@@ -89,7 +89,7 @@ jobs:
 
       - name: Upload frontend diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-logs
           path: ci-logs/
@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload backend diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-logs
           path: ci-logs/
@@ -197,7 +197,7 @@ jobs:
 
       - name: Upload migration/contract diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: migration-contract-logs
           path: ci-logs/
@@ -238,7 +238,7 @@ jobs:
 
       - name: Upload smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-logs
           path: api-smoke.log
