@@ -4,7 +4,7 @@ Two independent suites, each runnable on its own.
 
 | Suite | Command | Count | Stack |
 | --- | --- | --- | --- |
-| Frontend | `npm test` | 16 | Vitest + React Testing Library + MSW v2 |
+| Frontend | `npm test` | 18 | Vitest + React Testing Library + MSW v2 |
 | Backend | `npm run test:api` | 38 | pytest |
 
 ## Backend (`apps/api`)
@@ -60,6 +60,8 @@ independent cities.
 - **`opportunity-detail.test.tsx`** — separates observed evidence from AI inference,
   exposes a traceable source link, surfaces known-limitation/simulated disclosures,
   and lets the user change status.
+- **`locations.test.tsx`** — opening the edit dialog seeds the form from the selected
+  location (regression guard for the render-phase form-reset in `LocationDialog`).
 
 ## Also verified
 
@@ -81,6 +83,12 @@ GitHub Actions runs the Phase 1–2 quality gates on every change:
 
 Concurrency is grouped per workflow + branch/PR with `cancel-in-progress: true`, so a
 newer commit cancels older in-flight runs. Workflow permissions are `contents: read`.
+
+**Reliable failure propagation.** Every job step runs under a strict shell
+(`shell: bash --noprofile --norc -euo pipefail {0}`) so a failing command in a
+`cmd | tee log` pipeline is no longer masked by `tee`'s success. `npm run test:ci-pipefail`
+is a maintained regression guard for this behavior; diagnostic log uploads remain
+conditional on failure only.
 
 **Jobs** (each name is stable and suitable as a required status check):
 
