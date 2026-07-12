@@ -73,10 +73,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Validate a persisted token on first load.
   useEffect(() => {
     const existing = localStorage.getItem(TOKEN_KEY);
-    if (!existing) {
-      setStatus('unauthenticated');
-      return;
-    }
+    // status is already seeded to 'unauthenticated' when there is no token
+    // (see useState initializer), so no setState is needed on this path.
+    if (!existing) return;
     setAuthToken(existing);
     const controller = new AbortController();
     api

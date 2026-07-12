@@ -93,11 +93,15 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
   const [searchDraft, setSearchDraft] = useState(filters.search);
 
   // Reset all filters when the active location changes so one market's filters
-  // never carry over to another.
-  useEffect(() => {
+  // never carry over to another. Adjusted during render (guarded by the previous
+  // location) rather than in an effect, preserving strict per-location isolation
+  // without a cascading render.
+  const [prevLocationId, setPrevLocationId] = useState(locationId);
+  if (locationId !== prevLocationId) {
+    setPrevLocationId(locationId);
     setFilters(defaultFilters);
     setSearchDraft('');
-  }, [locationId]);
+  }
 
   // Debounce the search box into the applied filters.
   useEffect(() => {
