@@ -23,6 +23,7 @@
     "test": "npm run test --workspace apps/web",
     "test:api": "bash scripts/run-tests-api.sh",
     "smoke": "bash scripts/ci-smoke.sh",
+    "test:ci-pipefail": "bash scripts/test-ci-pipefail.sh",
     "format": "npm run format --workspace apps/web",
     "migrate": "bash scripts/migrate.sh",
     "migrate:down": "bash scripts/migrate-down.sh",
