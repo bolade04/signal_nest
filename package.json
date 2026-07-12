@@ -1,0 +1,36 @@
+{
+  "name": "signalnest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SignalNest — AI-powered marketing intelligence (AI Scout) platform",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/web",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20 <21",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "bootstrap": "bash scripts/bootstrap.sh",
+    "dev": "bash scripts/dev.sh",
+    "dev:web": "npm run dev --workspace apps/web",
+    "dev:api": "bash scripts/run-api.sh",
+    "build": "npm run build --workspace apps/web",
+    "lint": "npm run lint --workspace apps/web",
+    "type-check": "npm run type-check --workspace apps/web",
+    "test": "npm run test --workspace apps/web",
+    "test:api": "bash scripts/run-tests-api.sh",
+    "format": "npm run format --workspace apps/web",
+    "migrate": "bash scripts/migrate.sh",
+    "migrate:down": "bash scripts/migrate-down.sh",
+    "migrate:status": "bash scripts/migrate-status.sh",
+    "migrate:create": "bash scripts/migrate-create.sh",
+    "seed": "bash scripts/seed.sh",
+    "seed:reset": "bash scripts/seed-reset.sh",
+    "demo:setup": "bash scripts/demo-setup.sh",
+    "gen:types": "bash scripts/gen-types.sh",
+    "clean": "rm -rf apps/web/.next apps/web/node_modules node_modules packages/*/node_modules apps/api/.venv"
+  }
+}

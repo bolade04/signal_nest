@@ -1,0 +1,38 @@
+# Node
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Databases / local state
+*.db
+*.sqlite
+*.sqlite3
+apps/api/signalnest.db
+storage/
+.localstorage/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
+coverage/
