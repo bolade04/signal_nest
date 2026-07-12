@@ -1,0 +1,89 @@
+# Dependabot version updates for SignalNest.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+#
+# Three ecosystems match the actual manifests in this repo:
+#   - npm            -> root package-lock.json (npm workspaces: apps/web, packages/*)
+#   - pip            -> apps/api/pyproject.toml (FastAPI backend)
+#   - github-actions -> .github/workflows/*.yml (CI quality gates)
+#
+# Security updates (vulnerability-driven) are configured separately in the repo
+# settings and do not depend on this file. This file governs scheduled *version*
+# updates only. Nothing here auto-merges.
+version: 2
+
+updates:
+  # --- JavaScript / npm workspaces (root lockfile covers all workspaces) ---
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      # Group all non-major runtime bumps into a single PR to cut review noise.
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+      # Dev tooling (linters, test frameworks, build tools) grouped separately.
+      development-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # --- Python / pip (FastAPI backend manifest) ---
+  - package-ecosystem: "pip"
+    directory: "/apps/api"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 5
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # --- GitHub Actions used by the CI workflows ---
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 3
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
