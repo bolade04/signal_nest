@@ -1,5 +1,5 @@
 import { Menu } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
@@ -15,10 +15,14 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
 
-  // Close the mobile drawer whenever navigation occurs.
-  useEffect(() => {
+  // Close the mobile drawer whenever navigation occurs. Adjusted during render
+  // (guarded by the previous path) instead of in an effect, so it can't trigger
+  // a cascading render.
+  const [prevPath, setPrevPath] = useState(location.pathname);
+  if (location.pathname !== prevPath) {
+    setPrevPath(location.pathname);
     setMobileOpen(false);
-  }, [location.pathname]);
+  }
 
   return (
     <div className="flex h-full min-h-screen bg-background">

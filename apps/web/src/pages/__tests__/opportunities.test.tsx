@@ -29,6 +29,33 @@ describe('opportunity feed', () => {
     expect(screen.queryByText(/Nairobi customers/i)).not.toBeInTheDocument();
   });
 
+  it('clears the search box when the active location changes', async () => {
+    // Regression guard for the WorkspaceContext/Opportunities state migration:
+    // switching markets must reset per-market filter state so one location's
+    // search never leaks into another's feed.
+    const screen = renderApp(<App />, { route: '/opportunities', activeLocation: 'loc-dallas' });
+    await screen.findByText(/Dallas customers want faster delivery 1/i);
+    // Scope to the page body: the shell mounts only after the session resolves.
+    const main = within(screen.container.querySelector('#main-content') as HTMLElement);
+
+    // The page filter search shares its label with the header global search, so
+    // scope to the main region.
+    const search = main.getByLabelText(/search opportunities/i);
+    await screen.user.type(search, 'faster');
+    expect(search).toHaveValue('faster');
+
+    // The switchers are duplicated for desktop + mobile; drive the first one.
+    const locationFilter = screen.getAllByRole('combobox', { name: /location filter/i })[0]!;
+    await screen.user.click(locationFilter);
+    const listbox = await screen.findByRole('listbox');
+    await screen.user.click(within(listbox).getByRole('option', { name: /London/i }));
+
+    // The search draft resets on the location switch, and only London shows.
+    await waitFor(() => expect(search).toHaveValue(''));
+    await main.findByText(/London customers want faster delivery 1/i);
+    expect(main.queryByText(/Dallas customers/i)).not.toBeInTheDocument();
+  });
+
   it('filters the feed by classification', async () => {
     const screen = renderApp(<App />, { route: '/opportunities', activeLocation: 'loc-dallas' });
     await screen.findByText(/Dallas customers want faster delivery 1/i);

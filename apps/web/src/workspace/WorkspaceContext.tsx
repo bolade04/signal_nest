@@ -54,17 +54,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const organizations = useMemo(() => orgQuery.data ?? [], [orgQuery.data]);
 
   // Resolve a valid active organization from persisted value / memberships / list.
-  useEffect(() => {
-    if (!organizations.length) return;
-    const valid = organizations.some((o) => o.id === organizationId);
-    if (!valid) {
-      const fallback =
-        memberships.find((m) => organizations.some((o) => o.id === m.organization_id))
-          ?.organization_id ?? organizations[0]!.id;
-      setOrgId(fallback);
-      localStorage.setItem(ORG_KEY, fallback);
-    }
-  }, [organizations, organizationId, memberships]);
+  // Adjusted during render (React's endorsed alternative to a setState-in-effect):
+  // when the current selection isn't in the freshly-loaded list we fall back
+  // immediately. The guard is self-limiting — once a valid id is selected the
+  // condition is false — so it cannot loop. localStorage is synced separately in
+  // the write-only effects below.
+  if (organizations.length && !organizations.some((o) => o.id === organizationId)) {
+    const fallback =
+      memberships.find((m) => organizations.some((o) => o.id === m.organization_id))
+        ?.organization_id ?? organizations[0]!.id;
+    setOrgId(fallback);
+  }
 
   const wsQuery = useQuery({
     queryKey: organizationId ? queryKeys.workspaces(organizationId) : ['workspaces', 'none'],
@@ -74,24 +74,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const workspaces = useMemo(() => wsQuery.data ?? [], [wsQuery.data]);
 
-  useEffect(() => {
-    if (!workspaces.length) return;
-    const valid = workspaces.some((w) => w.id === workspaceId);
-    if (!valid) {
-      const fallback = workspaces[0]!.id;
-      // Only wipe the active location on an actual switch away from a
-      // previously-resolved workspace. On initial resolution (workspaceId was
-      // null) keep any persisted location — the validity effect below drops it
-      // if it doesn't belong to this workspace.
-      const wasResolved = workspaceId !== null;
-      setWsId(fallback);
-      localStorage.setItem(WS_KEY, fallback);
-      if (wasResolved) {
-        setLocId(null);
-        localStorage.removeItem(LOC_KEY);
-      }
-    }
-  }, [workspaces, workspaceId]);
+  if (workspaces.length && !workspaces.some((w) => w.id === workspaceId)) {
+    // Only wipe the active location on an actual switch away from a
+    // previously-resolved workspace. On initial resolution (workspaceId was
+    // null) keep any persisted location — the resolver below drops it if it
+    // doesn't belong to this workspace.
+    const wasResolved = workspaceId !== null;
+    setWsId(workspaces[0]!.id);
+    if (wasResolved) setLocId(null);
+  }
 
   const brandsQuery = useQuery({
     queryKey: workspaceId ? queryKeys.brands(workspaceId) : ['brands', 'none'],
@@ -109,34 +100,40 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const locations = useMemo(() => locationsQuery.data ?? [], [locationsQuery.data]);
 
   // If the active location no longer belongs to the workspace, drop it.
+  if (locationId && locations.length && !locations.some((l) => l.id === locationId)) {
+    setLocId(null);
+  }
+
+  // Persist the resolved selections. These effects only sync to an external
+  // system (localStorage) and never call setState, which is what effects are for.
   useEffect(() => {
-    if (locationId && locations.length && !locations.some((l) => l.id === locationId)) {
-      setLocId(null);
-      localStorage.removeItem(LOC_KEY);
-    }
-  }, [locations, locationId]);
+    if (organizationId) localStorage.setItem(ORG_KEY, organizationId);
+    else localStorage.removeItem(ORG_KEY);
+  }, [organizationId]);
+  useEffect(() => {
+    if (workspaceId) localStorage.setItem(WS_KEY, workspaceId);
+    else localStorage.removeItem(WS_KEY);
+  }, [workspaceId]);
+  useEffect(() => {
+    if (locationId) localStorage.setItem(LOC_KEY, locationId);
+    else localStorage.removeItem(LOC_KEY);
+  }, [locationId]);
 
   const setOrganizationId = useCallback((id: string) => {
     setOrgId(id);
-    localStorage.setItem(ORG_KEY, id);
-    // Force workspace/location re-resolution for the new org.
+    // Force workspace/location re-resolution for the new org. localStorage is
+    // kept in sync by the write-only effects above.
     setWsId(null);
-    localStorage.removeItem(WS_KEY);
     setLocId(null);
-    localStorage.removeItem(LOC_KEY);
   }, []);
 
   const setWorkspaceId = useCallback((id: string) => {
     setWsId(id);
-    localStorage.setItem(WS_KEY, id);
     setLocId(null);
-    localStorage.removeItem(LOC_KEY);
   }, []);
 
   const setLocationId = useCallback((id: string | null) => {
     setLocId(id);
-    if (id) localStorage.setItem(LOC_KEY, id);
-    else localStorage.removeItem(LOC_KEY);
   }, []);
 
   const value = useMemo<WorkspaceContextValue>(() => {

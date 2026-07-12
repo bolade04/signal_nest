@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import * as api from '@/api/endpoints';
 import { ApiError } from '@/api/client';
 import { queryKeys } from '@/api/queryKeys';
@@ -56,13 +56,17 @@ export function ScoutRequestDialog({
   });
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Clear the error and align the form's location with the active workspace
+  // location each time the dialog opens. Adjusted during render (guarded by the
+  // previous open state) instead of in a setState effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setError(null);
       setForm((f) => ({ ...f, location_id: locationId ?? null }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
 
   const campaignsQuery = useQuery({
     queryKey: queryKeys.context(workspaceId, 'campaigns'),

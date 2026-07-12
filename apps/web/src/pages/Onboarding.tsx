@@ -98,15 +98,23 @@ function WizardInner({ workspaceId }: { workspaceId: string }) {
     queryFn: ({ signal }) => api.getBusinessProfile(workspaceId, signal),
     retry: false,
   });
-  useEffect(() => {
-    if (!existing.data || localStorage.getItem(draftKey)) return;
-    setForm((f) => ({
-      ...f,
-      brand_name: f.brand_name || existing.data!.company_name,
-      profile: { ...f.profile, ...existing.data! },
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existing.data]);
+  // Seed the wizard from the saved profile on the first render only, matching the
+  // original effect which fired before the autosave below wrote a draft: only when
+  // the profile is already cached and the user has no saved draft. Done as a
+  // one-shot render-phase adjustment instead of a setState-in-effect.
+  const [hadInitialDraft] = useState(() => localStorage.getItem(draftKey) != null);
+  const [seedChecked, setSeedChecked] = useState(false);
+  if (!seedChecked) {
+    setSeedChecked(true);
+    if (existing.data && !hadInitialDraft) {
+      const data = existing.data;
+      setForm((f) => ({
+        ...f,
+        brand_name: f.brand_name || data.company_name,
+        profile: { ...f.profile, ...data },
+      }));
+    }
+  }
 
   // Autosave the draft as the user edits so progress is never lost on reload.
   useEffect(() => {

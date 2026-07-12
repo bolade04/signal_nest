@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Locate } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import * as api from '@/api/endpoints';
 import { ApiError } from '@/api/client';
 import { queryKeys } from '@/api/queryKeys';
@@ -75,46 +75,57 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location }: Pr
     retry: false,
   });
 
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    if (location) {
-      setForm({
-        name: location.name,
-        address: location.address ?? '',
-        city: location.city ?? '',
-        state_province: location.state_province ?? '',
-        country: location.country ?? '',
-        postal_code: location.postal_code ?? '',
-        timezone: location.timezone ?? '',
-        currency: location.currency ?? '',
-        latitude: location.latitude ?? null,
-        longitude: location.longitude ?? null,
-        local_competitors: location.local_competitors ?? [],
-        local_notes: location.local_notes ?? '',
-      });
-    } else {
-      setForm(emptyLocation);
-      setCoverage(emptyCoverage);
+  // Reset the form to the dialog's subject whenever it (re)opens or the edited
+  // location changes. Adjusted during render (guarded by the previous open state
+  // and location id) rather than in a setState effect.
+  const [dialogFor, setDialogFor] = useState<{ open: boolean; id: string | null }>({
+    open,
+    id: location?.id ?? null,
+  });
+  if (dialogFor.open !== open || dialogFor.id !== (location?.id ?? null)) {
+    setDialogFor({ open, id: location?.id ?? null });
+    if (open) {
+      setError(null);
+      if (location) {
+        setForm({
+          name: location.name,
+          address: location.address ?? '',
+          city: location.city ?? '',
+          state_province: location.state_province ?? '',
+          country: location.country ?? '',
+          postal_code: location.postal_code ?? '',
+          timezone: location.timezone ?? '',
+          currency: location.currency ?? '',
+          latitude: location.latitude ?? null,
+          longitude: location.longitude ?? null,
+          local_competitors: location.local_competitors ?? [],
+          local_notes: location.local_notes ?? '',
+        });
+      } else {
+        setForm(emptyLocation);
+        setCoverage(emptyCoverage);
+      }
     }
-  }, [open, location]);
+  }
 
-  useEffect(() => {
-    if (coverageQuery.data) {
-      setCoverage({
-        coverage_type: coverageQuery.data.coverage_type,
-        business_address: coverageQuery.data.business_address,
-        center_latitude: coverageQuery.data.center_latitude,
-        center_longitude: coverageQuery.data.center_longitude,
-        radius_miles: coverageQuery.data.radius_miles ?? 25,
-        country: coverageQuery.data.country,
-        state: coverageQuery.data.state,
-        included_markets: coverageQuery.data.included_markets ?? [],
-        excluded_markets: coverageQuery.data.excluded_markets ?? [],
-        online_global: coverageQuery.data.online_global,
-      });
-    }
-  }, [coverageQuery.data]);
+  // Populate coverage from the fetched record once it arrives (guarded by the
+  // previous data reference so it runs exactly once per fetch).
+  const [syncedCoverage, setSyncedCoverage] = useState<typeof coverageQuery.data>(undefined);
+  if (coverageQuery.data && coverageQuery.data !== syncedCoverage) {
+    setSyncedCoverage(coverageQuery.data);
+    setCoverage({
+      coverage_type: coverageQuery.data.coverage_type,
+      business_address: coverageQuery.data.business_address,
+      center_latitude: coverageQuery.data.center_latitude,
+      center_longitude: coverageQuery.data.center_longitude,
+      radius_miles: coverageQuery.data.radius_miles ?? 25,
+      country: coverageQuery.data.country,
+      state: coverageQuery.data.state,
+      included_markets: coverageQuery.data.included_markets ?? [],
+      excluded_markets: coverageQuery.data.excluded_markets ?? [],
+      online_global: coverageQuery.data.online_global,
+    });
+  }
 
   const geocodeMutation = useMutation({
     mutationFn: () => api.geocode({ query: [form.address, form.city, form.country].filter(Boolean).join(', ') }),
