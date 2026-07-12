@@ -9,18 +9,46 @@ dist/
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 .venv/
 venv/
+env/
+ENV/
 .pytest_cache/
 .mypy_cache/
+.dmypy.json
+dmypy.json
 .ruff_cache/
+.hypothesis/
 *.egg-info/
+*.egg
+.eggs/
+build/
+develop-eggs/
+downloads/
+eggs/
+wheels/
+sdist/
+MANIFEST
+cython_debug/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer / packaging logs
+pip-log.txt
+pip-delete-this-directory.txt
+.pypirc
 
 # Env / secrets
 .env
 .env.local
 .env.*.local
 !.env.example
+.envrc
+.streamlit/secrets.toml
 
 # Databases / local state
 *.db
@@ -30,9 +58,24 @@ apps/api/signalnest.db
 storage/
 .localstorage/
 
+# Message queues / caches
+*.rdb
+*.aof
+*.pid
+celerybeat-schedule
+
+# Coverage / test reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+coverage/
+
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
 *.log
-coverage/
