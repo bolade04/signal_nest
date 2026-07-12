@@ -1,0 +1,232 @@
+name: CI
+
+# Phase 1-2 quality gates. Everything below runs in the project's default
+# zero-dependency local mode: SQLite, in-process queue, in-memory cache,
+# brute-force vector index, local-file storage and the deterministic mock LLM.
+# No Docker, PostgreSQL, Redis or paid API keys are required.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  workflow_dispatch:
+
+# Newer commits on the same branch / PR cancel older in-flight runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: jobs only read repository contents.
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'          # repository engines: node >=20 <21
+  PYTHON_VERSION: '3.12'      # backend supports >=3.11; 3.12 matches development
+  # Backend CI runtime configuration — actual Settings field names (see
+  # apps/api/app/core/config.py). Safe, non-secret, zero-dependency values.
+  APP_MODE: local
+  ENVIRONMENT: test
+  DATABASE_URL: sqlite:///./signalnest.db
+  QUEUE_BACKEND: inprocess
+  CACHE_BACKEND: memory
+  VECTOR_BACKEND: bruteforce
+  STORAGE_BACKEND: local
+  LLM_PROVIDER: mock
+  LLM_MOCK_SEED: signalnest-ci
+
+jobs:
+  frontend-quality:
+    name: Frontend quality
+    runs-on: ubuntu-latest
+    env:
+      # In CI the frontend is tested against MSW and built statically; the API
+      # base URL stays blank (same as local dev through the Vite proxy).
+      VITE_API_BASE_URL: ''
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace dependencies
+        run: |
+          mkdir -p ci-logs
+          npm ci 2>&1 | tee ci-logs/npm-ci.log
+
+      - name: Lint (zero warnings)
+        run: npm run lint 2>&1 | tee ci-logs/frontend-lint.log
+
+      - name: Type-check
+        run: npm run type-check 2>&1 | tee ci-logs/frontend-typecheck.log
+
+      - name: Test
+        run: npm run test 2>&1 | tee ci-logs/frontend-test.log
+
+      - name: Production build
+        run: npm run build 2>&1 | tee ci-logs/frontend-build.log
+
+      - name: Upload frontend diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-logs
+          path: ci-logs/
+          retention-days: 7
+
+  backend-quality:
+    name: Backend quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Create fresh API virtualenv and install (dev extras)
+        run: |
+          mkdir -p ci-logs
+          python -m venv apps/api/.venv
+          apps/api/.venv/bin/pip install --upgrade pip
+          apps/api/.venv/bin/pip install -e "apps/api[dev]" 2>&1 | tee ci-logs/pip-install.log
+
+      - name: Ruff check
+        run: apps/api/.venv/bin/python -m ruff check apps/api 2>&1 | tee ci-logs/backend-ruff.log
+
+      - name: Backend tests
+        # Invoke the repo bash scripts directly (they use apps/api/.venv); this
+        # job sets up Python only, so it must not depend on npm/Node.
+        # A migrated + seeded DB is required for the HTTP-isolation integration tests.
+        run: |
+          bash scripts/demo-setup.sh 2>&1 | tee ci-logs/backend-demo-setup.log
+          bash scripts/run-tests-api.sh 2>&1 | tee ci-logs/backend-pytest.log
+
+      - name: Upload backend diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-logs
+          path: ci-logs/
+          retention-days: 7
+
+  migration-and-contract:
+    name: Migrations and API contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          mkdir -p ci-logs
+          npm ci 2>&1 | tee ci-logs/npm-ci.log
+          python -m venv apps/api/.venv
+          apps/api/.venv/bin/pip install --upgrade pip
+          apps/api/.venv/bin/pip install -e "apps/api[dev]" 2>&1 | tee ci-logs/pip-install.log
+
+      - name: Migration round-trip + seed idempotency
+        working-directory: apps/api
+        run: |
+          PY=.venv/bin/python
+          echo "== fresh database: remove any pre-existing SQLite file =="
+          rm -f signalnest.db
+          echo "== upgrade empty database -> head =="
+          $PY -m alembic upgrade head
+          echo "== schema-drift check (expect: no new upgrade operations) =="
+          $PY -m alembic check
+          echo "== seed =="
+          $PY -m app.db.seed
+          echo "== seed again (idempotency: no duplicates, safe re-run) =="
+          $PY -m app.db.seed
+          echo "== downgrade to base =="
+          $PY -m alembic downgrade base
+          echo "== upgrade back to head =="
+          $PY -m alembic upgrade head
+          echo "== reset + reseed (documented seed:reset workflow) =="
+          $PY -m app.db.seed --reset
+
+      - name: OpenAPI regeneration + contract-drift check
+        run: |
+          npm run gen:types 2>&1 | tee ci-logs/gen-types.log
+          echo "== fail if generation produced an uncommitted diff =="
+          git diff --exit-code -- apps/api/openapi.json apps/web/src/api/schema.d.ts
+
+      - name: Show contract drift on failure
+        if: failure()
+        run: git --no-pager diff -- apps/api/openapi.json apps/web/src/api/schema.d.ts || true
+
+      - name: Upload migration/contract diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-contract-logs
+          path: ci-logs/
+          retention-days: 7
+
+  integration-smoke:
+    name: Integration smoke
+    runs-on: ubuntu-latest
+    # Only run once the core quality + migration gates are green.
+    needs: [frontend-quality, backend-quality, migration-and-contract]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Create fresh API virtualenv and install
+        run: |
+          python -m venv apps/api/.venv
+          apps/api/.venv/bin/pip install --upgrade pip
+          apps/api/.venv/bin/pip install -e "apps/api[dev]"
+
+      - name: Prepare a fresh, migrated + seeded demo database
+        # Python-only job: call the bash script directly (no npm/Node dependency).
+        run: |
+          rm -f apps/api/signalnest.db
+          bash scripts/demo-setup.sh
+
+      - name: HTTP isolation smoke test
+        # ci-smoke.sh starts uvicorn, waits on /health with a bounded loop, runs
+        # scripts/smoke_http.py, and always stops the server (trap on EXIT).
+        run: bash scripts/ci-smoke.sh
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: api-smoke.log
+          retention-days: 7

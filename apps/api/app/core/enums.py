@@ -1,0 +1,147 @@
+"""Canonical enums shared across domain modules.
+
+These mirror the values exported to the frontend in ``packages/shared`` so the UI and
+backend agree on status vocabularies without duplicating business logic.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class Role(StrEnum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    MARKETER = "marketer"
+    REVIEWER = "reviewer"
+    VIEWER = "viewer"
+    COMPLIANCE_REVIEWER = "compliance_reviewer"
+
+
+class CoverageType(StrEnum):
+    CITY = "city"
+    METRO = "metro"
+    COUNTY = "county"
+    STATE = "state"
+    COUNTRY = "country"
+    MULTI_CITY = "multi_city"
+    MULTI_STATE = "multi_state"
+    RADIUS = "radius"
+    ONLINE = "online"
+
+
+class CampaignMode(StrEnum):
+    SAME_FOR_ALL = "same_for_all"
+    PER_LOCATION = "per_location"
+    GROUPED = "grouped"
+    RECOMMEND = "recommend"
+
+
+class ScoutRequestStatus(StrEnum):
+    DRAFT = "draft"
+    QUEUED = "queued"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class SourceType(StrEnum):
+    MANUAL = "manual"
+    WEBSITE_SCAN = "website_scan"
+    COMPETITOR_SCAN = "competitor_scan"
+    RSS_NEWS = "rss_news"
+    REDDIT = "reddit"
+    REVIEWS = "reviews"
+    GOOGLE_TRENDS = "google_trends"
+    META_AD_LIBRARY = "meta_ad_library"
+    TIKTOK_CREATIVE_CENTER = "tiktok_creative_center"
+
+
+class SignalType(StrEnum):
+    COMPLAINT = "complaint"
+    PAIN_POINT = "pain_point"
+    QUESTION = "question"
+    BUYING_INTENT = "buying_intent"
+    COMPETITOR_DISSATISFACTION = "competitor_dissatisfaction"
+    FEATURE_REQUEST = "feature_request"
+    PRODUCT_CONFUSION = "product_confusion"
+    TREND_DISCUSSION = "trend_discussion"
+    POSITIVE_TREND = "positive_trend"
+    LOCAL_OPPORTUNITY = "local_opportunity"
+    REVIEW_COMPLAINT = "review_complaint"
+    SEARCH_DEMAND_CHANGE = "search_demand_change"
+    SEO_GAP = "seo_gap"
+    COMPETITOR_WEBSITE_GAP = "competitor_website_gap"
+    OBJECTION = "objection"
+    SEASONAL_OPPORTUNITY = "seasonal_opportunity"
+    FAQ = "faq"
+    NEWS_TRIGGER = "news_trigger"
+
+
+class PainPointDNA(StrEnum):
+    TRUST_ISSUE = "trust_issue"
+    PRICE_FRUSTRATION = "price_frustration"
+    SPEED_COMPLAINT = "speed_complaint"
+    POOR_CUSTOMER_SERVICE = "poor_customer_service"
+    PRODUCT_CONFUSION = "product_confusion"
+    SAFETY_CONCERN = "safety_concern"
+    CONVENIENCE_PROBLEM = "convenience_problem"
+    QUALITY_CONCERN = "quality_concern"
+    LACK_OF_TRANSPARENCY = "lack_of_transparency"
+    HIDDEN_FEES = "hidden_fees"
+    BAD_USER_EXPERIENCE = "bad_user_experience"
+    SOCIAL_EMBARRASSMENT = "social_embarrassment"
+    FEAR_OF_BEING_SCAMMED = "fear_of_being_scammed"
+    NEED_FOR_STATUS = "need_for_status"
+    NEED_FOR_PROOF = "need_for_proof"
+    NEED_FOR_RELIABILITY = "need_for_reliability"
+
+
+class OpportunityClassification(StrEnum):
+    NOISE = "noise"
+    DISCUSSION_ONLY = "discussion_only"
+    WEAK = "weak"
+    EARLY = "early"
+    EMERGING = "emerging"
+    VALIDATED = "validated"
+    HIGH_PRIORITY = "high_priority"
+    DEAD = "dead"
+
+
+class DecisionAction(StrEnum):
+    ACT_NOW = "act_now"
+    ACT_SOON = "act_soon"
+    MONITOR = "monitor"
+    ARCHIVE = "archive"
+    IGNORE = "ignore"
+    STAY_SILENT = "stay_silent"
+    BLOCK = "block"
+
+
+class RiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    BLOCKED = "blocked"
+
+
+class ConfidenceLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class OpportunityStatus(StrEnum):
+    NEW = "new"
+    SAVED = "saved"
+    MONITORING = "monitoring"
+    IGNORED = "ignored"
+    ACTIONED = "actioned"
+
+
+class ClaimRisk(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    BLOCKED = "blocked"

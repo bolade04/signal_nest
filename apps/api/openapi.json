@@ -1,0 +1,6704 @@
+{
+  "components": {
+    "schemas": {
+      "AudienceIn": {
+        "properties": {
+          "demographics": {
+            "additionalProperties": true,
+            "title": "Demographics",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "motivations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Motivations",
+            "type": "array"
+          },
+          "objections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Objections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "AudienceIn",
+        "type": "object"
+      },
+      "BrandOut": {
+        "properties": {
+          "business_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Type"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "industry",
+          "business_type"
+        ],
+        "title": "BrandOut",
+        "type": "object"
+      },
+      "BrandVoiceIn": {
+        "properties": {
+          "avoid": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Avoid",
+            "type": "array"
+          },
+          "do_use": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Do Use",
+            "type": "array"
+          },
+          "example_copy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Copy"
+          },
+          "personality": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Personality",
+            "type": "array"
+          },
+          "tone": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tone",
+            "type": "array"
+          }
+        },
+        "title": "BrandVoiceIn",
+        "type": "object"
+      },
+      "BusinessProfileBase": {
+        "properties": {
+          "advertising_budget_preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertising Budget Preference"
+          },
+          "alternative_presence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alternative Presence"
+          },
+          "business_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Type"
+          },
+          "buying_process": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Buying Process"
+          },
+          "campaign_goals": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Campaign Goals",
+            "type": "array"
+          },
+          "common_objections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Common Objections",
+            "type": "array"
+          },
+          "company_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Company Name",
+            "type": "string"
+          },
+          "compliance_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compliance Notes"
+          },
+          "core_problem_solved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core Problem Solved"
+          },
+          "customer_pain_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Customer Pain Points",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "google_business_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Business Profile"
+          },
+          "ideal_customer_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Customer Profile"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "marketplace_links": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Marketplace Links",
+            "type": "array"
+          },
+          "markets_served": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Markets Served",
+            "type": "array"
+          },
+          "onboarding_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onboarding Path"
+          },
+          "preferred_platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferred Platforms",
+            "type": "array"
+          },
+          "pricing_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Model"
+          },
+          "sensitive_topics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sensitive Topics",
+            "type": "array"
+          },
+          "social_links": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Social Links",
+            "type": "object"
+          },
+          "target_audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Audience"
+          },
+          "unique_value_proposition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unique Value Proposition"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          },
+          "weekly_ad_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Ad Volume"
+          }
+        },
+        "required": [
+          "company_name"
+        ],
+        "title": "BusinessProfileBase",
+        "type": "object"
+      },
+      "BusinessProfileOut": {
+        "properties": {
+          "advertising_budget_preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertising Budget Preference"
+          },
+          "alternative_presence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alternative Presence"
+          },
+          "brand_id": {
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "business_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Type"
+          },
+          "buying_process": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Buying Process"
+          },
+          "campaign_goals": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Campaign Goals",
+            "type": "array"
+          },
+          "common_objections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Common Objections",
+            "type": "array"
+          },
+          "company_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Company Name",
+            "type": "string"
+          },
+          "compliance_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compliance Notes"
+          },
+          "core_problem_solved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core Problem Solved"
+          },
+          "customer_pain_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Customer Pain Points",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "google_business_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Business Profile"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ideal_customer_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Customer Profile"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "marketplace_links": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Marketplace Links",
+            "type": "array"
+          },
+          "markets_served": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Markets Served",
+            "type": "array"
+          },
+          "onboarding_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onboarding Path"
+          },
+          "preferred_platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferred Platforms",
+            "type": "array"
+          },
+          "pricing_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Model"
+          },
+          "sensitive_topics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sensitive Topics",
+            "type": "array"
+          },
+          "social_links": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Social Links",
+            "type": "object"
+          },
+          "target_audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Audience"
+          },
+          "unique_value_proposition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unique Value Proposition"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          },
+          "weekly_ad_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Ad Volume"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "company_name",
+          "id",
+          "brand_id",
+          "workspace_id"
+        ],
+        "title": "BusinessProfileOut",
+        "type": "object"
+      },
+      "CampaignIn": {
+        "properties": {
+          "goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Location Ids",
+            "type": "array"
+          },
+          "mode": {
+            "default": "per_location",
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "default": "active",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CampaignIn",
+        "type": "object"
+      },
+      "ChannelPrefIn": {
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "weekly_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Volume"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "title": "ChannelPrefIn",
+        "type": "object"
+      },
+      "ClaimIn": {
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "kind": {
+            "default": "approved",
+            "title": "Kind",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "risk_level": {
+            "default": "low",
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ClaimIn",
+        "type": "object"
+      },
+      "CompetitorIn": {
+        "properties": {
+          "known_weaknesses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Known Weaknesses",
+            "type": "array"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CompetitorIn",
+        "type": "object"
+      },
+      "GeoCoverageBase": {
+        "properties": {
+          "business_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Address"
+          },
+          "center_latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Latitude"
+          },
+          "center_longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Longitude"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "coverage_type": {
+            "default": "radius",
+            "title": "Coverage Type",
+            "type": "string"
+          },
+          "excluded_markets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Markets",
+            "type": "array"
+          },
+          "included_markets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Included Markets",
+            "type": "array"
+          },
+          "online_global": {
+            "default": false,
+            "title": "Online Global",
+            "type": "boolean"
+          },
+          "radius_miles": {
+            "anyOf": [
+              {
+                "maximum": 200.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius Miles"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "title": "GeoCoverageBase",
+        "type": "object"
+      },
+      "GeoCoverageOut": {
+        "properties": {
+          "business_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Address"
+          },
+          "center_latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Latitude"
+          },
+          "center_longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Longitude"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "coverage_type": {
+            "default": "radius",
+            "title": "Coverage Type",
+            "type": "string"
+          },
+          "excluded_markets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Markets",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "included_markets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Included Markets",
+            "type": "array"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "online_global": {
+            "default": false,
+            "title": "Online Global",
+            "type": "boolean"
+          },
+          "radius_miles": {
+            "anyOf": [
+              {
+                "maximum": 200.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius Miles"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "id",
+          "location_id"
+        ],
+        "title": "GeoCoverageOut",
+        "type": "object"
+      },
+      "GeocodeRequest": {
+        "properties": {
+          "query": {
+            "minLength": 2,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "GeocodeRequest",
+        "type": "object"
+      },
+      "GeocodeResponse": {
+        "properties": {
+          "city": {
+            "title": "City",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "country": {
+            "title": "Country",
+            "type": "string"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "state_province": {
+            "title": "State Province",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "city",
+          "state_province",
+          "country",
+          "timezone",
+          "confidence"
+        ],
+        "title": "GeocodeResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LocationBase": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "google_business_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Business Profile"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "local_competitors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Local Competitors",
+            "type": "array"
+          },
+          "local_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Notes"
+          },
+          "local_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Phone"
+          },
+          "local_social_links": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Local Social Links",
+            "type": "object"
+          },
+          "local_website_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Website Page"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "title": "Overrides",
+            "type": "object"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "state_province": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Province"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LocationBase",
+        "type": "object"
+      },
+      "LocationOut": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "brand_id": {
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "google_business_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Business Profile"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "local_competitors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Local Competitors",
+            "type": "array"
+          },
+          "local_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Notes"
+          },
+          "local_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Phone"
+          },
+          "local_social_links": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Local Social Links",
+            "type": "object"
+          },
+          "local_website_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Website Page"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "title": "Overrides",
+            "type": "object"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "state_province": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Province"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "id",
+          "brand_id",
+          "workspace_id",
+          "is_active"
+        ],
+        "title": "LocationOut",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "MembershipOut": {
+        "properties": {
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "organization_name": {
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "organization_name",
+          "role"
+        ],
+        "title": "MembershipOut",
+        "type": "object"
+      },
+      "OfferIn": {
+        "properties": {
+          "cta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta"
+          },
+          "discount_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discount Amount"
+          },
+          "eligible_location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Eligible Location Ids",
+            "type": "array"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "landing_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landing Url"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "percentage_discount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentage Discount"
+          },
+          "product_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Service"
+          },
+          "promo_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promo Code"
+          },
+          "regular_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regular Price"
+          },
+          "required_disclaimer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Disclaimer"
+          },
+          "sale_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sale Price"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terms"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "OfferIn",
+        "type": "object"
+      },
+      "OnboardingRequest": {
+        "description": "Full guided-onboarding payload. No presence field is required.",
+        "properties": {
+          "audiences": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Audiences",
+            "type": "array"
+          },
+          "brand_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Brand Name",
+            "type": "string"
+          },
+          "claims": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "competitors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "preferred_source_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferred Source Types",
+            "type": "array"
+          },
+          "products": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Products",
+            "type": "array"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/BusinessProfileBase"
+          }
+        },
+        "required": [
+          "brand_name",
+          "profile"
+        ],
+        "title": "OnboardingRequest",
+        "type": "object"
+      },
+      "OnboardingResult": {
+        "properties": {
+          "brand": {
+            "$ref": "#/components/schemas/BrandOut"
+          },
+          "business_profile": {
+            "$ref": "#/components/schemas/BusinessProfileOut"
+          },
+          "onboarding_completed": {
+            "title": "Onboarding Completed",
+            "type": "boolean"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "brand",
+          "business_profile",
+          "workspace_id",
+          "onboarding_completed"
+        ],
+        "title": "OnboardingResult",
+        "type": "object"
+      },
+      "OpportunityCard": {
+        "description": "Compact representation for the opportunity feed.",
+        "properties": {
+          "audience_fit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience Fit"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "commercial_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commercial Value"
+          },
+          "confidence_level": {
+            "title": "Confidence Level",
+            "type": "string"
+          },
+          "confidence_score": {
+            "title": "Confidence Score",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inside_scout_area": {
+            "title": "Inside Scout Area",
+            "type": "boolean"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "opportunity_score": {
+            "title": "Opportunity Score",
+            "type": "integer"
+          },
+          "priority_score": {
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "recommended_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Action"
+          },
+          "relevance_score": {
+            "title": "Relevance Score",
+            "type": "integer"
+          },
+          "resolved_market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Market"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "scout_request_id": {
+            "title": "Scout Request Id",
+            "type": "string"
+          },
+          "source_summary": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Summary",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "urgency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urgency"
+          },
+          "why_it_matters": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why It Matters"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "classification",
+          "decision",
+          "opportunity_score",
+          "confidence_score",
+          "confidence_level",
+          "priority_score",
+          "relevance_score",
+          "risk_level",
+          "resolved_market",
+          "inside_scout_area",
+          "why_it_matters",
+          "recommended_action",
+          "audience_fit",
+          "urgency",
+          "commercial_value",
+          "source_summary",
+          "status",
+          "location_id",
+          "campaign_id",
+          "scout_request_id",
+          "is_simulated",
+          "created_at"
+        ],
+        "title": "OpportunityCard",
+        "type": "object"
+      },
+      "OpportunityDetail": {
+        "properties": {
+          "ai_inference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Inference"
+          },
+          "audience_fit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience Fit"
+          },
+          "brand_id": {
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "claims_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Claims Warnings",
+            "type": "array"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "commercial_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commercial Value"
+          },
+          "confidence_level": {
+            "title": "Confidence Level",
+            "type": "string"
+          },
+          "confidence_score": {
+            "title": "Confidence Score",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inside_scout_area": {
+            "title": "Inside Scout Area",
+            "type": "boolean"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "observed_evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Observed Evidence",
+            "type": "array"
+          },
+          "opportunity_score": {
+            "title": "Opportunity Score",
+            "type": "integer"
+          },
+          "priority_score": {
+            "title": "Priority Score",
+            "type": "integer"
+          },
+          "recommended_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Action"
+          },
+          "relevance_score": {
+            "title": "Relevance Score",
+            "type": "integer"
+          },
+          "resolved_market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Market"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "risk_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Note"
+          },
+          "scores": {
+            "items": {
+              "$ref": "#/components/schemas/ScoreBreakdown"
+            },
+            "title": "Scores",
+            "type": "array"
+          },
+          "scout_request_id": {
+            "title": "Scout Request Id",
+            "type": "string"
+          },
+          "source_summary": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Summary",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "suggested_angles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggested Angles",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "urgency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urgency"
+          },
+          "validation_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationEvidenceOut"
+            },
+            "title": "Validation Evidence",
+            "type": "array"
+          },
+          "who_cares": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Who Cares"
+          },
+          "why_it_matters": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why It Matters"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "classification",
+          "decision",
+          "opportunity_score",
+          "confidence_score",
+          "confidence_level",
+          "priority_score",
+          "relevance_score",
+          "risk_level",
+          "resolved_market",
+          "inside_scout_area",
+          "why_it_matters",
+          "recommended_action",
+          "audience_fit",
+          "urgency",
+          "commercial_value",
+          "source_summary",
+          "status",
+          "location_id",
+          "campaign_id",
+          "scout_request_id",
+          "is_simulated",
+          "created_at",
+          "who_cares",
+          "observed_evidence",
+          "ai_inference",
+          "suggested_angles",
+          "risk_note",
+          "claims_warnings",
+          "brand_id"
+        ],
+        "title": "OpportunityDetail",
+        "type": "object"
+      },
+      "OpportunityStatusUpdate": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "OpportunityStatusUpdate",
+        "type": "object"
+      },
+      "OrganizationOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug"
+        ],
+        "title": "OrganizationOut",
+        "type": "object"
+      },
+      "ProductIn": {
+        "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "claims_rules": {
+            "additionalProperties": true,
+            "title": "Claims Rules",
+            "type": "object"
+          },
+          "competitors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "exclusion_rules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Rules",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pain_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pain Points",
+            "type": "array"
+          },
+          "relevance_weight": {
+            "default": 1.0,
+            "title": "Relevance Weight",
+            "type": "number"
+          },
+          "use_cases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Use Cases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProductIn",
+        "type": "object"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "full_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Full Name",
+            "type": "string"
+          },
+          "organization_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "full_name",
+          "password",
+          "organization_name"
+        ],
+        "title": "RegisterRequest",
+        "type": "object"
+      },
+      "ScoreBreakdown": {
+        "properties": {
+          "breakdown": {
+            "additionalProperties": true,
+            "title": "Breakdown",
+            "type": "object"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "total",
+          "breakdown"
+        ],
+        "title": "ScoreBreakdown",
+        "type": "object"
+      },
+      "ScoutRequestCreate": {
+        "properties": {
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "product_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Profile Id"
+          },
+          "resolved_market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Market"
+          },
+          "source_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ScoutRequestCreate",
+        "type": "object"
+      },
+      "ScoutRequestOut": {
+        "properties": {
+          "brand_id": {
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "product_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Profile Id"
+          },
+          "resolved_market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Market"
+          },
+          "source_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Types",
+            "type": "array"
+          },
+          "stats": {
+            "additionalProperties": true,
+            "title": "Stats",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "workspace_id",
+          "brand_id",
+          "location_id",
+          "campaign_id",
+          "name",
+          "status",
+          "source_types",
+          "keywords",
+          "product_profile_id",
+          "resolved_market",
+          "notes",
+          "last_run_at",
+          "stats",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScoutRequestOut",
+        "type": "object"
+      },
+      "ScoutRequestUpdate": {
+        "properties": {
+          "keywords": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keywords"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "resolved_market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Market"
+          },
+          "source_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Types"
+          }
+        },
+        "title": "ScoutRequestUpdate",
+        "type": "object"
+      },
+      "ScoutRunResult": {
+        "properties": {
+          "scout_request_id": {
+            "title": "Scout Request Id",
+            "type": "string"
+          },
+          "stats": {
+            "additionalProperties": true,
+            "title": "Stats",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scout_request_id",
+          "status",
+          "stats"
+        ],
+        "title": "ScoutRunResult",
+        "type": "object"
+      },
+      "SessionOut": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipOut"
+            },
+            "title": "Memberships",
+            "type": "array"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserOut"
+          }
+        },
+        "required": [
+          "access_token",
+          "user",
+          "memberships"
+        ],
+        "title": "SessionOut",
+        "type": "object"
+      },
+      "SourcePrefIn": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_type"
+        ],
+        "title": "SourcePrefIn",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "full_name"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationEvidenceOut": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "source_type",
+          "detail",
+          "weight"
+        ],
+        "title": "ValidationEvidenceOut",
+        "type": "object"
+      },
+      "WorkspaceCreate": {
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkspaceCreate",
+        "type": "object"
+      },
+      "WorkspaceOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "onboarding_completed": {
+            "title": "Onboarding Completed",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "name",
+          "slug",
+          "onboarding_completed",
+          "created_at"
+        ],
+        "title": "WorkspaceOut",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "SignalNest API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "me_api_v1_auth_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "register_api_v1_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/geocode": {
+      "post": {
+        "description": "Scout Reach helper \u2014 geocode an address so a radius can be applied.",
+        "operationId": "geocode_address_api_v1_geocode_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeocodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeocodeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Geocode Address",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
+    "/api/v1/organizations": {
+      "get": {
+        "operationId": "list_organizations_api_v1_organizations_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrganizationOut"
+                  },
+                  "title": "Response List Organizations Api V1 Organizations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Organizations",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/workspaces": {
+      "get": {
+        "operationId": "list_workspaces_api_v1_organizations__organization_id__workspaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceOut"
+                  },
+                  "title": "Response List Workspaces Api V1 Organizations  Organization Id  Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workspaces",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "create_workspace_api_v1_organizations__organization_id__workspaces_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Workspace",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}": {
+      "get": {
+        "operationId": "get_workspace_api_v1_workspaces__workspace_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Workspace",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/audiences": {
+      "get": {
+        "operationId": "list_audiences_api_v1_workspaces__workspace_id__audiences_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Audiences Api V1 Workspaces  Workspace Id  Audiences Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Audiences",
+        "tags": [
+          "campaign-context",
+          "audiences"
+        ]
+      },
+      "post": {
+        "operationId": "create_audiences_api_v1_workspaces__workspace_id__audiences_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Audiences Api V1 Workspaces  Workspace Id  Audiences Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Audiences",
+        "tags": [
+          "campaign-context",
+          "audiences"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/audiences/{item_id}": {
+      "delete": {
+        "operationId": "delete_audiences_api_v1_workspaces__workspace_id__audiences__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Audiences",
+        "tags": [
+          "campaign-context",
+          "audiences"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/audit-logs": {
+      "get": {
+        "operationId": "list_audit_logs_api_v1_workspaces__workspace_id__audit_logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Audit Logs Api V1 Workspaces  Workspace Id  Audit Logs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Audit Logs",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/brand-voice": {
+      "get": {
+        "operationId": "list_brand_voice_api_v1_workspaces__workspace_id__brand_voice_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Brand Voice Api V1 Workspaces  Workspace Id  Brand Voice Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Brand-Voice",
+        "tags": [
+          "campaign-context",
+          "brand-voice"
+        ]
+      },
+      "post": {
+        "operationId": "create_brand_voice_api_v1_workspaces__workspace_id__brand_voice_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandVoiceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Brand Voice Api V1 Workspaces  Workspace Id  Brand Voice Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Brand-Voice",
+        "tags": [
+          "campaign-context",
+          "brand-voice"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/brand-voice/{item_id}": {
+      "delete": {
+        "operationId": "delete_brand_voice_api_v1_workspaces__workspace_id__brand_voice__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Brand-Voice",
+        "tags": [
+          "campaign-context",
+          "brand-voice"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/brands": {
+      "get": {
+        "operationId": "list_brands_api_v1_workspaces__workspace_id__brands_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrandOut"
+                  },
+                  "title": "Response List Brands Api V1 Workspaces  Workspace Id  Brands Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Brands",
+        "tags": [
+          "brands"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/business-profile": {
+      "get": {
+        "operationId": "get_business_profile_api_v1_workspaces__workspace_id__business_profile_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessProfileOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Business Profile",
+        "tags": [
+          "brands"
+        ]
+      },
+      "put": {
+        "operationId": "update_business_profile_api_v1_workspaces__workspace_id__business_profile_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BusinessProfileBase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessProfileOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Business Profile",
+        "tags": [
+          "brands"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/campaigns": {
+      "get": {
+        "operationId": "list_campaigns_api_v1_workspaces__workspace_id__campaigns_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Campaigns Api V1 Workspaces  Workspace Id  Campaigns Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Campaigns",
+        "tags": [
+          "campaign-context",
+          "campaigns"
+        ]
+      },
+      "post": {
+        "operationId": "create_campaigns_api_v1_workspaces__workspace_id__campaigns_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Campaigns Api V1 Workspaces  Workspace Id  Campaigns Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Campaigns",
+        "tags": [
+          "campaign-context",
+          "campaigns"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/campaigns/{item_id}": {
+      "delete": {
+        "operationId": "delete_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Campaigns",
+        "tags": [
+          "campaign-context",
+          "campaigns"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/channel-preferences": {
+      "get": {
+        "operationId": "list_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Channel Preferences Api V1 Workspaces  Workspace Id  Channel Preferences Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Channel-Preferences",
+        "tags": [
+          "campaign-context",
+          "channels"
+        ]
+      },
+      "post": {
+        "operationId": "create_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelPrefIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Channel Preferences Api V1 Workspaces  Workspace Id  Channel Preferences Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Channel-Preferences",
+        "tags": [
+          "campaign-context",
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/channel-preferences/{item_id}": {
+      "delete": {
+        "operationId": "delete_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Channel-Preferences",
+        "tags": [
+          "campaign-context",
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/claims": {
+      "get": {
+        "operationId": "list_claims_api_v1_workspaces__workspace_id__claims_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Claims Api V1 Workspaces  Workspace Id  Claims Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Claims",
+        "tags": [
+          "campaign-context",
+          "claims"
+        ]
+      },
+      "post": {
+        "operationId": "create_claims_api_v1_workspaces__workspace_id__claims_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Claims Api V1 Workspaces  Workspace Id  Claims Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Claims",
+        "tags": [
+          "campaign-context",
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/claims/{item_id}": {
+      "delete": {
+        "operationId": "delete_claims_api_v1_workspaces__workspace_id__claims__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Claims",
+        "tags": [
+          "campaign-context",
+          "claims"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/competitors": {
+      "get": {
+        "operationId": "list_competitors_api_v1_workspaces__workspace_id__competitors_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Competitors Api V1 Workspaces  Workspace Id  Competitors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Competitors",
+        "tags": [
+          "campaign-context",
+          "competitors"
+        ]
+      },
+      "post": {
+        "operationId": "create_competitors_api_v1_workspaces__workspace_id__competitors_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompetitorIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Competitors Api V1 Workspaces  Workspace Id  Competitors Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Competitors",
+        "tags": [
+          "campaign-context",
+          "competitors"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/competitors/{item_id}": {
+      "delete": {
+        "operationId": "delete_competitors_api_v1_workspaces__workspace_id__competitors__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Competitors",
+        "tags": [
+          "campaign-context",
+          "competitors"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/locations": {
+      "get": {
+        "operationId": "list_locations_api_v1_workspaces__workspace_id__locations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LocationOut"
+                  },
+                  "title": "Response List Locations Api V1 Workspaces  Workspace Id  Locations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Locations",
+        "tags": [
+          "locations"
+        ]
+      },
+      "post": {
+        "operationId": "create_location_api_v1_workspaces__workspace_id__locations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocationBase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Location",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}": {
+      "put": {
+        "operationId": "update_location_api_v1_workspaces__workspace_id__locations__location_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocationBase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Location",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage": {
+      "get": {
+        "operationId": "get_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoCoverageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Geo Coverage",
+        "tags": [
+          "locations"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeoCoverageBase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoCoverageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Geo Coverage",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/offers": {
+      "get": {
+        "operationId": "list_offers_api_v1_workspaces__workspace_id__offers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Offers Api V1 Workspaces  Workspace Id  Offers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Offers",
+        "tags": [
+          "campaign-context",
+          "offers"
+        ]
+      },
+      "post": {
+        "operationId": "create_offers_api_v1_workspaces__workspace_id__offers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfferIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Offers Api V1 Workspaces  Workspace Id  Offers Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Offers",
+        "tags": [
+          "campaign-context",
+          "offers"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/offers/{item_id}": {
+      "delete": {
+        "operationId": "delete_offers_api_v1_workspaces__workspace_id__offers__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Offers",
+        "tags": [
+          "campaign-context",
+          "offers"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/onboarding": {
+      "post": {
+        "operationId": "onboard_api_v1_workspaces__workspace_id__onboarding_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Onboard",
+        "tags": [
+          "brands"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/opportunities": {
+      "get": {
+        "operationId": "list_opportunities_api_v1_workspaces__workspace_id__opportunities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "location_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "campaign_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scout_request_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scout Request Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "classification",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Classification"
+            }
+          },
+          {
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Decision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "risk_level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Risk Level"
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Market"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_score",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Min Score",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "priority",
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "pattern": "^(asc|desc)$",
+              "title": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OpportunityCard"
+                  },
+                  "title": "Response List Opportunities Api V1 Workspaces  Workspace Id  Opportunities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Opportunities",
+        "tags": [
+          "opportunities"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}": {
+      "get": {
+        "operationId": "get_opportunity_api_v1_workspaces__workspace_id__opportunities__opportunity_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpportunityDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Opportunity",
+        "tags": [
+          "opportunities"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/status": {
+      "put": {
+        "operationId": "update_opportunity_status_api_v1_workspaces__workspace_id__opportunities__opportunity_id__status_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpportunityStatusUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpportunityCard"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Opportunity Status",
+        "tags": [
+          "opportunities"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/products": {
+      "get": {
+        "operationId": "list_products_api_v1_workspaces__workspace_id__products_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Products Api V1 Workspaces  Workspace Id  Products Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Products",
+        "tags": [
+          "campaign-context",
+          "products"
+        ]
+      },
+      "post": {
+        "operationId": "create_products_api_v1_workspaces__workspace_id__products_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Products Api V1 Workspaces  Workspace Id  Products Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Products",
+        "tags": [
+          "campaign-context",
+          "products"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/products/{item_id}": {
+      "delete": {
+        "operationId": "delete_products_api_v1_workspaces__workspace_id__products__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Products",
+        "tags": [
+          "campaign-context",
+          "products"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests": {
+      "get": {
+        "operationId": "list_scout_requests_api_v1_workspaces__workspace_id__scout_requests_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "location_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScoutRequestOut"
+                  },
+                  "title": "Response List Scout Requests Api V1 Workspaces  Workspace Id  Scout Requests Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scout Requests",
+        "tags": [
+          "scout-requests"
+        ]
+      },
+      "post": {
+        "operationId": "create_scout_request_api_v1_workspaces__workspace_id__scout_requests_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoutRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Scout Request",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}": {
+      "get": {
+        "operationId": "get_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scout Request",
+        "tags": [
+          "scout-requests"
+        ]
+      },
+      "put": {
+        "operationId": "update_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoutRequestUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Scout Request",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/pause": {
+      "post": {
+        "operationId": "pause_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause Scout Request",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/resume": {
+      "post": {
+        "operationId": "resume_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Scout Request",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/run": {
+      "post": {
+        "operationId": "run_scout_request_endpoint_api_v1_workspaces__workspace_id__scout_requests__request_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutRunResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Scout Request Endpoint",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/source-preferences": {
+      "get": {
+        "operationId": "list_source_preferences_api_v1_workspaces__workspace_id__source_preferences_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Source Preferences Api V1 Workspaces  Workspace Id  Source Preferences Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Source-Preferences",
+        "tags": [
+          "campaign-context",
+          "sources"
+        ]
+      },
+      "post": {
+        "operationId": "create_source_preferences_api_v1_workspaces__workspace_id__source_preferences_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePrefIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Source Preferences Api V1 Workspaces  Workspace Id  Source Preferences Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Source-Preferences",
+        "tags": [
+          "campaign-context",
+          "sources"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/source-preferences/{item_id}": {
+      "delete": {
+        "operationId": "delete_source_preferences_api_v1_workspaces__workspace_id__source_preferences__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Source-Preferences",
+        "tags": [
+          "campaign-context",
+          "sources"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "system"
+        ]
+      }
+    }
+  }
+}

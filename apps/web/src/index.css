@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 221 83% 45%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 214 32% 91%;
+    --secondary-foreground: 222 47% 20%;
+
+    --muted: 214 32% 93%;
+    --muted-foreground: 215 16% 42%;
+
+    --accent: 199 89% 48%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 62% 34%;
+    --success-foreground: 210 40% 98%;
+
+    --warning: 32 90% 44%;
+    --warning-foreground: 210 40% 98%;
+
+    --border: 214 24% 86%;
+    --input: 214 24% 84%;
+    --ring: 221 83% 53%;
+
+    --radius: 0.6rem;
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 96%;
+
+    --card: 222 44% 11%;
+    --card-foreground: 210 40% 96%;
+
+    --popover: 222 44% 11%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 213 94% 60%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217 33% 18%;
+    --secondary-foreground: 210 40% 96%;
+
+    --muted: 217 33% 16%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 199 89% 54%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 55% 45%;
+    --success-foreground: 222 47% 11%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 222 47% 11%;
+
+    --border: 217 33% 22%;
+    --input: 217 33% 24%;
+    --ring: 213 94% 60%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: hsl(var(--muted));
+  }
+
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--foreground) / 0.06),
+      transparent
+    );
+    animation: shimmer 1.5s infinite;
+  }
+}
