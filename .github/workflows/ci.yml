@@ -23,6 +23,14 @@ concurrency:
 permissions:
   contents: read
 
+# Strict shell for every `run:` step. The default GitHub shell is `bash -e {0}`
+# (no pipefail), so `cmd | tee log` reports tee's exit status and a failing
+# quality command is silently masked as success. Enabling pipefail propagates
+# the left-hand failure; -u catches unset variables; -e stops on first error.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
 env:
   NODE_VERSION: '20'          # repository engines: node >=20 <21
   PYTHON_VERSION: '3.12'      # backend supports >=3.11; 3.12 matches development
@@ -56,6 +64,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: CI failure-propagation regression test
+        # Proves `cmd | tee log` fails the step when `cmd` fails under the
+        # workflow's strict shell (regression guard for the pipefail masking bug).
+        run: npm run test:ci-pipefail
 
       - name: Install workspace dependencies
         run: |
