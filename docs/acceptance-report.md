@@ -1,63 +1,255 @@
 # Phase 1–2 Acceptance Report
 
-Scope: foundation (Phase 1) + scouting → explainable opportunities (Phase 2).
-Phases 3–5 are intentionally out of scope; see [`phase-3-plan.md`](phase-3-plan.md).
+Scope: foundation (Phase 1) + scouting → explainable opportunities (Phase 2), plus the
+security-remediation, CI-reliability, GitHub-Actions, and frontend-lint-toolchain work
+that followed. Phase 3+ is intentionally out of scope; see
+[`phase-3-plan.md`](phase-3-plan.md).
 
-## Verification summary
+## Executive acceptance status
+
+- **Phase 1–2 is complete and accepted.** The production-style vertical slice is
+  implemented end to end (foundation → scouting → explainable, scored opportunities).
+- **`main` is green.** The latest CI run for the accepted commit passes all four
+  required jobs.
+- **Security advisories are remediated.** `npm audit` reports zero vulnerabilities and
+  there are zero open Dependabot security alerts.
+- **CI quality checks now propagate real failures.** The pipefail masking bug is fixed
+  and guarded by a regression test.
+- **Frontend lint tooling is migrated and stable** (ESLint flat config on ESLint 10).
+- **Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.
+
+## Final repository baseline
+
+| Item | Value |
+| --- | --- |
+| Repository | `bolade04/signal_nest` |
+| Default branch | `main` |
+| Accepted `main` SHA | `73c21aca819f680aa986160dba3da4f32f8981a8` |
+| Phase 1–2 squash commit | `8dca455e9592fdec959e57e6d9f741007f421f5f` |
+| Working tree at acceptance | clean (no tracked changes; `git status --short` empty) |
+| Safety branch | `backup/signalnest-phase-1-2-pre-history-stitch` |
+
+The safety branch is retained **intentionally** as a pre-history-stitch snapshot. It is
+**not** the active development branch and should not be built on; `main` is authoritative.
+
+## Delivered architecture
+
+The implemented stack, as present in the repository:
+
+- **Frontend:** React 18 + TypeScript + Vite + React Router + TanStack Query v5 +
+  React Hook Form/Zod + Tailwind + Radix.
+- **Backend:** Python 3.12 + FastAPI modular monolith — DB, migrations, domain logic,
+  pure scoring/geo/claims engines, REST, auth, in-process jobs.
+- **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`).
+- **Default (zero-dependency) local mode:** SQLite, in-process queue, in-memory cache,
+  numpy brute-force vector fallback, local-file storage, mock-first LLM.
+- **Production adapters (implemented behind `APP_MODE=full`, not necessarily deployed):**
+  PostgreSQL, pgvector, Redis, S3-compatible object storage, real LLM providers.
+- **Migrations & contracts:** Alembic migrations; generated `apps/api/openapi.json` and
+  a TypeScript client generated from the OpenAPI schema.
+
+> The production adapters exist and are wired behind env selection. This report does
+> **not** claim any production service is deployed.
+
+## Completed functional vertical slice
+
+Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
+**[P] Planned for Phase 3**.
+
+### Phase 1 — foundation
+- **[T]** Organization / workspace / brand / location model with server-side tenancy:
+  every query scoped by org/workspace/location; client-supplied tenant IDs never
+  trusted (proven by integration tests).
+- **[T]** Multi-location support (Dallas TX, London UK, Lagos NG, Nairobi KE demo
+  markets) with strict per-location data isolation.
+- **[T]** Demo authentication flow (email/password + JWT), RBAC roles, per-domain policy
+  layers.
+- **[T]** Domain models + Alembic migrations for the Phase 1 tables.
+- **[T]** Geography engine (haversine radius 1–200 mi, coverage, geo-relevance) — unit
+  tested.
+- **[T]** REST API — **56 operations across 41 paths** — with OpenAPI documentation.
+- **[T]** Audit logging on sensitive actions.
+- **[T]** Frontend app shell (workspace/location/campaign switchers, breadcrumbs, search,
+  theme, responsive), local auth screens, protected routes.
+- **[T]** Onboarding wizard covering every presence path (website / social / both / GBP /
+  marketplace / offline / brand-new), with autosave + resume.
+- **[T]** Campaign Context Center (products, audiences, competitors, brand voice, offers,
+  claims, source/channel preferences, campaigns) with brand-wide + override model.
+- **[T]** Location & coverage configuration (multi-location manager + Scout Reach radius UI).
+- **[T]** Typed API client generated from OpenAPI; TanStack Query hooks; loading/empty/
+  error states.
+
+### Phase 2 — scouting → explainable opportunities
+- **[T]** Scout request workflow: create / configure / pause / resume / run / review,
+  isolated per workspace+brand+location+market+campaign.
+- **[A]** Fixture-based connectors clearly labeled "Simulated"; live connectors
+  (Reddit, reviews, Trends, Meta Ad Library, TikTok, RSS/news) exist as adapter
+  placeholders only.
+- **[T]** Canonical signal model, normalization, dedupe/cluster, classification.
+- **[T]** Noise gate ("collect broadly, notify selectively") — unit tested.
+- **[T]** Relevance engine with the **<40 ⇒ never recommend action** hard rule — unit tested.
+- **[T]** Geo-relevance resolution with evidence + confidence + `inside_scout_area`.
+- **[T]** Validation → classification bands — unit tested.
+- **[T]** Opportunity + confidence scoring (weighted, explainable breakdowns) — unit tested.
+- **[T]** Decision engine (Act now / Act soon / Monitor / Archive / Stay silent / Block)
+  — unit tested.
+- **[T]** Explanation engine separating **Observed evidence / AI inference / Recommended
+  action**, with claim-safety guard.
+- **[T]** Opportunity Feed (scores, confidence, risk, filters, sorting, search, strict
+  per-location separation) — isolation proven by tests on all four cities.
+- **[T]** Opportunity Detail (evidence vs inference, traceable source URLs, geo evidence,
+  claim warnings, simulated/known-limitation disclosures, status controls).
+- **[T]** HTTP smoke flow proving four-market isolation over the real API.
+- **[A]** LLM is mock-first by default; OpenAI/Anthropic adapters behind env, not
+  exercised in the demo.
+- **[P]** Creative generation, approvals, analytics, live integrations, billing — stubs
+  routing to "coming in Phase 3".
+
+## Security and dependency status
+
+| Control / package | State |
+| --- | --- |
+| GitHub secret scanning | enabled |
+| Push protection | enabled |
+| Dependabot security updates | enabled |
+| Open Dependabot security alerts | **0** at acceptance |
+| `npm audit` | **0 vulnerabilities** |
+| Vite | `7.3.6` |
+| esbuild | `0.28.1` |
+| `@vitejs/plugin-react` | `5.2.0` |
+| TypeScript | `5.9.3` (unchanged; TS 7 deferred) |
+
+Completed remediation sequence (summary):
+
+- Critical Vitest and Vite advisories addressed.
+- Nested vulnerable Vite/esbuild versions removed from the dependency tree.
+- **No `npm` overrides** were used.
+- **No unsupported peer forcing** (`--legacy-peer-deps` / `--force`) was used.
+
+## CI reliability correction
+
+Earlier `command | tee log` pipelines could **hide failures** because the shell did not
+enable `pipefail` — the pipeline reported `tee`'s (successful) exit status, masking a
+failing quality command as green.
+
+Fix:
+
+- The workflow now runs every step under a strict shell:
+
+  ```
+  shell: bash --noprofile --norc -euo pipefail {0}
+  ```
+
+- A maintained regression test verifies failure propagation:
+
+  ```bash
+  npm run test:ci-pipefail
+  ```
+
+- Required checks are now trustworthy.
+- Diagnostic log uploads remain **conditional on failure** only.
+
+> CI runs that predate this fix must not be treated as reliable acceptance evidence.
+> Acceptance evidence below is from the accepted commit, after the fix.
+
+## Current GitHub Actions versions
+
+| Action | Version on `main` |
+| --- | --- |
+| `actions/checkout` | `v7` |
+| `actions/setup-node` | `v6` |
+| `actions/upload-artifact` | `v7` |
+| `actions/setup-python` | `v5` |
+
+Remaining non-blocking warning: `actions/setup-python@v5` emits a Node-runtime
+deprecation annotation in the Python jobs. **The jobs still pass.** Upgrading
+`setup-python` is a small maintenance task, not a Phase 1–2 acceptance blocker (see the
+pre-Phase-3 maintenance queue in [`phase-3-plan.md`](phase-3-plan.md)).
+
+## Frontend lint-toolchain migration
+
+Accepted toolchain:
+
+| Package | Version |
+| --- | --- |
+| ESLint | `10.7.0` (native flat config) |
+| typescript-eslint | `8.63.0` |
+| eslint-plugin-react-hooks | `7.1.1` |
+| eslint-plugin-react-refresh | `0.5.3` |
+| TypeScript | `5.9.3` |
+
+- `.eslintrc.cjs` **removed**; `eslint.config.js` (flat config) **added**.
+- React Hooks findings (React Compiler rule suite, incl. `set-state-in-effect` /
+  `set-state-in-render`) were **remediated in source** — effect-driven state updates were
+  converted to guarded render-phase updates, not silenced.
+- **No broad rule disabling** was introduced.
+- The React Refresh exception is **narrowly limited to UI primitive modules**
+  (`src/components/ui/**`).
+- Frontend test count is now **18**.
+- **No duplicate ESLint major and no invalid peers** remain.
+
+## Final quality evidence
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Backend tests | `npm run test:api` | **38 passed** |
-| Frontend tests | `npm test` | **16 passed** |
-| Type check (web) | `npm run type-check` | clean |
-| Lint (web) | `npm run lint` (`--max-warnings 0`) | clean |
-| Production build | `npm run build` | succeeds (chunk-size warning only) |
-| Schema/type sync | `npm run gen:types` | regenerates cleanly |
+| Deterministic install | `npm ci` | pass |
+| Security audit | `npm audit` | **0 vulnerabilities** |
+| CI pipefail regression | `npm run test:ci-pipefail` | pass |
+| Lint (web) | `npm run lint` (`--max-warnings 0`) | **0 errors, 0 warnings** |
+| Type check (web) | `npm run type-check` | pass |
+| Frontend tests | `npm test` | **18/18** |
+| Backend tests | `npm run test:api` | **38/38** |
+| Ruff (api) | `ruff check` | pass |
+| Production build | `npm run build` | pass (chunk-size warning only) |
+| OpenAPI/type generation | `npm run gen:types` | no drift |
+| Alembic | migration check | no schema drift |
+| HTTP smoke | `npm run smoke` | **13/13** |
+| Four-market isolation | smoke + RTL | pass |
+| Latest `main` CI | four jobs | all passing |
 
-## Requirement checklist
+Latest verified CI run for the accepted commit
+(`73c21aca819f680aa986160dba3da4f32f8981a8`):
 
-### Phase 1 — foundation
-- [x] Dual-mode infra behind adapters (SQLite/in-process/in-memory/local-fs/mock by
-      default; Postgres+pgvector/Redis/S3/real-LLM under `APP_MODE=full`).
-- [x] Auth (email/password + JWT), RBAC roles, per-domain policy layers.
-- [x] Server-side tenancy: every query scoped by org/workspace/location; client tenant
-      IDs never trusted. **Proven by integration tests.**
-- [x] Domain models + Alembic migrations for the Phase 1 tables.
-- [x] Geography engine (haversine radius 1–200 mi, coverage, geo-relevance). **Unit
-      tested.**
-- [x] REST endpoints (56 operations / 41 paths) with OpenAPI documentation.
-- [x] Audit logging on sensitive actions.
-- [x] Frontend app shell (workspace/location/campaign switchers, breadcrumbs, search,
-      theme, responsive), local auth screens, protected routes.
-- [x] Onboarding wizard covering every presence path (website / social / both / GBP /
-      marketplace / offline / brand-new), with autosave + resume.
-- [x] Campaign Context Center (products, audiences, competitors, brand voice, offers,
-      claims, source/channel preferences, campaigns) with brand-wide + override model.
-- [x] Multi-location manager + Scout Reach radius UI.
-- [x] Typed API client generated from OpenAPI; TanStack Query hooks; loading/empty/
-      error states.
+- <https://github.com/bolade04/signal_nest/actions/runs/29213437873> — workflow **CI**,
+  jobs **Frontend quality**, **Backend quality**, **Migrations and API contract**,
+  **Integration smoke** all `success`.
 
-### Phase 2 — scouting → explainable opportunities
-- [x] Scout requests: create / configure / pause / resume / run / review, isolated per
-      workspace+brand+location+market+campaign.
-- [x] Fixture-based connectors clearly labeled "simulated".
-- [x] Canonical signal model, normalization, dedupe/cluster, classification.
-- [x] Noise gate ("collect broadly, notify selectively"). **Unit tested.**
-- [x] Relevance engine with the **<40 ⇒ never recommend action** hard rule. **Unit
-      tested.**
-- [x] Geo-relevance resolution with evidence + confidence + `inside_scout_area`.
-- [x] Validation → classification bands. **Unit tested.**
-- [x] Opportunity + confidence scoring (weighted, explainable breakdowns). **Unit
-      tested.**
-- [x] Decision engine (Act now / Act soon / Monitor / Archive / Stay silent / Block).
-      **Unit tested.**
-- [x] Explanation engine separating **Observed evidence / AI inference / Recommended
-      action**, with claim-safety guard.
-- [x] Opportunity Feed (scores, confidence, risk, filters, sorting, search, strict
-      per-location separation). **Isolation proven by tests on 4 cities.**
-- [x] Opportunity Detail (evidence vs inference, traceable source URLs, geo evidence,
-      claim warnings, known-limitation + simulated disclosures, status controls).
-- [x] Multi-business, multi-location fixtures (Dallas / London / Lagos / Nairobi).
+## Governance and protection
+
+Final ruleset state (restored and active at acceptance):
+
+| Property | Value |
+| --- | --- |
+| Ruleset ID | `18820692` |
+| Name | `main protection` |
+| Enforcement | active |
+| Required approvals | 1 |
+| Dismiss stale approvals on push | yes |
+| Last-push approval required | yes |
+| Review-thread resolution required | yes |
+| Required status checks (strict) | Frontend quality · Backend quality · Migrations and API contract · Integration smoke |
+| Bypass actors | none |
+| Force pushes | blocked |
+| Branch deletion | blocked |
+
+A temporary review-rule relaxation was used for owner-authored PRs and **restored
+immediately, with no administrator bypass**. The authoritative final state is fully
+restored protection as tabulated above.
+
+## Known accepted limitations
+
+- Large frontend bundle/chunk warning remains (single chunk >500 kB; no route-level
+  code splitting) — non-blocking.
+- Backend Pydantic v2 class-based `Config` deprecation warnings remain — non-blocking.
+- `actions/setup-python@v5` Node-runtime annotation remains — non-blocking.
+- Production infrastructure adapters (PostgreSQL/pgvector/Redis/S3) are implemented but
+  not necessarily deployed.
+- Real external AI/provider integrations may still use mock-first behavior.
+- Live external data connectors are fixture-based ("Simulated") placeholders.
+- Auth is the local email/password + JWT provider only (no SSO/OAuth, refresh rotation,
+  or rate-limit backend).
+- Phase 3 features are not yet implemented.
+- TypeScript 7 upgrade (Dependabot PR #6) is intentionally deferred.
 
 ## Review checklist (for a human reviewer)
 
@@ -72,20 +264,3 @@ Phases 3–5 are intentionally out of scope; see [`phase-3-plan.md`](phase-3-pla
    traceable source link, score breakdowns, and simulated/known-limitation labels;
    change its status.
 8. Run `npm test` and `npm run test:api`; confirm both green.
-
-## Known limitations
-
-- **Simulated data.** All signal sources are fixture-based and clearly labeled
-  "Simulated"; no live connectors (Reddit, reviews, Trends, Meta Ad Library, TikTok)
-  are wired yet — they exist as adapter placeholders.
-- **LLM is mock by default.** Classification/explanation use a deterministic offline
-  mock; OpenAI/Anthropic adapters exist behind env but are not exercised in the demo.
-- **Integration tests read seeded state.** `test_api_isolation.py` runs against the
-  shared seeded SQLite DB and skips if demo data is absent; it does not create/tear
-  down an isolated database per test.
-- **Auth is the local provider.** Email/password + JWT only; no SSO/OAuth, refresh
-  rotation, or rate-limit backend (a placeholder middleware is present).
-- **Web bundle is a single chunk** (>500 kB) — no route-level code splitting yet.
-- **Pydantic v2 deprecation warnings** remain for class-based `Config` in some schemas
-  (non-blocking).
-- **Phase 3+ features are stubs**, routing to a clearly-labeled "coming in Phase 3".

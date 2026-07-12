@@ -78,10 +78,10 @@ isolation and geo accuracy.
 
 ## Testing
 
-- **Frontend:** 16 tests (Vitest + React Testing Library + MSW) covering the app
-  shell, auth, onboarding, campaign context, scout requests, and the opportunity
-  feed/detail — including three tests that prove Dallas/London/Lagos/Nairobi never
-  leak across locations.
+- **Frontend:** 18 tests (Vitest + React Testing Library + MSW) covering the app
+  shell, auth, onboarding, campaign context, scout requests, locations, and the
+  opportunity feed/detail — including tests that prove Dallas/London/Lagos/Nairobi
+  never leak across locations.
 - **Backend:** 38 tests (pytest) — pure-engine unit tests for relevance, opportunity
   and confidence scoring, the noise gate, validation, the decision engine, the
   geography engine, and claim safety; plus integration tests that drive the real
