@@ -74,6 +74,7 @@ isolation and geo accuracy.
 | `npm run test:api` | Backend test suite (pytest) |
 | `npm run lint` / `npm run type-check` | Web lint (0 warnings) / strict tsc |
 | `npm run build` | Production web build |
+| `npm run smoke` | Start the API, run the HTTP isolation smoke test, stop it |
 
 ## Testing
 
@@ -86,9 +87,16 @@ isolation and geo accuracy.
   geography engine, and claim safety; plus integration tests that drive the real
   FastAPI app to prove auth enforcement and per-location isolation over HTTP.
 
-See [`docs/testing.md`](docs/testing.md) for the full strategy and
-[`docs/acceptance-report.md`](docs/acceptance-report.md) for the Phase 1–2 acceptance
-checklist and known limitations.
+**Continuous integration.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs
+four gates — **Frontend quality**, **Backend quality**, **Migrations and API contract**,
+and **Integration smoke** — on pull requests to `main`, pushes to `main` and `feature/**`,
+and manual dispatch. CI runs entirely in zero-dependency local mode (SQLite, in-process
+adapters, fixture connectors, mock LLM); **no Docker, PostgreSQL, Redis or paid API keys
+are required.**
+
+See [`docs/testing.md`](docs/testing.md) for the full strategy (including how to run each
+CI gate locally) and [`docs/acceptance-report.md`](docs/acceptance-report.md) for the
+Phase 1–2 acceptance checklist and known limitations.
 
 ## Full mode (optional)
 

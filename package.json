@@ -22,6 +22,7 @@
     "type-check": "npm run type-check --workspace apps/web",
     "test": "npm run test --workspace apps/web",
     "test:api": "bash scripts/run-tests-api.sh",
+    "smoke": "bash scripts/ci-smoke.sh",
     "format": "npm run format --workspace apps/web",
     "migrate": "bash scripts/migrate.sh",
     "migrate:down": "bash scripts/migrate-down.sh",

@@ -66,3 +66,76 @@ independent cities.
 - `npm run type-check` — strict `tsc -b --noEmit`, clean.
 - `npm run lint` — ESLint with `--max-warnings 0`, clean.
 - `npm run build` — production web build succeeds (single large-chunk warning only).
+
+## Continuous integration
+
+GitHub Actions runs the Phase 1–2 quality gates on every change:
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
+**Triggers**
+
+- Pull requests targeting `main`
+- Pushes to `main`
+- Pushes to `feature/**`
+- Manual `workflow_dispatch`
+
+Concurrency is grouped per workflow + branch/PR with `cancel-in-progress: true`, so a
+newer commit cancels older in-flight runs. Workflow permissions are `contents: read`.
+
+**Jobs** (each name is stable and suitable as a required status check):
+
+| Check name | What it runs |
+| --- | --- |
+| **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build` |
+| **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest` |
+| **Migrations and API contract** | empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`, then `npm run gen:types` + `git diff --exit-code` (contract drift) |
+| **Integration smoke** | after the three gates pass: migrate + seed, start the API, wait on `/health`, run the HTTP isolation smoke, always stop the server |
+
+**Environment.** CI runs entirely in the default zero-dependency **local** mode:
+SQLite (`DATABASE_URL=sqlite:///./signalnest.db`), in-process queue
+(`QUEUE_BACKEND=inprocess`), in-memory cache (`CACHE_BACKEND=memory`), brute-force
+vector index (`VECTOR_BACKEND=bruteforce`), local-file storage
+(`STORAGE_BACKEND=local`), the fixture connectors, and the deterministic mock LLM
+(`LLM_PROVIDER=mock`, `LLM_MOCK_SEED=signalnest-ci`), with `ENVIRONMENT=test`. These
+are the actual `Settings` field names (`apps/api/app/core/config.py`). **Docker,
+PostgreSQL, Redis and paid OpenAI/Anthropic API keys are not required and no secrets
+are used.** Runtimes: Node 20 (repo engines) and Python 3.12. On failure, each job
+uploads its logs (`ci-logs/`, `api-smoke.log`) as artifacts.
+
+**Recommended required status checks for `main`:** Frontend quality, Backend quality,
+Migrations and API contract, Integration smoke.
+
+### Running each CI gate locally
+
+```bash
+npm ci                       # clean install (matches CI)
+npm run bootstrap            # create apps/api/.venv (or: python -m venv apps/api/.venv && .venv/bin/pip install -e 'apps/api[dev]')
+
+# Frontend quality
+npm run lint
+npm run type-check
+npm test
+npm run build
+
+# Backend quality
+cd apps/api && .venv/bin/python -m ruff check . && cd ../..
+npm run demo:setup
+npm run test:api
+
+# Migrations and API contract
+cd apps/api
+rm -f signalnest.db
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m alembic check
+.venv/bin/python -m app.db.seed
+.venv/bin/python -m app.db.seed          # idempotent re-run
+.venv/bin/python -m alembic downgrade base
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m app.db.seed --reset
+cd ../..
+npm run gen:types && git diff --exit-code -- apps/api/openapi.json apps/web/src/api/schema.d.ts
+
+# Integration smoke (starts + stops the API for you)
+npm run demo:setup
+npm run smoke
+```
