@@ -24,8 +24,8 @@ that followed. Phase 3+ is intentionally out of scope; see
 | --- | --- |
 | Repository | `bolade04/signal_nest` |
 | Default branch | `main` |
-| Accepted `main` SHA | `73c21aca819f680aa986160dba3da4f32f8981a8` |
-| Phase 1–2 squash commit | `8dca455e9592fdec959e57e6d9f741007f421f5f` |
+| Current accepted & maintained `main` SHA | `b5965d354a0c2335c2ac9cf283fd28b56d8d612d` |
+| Original Phase 1–2 implementation squash commit | `8dca455e9592fdec959e57e6d9f741007f421f5f` |
 | Working tree at acceptance | clean (no tracked changes; `git status --short` empty) |
 | Safety branch | `backup/signalnest-phase-1-2-pre-history-stitch` |
 
@@ -159,12 +159,19 @@ Fix:
 | `actions/checkout` | `v7` |
 | `actions/setup-node` | `v6` |
 | `actions/upload-artifact` | `v7` |
-| `actions/setup-python` | `v5` |
+| `actions/setup-python` | `v6` |
 
-Remaining non-blocking warning: `actions/setup-python@v5` emits a Node-runtime
-deprecation annotation in the Python jobs. **The jobs still pass.** Upgrading
-`setup-python` is a small maintenance task, not a Phase 1–2 acceptance blocker (see the
-pre-Phase-3 maintenance queue in [`phase-3-plan.md`](phase-3-plan.md)).
+`actions/setup-python` was upgraded from v5 to **v6** (PR #19, squash commit
+`b5965d354a0c2335c2ac9cf283fd28b56d8d612d`). v6:
+
+- runs internally on **Node 24** (its own action runtime; this is unrelated to
+  SignalNest's application/frontend runtime, which remains **Node 20**),
+- continues to install the configured **Python 3.12** runtime (CI installs CPython
+  3.12.13),
+- preserves pip caching and `cache-dependency-path` behavior,
+- introduced **no workflow-permission change** (jobs remain `contents: read`), and
+- **removed the previous Node-20 action-runtime deprecation annotation** — no CI
+  annotations remain.
 
 ## Frontend lint-toolchain migration
 
@@ -205,14 +212,14 @@ Accepted toolchain:
 | Alembic | migration check | no schema drift |
 | HTTP smoke | `npm run smoke` | **13/13** |
 | Four-market isolation | smoke + RTL | pass |
-| Latest `main` CI | four jobs | all passing |
+| Latest `main` CI | four jobs | all passing (no annotations) |
 
-Latest verified CI run for the accepted commit
-(`73c21aca819f680aa986160dba3da4f32f8981a8`):
+Latest verified CI run for the current accepted commit
+(`b5965d354a0c2335c2ac9cf283fd28b56d8d612d`):
 
-- <https://github.com/bolade04/signal_nest/actions/runs/29213437873> — workflow **CI**,
+- <https://github.com/bolade04/signal_nest/actions/runs/29215104167> — workflow **CI**,
   jobs **Frontend quality**, **Backend quality**, **Migrations and API contract**,
-  **Integration smoke** all `success`.
+  **Integration smoke** all `success`, with **no remaining CI annotations**.
 
 ## Governance and protection
 
@@ -241,7 +248,6 @@ restored protection as tabulated above.
 - Large frontend bundle/chunk warning remains (single chunk >500 kB; no route-level
   code splitting) — non-blocking.
 - Backend Pydantic v2 class-based `Config` deprecation warnings remain — non-blocking.
-- `actions/setup-python@v5` Node-runtime annotation remains — non-blocking.
 - Production infrastructure adapters (PostgreSQL/pgvector/Redis/S3) are implemented but
   not necessarily deployed.
 - Real external AI/provider integrations may still use mock-first behavior.
@@ -250,6 +256,11 @@ restored protection as tabulated above.
   or rate-limit backend).
 - Phase 3 features are not yet implemented.
 - TypeScript 7 upgrade (Dependabot PR #6) is intentionally deferred.
+
+### Completed maintenance
+- `actions/setup-python` was upgraded to **v6** (PR #19), and the prior Node-runtime
+  deprecation annotation is **no longer present** — this is no longer an active
+  limitation.
 
 ## Review checklist (for a human reviewer)
 
