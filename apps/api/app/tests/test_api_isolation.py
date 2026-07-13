@@ -99,8 +99,17 @@ def test_system_readiness_is_ready_in_seeded_local_mode(client: TestClient):
     assert body["unconfigured"] == []
 
 
-def test_system_capabilities_is_local_and_secret_free(client: TestClient):
+def test_system_capabilities_requires_authentication(client: TestClient):
+    # The capability view enumerates infrastructure topology and must not be
+    # anonymously reachable (no infra fingerprinting without a valid caller).
     resp = client.get(f"{API}/system/capabilities")
+    assert resp.status_code == 401
+
+
+def test_system_capabilities_is_local_and_secret_free(
+    client: TestClient, auth: dict[str, str]
+):
+    resp = client.get(f"{API}/system/capabilities", headers=auth)
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_local_mode"] is True

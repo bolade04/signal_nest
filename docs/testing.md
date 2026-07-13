@@ -5,7 +5,7 @@ Two independent suites, each runnable on its own.
 | Suite | Command | Count | Stack |
 | --- | --- | --- | --- |
 | Frontend | `npm test` | 19 | Vitest + React Testing Library + MSW v2 |
-| Backend | `npm run test:api` | 60 | pytest |
+| Backend | `npm run test:api` | 61 | pytest |
 
 ## Backend (`apps/api`)
 
@@ -43,8 +43,9 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
 
   The same module also covers the Phase 3A **system** endpoints against the seeded
   instance: `/system/health` is live, `/system/readiness` reports ready (schema
-  migrated + all backends configured), and `/system/capabilities` reports local mode
-  and carries no secret material.
+  migrated + all backends configured), and `/system/capabilities` requires
+  authentication (anonymous callers are rejected) then reports local mode and carries no
+  secret material.
 - **`test_runtime_foundation.py`** (Phase 3A runtime foundation — pure unit, no DB)
   - Configuration rejects invalid production combinations (full mode + SQLite, mock LLM
     in production, missing secret key, real provider without an API key, dev fallback in

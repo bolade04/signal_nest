@@ -9,19 +9,25 @@
   capability is bound to and whether it is configured. Never exposes URLs, keys, bucket
   names or endpoints.
 
-These endpoints are unauthenticated on purpose (no tenant data is returned) and expose
-no secrets, so they are safe for load balancers and platform probes.
+``health`` and ``readiness`` are unauthenticated on purpose: they return no tenant data
+and no secrets, so they are safe for load balancers and platform probes that cannot
+authenticate. ``capabilities`` enumerates the infrastructure topology (environment,
+provider and backend names, and configuration gaps); although it carries no secrets, that
+detail is operational and must not be anonymously enumerable, so it requires an
+authenticated caller.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy import inspect
 
+from app.auth.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.runtime import build_runtime_report
 from app.db.session import engine
+from app.organizations.models import User
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -70,7 +76,9 @@ def system_health() -> HealthOut:
 
 
 @router.get("/capabilities", response_model=CapabilitiesOut)
-def system_capabilities() -> CapabilitiesOut:
+def system_capabilities(_user: User = Depends(get_current_user)) -> CapabilitiesOut:
+    # Requires authentication: this view enumerates the infrastructure topology, so it
+    # must not be anonymously reachable even though it exposes no secrets.
     report = build_runtime_report()
     return CapabilitiesOut(**report.to_public_dict())
 

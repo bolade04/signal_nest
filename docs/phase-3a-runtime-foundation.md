@@ -12,7 +12,7 @@ unchanged.
 | --- | --- | --- |
 | Error taxonomy | `app/core/errors.py` | `ConfigurationError`, `AdapterNotConfiguredError`, `CapabilityUnavailableError` (all `503`). Production placeholders **fail explicitly** rather than partially activating. |
 | Runtime capability model | `app/core/runtime.py` | A **secret-free**, pure read model over `Settings`: per-capability backend, `configured`, `is_local`, `requires_external`. Never surfaces URLs, keys, buckets or endpoints. |
-| System endpoints | `app/system/routes.py` | `GET {prefix}/system/health` (liveness), `/system/readiness` (schema migrated + all backends configured → `503` when not ready), `/system/capabilities` (secret-free introspection). |
+| System endpoints | `app/system/routes.py` | `GET {prefix}/system/health` (liveness, anonymous probe), `/system/readiness` (schema migrated + all backends configured → `503` when not ready, anonymous probe), `/system/capabilities` (secret-free introspection, **requires authentication** so infrastructure topology is not anonymously enumerable). |
 | Tenant execution context | `app/jobs/context.py` | `ExecutionContext` (org / workspace / location / campaign + correlation ids) so isolation travels **with the job**, plus a `scope_matches` guard. |
 | Versioned job contracts | `app/jobs/contracts.py` | `JobEnvelope` with `contract_version="1"`, deterministic `envelope_hash`, JSON-serializable message form. `unwrap()` accepts both the envelope and the legacy bare payload. |
 | Pipeline wiring | `app/jobs/pipeline.py`, `app/scouting_requests/routes.py` | The run endpoint now enqueues a versioned envelope carrying tenant scope; the handler unwraps either form and **refuses** a request whose scope does not match the declared context. |

@@ -1935,7 +1935,9 @@ export interface operations {
     system_capabilities_api_v1_system_capabilities_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1948,6 +1950,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilitiesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

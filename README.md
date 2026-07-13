@@ -82,7 +82,7 @@ isolation and geo accuracy.
   shell, auth, onboarding, campaign context, scout requests, locations, the
   opportunity feed/detail, and the Settings runtime-status panel — including tests that
   prove Dallas/London/Lagos/Nairobi never leak across locations.
-- **Backend:** 60 tests (pytest) — pure-engine unit tests for relevance, opportunity
+- **Backend:** 61 tests (pytest) — pure-engine unit tests for relevance, opportunity
   and confidence scoring, the noise gate, validation, the decision engine, the
   geography engine, and claim safety; the Phase 3A runtime-foundation unit tests
   (configuration rejection, capability registry, versioned job contracts, tenant
