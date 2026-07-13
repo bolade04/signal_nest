@@ -3716,6 +3716,117 @@
         "title": "ValidationEvidenceOut",
         "type": "object"
       },
+      "WorkerFleetDiagnosticsOut": {
+        "description": "Operator fleet snapshot: aggregate health + coarse per-worker summaries.",
+        "properties": {
+          "active_count": {
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "stale_count": {
+            "title": "Stale Count",
+            "type": "integer"
+          },
+          "status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Status Counts",
+            "type": "object"
+          },
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerSummaryOut"
+            },
+            "title": "Workers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status_counts",
+          "active_count",
+          "stale_count",
+          "workers"
+        ],
+        "title": "WorkerFleetDiagnosticsOut",
+        "type": "object"
+      },
+      "WorkerSummaryOut": {
+        "description": "Coarse per-worker lifecycle summary (no identity or build metadata).",
+        "properties": {
+          "concurrency": {
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "queue_backend": {
+            "title": "Queue Backend",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stopped_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped At"
+          },
+          "supported_job_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Job Types",
+            "type": "array"
+          },
+          "worker_type": {
+            "title": "Worker Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "worker_type",
+          "status",
+          "concurrency",
+          "queue_backend",
+          "supported_job_types",
+          "started_at",
+          "last_heartbeat_at",
+          "stopped_at"
+        ],
+        "title": "WorkerSummaryOut",
+        "type": "object"
+      },
       "WorkspaceCreate": {
         "properties": {
           "name": {
@@ -4133,6 +4244,68 @@
           }
         },
         "summary": "Internal Readiness",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/workers": {
+      "get": {
+        "description": "Coarse worker-fleet diagnostics for operators.\n\nReports the fleet's aggregate health (status counts, active/stale totals)\nand a per-worker lifecycle summary. Stale is derived live from the configured\nthreshold so the count is accurate regardless of sweep cadence. This never\nexposes a worker id, build revision, host fingerprint, URL or raw error.",
+        "operationId": "internal_workers_api_v1_internal_system_workers_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerFleetDiagnosticsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Workers",
         "tags": [
           "internal"
         ]

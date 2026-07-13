@@ -165,6 +165,7 @@ def test_internal_capabilities_is_detailed_and_secret_free(
         "vector",
         "storage",
         "llm",
+        "worker_registry",
     }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
@@ -194,6 +195,7 @@ def test_internal_readiness_reports_probe_diagnostics(
         "vector",
         "storage",
         "llm",
+        "worker_registry",
     }
     # Diagnostics carry durations but never secret material.
     for probe in body["probes"]:
@@ -241,6 +243,38 @@ def test_internal_jobs_is_diagnostics_and_secret_free(
     assert isinstance(body["status_counts"], dict)
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
+        assert forbidden not in blob
+
+
+def test_internal_workers_requires_operator(client: TestClient):
+    assert client.get(f"{API}/internal/system/workers").status_code == 401
+    non_operator = _register_non_operator(client)
+    resp = client.get(f"{API}/internal/system/workers", headers=non_operator)
+    assert resp.status_code == 403
+
+
+def test_internal_workers_is_coarse_and_secret_free(
+    client: TestClient, auth: dict[str, str]
+):
+    resp = client.get(f"{API}/internal/system/workers", headers=auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"status_counts", "active_count", "stale_count", "workers"}
+    assert isinstance(body["status_counts"], dict)
+    assert isinstance(body["active_count"], int)
+    assert isinstance(body["stale_count"], int)
+    # The fleet view is coarse: it never enumerates worker identity or build
+    # provenance, nor any infrastructure secret.
+    blob = resp.text.lower()
+    for forbidden in (
+        "worker_id",
+        "build_revision",
+        "host_fingerprint",
+        "application_version",
+        "password",
+        "redis://",
+        "postgresql://",
+    ):
         assert forbidden not in blob
 
 

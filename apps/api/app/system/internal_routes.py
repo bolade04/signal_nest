@@ -16,10 +16,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_operator
+from app.core.config import get_settings
 from app.core.runtime import build_runtime_report
 from app.db.session import get_db
 from app.jobs.models import Job
 from app.jobs.schemas import JobDiagnosticsOut, JobOperatorOut
+from app.jobs.worker_registry import worker_registry
+from app.jobs.worker_schemas import WorkerFleetDiagnosticsOut, WorkerSummaryOut
 from app.organizations.models import User
 from app.system.probes import run_readiness_probes
 
@@ -98,4 +101,27 @@ def internal_jobs(
     return JobDiagnosticsOut(
         status_counts={str(k): int(v) for k, v in counts.items()},
         recent=[JobOperatorOut.model_validate(j) for j in recent],
+    )
+
+
+@router.get("/workers", response_model=WorkerFleetDiagnosticsOut)
+def internal_workers(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _operator: User = Depends(require_operator),
+) -> WorkerFleetDiagnosticsOut:
+    """Coarse worker-fleet diagnostics for operators.
+
+    Reports the fleet's aggregate health (status counts, active/stale totals)
+    and a per-worker lifecycle summary. Stale is derived live from the configured
+    threshold so the count is accurate regardless of sweep cadence. This never
+    exposes a worker id, build revision, host fingerprint, URL or raw error.
+    """
+    stale_after = get_settings().worker_stale_after_seconds
+    rows = worker_registry.list_workers(db, limit=limit)
+    return WorkerFleetDiagnosticsOut(
+        status_counts=worker_registry.status_counts(db),
+        active_count=worker_registry.active_count(db),
+        stale_count=worker_registry.stale_count(db, stale_after_seconds=stale_after),
+        workers=[WorkerSummaryOut.model_validate(r, from_attributes=True) for r in rows],
     )

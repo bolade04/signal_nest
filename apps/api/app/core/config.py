@@ -54,12 +54,56 @@ class Settings(BaseSettings):
     # Default: local SQLite file next to the api app.
     database_url: str = Field(default="sqlite:///./signalnest.db", repr=False)
 
+    # --- PostgreSQL connection pool (full mode only) -------------------------
+    # These tune the SQLAlchemy QueuePool used for a PostgreSQL engine. They are
+    # ignored for SQLite (which uses SQLAlchemy's default single-connection pool).
+    #: Steady-state pooled connections held open to PostgreSQL.
+    db_pool_size: int = 5
+    #: Extra connections opened past the pool under burst load (returned after use).
+    db_max_overflow: int = 10
+    #: Seconds a caller waits for a pooled connection before failing.
+    db_pool_timeout_seconds: float = 30.0
+    #: Recycle a pooled connection after this many seconds (defeats stale/idle
+    #: server-side disconnects). Must be > 0.
+    db_pool_recycle_seconds: float = 1800.0
+    #: TCP connect timeout for a new PostgreSQL connection (seconds).
+    db_connect_timeout_seconds: float = 10.0
+    #: application_name reported to PostgreSQL for observability. Non-secret.
+    db_application_name: str = "signalnest-api"
+
     # --- Full-mode services (optional in local mode) -------------------------
     redis_url: str | None = Field(default=None, repr=False)
     storage_backend: Literal["local", "s3"] = "local"
     s3_bucket: str | None = Field(default=None, repr=False)
     s3_endpoint_url: str | None = Field(default=None, repr=False)
+    s3_region: str | None = None
+    #: Whether the S3 client uses TLS. Only turn off for a local MinIO over http.
+    s3_use_ssl: bool = True
+    #: Optional explicit S3 credentials. When unset the SDK's default credential
+    #: chain (IAM role, env, profile) is used. Secret-bearing so repr=False.
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
+    #: Reject an upload whose body exceeds this many bytes (checked before put).
+    s3_max_object_bytes: int = 25 * 1024 * 1024
+    #: Bounded lifetime for a generated pre-signed URL (seconds).
+    s3_signed_url_ttl_seconds: int = 900
+    #: Bounded SDK socket/connect timeout and retry ceiling for S3 calls.
+    s3_operation_timeout_seconds: float = 10.0
+    s3_max_retries: int = 3
     local_storage_dir: str = "./storage"
+
+    # --- Redis tuning (cache + queue coordination, full mode only) -----------
+    #: Bounded Redis connection pool size shared by the cache and coordination.
+    redis_pool_size: int = 10
+    #: Socket/connect timeout for a single Redis operation (seconds).
+    redis_operation_timeout_seconds: float = 2.0
+    #: Namespace prefix applied to every Redis key this app writes.
+    redis_key_prefix: str = "signalnest"
+    #: Pub/sub channel used to signal "a durable job is available". Coordination
+    #: only — the database remains the authoritative source of queued work.
+    redis_notify_channel: str = "signalnest:jobs:available"
+    #: Bounded TTL for an optional Redis advisory lock (seconds). Must be > 0.
+    redis_lock_ttl_seconds: float = 30.0
 
     # --- Vector search -------------------------------------------------------
     vector_backend: Literal["bruteforce", "pgvector"] = "bruteforce"
@@ -102,6 +146,29 @@ class Settings(BaseSettings):
     #: Optional TTL for a cached readiness result (seconds). 0 disables caching.
     readiness_cache_ttl_seconds: float = 0.0
 
+    # --- Worker fleet registry (Phase 3A.4a) ---------------------------------
+    #: Logical worker class recorded in the registry (e.g. "durable-jobs").
+    worker_type: str = "durable-jobs"
+    #: A registration whose heartbeat is older than this is considered stale.
+    #: Must be strictly greater than worker_heartbeat_seconds so a healthy worker
+    #: is never flagged stale between beats.
+    worker_stale_after_seconds: float = 60.0
+    #: How many times worker startup retries a failed registry write before
+    #: giving up. Bounded; 0 means a single attempt with no retry.
+    worker_registration_retry_limit: int = 3
+    #: Delay between registration retries (seconds). Must be >= 0.
+    worker_registration_retry_delay_seconds: float = 1.0
+    #: Upper bound on the length of a worker id (guards the registry column and
+    #: rejects absurd operator-supplied identifiers). Must be >= 1.
+    worker_id_max_length: int = 128
+    #: When true, API readiness treats a missing/stale worker fleet as a failing
+    #: (required) condition. Default false: worker presence is informational and
+    #: API liveness never depends on a worker being up.
+    require_worker_fleet: bool = False
+    #: Non-secret build identifiers recorded in the worker registry for support.
+    application_version: str = "0.0.0"
+    build_revision: str | None = None
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None
@@ -121,8 +188,29 @@ class Settings(BaseSettings):
 
     # --- Derived helpers -----------------------------------------------------
     @property
+    def db_backend_name(self) -> str:
+        """SQLAlchemy dialect backend name for ``database_url``.
+
+        Uses ``make_url`` rather than string prefix matching so that URLs with a
+        driver suffix (``postgresql+psycopg://``) resolve to their true backend
+        (``postgresql``). Returns ``""`` for an unparseable URL, which the
+        validator rejects.
+        """
+        from sqlalchemy.engine import make_url
+        from sqlalchemy.exc import ArgumentError
+
+        try:
+            return make_url(self.database_url).get_backend_name()
+        except (ArgumentError, ValueError):
+            return ""
+
+    @property
     def is_sqlite(self) -> bool:
-        return self.database_url.startswith("sqlite")
+        return self.db_backend_name == "sqlite"
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.db_backend_name == "postgresql"
 
     @property
     def is_production_like(self) -> bool:
@@ -198,6 +286,25 @@ class Settings(BaseSettings):
         # valid and must fail fast rather than surfacing as a runtime error.
         if not self.database_url.strip():
             errors.append("database_url must not be empty")
+        elif not self.db_backend_name:
+            # Non-empty but unparseable by SQLAlchemy's make_url (malformed URL).
+            errors.append("database_url is malformed and cannot be parsed")
+
+        # PostgreSQL connection-pool bounds. These apply whenever a PostgreSQL
+        # engine will be built; guard against pools that cannot serve traffic.
+        if self.is_postgres:
+            if self.db_pool_size < 1:
+                errors.append("db_pool_size must be >= 1")
+            if self.db_max_overflow < 0:
+                errors.append("db_max_overflow must be >= 0")
+            if self.db_pool_timeout_seconds <= 0:
+                errors.append("db_pool_timeout_seconds must be greater than 0")
+            if self.db_pool_recycle_seconds <= 0:
+                errors.append("db_pool_recycle_seconds must be greater than 0")
+            if self.db_connect_timeout_seconds <= 0:
+                errors.append("db_connect_timeout_seconds must be greater than 0")
+            if not self.db_application_name.strip():
+                errors.append("db_application_name must not be empty")
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")
@@ -241,6 +348,64 @@ class Settings(BaseSettings):
             errors.append("job_max_payload_bytes must be greater than 0")
         if self.readiness_cache_ttl_seconds < 0:
             errors.append("readiness_cache_ttl_seconds must be >= 0")
+
+        # Redis tuning bounds. Only enforced when Redis is actually selected for
+        # the cache or queue coordination, since the values are otherwise unused.
+        # Presence of ``redis_url`` itself is a soft, environment-gated concern
+        # (enforced above for full mode); selecting Redis without a URL in local
+        # or development is surfaced as an *unconfigured* capability by the runtime
+        # report rather than failing Settings construction.
+        redis_selected = self.cache_backend == "redis" or self.queue_backend == "redis"
+        if redis_selected:
+            if self.redis_pool_size < 1:
+                errors.append("redis_pool_size must be >= 1")
+            if self.redis_operation_timeout_seconds <= 0:
+                errors.append("redis_operation_timeout_seconds must be greater than 0")
+            if not self.redis_key_prefix.strip():
+                errors.append("redis_key_prefix must not be empty")
+            if not self.redis_notify_channel.strip():
+                errors.append("redis_notify_channel must not be empty")
+            if self.redis_lock_ttl_seconds <= 0:
+                errors.append("redis_lock_ttl_seconds must be greater than 0")
+
+        # S3 object-storage bounds. Only enforced when S3 is selected. Presence of
+        # ``s3_bucket`` is a soft, environment-gated concern (enforced above for
+        # staging/production); selecting S3 without a bucket in local/development
+        # is surfaced as an *unconfigured* capability, not a construction failure.
+        if self.storage_backend == "s3":
+            if self.s3_max_object_bytes <= 0:
+                errors.append("s3_max_object_bytes must be greater than 0")
+            if self.s3_signed_url_ttl_seconds <= 0:
+                errors.append("s3_signed_url_ttl_seconds must be greater than 0")
+            if self.s3_operation_timeout_seconds <= 0:
+                errors.append("s3_operation_timeout_seconds must be greater than 0")
+            if self.s3_max_retries < 0:
+                errors.append("s3_max_retries must be >= 0")
+            # Credentials are all-or-nothing: supplying only one half cannot work
+            # and silently falling back to the ambient chain would be surprising.
+            if bool(self.s3_access_key_id) != bool(self.s3_secret_access_key):
+                errors.append(
+                    "s3_access_key_id and s3_secret_access_key must be set together"
+                )
+
+        # Worker fleet registry bounds.
+        if self.worker_stale_after_seconds <= self.worker_heartbeat_seconds:
+            errors.append(
+                "worker_stale_after_seconds must be > worker_heartbeat_seconds so a "
+                "healthy worker is never flagged stale between heartbeats"
+            )
+        if self.worker_registration_retry_limit < 0:
+            errors.append("worker_registration_retry_limit must be >= 0")
+        if self.worker_registration_retry_delay_seconds < 0:
+            errors.append("worker_registration_retry_delay_seconds must be >= 0")
+        if self.worker_id_max_length < 1:
+            errors.append("worker_id_max_length must be >= 1")
+        if self.worker_id is not None and len(self.worker_id) > self.worker_id_max_length:
+            errors.append(
+                f"worker_id must be <= worker_id_max_length ({self.worker_id_max_length})"
+            )
+        if not self.worker_type.strip():
+            errors.append("worker_type must not be empty")
 
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))

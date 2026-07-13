@@ -29,6 +29,15 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    # fakeredis backs the Redis cache + queue-coordination tests without a real
+    # Redis server, keeping the local suite zero-infrastructure.
+    "fakeredis>=2.21",
+    # redis client is needed to import/construct the adapters under test.
+    "redis>=5.0",
+    # psycopg lets tests build a PostgreSQL engine and (when TEST_POSTGRES_URL is
+    # set) run the real SKIP LOCKED claim integration tests. Dialect SQL
+    # compilation tests run without a server.
+    "psycopg[binary]>=3.1",
 ]
 
 [build-system]

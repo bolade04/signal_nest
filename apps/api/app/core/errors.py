@@ -80,6 +80,132 @@ class CapabilityUnavailableError(SignalNestError):
     code = "capability_unavailable"
 
 
+# --- Production data-plane adapter / worker-fleet taxonomy (Phase 3A.4a) ------
+#
+# Every adapter (PostgreSQL, Redis cache, Redis coordination, object storage) and
+# every worker-fleet operation raises one of these instead of leaking a raw
+# driver/SDK exception. Each carries a stable ``code``, a **static safe message**
+# (a raw exception message is never passed through — it may contain a URL,
+# credential, host or customer content), a ``retryable`` hint used by callers and
+# readiness probes, a ``log_severity`` (logging level name) and a coarse,
+# secret-free ``internal_category`` for internal grouping. The public envelope
+# only ever exposes ``code`` + the static ``message``.
+
+
+class AdapterError(SignalNestError):
+    """Base for infrastructure adapter / worker-fleet faults.
+
+    Subclasses set class-level ``code`` / ``status_code`` / ``retryable`` /
+    ``log_severity`` / ``internal_category`` and a ``default_message``. Callers
+    should construct these with **no** argument (using the safe default) or with
+    another *static* safe string — never with a driver/SDK message.
+    """
+
+    status_code = 503
+    code = "adapter_error"
+    retryable = True
+    log_severity = "error"
+    internal_category = "adapter"
+    default_message = "An infrastructure dependency is currently unavailable"
+
+    def __init__(self, message: str | None = None, *, code: str | None = None):
+        super().__init__(message or self.default_message, code=code)
+
+
+class PostgresUnavailableError(AdapterError):
+    code = "postgres_unavailable"
+    internal_category = "database"
+    default_message = "The database is temporarily unavailable"
+
+
+class RedisUnavailableError(AdapterError):
+    # The cache is best-effort, so a Redis outage is a warning, not an error.
+    code = "redis_unavailable"
+    log_severity = "warning"
+    internal_category = "cache"
+    default_message = "The cache backend is temporarily unavailable"
+
+
+class RedisNotifyFailedError(AdapterError):
+    # The durable job is already committed to the DB; a lost wake-up signal only
+    # delays pickup until the next DB poll, so this is non-fatal and not retried.
+    code = "redis_notify_failed"
+    retryable = False
+    log_severity = "warning"
+    internal_category = "coordination"
+    default_message = "Failed to publish a job-availability notification"
+
+
+class ObjectStorageUnavailableError(AdapterError):
+    code = "object_storage_unavailable"
+    internal_category = "storage"
+    default_message = "Object storage is temporarily unavailable"
+
+
+class InvalidObjectKeyError(AdapterError):
+    # A programming/client error, not an outage: reject fast, do not retry.
+    status_code = 400
+    code = "invalid_object_key"
+    retryable = False
+    log_severity = "warning"
+    internal_category = "storage"
+    default_message = "The object key is invalid"
+
+
+class ObjectTooLargeError(AdapterError):
+    status_code = 413
+    code = "object_too_large"
+    retryable = False
+    log_severity = "warning"
+    internal_category = "storage"
+    default_message = "The object exceeds the maximum permitted size"
+
+
+class WorkerRegistrationFailedError(AdapterError):
+    code = "worker_registration_failed"
+    internal_category = "worker"
+    default_message = "The worker could not register with the fleet registry"
+
+
+class WorkerHeartbeatFailedError(AdapterError):
+    code = "worker_heartbeat_failed"
+    log_severity = "warning"
+    internal_category = "worker"
+    default_message = "The worker heartbeat could not be recorded"
+
+
+class WorkerAlreadyActiveError(AdapterError):
+    status_code = 409
+    code = "worker_already_active"
+    retryable = False
+    internal_category = "worker"
+    default_message = "A worker with this id is already registered as active"
+
+
+class WorkerStaleError(AdapterError):
+    code = "worker_stale"
+    retryable = False
+    log_severity = "warning"
+    internal_category = "worker"
+    default_message = "The worker registration is stale"
+
+
+class AdapterInitializationError(AdapterError):
+    retryable = False
+    code = "adapter_initialization_failed"
+    default_message = "A production adapter failed to initialize"
+
+
+class ProductionAdapterNotConfiguredError(AdapterNotConfiguredError):
+    """A production adapter is required by policy but not configured.
+
+    Kept distinct from :class:`AdapterNotConfiguredError` so operator diagnostics
+    can tell "not wired up at all" apart from "explicitly required but missing".
+    """
+
+    code = "production_adapter_not_configured"
+
+
 def _envelope(code: str, message: str, details: object | None = None) -> dict:
     body = {"error": {"code": code, "message": message, "request_id": request_id_ctx.get()}}
     if details is not None:
