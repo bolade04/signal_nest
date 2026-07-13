@@ -168,6 +168,7 @@ def test_postgres_two_workers_claim_different_jobs() -> None:  # pragma: no cove
 
     from app.db.base import Base
     from app.jobs.store import DurableJobStore
+    from app.organizations.models import Organization, Workspace
 
     url = os.environ["TEST_POSTGRES_URL"]
     engine = create_engine(url, future=True)
@@ -175,6 +176,13 @@ def test_postgres_two_workers_claim_different_jobs() -> None:  # pragma: no cove
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     store = DurableJobStore()
+
+    # PostgreSQL enforces the jobs -> organizations/workspaces foreign keys, so the
+    # tenant scope the enqueued jobs reference must exist first.
+    with factory() as tenant:
+        tenant.add(Organization(id="org-1", name="Org One", slug="org-one"))
+        tenant.add(Workspace(id="ws-1", organization_id="org-1", name="WS One", slug="ws-one"))
+        tenant.commit()
 
     def _enqueue(db, key):
         payload = {"scout_request_id": key}
