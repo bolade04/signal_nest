@@ -46,10 +46,13 @@ The API exposes **56 operations across 41 paths**. See the live OpenAPI docs at
 ```bash
 npm run bootstrap      # install JS deps + create apps/api/.venv + install the API
 npm run demo:setup     # migrate the SQLite schema + seed demo data
-npm run dev            # start FastAPI (http://127.0.0.1:8000) + web (http://localhost:3000)
+npm run dev            # start FastAPI (http://127.0.0.1:8000) + web (http://localhost:5173)
 ```
 
-Then open http://localhost:3000 and sign in with the seeded demo account:
+`npm run dev` starts both the Vite frontend (http://localhost:5173) and the FastAPI
+backend (http://127.0.0.1:8000, with API docs at http://127.0.0.1:8000/api/v1/docs);
+Ctrl-C stops both. Then open http://localhost:5173 and sign in with the seeded demo
+account:
 
 - **Email:** `demo@signalnest.dev`
 - **Password:** `demo1234`
