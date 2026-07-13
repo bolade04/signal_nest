@@ -49,6 +49,37 @@ class ValidationDomainError(SignalNestError):
     code = "validation_error"
 
 
+class ConfigurationError(SignalNestError):
+    """Runtime configuration is invalid or incomplete.
+
+    Raised when a required setting is missing or inconsistent for the selected
+    runtime mode. This is an operator-facing fault (misconfiguration), returned as
+    503 so orchestrators treat the instance as not-ready rather than as a client
+    error.
+    """
+
+    status_code = 503
+    code = "configuration_error"
+
+
+class AdapterNotConfiguredError(SignalNestError):
+    """A production adapter was requested but is not configured.
+
+    Production placeholders must fail explicitly rather than partially activating or
+    silently degrading to a local implementation. Returned as 503 (not-ready).
+    """
+
+    status_code = 503
+    code = "adapter_not_configured"
+
+
+class CapabilityUnavailableError(SignalNestError):
+    """A runtime capability is unavailable in the current mode/configuration."""
+
+    status_code = 503
+    code = "capability_unavailable"
+
+
 def _envelope(code: str, message: str, details: object | None = None) -> dict:
     body = {"error": {"code": code, "message": message, "request_id": request_id_ctx.get()}}
     if details is not None:

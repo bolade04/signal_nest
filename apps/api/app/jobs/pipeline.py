@@ -30,6 +30,8 @@ from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
 from app.infra.queue import register_job
 from app.infra.vector import cosine, embed_text
+from app.jobs.context import ExecutionContext, JobContextError, scope_matches
+from app.jobs.contracts import unwrap
 from app.llm.base import LLMError
 from app.llm.service import llm_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -93,12 +95,18 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
 
 @register_job("run_scout_request")
 def run_scout_request(payload: dict) -> dict:
-    """Job entrypoint. payload = {"scout_request_id": ...}."""
+    """Job entrypoint.
+
+    Accepts either a versioned :class:`~app.jobs.contracts.JobEnvelope` mapping or the
+    legacy bare ``{"scout_request_id": ...}`` payload, so existing callers and in-flight
+    messages keep working while new callers carry an explicit tenant execution context.
+    """
     from app.db.session import SessionLocal
 
+    context, body = unwrap(payload)
     db = SessionLocal()
     try:
-        result = _run(db, payload["scout_request_id"])
+        result = _run(db, body["scout_request_id"], context)
         db.commit()
         return result
     except Exception:
@@ -108,10 +116,27 @@ def run_scout_request(payload: dict) -> dict:
         db.close()
 
 
-def _run(db: Session, scout_request_id: str) -> dict:
+def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = None) -> dict:
     request = db.get(ScoutRequest, scout_request_id)
     if not request:
         raise ValueError(f"Scout request {scout_request_id} not found")
+
+    # Isolation guard: when the caller declared a tenant context, the loaded request
+    # must belong to exactly that org + workspace (and location, if scoped). This makes
+    # cross-market blending impossible even if a wrong id is ever enqueued.
+    if context is not None:
+        if not scope_matches(
+            context,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+        ):
+            raise JobContextError(
+                "Job execution context does not match the scout request's tenant scope."
+            )
+        if context.location_id is not None and context.location_id != request.location_id:
+            raise JobContextError(
+                "Job execution context location does not match the scout request."
+            )
 
     request.status = ScoutRequestStatus.RUNNING.value
     db.flush()

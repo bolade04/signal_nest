@@ -26,6 +26,7 @@ import type {
   OrganizationOut,
   ProductIn,
   RegisterRequest,
+  RuntimeCapabilities,
   ScoutRequestCreate,
   ScoutRequestOut,
   ScoutRequestUpdate,
@@ -35,6 +36,10 @@ import type {
   WorkspaceCreate,
   WorkspaceOut,
 } from './types';
+
+// ---- System (unauthenticated runtime introspection; no secrets) ----
+export const getRuntimeCapabilities = (signal?: AbortSignal) =>
+  apiRequest<RuntimeCapabilities>('/system/capabilities', { signal });
 
 // ---- Auth ----
 export const login = (body: LoginRequest, signal?: AbortSignal) =>

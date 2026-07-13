@@ -84,6 +84,34 @@ def test_opportunities_are_isolated_per_location(client: TestClient, auth: dict[
     assert len(all_ids) == len(set(all_ids)), "opportunity leaked across locations"
 
 
+def test_system_health_is_live(client: TestClient):
+    resp = client.get(f"{API}/system/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_system_readiness_is_ready_in_seeded_local_mode(client: TestClient):
+    resp = client.get(f"{API}/system/readiness")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is True
+    assert body["schema_migrated"] is True
+    assert body["unconfigured"] == []
+
+
+def test_system_capabilities_is_local_and_secret_free(client: TestClient):
+    resp = client.get(f"{API}/system/capabilities")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_local_mode"] is True
+    names = {c["name"] for c in body["capabilities"]}
+    assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
+    # The capability view must never carry secret material.
+    blob = resp.text.lower()
+    for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
+        assert forbidden not in blob
+
+
 def test_unfiltered_feed_is_superset_of_each_location(
     client: TestClient, auth: dict[str, str]
 ):

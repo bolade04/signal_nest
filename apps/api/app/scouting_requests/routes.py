@@ -17,8 +17,11 @@ from app.auth.dependencies import TenantContext, get_tenant_context, require_rol
 from app.brands.service import get_primary_brand
 from app.core.enums import Role, ScoutRequestStatus
 from app.core.errors import NotFoundError, ValidationDomainError
+from app.core.logging import trace_id_ctx
 from app.db.session import get_db
 from app.infra.queue import queue
+from app.jobs.context import ExecutionContext
+from app.jobs.contracts import wrap
 from app.locations.models import BusinessLocation
 from app.scouting_requests.models import ScoutRequest
 from app.scouting_requests.schemas import (
@@ -225,7 +228,21 @@ def run_scout_request_endpoint(
     # Commit so the in-process job (opening its own session) sees the queued request.
     db.commit()
 
-    queue.enqueue("run_scout_request", {"scout_request_id": request.id})
+    # Carry the tenant/location scope with the job as a versioned envelope so isolation
+    # travels with the work (and a durable queue can validate the contract version).
+    envelope = wrap(
+        "run_scout_request",
+        ExecutionContext.for_scout_request(
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+            location_id=request.location_id,
+            campaign_id=request.campaign_id,
+            request_id=request.id,
+            trace_id=trace_id_ctx.get(),
+        ),
+        {"scout_request_id": request.id},
+    )
+    queue.enqueue("run_scout_request", envelope.to_message())
 
     # In-process backend runs synchronously and commits; refresh to read final state.
     db.refresh(request)

@@ -17,10 +17,12 @@ from app.locations.routes import router as locations_router
 from app.opportunities.routes import router as opportunities_router
 from app.organizations.routes import router as organizations_router
 from app.scouting_requests.routes import router as scout_requests_router
+from app.system.routes import router as system_router
 
 api_router = APIRouter()
 
 for _r in (
+    system_router,
     auth_router,
     organizations_router,
     brands_router,

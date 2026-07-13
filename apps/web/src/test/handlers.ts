@@ -175,6 +175,25 @@ const emptyProfile = {
 };
 
 export const handlers = [
+  // ---- System (runtime introspection; secret-free) ----
+  http.get(P('/system/capabilities'), () =>
+    HttpResponse.json({
+      app_mode: 'local',
+      environment: 'development',
+      llm_provider: 'mock',
+      is_local_mode: true,
+      all_configured: true,
+      capabilities: [
+        { name: 'database', backend: 'sqlite', configured: true, is_local: true, requires_external: false, detail: null },
+        { name: 'queue', backend: 'inprocess', configured: true, is_local: true, requires_external: false, detail: null },
+        { name: 'cache', backend: 'memory', configured: true, is_local: true, requires_external: false, detail: null },
+        { name: 'vector', backend: 'bruteforce', configured: true, is_local: true, requires_external: false, detail: null },
+        { name: 'storage', backend: 'local', configured: true, is_local: true, requires_external: false, detail: null },
+        { name: 'llm', backend: 'mock', configured: true, is_local: true, requires_external: false, detail: null },
+      ],
+    }),
+  ),
+
   // ---- Auth ----
   http.get(P('/auth/me'), () =>
     HttpResponse.json({ access_token: 'test-token', token_type: 'bearer', user: demoUser, memberships: [{ organization_id: org.id, role: 'owner' }] }),
