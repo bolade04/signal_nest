@@ -24,6 +24,8 @@ lifecycle is deterministically testable with a fixed clock.
 
 from __future__ import annotations
 
+import secrets
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -35,6 +37,7 @@ from app.core.logging import get_logger
 from app.jobs.backoff import compute_backoff_seconds
 from app.jobs.models import Job, JobEvent
 from app.jobs.status import (
+    ACTIVE_STATUSES,
     ENQUEUED_STATUSES,
     JobError,
     JobErrorCode,
@@ -51,12 +54,34 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _new_lease_token() -> str:
+    """A fresh, unguessable per-claim ownership token."""
+    return secrets.token_hex(16)
+
+
 class IdempotencyConflict(Exception):
     """A stored idempotency key was reused with a different payload."""
 
     def __init__(self, key: str) -> None:
         super().__init__(f"Idempotency key '{key}' was reused with a different payload")
         self.key = key
+
+
+class JobLeaseLostError(Exception):
+    """A worker tried to mutate a job it no longer owns.
+
+    Raised when a fenced worker mutation (heartbeat / running / success / failure
+    / retry / dead-letter / cancellation acknowledgement) matches **zero** rows
+    because the job's lease was reclaimed by another worker (its token was
+    rotated) or otherwise no longer belongs to the caller. It is a permanent
+    condition for *this* attempt — the losing worker must simply stop; the new
+    owner (or lease recovery) drives the job forward. It carries no raw database
+    detail and is never surfaced to a customer as an infrastructure error.
+    """
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"Lease ownership lost for job {job_id}")
+        self.job_id = job_id
 
 
 class DurableJobStore:
@@ -176,6 +201,9 @@ class DurableJobStore:
         ).all()
 
         for job_id, observed_status in candidates:
+            # A fresh token on every claim rotates ownership: any previous owner's
+            # captured token no longer matches, so its late writes are fenced out.
+            lease_token = _new_lease_token()
             result = db.execute(
                 update(Job)
                 .where(Job.id == job_id, Job.status == observed_status)
@@ -185,12 +213,17 @@ class DurableJobStore:
                     claimed_at=now,
                     lease_expires_at=lease_expires,
                     heartbeat_at=now,
+                    lease_token=lease_token,
                 )
             )
             if result.rowcount == 1:
                 db.flush()
                 job = db.get(Job, job_id)
                 assert job is not None
+                # A core UPDATE does not refresh an already-identity-mapped row, so
+                # reload it: the caller relies on the persisted worker_id/lease_token
+                # to fence its subsequent mutations.
+                db.refresh(job)
                 self._record_event(
                     db,
                     job,
@@ -206,34 +239,112 @@ class DurableJobStore:
 
         return None
 
+    # --- Lease fencing ------------------------------------------------------
+    def _fenced_update(
+        self,
+        db: Session,
+        job: Job,
+        *,
+        worker_id: str,
+        lease_token: str,
+        allowed_source: Iterable[JobStatus],
+        values: dict[str, Any],
+    ) -> None:
+        """Apply ``values`` only if the caller still owns the job's active lease.
+
+        The ownership predicate lives **inside** the UPDATE (never a read-then-write
+        in Python), so the check and the mutation are one atomic step. A worker
+        matches only when the row still carries its ``worker_id`` *and* the exact
+        ``lease_token`` it captured at claim time and the status is still one of
+        ``allowed_source``. If another worker reclaimed the job (rotating the
+        token) or it already moved on, zero rows match and we raise
+        :class:`JobLeaseLostError` — no audit event is written for a lost owner.
+        """
+        result = db.execute(
+            update(Job)
+            .where(
+                Job.id == job.id,
+                Job.worker_id == worker_id,
+                Job.lease_token == lease_token,
+                Job.status.in_([s.value for s in allowed_source]),
+            )
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            raise JobLeaseLostError(job.id)
+        # Reflect the committed row back onto the in-memory instance so the
+        # subsequent audit event records the true post-mutation state.
+        db.refresh(job)
+
     # --- Execution lifecycle ------------------------------------------------
-    def mark_running(self, db: Session, job: Job, *, now: datetime | None = None) -> Job:
-        """Begin an execution attempt (claimed -> running); counts the attempt."""
+    def mark_running(
+        self,
+        db: Session,
+        job: Job,
+        *,
+        worker_id: str,
+        lease_token: str,
+        now: datetime | None = None,
+    ) -> Job:
+        """Begin an execution attempt (claimed -> running); counts the attempt.
+
+        Fenced by lease ownership: only the worker that still holds this claim's
+        token may start the attempt.
+        """
         now = now or utcnow()
-        self._transition(job, JobStatus.RUNNING)
-        job.attempt_count += 1
-        if job.started_at is None:
-            job.started_at = now
-        job.heartbeat_at = now
-        db.flush()
+        previous = JobStatus(job.status)
+        ensure_transition(previous, JobStatus.RUNNING)
+        self._fenced_update(
+            db,
+            job,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            allowed_source=(JobStatus.CLAIMED, JobStatus.CANCEL_REQUESTED),
+            values={
+                "status": JobStatus.RUNNING.value,
+                "attempt_count": Job.attempt_count + 1,
+                "started_at": func.coalesce(Job.started_at, now),
+                "heartbeat_at": now,
+            },
+        )
         self._record_event(
             db,
             job,
             event_type="started",
-            previous_status=JobStatus.CLAIMED,
+            previous_status=previous,
             new_status=JobStatus.RUNNING,
-            worker_id=job.worker_id,
+            worker_id=worker_id,
         )
         return job
 
     def heartbeat(
-        self, db: Session, job: Job, *, lease_seconds: float, now: datetime | None = None
+        self,
+        db: Session,
+        job: Job,
+        *,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: float,
+        now: datetime | None = None,
     ) -> Job:
-        """Extend the lease of a running job. Heartbeats are not audited (noisy)."""
+        """Extend the lease of a job the caller still owns (not audited: noisy).
+
+        Fenced: a stale worker (whose lease was reclaimed) cannot renew, and the
+        restriction to :data:`ACTIVE_STATUSES` means a heartbeat can never revive a
+        terminal or retry-waiting job.
+        """
         now = now or utcnow()
-        job.heartbeat_at = now
-        job.lease_expires_at = now + timedelta(seconds=lease_seconds)
-        db.flush()
+        self._fenced_update(
+            db,
+            job,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            allowed_source=ACTIVE_STATUSES,
+            values={
+                "heartbeat_at": now,
+                "lease_expires_at": now + timedelta(seconds=lease_seconds),
+            },
+        )
         return job
 
     def complete(
@@ -241,22 +352,35 @@ class DurableJobStore:
         db: Session,
         job: Job,
         *,
+        worker_id: str,
+        lease_token: str,
         result_summary: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> Job:
-        """Record a successful attempt (terminal SUCCEEDED)."""
+        """Record a successful attempt (terminal SUCCEEDED). Fenced by ownership."""
         now = now or utcnow()
-        self._transition(job, JobStatus.SUCCEEDED)
-        job.completed_at = now
-        job.result_summary = result_summary or {}
-        job.lease_expires_at = None
-        db.flush()
+        ensure_transition(JobStatus(job.status), JobStatus.SUCCEEDED)
+        self._fenced_update(
+            db,
+            job,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            allowed_source=(JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED),
+            values={
+                "status": JobStatus.SUCCEEDED.value,
+                "completed_at": now,
+                "result_summary": result_summary or {},
+                "lease_expires_at": None,
+                "worker_id": None,
+                "lease_token": None,
+            },
+        )
         self._record_event(
             db,
             job,
             event_type="succeeded",
             new_status=JobStatus.SUCCEEDED,
-            worker_id=job.worker_id,
+            worker_id=worker_id,
         )
         return job
 
@@ -265,6 +389,8 @@ class DurableJobStore:
         db: Session,
         job: Job,
         *,
+        worker_id: str,
+        lease_token: str,
         error: JobError,
         base_seconds: float,
         max_seconds: float,
@@ -273,22 +399,35 @@ class DurableJobStore:
     ) -> Job:
         """Record a failed attempt and route it: retry / fail / dead-letter.
 
+        Fenced by ownership, so a stale worker can neither burn an attempt nor
+        overwrite the new owner's outcome.
+
         * non-retryable error  -> FAILED (fail fast, no more attempts)
         * retryable, attempts remain -> RETRY_WAIT (backoff, re-enqueued)
         * retryable, attempts exhausted -> DEAD_LETTERED
         """
         now = now or utcnow()
-        job.last_error_code = error.code.value
-        job.last_error_summary = error.safe_summary()
-        job.worker_id = None
-        job.lease_expires_at = None
+        error_code = error.code.value
+        error_summary = error.safe_summary()
+        source = (JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED)
 
         attempts_remain = job.attempt_count < job.max_attempts
 
         if not error.retryable:
-            self._transition(job, JobStatus.FAILED)
-            job.completed_at = now
-            db.flush()
+            ensure_transition(JobStatus(job.status), JobStatus.FAILED)
+            self._fenced_update(
+                db, job, worker_id=worker_id, lease_token=lease_token,
+                allowed_source=source,
+                values={
+                    "status": JobStatus.FAILED.value,
+                    "completed_at": now,
+                    "last_error_code": error_code,
+                    "last_error_summary": error_summary,
+                    "worker_id": None,
+                    "lease_token": None,
+                    "lease_expires_at": None,
+                },
+            )
             self._record_event(
                 db, job, event_type="failed", new_status=JobStatus.FAILED,
                 error_code=error.code,
@@ -302,9 +441,20 @@ class DurableJobStore:
                 max_seconds=max_seconds,
                 jitter_seed=jitter_seed,
             )
-            job.available_at = now + timedelta(seconds=delay)
-            self._transition(job, JobStatus.RETRY_WAIT)
-            db.flush()
+            ensure_transition(JobStatus(job.status), JobStatus.RETRY_WAIT)
+            self._fenced_update(
+                db, job, worker_id=worker_id, lease_token=lease_token,
+                allowed_source=source,
+                values={
+                    "status": JobStatus.RETRY_WAIT.value,
+                    "available_at": now + timedelta(seconds=delay),
+                    "last_error_code": error_code,
+                    "last_error_summary": error_summary,
+                    "worker_id": None,
+                    "lease_token": None,
+                    "lease_expires_at": None,
+                },
+            )
             self._record_event(
                 db,
                 job,
@@ -315,9 +465,20 @@ class DurableJobStore:
             )
             return job
 
-        self._transition(job, JobStatus.DEAD_LETTERED)
-        job.completed_at = now
-        db.flush()
+        ensure_transition(JobStatus(job.status), JobStatus.DEAD_LETTERED)
+        self._fenced_update(
+            db, job, worker_id=worker_id, lease_token=lease_token,
+            allowed_source=source,
+            values={
+                "status": JobStatus.DEAD_LETTERED.value,
+                "completed_at": now,
+                "last_error_code": error_code,
+                "last_error_summary": error_summary,
+                "worker_id": None,
+                "lease_token": None,
+                "lease_expires_at": None,
+            },
+        )
         self._record_event(
             db, job, event_type="dead_lettered", new_status=JobStatus.DEAD_LETTERED,
             error_code=error.code,
@@ -345,9 +506,12 @@ class DurableJobStore:
         job.cancel_requested_at = now
 
         if current in ENQUEUED_STATUSES:
+            # Not yet owned by a worker: cancel immediately and clear any residual
+            # ownership fields so no stale token can ever match this row again.
             self._transition(job, JobStatus.CANCELLED)
             job.cancelled_at = now
             job.worker_id = None
+            job.lease_token = None
             job.lease_expires_at = None
             db.flush()
             self._record_event(
@@ -356,6 +520,8 @@ class DurableJobStore:
             )
             return job
 
+        # A worker owns it: record the request but leave worker_id/lease_token
+        # intact so only that owner may acknowledge the cancellation.
         self._transition(job, JobStatus.CANCEL_REQUESTED)
         db.flush()
         self._record_event(
@@ -364,14 +530,37 @@ class DurableJobStore:
         )
         return job
 
-    def finish_cancel(self, db: Session, job: Job, *, now: datetime | None = None) -> Job:
-        """A worker observed the cancel request and stopped (-> CANCELLED)."""
+    def finish_cancel(
+        self,
+        db: Session,
+        job: Job,
+        *,
+        worker_id: str,
+        lease_token: str,
+        now: datetime | None = None,
+    ) -> Job:
+        """A worker observed the cancel request and stopped (-> CANCELLED).
+
+        Fenced by ownership: only the worker that still holds the claim may
+        convert it to CANCELLED, so a stale worker cannot cancel a job another
+        worker has since reclaimed.
+        """
         now = now or utcnow()
-        self._transition(job, JobStatus.CANCELLED)
-        job.cancelled_at = now
-        job.worker_id = None
-        job.lease_expires_at = None
-        db.flush()
+        ensure_transition(JobStatus(job.status), JobStatus.CANCELLED)
+        self._fenced_update(
+            db,
+            job,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            allowed_source=ACTIVE_STATUSES,
+            values={
+                "status": JobStatus.CANCELLED.value,
+                "cancelled_at": now,
+                "worker_id": None,
+                "lease_token": None,
+                "lease_expires_at": None,
+            },
+        )
         self._record_event(
             db, job, event_type="cancelled", new_status=JobStatus.CANCELLED,
         )
@@ -401,7 +590,10 @@ class DurableJobStore:
         recovered = 0
         for job in stale:
             previous = JobStatus(job.status)
+            # Clear ownership *including the token*: this is what fences out the
+            # crashed/slow previous owner — its captured token no longer matches.
             job.worker_id = None
+            job.lease_token = None
             job.lease_expires_at = None
             if job.attempt_count < job.max_attempts:
                 job.available_at = now

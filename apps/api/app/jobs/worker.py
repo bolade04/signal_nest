@@ -45,12 +45,16 @@ from app.jobs.status import (
     JobExecutionError,
     JobStatus,
 )
-from app.jobs.store import DurableJobStore, job_store, utcnow
+from app.jobs.store import DurableJobStore, JobLeaseLostError, job_store, utcnow
 
 logger = get_logger("signalnest.jobs.worker")
 
 SessionFactory = Callable[[], Session]
 Clock = Callable[[], datetime]
+
+#: Sentinel returned when a mutation is rejected because the lease was reclaimed
+#: by another worker. The losing worker simply stops; the new owner drives on.
+LEASE_LOST = "lease_lost"
 
 
 def derive_worker_id(configured: str | None = None) -> str:
@@ -104,7 +108,9 @@ class JobRunner:
         return _check
 
     # -- heartbeat ----------------------------------------------------------
-    def _start_heartbeat(self, job_id: str) -> tuple[threading.Event, threading.Thread]:
+    def _start_heartbeat(
+        self, job_id: str, *, worker_id: str, lease_token: str
+    ) -> tuple[threading.Event, threading.Thread]:
         stop = threading.Event()
         interval = self._settings.worker_heartbeat_seconds
         lease = self._settings.worker_lease_seconds
@@ -117,8 +123,21 @@ class JobRunner:
                 try:
                     job = hs.get(Job, job_id)
                     if job is not None and job.status == JobStatus.RUNNING.value:
-                        self._store.heartbeat(hs, job, lease_seconds=lease)
+                        # Fenced by the credential captured at claim: if the lease
+                        # was reclaimed the token no longer matches and we stop
+                        # beating rather than reviving another worker's job.
+                        self._store.heartbeat(
+                            hs, job, worker_id=worker_id,
+                            lease_token=lease_token, lease_seconds=lease,
+                        )
                         hs.commit()
+                except JobLeaseLostError:
+                    hs.rollback()
+                    logger.info(
+                        "worker.heartbeat.lease_lost",
+                        extra={"extra_fields": {"job_id": job_id}},
+                    )
+                    stop.set()
                 except Exception:  # pragma: no cover - best-effort lease renewal
                     hs.rollback()
                 finally:
@@ -130,14 +149,39 @@ class JobRunner:
 
     # -- one job ------------------------------------------------------------
     def run_claimed(self, db: Session, job: Job) -> str:
-        """Execute an already-claimed job to a terminal state; return that state."""
-        # Persist RUNNING (and count the attempt) before doing any work, so a crash
-        # mid-handler leaves an accurate, recoverable record.
-        self._store.mark_running(db, job, now=self._clock())
-        db.commit()
+        """Execute an already-claimed job to a terminal state; return that state.
+
+        Every store mutation is fenced by the ownership credential captured *at
+        claim time* (``worker_id`` + opaque ``lease_token``). If the lease was
+        reclaimed by another worker mid-flight, the fenced mutation matches zero
+        rows and raises :class:`JobLeaseLostError`; this worker then rolls back
+        and stops, leaving the job to its new owner (returns :data:`LEASE_LOST`).
+        """
+        # Capture the ownership credential now; the row's live values are cleared
+        # to NULL on terminal mutations, and a reclaim would rotate the token.
+        worker_id = job.worker_id
+        lease_token = job.lease_token
+        assert worker_id is not None and lease_token is not None
 
         job_id = job.id
-        stop_hb, hb_thread = self._start_heartbeat(job_id)
+        # Persist RUNNING (and count the attempt) before doing any work, so a crash
+        # mid-handler leaves an accurate, recoverable record.
+        try:
+            self._store.mark_running(
+                db, job, worker_id=worker_id, lease_token=lease_token, now=self._clock()
+            )
+            db.commit()
+        except JobLeaseLostError:
+            db.rollback()
+            logger.warning(
+                "worker.lease_lost",
+                extra={"extra_fields": {"job_id": job_id, "stage": "mark_running"}},
+            )
+            return LEASE_LOST
+
+        stop_hb, hb_thread = self._start_heartbeat(
+            job_id, worker_id=worker_id, lease_token=lease_token
+        )
         try:
             handler = resolve_handler(job.job_type)
             ctx = HandlerContext(
@@ -146,41 +190,77 @@ class JobRunner:
                 payload=dict(job.payload or {}),
                 job_id=job_id,
                 attempt=job.attempt_count,
-                worker_id=job.worker_id,
+                worker_id=worker_id,
                 is_cancelled=self._cancel_checker(job_id),
             )
             result = handler(ctx)
-            self._store.complete(db, job, result_summary=result, now=self._clock())
+            self._store.complete(
+                db, job, worker_id=worker_id, lease_token=lease_token,
+                result_summary=result, now=self._clock(),
+            )
             db.commit()
             return JobStatus.SUCCEEDED.value
+        except JobLeaseLostError:
+            db.rollback()
+            logger.warning(
+                "worker.lease_lost",
+                extra={"extra_fields": {"job_id": job_id, "stage": "complete"}},
+            )
+            return LEASE_LOST
         except JobExecutionError as exc:
             db.rollback()
             if exc.error.code == JobErrorCode.CANCELLED:
-                self._store.finish_cancel(db, job, now=self._clock())
-                db.commit()
-                return JobStatus.CANCELLED.value
-            return self._fail(db, job, exc.error)
+                try:
+                    self._store.finish_cancel(
+                        db, job, worker_id=worker_id,
+                        lease_token=lease_token, now=self._clock(),
+                    )
+                    db.commit()
+                    return JobStatus.CANCELLED.value
+                except JobLeaseLostError:
+                    db.rollback()
+                    logger.warning(
+                        "worker.lease_lost",
+                        extra={"extra_fields": {"job_id": job_id, "stage": "finish_cancel"}},
+                    )
+                    return LEASE_LOST
+            return self._fail(db, job, exc.error, worker_id=worker_id, lease_token=lease_token)
         except Exception as exc:  # unclassified escape -> conservative retryable
             db.rollback()
             # Record only the exception *class name*, never its message (which may
             # carry secrets or customer content).
-            return self._fail(db, job, JobError(JobErrorCode.TRANSIENT, type(exc).__name__))
+            return self._fail(
+                db, job, JobError(JobErrorCode.TRANSIENT, type(exc).__name__),
+                worker_id=worker_id, lease_token=lease_token,
+            )
         finally:
             stop_hb.set()
             hb_thread.join(timeout=1.0)
 
-    def _fail(self, db: Session, job: Job, error: JobError) -> str:
-        self._store.fail(
-            db,
-            job,
-            error=error,
-            base_seconds=self._settings.job_retry_base_seconds,
-            max_seconds=self._settings.job_retry_max_seconds,
-            jitter_seed=job.id,
-            now=self._clock(),
-        )
-        db.commit()
-        return job.status
+    def _fail(
+        self, db: Session, job: Job, error: JobError, *, worker_id: str, lease_token: str
+    ) -> str:
+        try:
+            self._store.fail(
+                db,
+                job,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                error=error,
+                base_seconds=self._settings.job_retry_base_seconds,
+                max_seconds=self._settings.job_retry_max_seconds,
+                jitter_seed=job.id,
+                now=self._clock(),
+            )
+            db.commit()
+            return job.status
+        except JobLeaseLostError:
+            db.rollback()
+            logger.warning(
+                "worker.lease_lost",
+                extra={"extra_fields": {"job_id": job.id, "stage": "fail"}},
+            )
+            return LEASE_LOST
 
     # -- claim + run one ----------------------------------------------------
     def poll_once(self, *, worker_id: str) -> bool:

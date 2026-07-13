@@ -96,6 +96,12 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     worker_id: Mapped[str | None] = mapped_column(String(128))
+    #: Opaque per-claim ownership token. Rotated to a fresh random value on every
+    #: claim and cleared when ownership ends (terminal outcome or lease recovery).
+    #: A worker captures it at claim time and must present it for every subsequent
+    #: mutation, so a stale worker whose lease was reclaimed can never write back
+    #: (the reclaim rotated the token). Internal-only: never exposed by any API.
+    lease_token: Mapped[str | None] = mapped_column(String(64))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

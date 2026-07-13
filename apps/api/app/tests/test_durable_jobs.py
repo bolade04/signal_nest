@@ -44,7 +44,7 @@ from app.jobs.status import (
     ensure_transition,
     is_terminal,
 )
-from app.jobs.store import DurableJobStore, IdempotencyConflict
+from app.jobs.store import DurableJobStore, IdempotencyConflict, JobLeaseLostError
 from app.jobs.worker import JobRunner
 
 # Importing the app registers every ORM model on the shared Base so the throwaway
@@ -218,10 +218,11 @@ def test_claim_prefers_higher_priority(store, db) -> None:
 
 def test_complete_records_success_and_result(store, db) -> None:
     job = _enqueue(store, db)
-    store.claim_one(db, worker_id="w1", lease_seconds=30)
-    store.mark_running(db, job)
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30)
+    wid, tok = claimed.worker_id, claimed.lease_token
+    store.mark_running(db, job, worker_id=wid, lease_token=tok)
     assert job.attempt_count == 1
-    store.complete(db, job, result_summary={"opportunities": 3})
+    store.complete(db, job, worker_id=wid, lease_token=tok, result_summary={"opportunities": 3})
     db.commit()
     assert job.status == JobStatus.SUCCEEDED.value
     assert job.result_summary == {"opportunities": 3}
@@ -230,9 +231,11 @@ def test_complete_records_success_and_result(store, db) -> None:
 
 def test_non_retryable_failure_fails_fast(store, db) -> None:
     job = _enqueue(store, db, max_attempts=5)
-    store.claim_one(db, worker_id="w1", lease_seconds=30)
-    store.mark_running(db, job)
-    store.fail(db, job, error=JobError(JobErrorCode.VALIDATION, "bad"),
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30)
+    wid, tok = claimed.worker_id, claimed.lease_token
+    store.mark_running(db, job, worker_id=wid, lease_token=tok)
+    store.fail(db, job, worker_id=wid, lease_token=tok,
+               error=JobError(JobErrorCode.VALIDATION, "bad"),
                base_seconds=2, max_seconds=30)
     db.commit()
     assert job.status == JobStatus.FAILED.value
@@ -242,21 +245,28 @@ def test_non_retryable_failure_fails_fast(store, db) -> None:
 def test_retryable_failure_schedules_backoff(store, db) -> None:
     now = datetime(2026, 7, 12, tzinfo=UTC)
     job = _enqueue(store, db, max_attempts=5, now=now)
-    store.claim_one(db, worker_id="w1", lease_seconds=30, now=now)
-    store.mark_running(db, job, now=now)
-    store.fail(db, job, error=JobError(JobErrorCode.TRANSIENT), base_seconds=2,
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30, now=now)
+    wid, tok = claimed.worker_id, claimed.lease_token
+    store.mark_running(db, job, worker_id=wid, lease_token=tok, now=now)
+    store.fail(db, job, worker_id=wid, lease_token=tok,
+               error=JobError(JobErrorCode.TRANSIENT), base_seconds=2,
                max_seconds=300, jitter_seed=job.id, now=now)
     db.commit()
     assert job.status == JobStatus.RETRY_WAIT.value
-    assert job.available_at > now  # waits out the backoff
+    # available_at is reloaded from the row (tz-naive UTC on SQLite); the backoff
+    # must have pushed availability into the future.
+    assert job.available_at.replace(tzinfo=UTC) > now  # waits out the backoff
     assert JobStatus.RETRY_WAIT in ENQUEUED_STATUSES  # eligible to reclaim
 
 
 def test_exhausted_retryable_failure_dead_letters(store, db) -> None:
     job = _enqueue(store, db, max_attempts=1)
-    store.claim_one(db, worker_id="w1", lease_seconds=30)
-    store.mark_running(db, job)  # attempt_count -> 1 == max_attempts
-    store.fail(db, job, error=JobError(JobErrorCode.TRANSIENT), base_seconds=2,
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30)
+    wid, tok = claimed.worker_id, claimed.lease_token
+    # attempt_count -> 1 == max_attempts
+    store.mark_running(db, job, worker_id=wid, lease_token=tok)
+    store.fail(db, job, worker_id=wid, lease_token=tok,
+               error=JobError(JobErrorCode.TRANSIENT), base_seconds=2,
                max_seconds=30)
     db.commit()
     assert job.status == JobStatus.DEAD_LETTERED.value
@@ -272,8 +282,8 @@ def test_cancel_pending_job_is_immediate(store, db) -> None:
 
 def test_cancel_running_job_is_cooperative(store, db) -> None:
     job = _enqueue(store, db)
-    store.claim_one(db, worker_id="w1", lease_seconds=30)
-    store.mark_running(db, job)
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30)
+    store.mark_running(db, job, worker_id=claimed.worker_id, lease_token=claimed.lease_token)
     store.request_cancel(db, job)
     db.commit()
     assert job.status == JobStatus.CANCEL_REQUESTED.value
@@ -285,8 +295,8 @@ def test_cancel_running_job_is_idempotent(store, db) -> None:
     # never an illegal cancel_requested -> cancel_requested transition (which would
     # surface to the customer as a 500). The endpoint is safe to retry/double-click.
     job = _enqueue(store, db)
-    store.claim_one(db, worker_id="w1", lease_seconds=30)
-    store.mark_running(db, job)
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30)
+    store.mark_running(db, job, worker_id=claimed.worker_id, lease_token=claimed.lease_token)
     store.request_cancel(db, job)
     db.commit()
     assert job.status == JobStatus.CANCEL_REQUESTED.value
@@ -301,8 +311,9 @@ def test_cancel_running_job_is_idempotent(store, db) -> None:
 def test_expired_lease_is_recovered_to_pending(store, db) -> None:
     past = datetime(2026, 7, 12, tzinfo=UTC)
     job = _enqueue(store, db, now=past)
-    store.claim_one(db, worker_id="w1", lease_seconds=30, now=past)
-    store.mark_running(db, job, now=past)
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30, now=past)
+    store.mark_running(db, job, worker_id=claimed.worker_id,
+                       lease_token=claimed.lease_token, now=past)
     # Lease expired well before "now".
     recovered = store.recover_expired_leases(db, now=past + timedelta(hours=1))
     db.commit()
@@ -473,3 +484,181 @@ def test_enqueue_scout_request_persists_scoped_job(store, db) -> None:
     assert job.status == JobStatus.PENDING.value
     assert job.organization_id == ORG and job.workspace_id == WS
     assert job.scout_request_id == "sr-9"
+
+
+# --------------------------------------------------------------------------- #
+# Lease-ownership fencing (stale-worker protection)
+# --------------------------------------------------------------------------- #
+def test_lease_token_is_minted_on_claim_and_rotates(store, db) -> None:
+    """Each claim mints a fresh opaque token; recovery + re-claim rotates it."""
+    past = datetime(2026, 7, 12, tzinfo=UTC)
+    job = _enqueue(store, db, now=past)
+    first = store.claim_one(db, worker_id="w1", lease_seconds=30, now=past)
+    assert first.lease_token is not None and len(first.lease_token) >= 16
+    token_a = first.lease_token
+
+    # Expire + recover clears ownership (including the token) ...
+    store.recover_expired_leases(db, now=past + timedelta(hours=1))
+    db.commit()
+    db.refresh(job)
+    assert job.lease_token is None
+    # ... and the next claim mints a different token.
+    second = store.claim_one(db, worker_id="w2", lease_seconds=30, now=past + timedelta(hours=1))
+    assert second.lease_token is not None and second.lease_token != token_a
+
+
+def test_lease_token_never_exposed_by_any_response_schema(store, db) -> None:
+    """The opaque token is internal only: no customer/operator schema exposes it."""
+    from app.jobs.schemas import JobEventOut, JobListOut, JobOperatorOut, JobOut
+
+    for schema in (JobOut, JobListOut, JobEventOut, JobOperatorOut):
+        assert "lease_token" not in schema.model_fields
+
+    # And a real, freshly-claimed job (which HAS a token) never serializes it,
+    # not even through the operator diagnostics view.
+    _enqueue(store, db)
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30)
+    assert claimed.lease_token is not None  # the token exists on the row ...
+    dumped = JobOperatorOut.model_validate(claimed).model_dump()
+    assert "lease_token" not in dumped  # ... but is never disclosed.
+    assert "lease_token" not in JobOut.model_validate(claimed).model_dump()
+
+
+def test_stale_worker_cannot_mutate_after_reclaim(store, session_factory) -> None:
+    """Mandatory regression: a worker whose lease was reclaimed cannot write back.
+
+    Fifteen steps across independent worker sessions: A claims and starts, its
+    lease expires, B reclaims and starts, then *every* stale mutation A attempts
+    (heartbeat / success / failure / cancel-ack) is rejected with
+    ``JobLeaseLostError`` and writes no audit event, while B drives the job to a
+    clean terminal state. The final row and audit trail reflect only B.
+    """
+    t0 = datetime(2026, 7, 12, tzinfo=UTC)
+    later = t0 + timedelta(hours=1)
+
+    # 1. enqueue
+    setup = session_factory()
+    job = _enqueue(store, setup, job_type="test.ok", now=t0)
+    job_id = job.id
+    setup.close()
+
+    # 2. Worker A claims and starts, on its own session.
+    sa = session_factory()
+    a_job = store.claim_one(sa, worker_id="A", lease_seconds=30, now=t0)
+    assert a_job is not None
+    # 3. capture A's ownership credential (as a real worker would, at claim time).
+    a_wid, a_tok = a_job.worker_id, a_job.lease_token
+    store.mark_running(sa, a_job, worker_id=a_wid, lease_token=a_tok, now=t0)
+    sa.commit()
+
+    # 4. advance past A's lease; 5. Worker B recovers + reclaims on its session.
+    sb = session_factory()
+    assert store.recover_expired_leases(sb, now=later) == 1
+    sb.commit()
+    b_job = store.claim_one(sb, worker_id="B", lease_seconds=30, now=later)
+    assert b_job is not None and b_job.id == job_id
+    # 6. capture B's credential — it must differ from A's rotated-away one.
+    b_wid, b_tok = b_job.worker_id, b_job.lease_token
+    assert (b_wid, b_tok) != (a_wid, a_tok)
+    store.mark_running(sb, b_job, worker_id=b_wid, lease_token=b_tok, now=later)
+    sb.commit()
+
+    # 7-10. Every stale mutation A attempts is rejected as a lost lease.
+    sa.rollback()
+    with pytest.raises(JobLeaseLostError):
+        store.heartbeat(sa, a_job, worker_id=a_wid, lease_token=a_tok,
+                        lease_seconds=30, now=later)
+    sa.rollback()
+    with pytest.raises(JobLeaseLostError):
+        store.complete(sa, a_job, worker_id=a_wid, lease_token=a_tok,
+                       result_summary={"stale": True}, now=later)
+    sa.rollback()
+    with pytest.raises(JobLeaseLostError):
+        store.fail(sa, a_job, worker_id=a_wid, lease_token=a_tok,
+                   error=JobError(JobErrorCode.TRANSIENT), base_seconds=2,
+                   max_seconds=30, now=later)
+    sa.rollback()
+    with pytest.raises(JobLeaseLostError):
+        store.finish_cancel(sa, a_job, worker_id=a_wid, lease_token=a_tok, now=later)
+    sa.rollback()
+    sa.close()
+
+    # 11. No stale audit event was written by any of A's rejected mutations.
+    audit = session_factory()
+    types_before = [e.event_type for e in store.list_events(audit, job_id=job_id)]
+    assert types_before == [
+        "enqueued", "claimed", "started", "lease_recovered", "claimed", "started",
+    ]
+    audit.close()
+
+    # 12. B's heartbeat succeeds (it still owns the lease).
+    store.heartbeat(sb, b_job, worker_id=b_wid, lease_token=b_tok,
+                    lease_seconds=30, now=later)
+    sb.commit()
+    # 13. B completes the job normally.
+    store.complete(sb, b_job, worker_id=b_wid, lease_token=b_tok,
+                   result_summary={"by": "B"}, now=later)
+    sb.commit()
+    sb.close()
+
+    # 14. Final state is a clean success owned by B (ran twice: A then B).
+    check = session_factory()
+    final = check.get(Job, job_id)
+    assert final.status == JobStatus.SUCCEEDED.value
+    assert final.result_summary == {"by": "B"}
+    assert final.attempt_count == 2
+    assert final.worker_id is None and final.lease_token is None
+
+    # 15. The audit trail shows exactly one terminal transition — B's success.
+    events = store.list_events(check, job_id=job_id)
+    terminal = [e for e in events if e.new_status in {s.value for s in TERMINAL_STATUSES}]
+    assert len(terminal) == 1
+    assert terminal[0].event_type == "succeeded" and terminal[0].worker_id == "B"
+    check.close()
+
+
+def test_race_expired_lease_reclaimed_twice_single_owner_mutation(
+    store, session_factory
+) -> None:
+    """Reclaimed twice (A→B→C): only the final owner's completion sticks."""
+    t0 = datetime(2026, 7, 12, tzinfo=UTC)
+    setup = session_factory()
+    job = _enqueue(store, setup, job_type="test.ok", now=t0)
+    job_id = job.id
+    setup.close()
+
+    creds: dict[str, tuple[str, str]] = {}
+    now = t0
+    for name in ("A", "B", "C"):
+        s = session_factory()
+        store.recover_expired_leases(s, now=now)
+        s.commit()
+        claimed = store.claim_one(s, worker_id=name, lease_seconds=30, now=now)
+        assert claimed is not None
+        creds[name] = (claimed.worker_id, claimed.lease_token)
+        store.mark_running(s, claimed, worker_id=creds[name][0],
+                           lease_token=creds[name][1], now=now)
+        s.commit()
+        s.close()
+        now += timedelta(hours=1)  # let each lease expire before the next claim
+
+    # The final owner C completes; the earlier owners A and B are fenced out.
+    for name in ("A", "B"):
+        s = session_factory()
+        stale = s.get(Job, job_id)
+        with pytest.raises(JobLeaseLostError):
+            store.complete(s, stale, worker_id=creds[name][0],
+                           lease_token=creds[name][1], now=now)
+        s.rollback()
+        s.close()
+
+    s = session_factory()
+    c_job = s.get(Job, job_id)
+    store.complete(s, c_job, worker_id=creds["C"][0], lease_token=creds["C"][1], now=now)
+    s.commit()
+    assert c_job.status == JobStatus.SUCCEEDED.value
+    # Exactly one success event across the whole (multiply-reclaimed) history.
+    successes = [e for e in store.list_events(s, job_id=job_id)
+                 if e.event_type == "succeeded"]
+    assert len(successes) == 1
+    s.close()

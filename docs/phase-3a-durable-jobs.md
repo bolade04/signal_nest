@@ -43,6 +43,17 @@ handler must be safe to re-run.
   never its message (which may contain customer content or secrets).
 - **Exactly one worker per job.** The compare-and-set claim guarantees a single winner even
   under concurrency; a lost race simply scans the next candidate.
+- **Lease-ownership fencing (stale-worker protection).** Each claim mints a fresh, opaque
+  `lease_token` (persisted atomically with `worker_id` + `lease_expires_at`). A worker captures
+  that token *at claim time* and must present it for **every** subsequent mutation — mark-running,
+  heartbeat, success, failure/retry/dead-letter, and cancellation-acknowledgement. Every such
+  write is an atomic conditional `UPDATE … WHERE id=… AND worker_id=… AND lease_token=… AND
+  status IN (…)`; the ownership check and the mutation are one step, never read-then-write. If the
+  lease was reclaimed (recovery clears the token; the next claim rotates it) the predicate matches
+  zero rows, the store raises `JobLeaseLostError`, and **no audit event is written** — so a slow or
+  crashed worker that returns late can never overwrite the new owner's state, corrupt the attempt
+  count, or forge a terminal transition. The token is internal only: it appears in no customer or
+  operator schema, log, or error.
 - **Operator gate.** `/internal/system/jobs` is `401` anonymous, `403` for an authenticated
   non-operator, and detailed-but-secret-free for an operator.
 
