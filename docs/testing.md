@@ -4,8 +4,8 @@ Two independent suites, each runnable on its own.
 
 | Suite | Command | Count | Stack |
 | --- | --- | --- | --- |
-| Frontend | `npm test` | 18 | Vitest + React Testing Library + MSW v2 |
-| Backend | `npm run test:api` | 38 | pytest |
+| Frontend | `npm test` | 19 | Vitest + React Testing Library + MSW v2 |
+| Backend | `npm run test:api` | 61 | pytest |
 
 ## Backend (`apps/api`)
 
@@ -41,6 +41,23 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
   These tests require a migrated + seeded database (`npm run demo:setup`). If the demo
   data is absent, the module skips itself rather than failing spuriously.
 
+  The same module also covers the Phase 3A **system** endpoints against the seeded
+  instance: `/system/health` is live, `/system/readiness` reports ready (schema
+  migrated + all backends configured), and `/system/capabilities` requires
+  authentication (anonymous callers are rejected) then reports local mode and carries no
+  secret material.
+- **`test_runtime_foundation.py`** (Phase 3A runtime foundation — pure unit, no DB)
+  - Configuration rejects invalid production combinations (full mode + SQLite, mock LLM
+    in production, missing secret key, real provider without an API key, dev fallback in
+    production) — proving there is **no silent production fallback**.
+  - The capability registry classifies each backend (local vs external), flags
+    unconfigured production backends instead of reporting them healthy, and **never
+    exposes secrets** in its public view.
+  - Job envelopes are versioned and deterministic (stable `envelope_hash`), reject
+    unknown contract versions, and remain backward compatible with the legacy bare
+    payload; the tenant execution context makes org/workspace/location isolation
+    explicit.
+
 ## Frontend (`apps/web`)
 
 Component/integration tests render the real `App` with a small in-memory MSW backend
@@ -62,6 +79,9 @@ independent cities.
   and lets the user change status.
 - **`locations.test.tsx`** — opening the edit dialog seeds the form from the selected
   location (regression guard for the render-phase form-reset in `LocationDialog`).
+- **`settings-runtime.test.tsx`** — the Settings page surfaces the runtime status from
+  `/system/capabilities`: local (zero-dependency) mode and a per-capability readiness
+  badge for database, queue, cache, vector, storage and llm.
 
 ## Also verified
 

@@ -5,6 +5,7 @@ import type { OpportunityFilters } from './types';
 // naturally produces distinct cache entries and prevents cross-tenant leakage.
 export const queryKeys = {
   session: ['session'] as const,
+  runtimeCapabilities: ['system', 'capabilities'] as const,
   organizations: ['organizations'] as const,
   workspaces: (orgId: string) => ['organizations', orgId, 'workspaces'] as const,
   workspace: (workspaceId: string) => ['workspaces', workspaceId] as const,

@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
@@ -43,6 +43,12 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+
+  const runtime = useQuery({
+    queryKey: queryKeys.runtimeCapabilities,
+    queryFn: ({ signal }) => api.getRuntimeCapabilities(signal),
+    staleTime: 60_000,
+  });
 
   const form = useForm<z.infer<typeof wsSchema>>({
     resolver: zodResolver(wsSchema),
@@ -181,6 +187,48 @@ export function SettingsPage() {
                 )}
               </div>
             ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Runtime</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {runtime.isLoading ? (
+              <p className="text-muted-foreground">Loading runtime status…</p>
+            ) : runtime.data ? (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Mode</span>
+                  <Badge intent={runtime.data.is_local_mode ? 'info' : 'success'}>
+                    {runtime.data.is_local_mode ? 'Local (zero-dependency)' : runtime.data.app_mode}
+                  </Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Environment</span>
+                  <span className="font-medium">{runtime.data.environment}</span>
+                </div>
+                <div className="space-y-1">
+                  {runtime.data.capabilities.map((cap) => (
+                    <div
+                      key={cap.name}
+                      className="flex items-center justify-between rounded-md border border-border px-3 py-1.5"
+                    >
+                      <span className="font-medium capitalize">{cap.name}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-muted-foreground">{cap.backend}</span>
+                        <Badge intent={cap.configured ? 'success' : 'danger'}>
+                          {cap.configured ? 'ready' : 'not configured'}
+                        </Badge>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-muted-foreground">Runtime status is unavailable.</p>
+            )}
           </CardContent>
         </Card>
       </div>

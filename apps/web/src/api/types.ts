@@ -47,6 +47,9 @@ export type CampaignIn = S['CampaignIn'];
 export type SourcePrefIn = S['SourcePrefIn'];
 export type ChannelPrefIn = S['ChannelPrefIn'];
 
+export type RuntimeCapability = S['CapabilityOut'];
+export type RuntimeCapabilities = S['CapabilitiesOut'];
+
 // Campaign-context list endpoints return loosely-typed dict rows; every row
 // carries at least an id alongside its input fields.
 export type ContextRow = Record<string, unknown> & { id: string };

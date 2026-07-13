@@ -690,6 +690,91 @@
         "title": "CampaignIn",
         "type": "object"
       },
+      "CapabilitiesOut": {
+        "properties": {
+          "all_configured": {
+            "title": "All Configured",
+            "type": "boolean"
+          },
+          "app_mode": {
+            "title": "App Mode",
+            "type": "string"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilityOut"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "is_local_mode": {
+            "title": "Is Local Mode",
+            "type": "boolean"
+          },
+          "llm_provider": {
+            "title": "Llm Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_mode",
+          "environment",
+          "llm_provider",
+          "is_local_mode",
+          "all_configured",
+          "capabilities"
+        ],
+        "title": "CapabilitiesOut",
+        "type": "object"
+      },
+      "CapabilityOut": {
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requires_external": {
+            "title": "Requires External",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "backend",
+          "configured",
+          "is_local",
+          "requires_external"
+        ],
+        "title": "CapabilityOut",
+        "type": "object"
+      },
       "ChannelPrefIn": {
         "properties": {
           "channel": {
@@ -1091,6 +1176,24 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthOut": {
+        "properties": {
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "mode"
+        ],
+        "title": "HealthOut",
         "type": "object"
       },
       "LocationBase": {
@@ -2342,6 +2445,45 @@
         "title": "ProductIn",
         "type": "object"
       },
+      "ReadinessOut": {
+        "properties": {
+          "all_configured": {
+            "title": "All Configured",
+            "type": "boolean"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "schema_migrated": {
+            "title": "Schema Migrated",
+            "type": "boolean"
+          },
+          "unconfigured": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unconfigured",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ready",
+          "schema_migrated",
+          "all_configured",
+          "unconfigured",
+          "reasons"
+        ],
+        "title": "ReadinessOut",
+        "type": "object"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -3313,6 +3455,97 @@
         "summary": "Create Workspace",
         "tags": [
           "organizations"
+        ]
+      }
+    },
+    "/api/v1/system/capabilities": {
+      "get": {
+        "operationId": "system_capabilities_api_v1_system_capabilities_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "System Capabilities",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/health": {
+      "get": {
+        "operationId": "system_health_api_v1_system_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System Health",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/system/readiness": {
+      "get": {
+        "operationId": "system_readiness_api_v1_system_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System Readiness",
+        "tags": [
+          "system"
         ]
       }
     },

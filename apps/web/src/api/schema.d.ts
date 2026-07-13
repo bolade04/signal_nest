@@ -110,6 +110,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** System Capabilities */
+        get: operations["system_capabilities_api_v1_system_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** System Health */
+        get: operations["system_health_api_v1_system_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** System Readiness */
+        get: operations["system_readiness_api_v1_system_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}": {
         parameters: {
             query?: never;
@@ -899,6 +950,36 @@ export interface components {
              */
             status: string;
         };
+        /** CapabilitiesOut */
+        CapabilitiesOut: {
+            /** All Configured */
+            all_configured: boolean;
+            /** App Mode */
+            app_mode: string;
+            /** Capabilities */
+            capabilities: components["schemas"]["CapabilityOut"][];
+            /** Environment */
+            environment: string;
+            /** Is Local Mode */
+            is_local_mode: boolean;
+            /** Llm Provider */
+            llm_provider: string;
+        };
+        /** CapabilityOut */
+        CapabilityOut: {
+            /** Backend */
+            backend: string;
+            /** Configured */
+            configured: boolean;
+            /** Detail */
+            detail?: string | null;
+            /** Is Local */
+            is_local: boolean;
+            /** Name */
+            name: string;
+            /** Requires External */
+            requires_external: boolean;
+        };
         /** ChannelPrefIn */
         ChannelPrefIn: {
             /** Channel */
@@ -1029,6 +1110,13 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HealthOut */
+        HealthOut: {
+            /** Mode */
+            mode: string;
+            /** Status */
+            status: string;
         };
         /** LocationBase */
         LocationBase: {
@@ -1387,6 +1475,19 @@ export interface components {
             relevance_weight: number;
             /** Use Cases */
             use_cases?: string[];
+        };
+        /** ReadinessOut */
+        ReadinessOut: {
+            /** All Configured */
+            all_configured: boolean;
+            /** Ready */
+            ready: boolean;
+            /** Reasons */
+            reasons: string[];
+            /** Schema Migrated */
+            schema_migrated: boolean;
+            /** Unconfigured */
+            unconfigured: string[];
         };
         /** RegisterRequest */
         RegisterRequest: {
@@ -1827,6 +1928,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_capabilities_api_v1_system_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_health_api_v1_system_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthOut"];
+                };
+            };
+        };
+    };
+    system_readiness_api_v1_system_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessOut"];
                 };
             };
         };
