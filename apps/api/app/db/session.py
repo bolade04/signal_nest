@@ -27,6 +27,12 @@ if _settings.is_sqlite:
     def _enable_sqlite_fk(dbapi_conn, _):  # pragma: no cover - trivial
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # Concurrent job workers contend on the same file. A short busy timeout
+        # lets a blocked writer wait for the lock instead of failing immediately
+        # with "database is locked", so atomic compare-and-set claims are
+        # reliable under concurrency (the claim itself stays correct because it
+        # is guarded by ``WHERE status = <observed>``).
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
 

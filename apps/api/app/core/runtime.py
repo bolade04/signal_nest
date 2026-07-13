@@ -29,6 +29,7 @@ from app.core.config import Settings, get_settings
 _LOCAL_BACKENDS = {
     "database": {"sqlite"},
     "queue": {"inprocess"},
+    "durable_queue": {"local"},
     "cache": {"memory"},
     "vector": {"bruteforce"},
     "storage": {"local"},
@@ -132,6 +133,9 @@ def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
             configured=s.queue_backend != "redis" or s.redis_url is not None,
             detail=None if s.queue_backend != "redis" or s.redis_url else "redis_url is not set",
         ),
+        # Durable job execution store. Only the local SQLite-backed backend is
+        # implemented; it is always available once the schema is migrated.
+        _status("durable_queue", s.job_queue_backend, configured=True),
         _status(
             "cache",
             s.cache_backend,

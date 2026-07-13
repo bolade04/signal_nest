@@ -180,6 +180,23 @@ def _check_queue(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool
     )
 
 
+def _check_durable_queue(_settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
+    # Verify the durable job store is queryable (its schema is migrated). This is
+    # a schema/connectivity check only — it never makes a billable call and does
+    # not depend on a worker being up.
+    with engine.connect() as conn:
+        tables = set(inspect(conn).get_table_names())
+        if "jobs" not in tables or "job_events" not in tables:
+            return (
+                ProbeStatus.UNAVAILABLE,
+                "durable job schema is not migrated",
+                "missing jobs/job_events tables",
+                False,
+            )
+        conn.execute(text("SELECT 1 FROM jobs LIMIT 1"))
+    return (ProbeStatus.HEALTHY, "durable job store is queryable", None, False)
+
+
 def _check_cache(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
     if settings.cache_backend == "redis":
         return _ping_redis(settings, "cache")
@@ -290,6 +307,7 @@ def _build_probes() -> list[ReadinessProbe]:
     return [
         ReadinessProbe("database", required=True, check=_check_database),
         ReadinessProbe("queue", required=True, check=_check_queue),
+        ReadinessProbe("durable_queue", required=True, check=_check_durable_queue),
         ReadinessProbe("cache", required=True, check=_check_cache),
         ReadinessProbe("storage", required=True, check=_check_storage),
         ReadinessProbe("vector", required=True, check=_check_vector),

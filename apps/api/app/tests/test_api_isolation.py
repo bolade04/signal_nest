@@ -157,7 +157,15 @@ def test_internal_capabilities_is_detailed_and_secret_free(
     body = resp.json()
     assert body["is_local_mode"] is True
     names = {c["name"] for c in body["capabilities"]}
-    assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
+    assert names == {
+        "database",
+        "queue",
+        "durable_queue",
+        "cache",
+        "vector",
+        "storage",
+        "llm",
+    }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
         assert forbidden not in blob
@@ -178,10 +186,59 @@ def test_internal_readiness_reports_probe_diagnostics(
     body = resp.json()
     assert body["ready"] is True
     names = {p["name"] for p in body["probes"]}
-    assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
+    assert names == {
+        "database",
+        "queue",
+        "durable_queue",
+        "cache",
+        "vector",
+        "storage",
+        "llm",
+    }
     # Diagnostics carry durations but never secret material.
     for probe in body["probes"]:
         assert probe["duration_ms"] >= 0
+    blob = resp.text.lower()
+    for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
+        assert forbidden not in blob
+
+
+def test_jobs_endpoint_requires_authentication(client: TestClient):
+    # Tenant-scoped job listing is never anonymous.
+    resp = client.get(f"{API}/workspaces/any-ws/jobs")
+    assert resp.status_code in (401, 403)
+
+
+def test_jobs_listing_is_customer_safe(client: TestClient, auth: dict[str, str]):
+    ws = _first_workspace(client, auth)
+    resp = client.get(f"{API}/workspaces/{ws}/jobs", headers=auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    # Paginated envelope shape.
+    assert set(body) == {"items", "total", "limit", "offset"}
+    # The customer view must never leak worker/lease/payload/infra fields, even
+    # if the seeded workspace has jobs.
+    blob = resp.text.lower()
+    for forbidden in ("worker_id", "lease_expires", "payload_hash", "heartbeat", "idempotency"):
+        assert forbidden not in blob
+
+
+def test_internal_jobs_requires_operator(client: TestClient):
+    # Anonymous -> 401; authenticated non-operator -> 403.
+    assert client.get(f"{API}/internal/system/jobs").status_code == 401
+    non_operator = _register_non_operator(client)
+    resp = client.get(f"{API}/internal/system/jobs", headers=non_operator)
+    assert resp.status_code == 403
+
+
+def test_internal_jobs_is_diagnostics_and_secret_free(
+    client: TestClient, auth: dict[str, str]
+):
+    resp = client.get(f"{API}/internal/system/jobs", headers=auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"status_counts", "recent"}
+    assert isinstance(body["status_counts"], dict)
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
         assert forbidden not in blob

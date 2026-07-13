@@ -17,6 +17,7 @@
     "dev": "bash scripts/dev.sh",
     "dev:web": "npm run dev --workspace apps/web",
     "dev:api": "bash scripts/run-api.sh",
+    "worker": "bash scripts/run-worker.sh",
     "build": "npm run build --workspace apps/web",
     "lint": "npm run lint --workspace apps/web",
     "type-check": "npm run type-check --workspace apps/web",

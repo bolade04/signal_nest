@@ -5,7 +5,7 @@ Two independent suites, each runnable on its own.
 | Suite | Command | Count | Stack |
 | --- | --- | --- | --- |
 | Frontend | `npm test` | 20 | Vitest + React Testing Library + MSW v2 |
-| Backend | `npm run test:api` | 86 | pytest |
+| Backend | `npm run test:api` | 121 | pytest |
 
 ## Backend (`apps/api`)
 
@@ -77,6 +77,29 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
     cut off well under its own timeout; a failed required probe blocks overall readiness.
   - A probe that raises exposes only the exception **class name** in its operator detail —
     never the raw message — so a driver error's host/port/URL never reaches a response.
+- **`test_durable_jobs.py`** (Phase 3A.3 durable job foundation — pure contracts + store +
+  worker against a throwaway SQLite DB, no external service)
+  - **Contracts:** backoff is deterministic and bounded (capped, no overflow, jitter only
+    reduces); terminal states have no outgoing transitions and illegal transitions raise;
+    the error taxonomy classifies retryability; `JobError.safe_summary` is bounded/normalized.
+  - **Store:** enqueue creates a `pending` (or future-dated `scheduled`) job with an audit
+    event; a repeated idempotency key returns the same job while a **different** payload for
+    that key is a conflict; the atomic claim marks/audits the job and prefers higher priority;
+    the running→success/fail-fast/retry-with-backoff/dead-letter/cancel lifecycle is exact;
+    an expired lease is recovered to `pending`; listing/reads are tenant-scoped.
+  - **Concurrency:** four threads racing to claim a single job yield **exactly one winner**.
+  - **Worker runner:** a claimed job runs end-to-end through a registered handler into every
+    outcome — success (with result), retryable → `retry_wait`, non-retryable → `failed`,
+    unknown type → `failed (unsupported_type)`, cooperative `cancelled`, and an unclassified
+    exception recorded as `transient` carrying only the exception **class name** (never its
+    message).
+  - **Enqueue guards:** an unknown job type and an oversized payload are rejected before
+    anything is enqueued.
+
+  `test_api_isolation.py` additionally covers the customer job endpoints against the seeded
+  instance: `…/jobs` requires authentication and returns the customer-safe envelope with **no**
+  worker/lease/payload/idempotency fields, and operator-only `/internal/system/jobs` is `401`
+  anonymous / `403` for a non-operator / secret-free diagnostics for an operator.
 
 ## Frontend (`apps/web`)
 
@@ -88,9 +111,9 @@ independent cities.
 - **`onboarding.test.tsx`** — the wizard offers every presence path, gates continue
   on a business name, and autosaves the draft to `localStorage`.
 - **`campaign-context.test.tsx`** — context tabs, empty state, add-product dialog.
-- **`scout-requests.test.tsx`** — lists all requests with status, runs a scout to
-  completion, and opens a detail page with its configuration and simulated-source
-  disclosure.
+- **`scout-requests.test.tsx`** — lists all requests with status, runs a scout and
+  confirms it reports back as **queued** (the run is now an async durable job), and opens
+  a detail page with its configuration and simulated-source disclosure.
 - **`opportunities.test.tsx`** — renders scored cards with human-readable score labels
   and simulated badges; **proves strict per-location isolation** (Dallas shows only
   Dallas; London only London); filters by classification.

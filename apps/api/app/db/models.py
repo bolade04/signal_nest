@@ -20,6 +20,7 @@ from app.campaign_context.models import (  # noqa: F401
     SourcePreference,
 )
 from app.db.base import Base  # noqa: F401
+from app.jobs.models import Job, JobEvent  # noqa: F401
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: F401
 from app.opportunities.models import (  # noqa: F401
     Opportunity,

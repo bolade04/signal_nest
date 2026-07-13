@@ -10,11 +10,16 @@ credentials, bucket names or endpoints.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_operator
 from app.core.runtime import build_runtime_report
+from app.db.session import get_db
+from app.jobs.models import Job
+from app.jobs.schemas import JobDiagnosticsOut, JobOperatorOut
 from app.organizations.models import User
 from app.system.probes import run_readiness_probes
 
@@ -69,4 +74,28 @@ def internal_readiness(
     return ReadinessDiagnosticsOut(
         ready=report.ready,
         probes=[ProbeDiagnosticOut(**r.to_operator_dict()) for r in report.results],
+    )
+
+
+@router.get("/jobs", response_model=JobDiagnosticsOut)
+def internal_jobs(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _operator: User = Depends(require_operator),
+) -> JobDiagnosticsOut:
+    """Cross-tenant queue diagnostics for operators.
+
+    Surfaces status counts and the most recent jobs with safe worker/lease
+    detail. This is operational introspection, so it is not workspace-scoped —
+    hence the operator gate — but it still never exposes a raw payload or secret.
+    """
+    counts = dict(
+        db.execute(select(Job.status, func.count()).group_by(Job.status)).all()
+    )
+    recent = list(
+        db.execute(select(Job).order_by(Job.created_at.desc()).limit(limit)).scalars()
+    )
+    return JobDiagnosticsOut(
+        status_counts={str(k): int(v) for k, v in counts.items()},
+        recent=[JobOperatorOut.model_validate(j) for j in recent],
     )

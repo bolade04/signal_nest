@@ -195,7 +195,15 @@ def test_local_defaults_are_fully_local_and_configured() -> None:
     assert report.all_configured is True
     assert report.unconfigured == []
     names = {c.name for c in report.capabilities}
-    assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
+    assert names == {
+        "database",
+        "queue",
+        "durable_queue",
+        "cache",
+        "vector",
+        "storage",
+        "llm",
+    }
 
 
 def test_unconfigured_production_backends_are_flagged_not_healthy() -> None:

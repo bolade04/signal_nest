@@ -31,13 +31,22 @@ services that are unit-tested without FastAPI or a database.
 
 ### The intelligence pipeline (Phase 2)
 
-The job chain, run in-process by default (Redis/worker in full mode):
+The pipeline chain (pure engines, orchestrated by the scout handler):
 
 ```
 run_scout_request → ingest_source_data → normalize_signal → classify_signal
   → dedupe/cluster → noise_filter → score_relevance → score_geo_relevance
   → validate → score_opportunity → generate_explanation
 ```
+
+Since Phase 3A.3 this pipeline runs as a **durable background job** (`app/jobs/`),
+not synchronously inside the run request. The scout run endpoint atomically flips the
+request to `queued` and enqueues a `scout_request.execute` job; a separate worker
+(`python -m app.jobs.worker`, default local backend) claims it with a SQLite-safe atomic
+compare-and-set, holds a lease with heartbeats, and drives it to a terminal state with
+bounded retries, dead-lettering, cooperative cancellation and expired-lease recovery.
+Delivery is **at-least-once with idempotency controls**, so handlers are safe to re-run.
+See `docs/phase-3a-durable-jobs.md`.
 
 Key engines and their rules:
 
@@ -69,6 +78,7 @@ Every external dependency sits behind an adapter interface selected by `APP_MODE
 | --- | --- | --- |
 | Database | SQLite | Postgres + pgvector |
 | Queue | in-process | Redis |
+| Durable job queue | SQLite-backed store + worker | (Redis/Celery/etc. — Phase 3B) |
 | Cache | in-memory | Redis |
 | Vector search | numpy brute-force | pgvector |
 | Storage | local filesystem | S3 |

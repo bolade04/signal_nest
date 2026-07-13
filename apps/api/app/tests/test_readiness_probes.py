@@ -27,10 +27,18 @@ def test_local_stack_probes_are_ready() -> None:
     report = run_readiness_probes(_local_settings())
     assert report.ready is True
     names = {r.name for r in report.results}
-    assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
+    assert names == {
+        "database",
+        "queue",
+        "durable_queue",
+        "cache",
+        "vector",
+        "storage",
+        "llm",
+    }
     # The default local backends actively verify as healthy.
     by_name = {r.name: r for r in report.results}
-    for name in ("database", "queue", "cache", "vector"):
+    for name in ("database", "queue", "durable_queue", "cache", "vector"):
         assert by_name[name].status is ProbeStatus.HEALTHY
 
 

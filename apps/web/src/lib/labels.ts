@@ -102,6 +102,32 @@ export const scoutStatusIntent: Record<string, Intent> = {
   failed: 'danger',
 };
 
+export const jobStatusLabels: Record<string, string> = {
+  pending: 'Pending',
+  scheduled: 'Scheduled',
+  claimed: 'Claimed',
+  running: 'Running',
+  retry_wait: 'Retry queued',
+  succeeded: 'Succeeded',
+  failed: 'Failed',
+  dead_lettered: 'Dead-lettered',
+  cancel_requested: 'Cancelling',
+  cancelled: 'Cancelled',
+};
+
+export const jobStatusIntent: Record<string, Intent> = {
+  pending: 'muted',
+  scheduled: 'muted',
+  claimed: 'info',
+  running: 'info',
+  retry_wait: 'warning',
+  succeeded: 'success',
+  failed: 'danger',
+  dead_lettered: 'danger',
+  cancel_requested: 'warning',
+  cancelled: 'muted',
+};
+
 export const sourceTypeLabels: Record<string, string> = {
   manual: 'Manual input',
   website_scan: 'Website scan',

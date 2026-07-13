@@ -31,6 +31,10 @@ export type ScoutRequestUpdate = S['ScoutRequestUpdate'];
 export type ScoutRequestOut = S['ScoutRequestOut'];
 export type ScoutRunResult = S['ScoutRunResult'];
 
+export type JobOut = S['JobOut'];
+export type JobListOut = S['JobListOut'];
+export type JobEventOut = S['JobEventOut'];
+
 export type OpportunityCard = S['OpportunityCard'];
 export type OpportunityDetail = S['OpportunityDetail'];
 export type OpportunityStatusUpdate = S['OpportunityStatusUpdate'];
