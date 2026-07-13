@@ -88,6 +88,21 @@ def test_probe_timeout_is_bounded_and_nonblocking() -> None:
     assert elapsed < 2.0  # bounded well under the hung 5s check
 
 
+def test_probe_error_detail_excludes_raw_exception_message() -> None:
+    # A failing probe must not leak the raw exception text (which can embed a
+    # host, port or connection URL) into the operator diagnostic detail.
+    def _boom(_settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
+        raise RuntimeError("could not connect to db-host:5432 as user secret")
+
+    probe = ReadinessProbe("database", required=True, check=_boom)
+    result = probe.run(_local_settings(), timeout=1.0)
+    assert result.status is ProbeStatus.UNAVAILABLE
+    assert result.detail == "RuntimeError"
+    blob = repr(result.to_operator_dict())
+    for forbidden in ("db-host", "5432", "secret"):
+        assert forbidden not in blob
+
+
 def test_failed_required_probe_blocks_readiness() -> None:
     result = ProbeResult(
         name="database",

@@ -118,12 +118,15 @@ class ReadinessProbe:
             )
         except Exception as exc:  # noqa: BLE001 - any backend error => unavailable
             logger.warning("probe.error", extra={"extra_fields": {"probe": self.name}})
+            # Report only the exception *class*, never its message: a raw adapter
+            # error (e.g. a driver connection error) can embed a host, port or URL,
+            # and this detail is surfaced on the operator diagnostics endpoint.
             return ProbeResult(
                 name=self.name,
                 status=ProbeStatus.UNAVAILABLE,
                 required=self.required,
                 summary="check failed",
-                detail=f"{type(exc).__name__}: {exc}",
+                detail=type(exc).__name__,
                 duration_ms=(time.perf_counter() - started) * 1000,
                 retryable=True,
                 timestamp=ts,

@@ -83,7 +83,7 @@ isolation and geo accuracy.
   opportunity feed/detail, and the Settings runtime-status panel (coarse summary for
   every user, operator-only infrastructure detail) — including tests that prove
   Dallas/London/Lagos/Nairobi never leak across locations.
-- **Backend:** 83 tests (pytest) — pure-engine unit tests for relevance, opportunity
+- **Backend:** 86 tests (pytest) — pure-engine unit tests for relevance, opportunity
   and confidence scoring, the noise gate, validation, the decision engine, the
   geography engine, and claim safety; the Phase 3A runtime-foundation and 3A.2 hardening
   unit tests (production-stack enforcement, secret-free errors, bounded readiness probes,

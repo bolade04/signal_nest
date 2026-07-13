@@ -5,7 +5,7 @@ Two independent suites, each runnable on its own.
 | Suite | Command | Count | Stack |
 | --- | --- | --- | --- |
 | Frontend | `npm test` | 20 | Vitest + React Testing Library + MSW v2 |
-| Backend | `npm run test:api` | 83 | pytest |
+| Backend | `npm run test:api` | 86 | pytest |
 
 ## Backend (`apps/api`)
 
@@ -75,6 +75,8 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
     only) without a live paid call.
   - Probe execution is **bounded and non-blocking**: a probe that hangs for seconds is
     cut off well under its own timeout; a failed required probe blocks overall readiness.
+  - A probe that raises exposes only the exception **class name** in its operator detail —
+    never the raw message — so a driver error's host/port/URL never reaches a response.
 
 ## Frontend (`apps/web`)
 

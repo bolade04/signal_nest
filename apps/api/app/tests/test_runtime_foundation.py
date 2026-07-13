@@ -149,6 +149,20 @@ def test_s3_storage_requires_bucket_in_production() -> None:
     assert "storage_backend=s3 requires s3_bucket" in str(exc.value)
 
 
+def test_production_rejects_blank_secret_key() -> None:
+    # A blank/whitespace secret key would sign JWTs with an empty key; it must be
+    # rejected in staging/production just like the insecure default.
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(secret_key="   "))
+    assert "secret_key must be set" in str(exc.value)
+
+
+def test_blank_database_url_is_rejected() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None, database_url="   ")
+    assert "database_url must not be empty" in str(exc.value)
+
+
 def test_readiness_timeout_bounds_are_validated() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, readiness_probe_timeout_seconds=0)

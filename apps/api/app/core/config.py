@@ -146,8 +146,11 @@ class Settings(BaseSettings):
                 )
 
         if self.is_production_like:
-            if self.secret_key == "dev-insecure-change-me":
-                errors.append("secret_key must be set in staging/production")
+            if self.secret_key == "dev-insecure-change-me" or not self.secret_key.strip():
+                errors.append(
+                    "secret_key must be set to a strong, non-empty value in "
+                    "staging/production"
+                )
             if self.llm_provider == "mock":
                 errors.append(
                     "mock LLM provider is not allowed in staging/production; "
@@ -157,6 +160,11 @@ class Settings(BaseSettings):
                 errors.append("llm_allow_dev_fallback must be false in staging/production")
             if self.storage_backend == "s3" and not self.s3_bucket:
                 errors.append("storage_backend=s3 requires s3_bucket")
+
+        # A database is required in every mode; an empty/whitespace URL is never
+        # valid and must fail fast rather than surfacing as a runtime error.
+        if not self.database_url.strip():
+            errors.append("database_url must not be empty")
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")

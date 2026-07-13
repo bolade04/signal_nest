@@ -26,10 +26,13 @@ the default local stack could still start silently. Enforcement is now driven by
 | `storage_backend=s3` without `s3_bucket` | requires `s3_bucket` |
 
 The existing production-like guards (mock LLM, insecure/missing secret key, real provider
-without an API key, dev fallback) remain. Two hardening details keep secrets out of
-crash output: `hide_input_in_errors=True` on the settings model (pydantic no longer
-echoes the raw constructor input in a `ValidationError`) and `repr=False` on every secret
-field. A regression test asserts a configuration error **never contains a secret value**.
+without an API key, dev fallback) remain, and reject **empty or whitespace-only** values:
+a blank `secret_key` in staging/production (which would otherwise sign JWTs with an empty
+key) and an empty `database_url` in any mode both fail fast. Two hardening details keep
+secrets out of crash output: `hide_input_in_errors=True` on the settings model (pydantic
+no longer echoes the raw constructor input in a `ValidationError`) and `repr=False` on
+every secret field. A regression test asserts a configuration error **never contains a
+secret value**.
 
 ## Follow-up 2 — Detailed runtime info is operator-only
 
@@ -80,12 +83,14 @@ config read.
 
 - **Public** readiness (`/system/readiness`) excludes hosts/ports/URLs/adapter
   details/exceptions/secret-var-names/buckets/paths. **Operator** diagnostics
-  (`/internal/system/readiness`) add safe summaries and internal detail.
+  (`/internal/system/readiness`) add safe summaries and internal detail. A probe that
+  raises reports only the exception **class name** — never the raw message, which could
+  embed a host/port/URL — so no raw adapter exception reaches even the operator surface.
 - Liveness (`/system/health`) stays cheap and independent of the probes.
 
 ## Guarantees demonstrated by tests
 
-Backend `61 → 83`, frontend `19 → 20`.
+Backend `61 → 86`, frontend `19 → 20`.
 
 - `test_runtime_foundation.py` — production rejects the local stack backend-by-backend,
   accepts a valid full/production stack, requires an s3 bucket, validates readiness
