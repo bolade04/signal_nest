@@ -32,7 +32,12 @@ def _session(db: Session, user: User) -> SessionOut:
     ]
     return SessionOut(
         access_token=service.issue_token(user),
-        user=UserOut(id=user.id, email=user.email, full_name=user.full_name),
+        user=UserOut(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            is_operator=user.is_operator,
+        ),
         memberships=memberships,
     )
 

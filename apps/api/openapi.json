@@ -2364,6 +2364,60 @@
         "title": "OrganizationOut",
         "type": "object"
       },
+      "ProbeDiagnosticOut": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "required",
+          "summary",
+          "duration_ms",
+          "retryable",
+          "timestamp"
+        ],
+        "title": "ProbeDiagnosticOut",
+        "type": "object"
+      },
       "ProductIn": {
         "properties": {
           "audience": {
@@ -2445,11 +2499,62 @@
         "title": "ProductIn",
         "type": "object"
       },
+      "ReadinessCheckOut": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "required"
+        ],
+        "title": "ReadinessCheckOut",
+        "type": "object"
+      },
+      "ReadinessDiagnosticsOut": {
+        "properties": {
+          "probes": {
+            "items": {
+              "$ref": "#/components/schemas/ProbeDiagnosticOut"
+            },
+            "title": "Probes",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "probes"
+        ],
+        "title": "ReadinessDiagnosticsOut",
+        "type": "object"
+      },
       "ReadinessOut": {
         "properties": {
           "all_configured": {
             "title": "All Configured",
             "type": "boolean"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessCheckOut"
+            },
+            "title": "Checks",
+            "type": "array"
           },
           "ready": {
             "title": "Ready",
@@ -2479,7 +2584,8 @@
           "schema_migrated",
           "all_configured",
           "unconfigured",
-          "reasons"
+          "reasons",
+          "checks"
         ],
         "title": "ReadinessOut",
         "type": "object"
@@ -2517,6 +2623,34 @@
           "organization_name"
         ],
         "title": "RegisterRequest",
+        "type": "object"
+      },
+      "RuntimeSummaryOut": {
+        "properties": {
+          "all_configured": {
+            "title": "All Configured",
+            "type": "boolean"
+          },
+          "app_mode": {
+            "title": "App Mode",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "is_local_mode": {
+            "title": "Is Local Mode",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_mode",
+          "environment",
+          "is_local_mode",
+          "all_configured"
+        ],
+        "title": "RuntimeSummaryOut",
         "type": "object"
       },
       "ScoreBreakdown": {
@@ -2931,6 +3065,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "is_operator": {
+            "default": false,
+            "title": "Is Operator",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3277,6 +3416,104 @@
         ]
       }
     },
+    "/api/v1/internal/system/capabilities": {
+      "get": {
+        "operationId": "internal_capabilities_api_v1_internal_system_capabilities_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Capabilities",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/readiness": {
+      "get": {
+        "operationId": "internal_readiness_api_v1_internal_system_readiness_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessDiagnosticsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Readiness",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
     "/api/v1/organizations": {
       "get": {
         "operationId": "list_organizations_api_v1_organizations_get",
@@ -3484,7 +3721,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CapabilitiesOut"
+                  "$ref": "#/components/schemas/RuntimeSummaryOut"
                 }
               }
             },

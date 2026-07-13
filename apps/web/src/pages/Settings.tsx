@@ -44,10 +44,21 @@ export function SettingsPage() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
 
+  const isOperator = user?.is_operator ?? false;
+
   const runtime = useQuery({
-    queryKey: queryKeys.runtimeCapabilities,
-    queryFn: ({ signal }) => api.getRuntimeCapabilities(signal),
+    queryKey: queryKeys.runtimeSummary,
+    queryFn: ({ signal }) => api.getRuntimeSummary(signal),
     staleTime: 60_000,
+  });
+
+  // The detailed backend topology is operator-only; ordinary customers only ever
+  // see the coarse summary above and never request the internal endpoint.
+  const runtimeDetail = useQuery({
+    queryKey: queryKeys.runtimeDetail,
+    queryFn: ({ signal }) => api.getRuntimeDetail(signal),
+    staleTime: 60_000,
+    enabled: isOperator,
   });
 
   const form = useForm<z.infer<typeof wsSchema>>({
@@ -209,22 +220,33 @@ export function SettingsPage() {
                   <span className="text-muted-foreground">Environment</span>
                   <span className="font-medium">{runtime.data.environment}</span>
                 </div>
-                <div className="space-y-1">
-                  {runtime.data.capabilities.map((cap) => (
-                    <div
-                      key={cap.name}
-                      className="flex items-center justify-between rounded-md border border-border px-3 py-1.5"
-                    >
-                      <span className="font-medium capitalize">{cap.name}</span>
-                      <span className="flex items-center gap-2">
-                        <span className="text-muted-foreground">{cap.backend}</span>
-                        <Badge intent={cap.configured ? 'success' : 'danger'}>
-                          {cap.configured ? 'ready' : 'not configured'}
-                        </Badge>
-                      </span>
-                    </div>
-                  ))}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Backends</span>
+                  <Badge intent={runtime.data.all_configured ? 'success' : 'danger'}>
+                    {runtime.data.all_configured ? 'all ready' : 'attention needed'}
+                  </Badge>
                 </div>
+                {isOperator && runtimeDetail.data ? (
+                  <div className="space-y-1 pt-1">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Infrastructure (operator view)
+                    </p>
+                    {runtimeDetail.data.capabilities.map((cap) => (
+                      <div
+                        key={cap.name}
+                        className="flex items-center justify-between rounded-md border border-border px-3 py-1.5"
+                      >
+                        <span className="font-medium capitalize">{cap.name}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-muted-foreground">{cap.backend}</span>
+                          <Badge intent={cap.configured ? 'success' : 'danger'}>
+                            {cap.configured ? 'ready' : 'not configured'}
+                          </Badge>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </>
             ) : (
               <p className="text-muted-foreground">Runtime status is unavailable.</p>

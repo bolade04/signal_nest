@@ -99,23 +99,89 @@ def test_system_readiness_is_ready_in_seeded_local_mode(client: TestClient):
     assert body["unconfigured"] == []
 
 
+def _register_non_operator(client: TestClient) -> dict[str, str]:
+    """Register a fresh customer (is_operator defaults to False) and return auth."""
+    import uuid
+
+    email = f"customer-{uuid.uuid4().hex[:8]}@example.com"
+    resp = client.post(
+        f"{API}/auth/register",
+        json={
+            "email": email,
+            "full_name": "Ordinary Customer",
+            "password": "customer1234",
+            "organization_name": "Customer Co",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    token = resp.json()["access_token"]
+    assert resp.json()["user"]["is_operator"] is False
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_system_capabilities_requires_authentication(client: TestClient):
-    # The capability view enumerates infrastructure topology and must not be
-    # anonymously reachable (no infra fingerprinting without a valid caller).
+    # The coarse summary is authenticated (no anonymous runtime introspection).
     resp = client.get(f"{API}/system/capabilities")
     assert resp.status_code == 401
 
 
-def test_system_capabilities_is_local_and_secret_free(
+def test_system_capabilities_is_coarse_summary_only(
     client: TestClient, auth: dict[str, str]
 ):
+    # Any authenticated caller gets a coarse summary WITHOUT per-capability
+    # backend topology (that detail is operator-only).
     resp = client.get(f"{API}/system/capabilities", headers=auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_local_mode"] is True
+    assert "capabilities" not in body
+    blob = resp.text.lower()
+    for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
+        assert forbidden not in blob
+
+
+def test_internal_capabilities_requires_operator(client: TestClient):
+    # Anonymous -> 401; authenticated non-operator -> 403.
+    assert client.get(f"{API}/internal/system/capabilities").status_code == 401
+    non_operator = _register_non_operator(client)
+    resp = client.get(f"{API}/internal/system/capabilities", headers=non_operator)
+    assert resp.status_code == 403
+
+
+def test_internal_capabilities_is_detailed_and_secret_free(
+    client: TestClient, auth: dict[str, str]
+):
+    # The seeded demo owner is an operator in the test environment.
+    resp = client.get(f"{API}/internal/system/capabilities", headers=auth)
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_local_mode"] is True
     names = {c["name"] for c in body["capabilities"]}
     assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
-    # The capability view must never carry secret material.
+    blob = resp.text.lower()
+    for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
+        assert forbidden not in blob
+
+
+def test_internal_readiness_requires_operator(client: TestClient):
+    assert client.get(f"{API}/internal/system/readiness").status_code == 401
+    non_operator = _register_non_operator(client)
+    resp = client.get(f"{API}/internal/system/readiness", headers=non_operator)
+    assert resp.status_code == 403
+
+
+def test_internal_readiness_reports_probe_diagnostics(
+    client: TestClient, auth: dict[str, str]
+):
+    resp = client.get(f"{API}/internal/system/readiness", headers=auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is True
+    names = {p["name"] for p in body["probes"]}
+    assert names == {"database", "queue", "cache", "vector", "storage", "llm"}
+    # Diagnostics carry durations but never secret material.
+    for probe in body["probes"]:
+        assert probe["duration_ms"] >= 0
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
         assert forbidden not in blob

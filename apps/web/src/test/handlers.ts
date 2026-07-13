@@ -9,7 +9,12 @@ import { API_PREFIX } from '@/api/config';
 
 const P = (path: string) => `*${API_PREFIX}${path}`;
 
-export const demoUser = { id: 'user-1', email: 'demo@signalnest.dev', full_name: 'Demo Marketer' };
+export const demoUser = {
+  id: 'user-1',
+  email: 'demo@signalnest.dev',
+  full_name: 'Demo Marketer',
+  is_operator: true,
+};
 
 const org = { id: 'org-1', name: 'Demo Org', slug: 'demo-org' };
 const workspace = {
@@ -176,7 +181,17 @@ const emptyProfile = {
 
 export const handlers = [
   // ---- System (runtime introspection; secret-free) ----
+  // Coarse summary for any authenticated caller (no per-capability topology).
   http.get(P('/system/capabilities'), () =>
+    HttpResponse.json({
+      app_mode: 'local',
+      environment: 'development',
+      is_local_mode: true,
+      all_configured: true,
+    }),
+  ),
+  // Detailed backend topology — operator-only in the real API.
+  http.get(P('/internal/system/capabilities'), () =>
     HttpResponse.json({
       app_mode: 'local',
       environment: 'development',

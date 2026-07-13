@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import Role
@@ -16,6 +16,13 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Platform-operator flag. Server-controlled only (never set from client
+    #: input): gates access to detailed infrastructure introspection. Defaults to
+    #: False so ordinary customers can never see runtime topology; the demo seed
+    #: sets it True only in local/test environments.
+    is_operator: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
 
     memberships: Mapped[list[OrganizationMember]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

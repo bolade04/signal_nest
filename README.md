@@ -78,17 +78,19 @@ isolation and geo accuracy.
 
 ## Testing
 
-- **Frontend:** 19 tests (Vitest + React Testing Library + MSW) covering the app
+- **Frontend:** 20 tests (Vitest + React Testing Library + MSW) covering the app
   shell, auth, onboarding, campaign context, scout requests, locations, the
-  opportunity feed/detail, and the Settings runtime-status panel — including tests that
-  prove Dallas/London/Lagos/Nairobi never leak across locations.
-- **Backend:** 61 tests (pytest) — pure-engine unit tests for relevance, opportunity
+  opportunity feed/detail, and the Settings runtime-status panel (coarse summary for
+  every user, operator-only infrastructure detail) — including tests that prove
+  Dallas/London/Lagos/Nairobi never leak across locations.
+- **Backend:** 86 tests (pytest) — pure-engine unit tests for relevance, opportunity
   and confidence scoring, the noise gate, validation, the decision engine, the
-  geography engine, and claim safety; the Phase 3A runtime-foundation unit tests
-  (configuration rejection, capability registry, versioned job contracts, tenant
-  execution context); plus integration tests that drive the real FastAPI app to prove
-  auth enforcement, per-location isolation, and the system health/readiness endpoints
-  over HTTP.
+  geography engine, and claim safety; the Phase 3A runtime-foundation and 3A.2 hardening
+  unit tests (production-stack enforcement, secret-free errors, bounded readiness probes,
+  capability registry, versioned job contracts, tenant execution context); plus
+  integration tests that drive the real FastAPI app to prove auth enforcement,
+  per-location isolation, operator-gated runtime introspection, and the system
+  health/readiness endpoints over HTTP.
 
 **Continuous integration.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs
 four gates — **Frontend quality**, **Backend quality**, **Migrations and API contract**,

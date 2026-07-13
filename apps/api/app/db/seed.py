@@ -39,6 +39,7 @@ from app.campaign_context.models import (
     ProductProfile,
     SourcePreference,
 )
+from app.core.config import get_settings
 from app.core.enums import (
     CampaignMode,
     Role,
@@ -205,12 +206,17 @@ def seed(reset: bool = False) -> dict:
         db.add(org)
         db.flush()
 
+        # The demo owner is granted platform-operator access ONLY in local
+        # development/test environments so the runtime-introspection panels are
+        # exercisable offline. It is never granted in staging/production.
+        demo_is_operator = get_settings().environment in ("development", "test")
         user = User(
             id=sid("user"),
             email=DEMO_EMAIL,
             full_name="Demo Owner",
             hashed_password=hash_password(DEMO_PASSWORD),
             is_active=True,
+            is_operator=demo_is_operator,
         )
         db.add(user)
         db.add(
