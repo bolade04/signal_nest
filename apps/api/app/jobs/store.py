@@ -336,6 +336,12 @@ class DurableJobStore:
         current = JobStatus(job.status)
         if is_terminal(current):
             return job
+        # Idempotent: a running job whose cancellation was already requested stays
+        # cancel_requested. Re-requesting must not attempt an illegal
+        # cancel_requested -> cancel_requested transition (which would surface as a
+        # 500), so the endpoint can be safely retried/double-clicked.
+        if current == JobStatus.CANCEL_REQUESTED:
+            return job
         job.cancel_requested_at = now
 
         if current in ENQUEUED_STATUSES:

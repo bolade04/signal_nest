@@ -280,6 +280,24 @@ def test_cancel_running_job_is_cooperative(store, db) -> None:
     assert job.cancel_requested_at is not None
 
 
+def test_cancel_running_job_is_idempotent(store, db) -> None:
+    # A second cancel on an already-cancel_requested running job must be a no-op,
+    # never an illegal cancel_requested -> cancel_requested transition (which would
+    # surface to the customer as a 500). The endpoint is safe to retry/double-click.
+    job = _enqueue(store, db)
+    store.claim_one(db, worker_id="w1", lease_seconds=30)
+    store.mark_running(db, job)
+    store.request_cancel(db, job)
+    db.commit()
+    assert job.status == JobStatus.CANCEL_REQUESTED.value
+    first_requested_at = job.cancel_requested_at
+
+    store.request_cancel(db, job)  # must not raise
+    db.commit()
+    assert job.status == JobStatus.CANCEL_REQUESTED.value
+    assert job.cancel_requested_at == first_requested_at
+
+
 def test_expired_lease_is_recovered_to_pending(store, db) -> None:
     past = datetime(2026, 7, 12, tzinfo=UTC)
     job = _enqueue(store, db, now=past)
