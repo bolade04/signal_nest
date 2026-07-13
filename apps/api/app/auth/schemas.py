@@ -19,6 +19,9 @@ class UserOut(BaseModel):
     id: str
     email: EmailStr
     full_name: str
+    #: Server-controlled platform-operator flag. Read-only to the client; used
+    #: only to decide whether to request detailed runtime introspection.
+    is_operator: bool = False
 
 
 class MembershipOut(BaseModel):

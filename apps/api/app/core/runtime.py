@@ -88,6 +88,20 @@ class RuntimeReport:
             "capabilities": [c.to_public_dict() for c in self.capabilities],
         }
 
+    def to_summary_dict(self) -> dict[str, object]:
+        """Coarse, non-privileged runtime summary.
+
+        Safe for any authenticated customer: it reports only the runtime mode
+        and an aggregate readiness flag and deliberately omits the per-capability
+        backend topology (which is operator-only introspection).
+        """
+        return {
+            "app_mode": self.app_mode,
+            "environment": self.environment,
+            "is_local_mode": self.is_local_mode,
+            "all_configured": self.all_configured,
+        }
+
 
 def _status(
     name: str, backend: str, *, configured: bool, detail: str | None = None

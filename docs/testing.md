@@ -4,8 +4,8 @@ Two independent suites, each runnable on its own.
 
 | Suite | Command | Count | Stack |
 | --- | --- | --- | --- |
-| Frontend | `npm test` | 19 | Vitest + React Testing Library + MSW v2 |
-| Backend | `npm run test:api` | 61 | pytest |
+| Frontend | `npm test` | 20 | Vitest + React Testing Library + MSW v2 |
+| Backend | `npm run test:api` | 83 | pytest |
 
 ## Backend (`apps/api`)
 
@@ -42,14 +42,24 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
   data is absent, the module skips itself rather than failing spuriously.
 
   The same module also covers the Phase 3A **system** endpoints against the seeded
-  instance: `/system/health` is live, `/system/readiness` reports ready (schema
-  migrated + all backends configured), and `/system/capabilities` requires
-  authentication (anonymous callers are rejected) then reports local mode and carries no
-  secret material.
+  instance. After the Phase 3A.2 hardening the surface is split by audience:
+  `/system/health` is live (anonymous); `/system/readiness` reports ready (schema
+  migrated + all probes healthy, anonymous, secret-free); `/system/capabilities`
+  requires authentication and returns only a **coarse summary** (mode + readiness, no
+  per-capability topology); and the detailed topology moved to operator-only
+  `/internal/system/capabilities` and `/internal/system/readiness` — anonymous callers
+  get `401`, an authenticated non-operator customer gets `403`, and only an operator sees
+  the detailed (still secret-free) report.
 - **`test_runtime_foundation.py`** (Phase 3A runtime foundation — pure unit, no DB)
   - Configuration rejects invalid production combinations (full mode + SQLite, mock LLM
     in production, missing secret key, real provider without an API key, dev fallback in
     production) — proving there is **no silent production fallback**.
+  - Phase 3A.2 adds environment-driven enforcement: `environment=production` requires
+    `app_mode=full` and rejects each local-only backend by name (SQLite, in-process
+    queue, in-memory cache, local storage, brute-force vector); the default local stack
+    is rejected wholesale; `storage_backend=s3` requires a bucket; readiness timeout
+    bounds are validated (positive, per-probe ≤ total); and a configuration error
+    **never echoes secret values**.
   - The capability registry classifies each backend (local vs external), flags
     unconfigured production backends instead of reporting them healthy, and **never
     exposes secrets** in its public view.
@@ -57,6 +67,14 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
     unknown contract versions, and remain backward compatible with the legacy bare
     payload; the tenant execution context makes org/workspace/location isolation
     explicit.
+- **`test_readiness_probes.py`** (Phase 3A.2 bounded readiness probes — pure unit)
+  - The seeded local stack probes all report healthy; the **public** probe view excludes
+    hosts/ports/URLs/adapter detail while the operator view carries safe diagnostics.
+  - `storage_backend=s3` without a bucket is `not_configured` (never healthy); the local
+    storage probe **rejects path traversal**; a real LLM provider is `degraded` (config
+    only) without a live paid call.
+  - Probe execution is **bounded and non-blocking**: a probe that hangs for seconds is
+    cut off well under its own timeout; a failed required probe blocks overall readiness.
 
 ## Frontend (`apps/web`)
 
@@ -79,9 +97,12 @@ independent cities.
   and lets the user change status.
 - **`locations.test.tsx`** — opening the edit dialog seeds the form from the selected
   location (regression guard for the render-phase form-reset in `LocationDialog`).
-- **`settings-runtime.test.tsx`** — the Settings page surfaces the runtime status from
-  `/system/capabilities`: local (zero-dependency) mode and a per-capability readiness
-  badge for database, queue, cache, vector, storage and llm.
+- **`settings-runtime.test.tsx`** — the Settings page surfaces the coarse runtime
+  summary from `/system/capabilities` (local zero-dependency mode) for every
+  authenticated user; an **operator** additionally sees the per-capability
+  infrastructure detail from `/internal/system/capabilities` (database, queue, cache,
+  vector, storage, llm), while a **non-operator** customer never triggers that internal
+  endpoint and never sees the operator-only section.
 
 ## Also verified
 

@@ -54,6 +54,20 @@ def get_current_user(
     return user
 
 
+def require_operator(user: User = Depends(get_current_user)) -> User:
+    """Authorize a platform-operator request.
+
+    Operator status is a server-controlled attribute on the user; it is never
+    derived from client input, email domain, or organization role. Anonymous
+    callers are rejected by ``get_current_user`` (401); an authenticated
+    non-operator is rejected here (403). This gates detailed infrastructure
+    introspection so runtime topology is not exposed to ordinary customers.
+    """
+    if not user.is_operator:
+        raise PermissionDeniedError("Operator privileges are required for this resource.")
+    return user
+
+
 def _membership(db: Session, user_id: str, org_id: str) -> OrganizationMember:
     m = db.scalar(
         select(OrganizationMember).where(

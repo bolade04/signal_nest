@@ -27,6 +27,7 @@ import type {
   ProductIn,
   RegisterRequest,
   RuntimeCapabilities,
+  RuntimeSummary,
   ScoutRequestCreate,
   ScoutRequestOut,
   ScoutRequestUpdate,
@@ -37,9 +38,14 @@ import type {
   WorkspaceOut,
 } from './types';
 
-// ---- System (unauthenticated runtime introspection; no secrets) ----
-export const getRuntimeCapabilities = (signal?: AbortSignal) =>
-  apiRequest<RuntimeCapabilities>('/system/capabilities', { signal });
+// ---- System (runtime introspection; no secrets) ----
+// Coarse summary — safe for any authenticated customer (mode + readiness only).
+export const getRuntimeSummary = (signal?: AbortSignal) =>
+  apiRequest<RuntimeSummary>('/system/capabilities', { signal });
+
+// Detailed per-capability backend topology — operator-only (403 otherwise).
+export const getRuntimeDetail = (signal?: AbortSignal) =>
+  apiRequest<RuntimeCapabilities>('/internal/system/capabilities', { signal });
 
 // ---- Auth ----
 export const login = (body: LoginRequest, signal?: AbortSignal) =>

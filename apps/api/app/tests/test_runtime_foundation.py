@@ -68,6 +68,112 @@ def test_production_rejects_dev_fallback() -> None:
     assert "llm_allow_dev_fallback must be false" in str(exc.value)
 
 
+# --- Production requires the production-shaped runtime (follow-up #1) ------------
+def _prod_kwargs(**overrides: object) -> dict[str, object]:
+    """A valid full/production config; individual fields are overridden per test."""
+    base: dict[str, object] = dict(
+        _env_file=None,
+        app_mode="full",
+        environment="production",
+        database_url="postgresql://u:p@localhost/db",
+        secret_key="a-real-secret",
+        queue_backend="redis",
+        cache_backend="redis",
+        redis_url="redis://localhost:6379/0",
+        storage_backend="s3",
+        s3_bucket="prod-bucket",
+        vector_backend="pgvector",
+        llm_provider="openai",
+        llm_api_key="sk-test",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_production_full_config_is_accepted() -> None:
+    settings = Settings(**_prod_kwargs())
+    assert settings.is_production is True
+    assert settings.app_mode == "full"
+
+
+def test_production_rejects_local_app_mode() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(app_mode="local"))
+    assert "environment=production requires app_mode=full" in str(exc.value)
+
+
+def test_production_rejects_sqlite() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(database_url="sqlite:///./x.db"))
+    assert "environment=production requires a PostgreSQL database" in str(exc.value)
+
+
+def test_production_rejects_inprocess_queue() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(queue_backend="inprocess"))
+    assert "durable queue backend" in str(exc.value)
+
+
+def test_production_rejects_memory_cache() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(cache_backend="memory"))
+    assert "shared cache backend" in str(exc.value)
+
+
+def test_production_rejects_local_storage() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(storage_backend="local"))
+    assert "durable object storage" in str(exc.value)
+
+
+def test_production_rejects_bruteforce_vector() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(vector_backend="bruteforce"))
+    assert "persistent vector backend" in str(exc.value)
+
+
+def test_production_default_local_stack_is_rejected_wholesale() -> None:
+    # A production environment left on the local defaults fails during Settings
+    # construction, naming every offending capability (no silent fallback).
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None, environment="production", secret_key="a-real-secret",
+                 llm_provider="openai", llm_api_key="sk-test")
+    message = str(exc.value)
+    for fragment in ("app_mode=full", "PostgreSQL", "queue", "cache", "storage", "vector"):
+        assert fragment in message
+
+
+def test_s3_storage_requires_bucket_in_production() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(s3_bucket=None))
+    assert "storage_backend=s3 requires s3_bucket" in str(exc.value)
+
+
+def test_readiness_timeout_bounds_are_validated() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, readiness_probe_timeout_seconds=0)
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            _env_file=None,
+            readiness_probe_timeout_seconds=10.0,
+            readiness_total_timeout_seconds=5.0,
+        )
+    assert "must be <=" in str(exc.value)
+
+
+def test_error_message_never_contains_secret_values() -> None:
+    # Rejecting a production misconfiguration must not echo secret-bearing values.
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            _env_file=None,
+            environment="production",
+            app_mode="local",
+            database_url="postgresql://user:SUPERSECRET@db-host/db",
+            secret_key="another-SUPERSECRET-value",
+        )
+    assert "SUPERSECRET" not in str(exc.value)
+
+
 # --- Capability registry: classification + secret hygiene -----------------------
 def test_local_defaults_are_fully_local_and_configured() -> None:
     report = build_runtime_report(Settings(_env_file=None))

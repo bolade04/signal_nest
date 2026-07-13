@@ -47,6 +47,7 @@ export type CampaignIn = S['CampaignIn'];
 export type SourcePrefIn = S['SourcePrefIn'];
 export type ChannelPrefIn = S['ChannelPrefIn'];
 
+export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];
 

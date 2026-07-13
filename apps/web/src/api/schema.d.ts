@@ -75,6 +75,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Internal Capabilities */
+        get: operations["internal_capabilities_api_v1_internal_system_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Internal Readiness */
+        get: operations["internal_readiness_api_v1_internal_system_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations": {
         parameters: {
             query?: never;
@@ -1448,6 +1482,25 @@ export interface components {
             /** Slug */
             slug: string;
         };
+        /** ProbeDiagnosticOut */
+        ProbeDiagnosticOut: {
+            /** Detail */
+            detail?: string | null;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Name */
+            name: string;
+            /** Required */
+            required: boolean;
+            /** Retryable */
+            retryable: boolean;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string;
+            /** Timestamp */
+            timestamp: string;
+        };
         /** ProductIn */
         ProductIn: {
             /** Audience */
@@ -1476,10 +1529,28 @@ export interface components {
             /** Use Cases */
             use_cases?: string[];
         };
+        /** ReadinessCheckOut */
+        ReadinessCheckOut: {
+            /** Name */
+            name: string;
+            /** Required */
+            required: boolean;
+            /** Status */
+            status: string;
+        };
+        /** ReadinessDiagnosticsOut */
+        ReadinessDiagnosticsOut: {
+            /** Probes */
+            probes: components["schemas"]["ProbeDiagnosticOut"][];
+            /** Ready */
+            ready: boolean;
+        };
         /** ReadinessOut */
         ReadinessOut: {
             /** All Configured */
             all_configured: boolean;
+            /** Checks */
+            checks: components["schemas"]["ReadinessCheckOut"][];
             /** Ready */
             ready: boolean;
             /** Reasons */
@@ -1502,6 +1573,17 @@ export interface components {
             organization_name: string;
             /** Password */
             password: string;
+        };
+        /** RuntimeSummaryOut */
+        RuntimeSummaryOut: {
+            /** All Configured */
+            all_configured: boolean;
+            /** App Mode */
+            app_mode: string;
+            /** Environment */
+            environment: string;
+            /** Is Local Mode */
+            is_local_mode: boolean;
         };
         /** ScoreBreakdown */
         ScoreBreakdown: {
@@ -1640,6 +1722,11 @@ export interface components {
             full_name: string;
             /** Id */
             id: string;
+            /**
+             * Is Operator
+             * @default false
+             */
+            is_operator: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -1831,6 +1918,68 @@ export interface operations {
             };
         };
     };
+    internal_capabilities_api_v1_internal_system_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_readiness_api_v1_internal_system_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessDiagnosticsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_organizations_api_v1_organizations_get: {
         parameters: {
             query?: never;
@@ -1949,7 +2098,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CapabilitiesOut"];
+                    "application/json": components["schemas"]["RuntimeSummaryOut"];
                 };
             };
             /** @description Validation Error */
