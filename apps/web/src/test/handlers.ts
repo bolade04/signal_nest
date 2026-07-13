@@ -272,7 +272,16 @@ export const handlers = [
     return HttpResponse.json({ ...r, status: 'completed' });
   }),
   http.post(P('/workspaces/:ws/scout-requests/:id/run'), ({ params }) =>
-    HttpResponse.json({ scout_request_id: String(params.id), status: 'completed', stats: { opportunities: 2, signals_processed: 20 } }),
+    HttpResponse.json({
+      scout_request_id: String(params.id),
+      status: 'queued',
+      stats: { job_id: 'job-1', job_status: 'pending' },
+    }),
+  ),
+
+  // ---- Durable jobs ----
+  http.get(P('/workspaces/:ws/jobs'), () =>
+    HttpResponse.json({ items: [], total: 0, limit: 10, offset: 0 }),
   ),
 
   // ---- Opportunities ----

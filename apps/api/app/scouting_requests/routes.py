@@ -9,7 +9,7 @@ default; Redis worker in full mode).
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -19,9 +19,7 @@ from app.core.enums import Role, ScoutRequestStatus
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.logging import trace_id_ctx
 from app.db.session import get_db
-from app.infra.queue import queue
-from app.jobs.context import ExecutionContext
-from app.jobs.contracts import wrap
+from app.jobs.service import enqueue_scout_request
 from app.locations.models import BusinessLocation
 from app.scouting_requests.models import ScoutRequest
 from app.scouting_requests.schemas import (
@@ -207,15 +205,41 @@ def run_scout_request_endpoint(
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutRunResult:
+    """Enqueue a durable scout-execute job and return immediately (non-blocking).
+
+    The pipeline no longer runs inside the request: a worker claims and executes
+    the queued job. The caller polls the request/job status for progress. A run
+    is accepted only from a settled state (draft / completed / failed), and the
+    ``draft/... -> queued`` flip is an atomic compare-and-set so two concurrent
+    submissions cannot enqueue duplicate work for the same request.
+    """
     request = _get_scoped(db, workspace_id, request_id)
-    if request.status == ScoutRequestStatus.RUNNING.value:
-        raise ValidationDomainError("Request is already running.")
-    if request.status == ScoutRequestStatus.PAUSED.value:
+    observed = request.status
+    if observed in (ScoutRequestStatus.RUNNING.value, ScoutRequestStatus.QUEUED.value):
+        raise ValidationDomainError("Request is already queued or running.")
+    if observed == ScoutRequestStatus.PAUSED.value:
         raise ValidationDomainError("Resume the request before running it.")
 
-    request.status = ScoutRequestStatus.QUEUED.value
-    db.add(request)
-    db.flush()
+    # Atomic claim of the run: only the caller that flips the observed status to
+    # QUEUED proceeds to enqueue; a lost race is reported rather than duplicated.
+    claimed = db.execute(
+        update(ScoutRequest)
+        .where(ScoutRequest.id == request.id, ScoutRequest.status == observed)
+        .values(status=ScoutRequestStatus.QUEUED.value)
+    )
+    if claimed.rowcount != 1:
+        raise ValidationDomainError("Request state changed; refresh and try again.")
+
+    job = enqueue_scout_request(
+        db,
+        organization_id=request.organization_id,
+        workspace_id=request.workspace_id,
+        scout_request_id=request.id,
+        location_id=request.location_id,
+        campaign_id=request.campaign_id,
+        request_id=request.id,
+        trace_id=trace_id_ctx.get(),
+    )
     record_audit(
         db,
         organization_id=ctx.organization.id,
@@ -225,27 +249,10 @@ def run_scout_request_endpoint(
         entity_type="scout_request",
         entity_id=request.id,
     )
-    # Commit so the in-process job (opening its own session) sees the queued request.
     db.commit()
 
-    # Carry the tenant/location scope with the job as a versioned envelope so isolation
-    # travels with the work (and a durable queue can validate the contract version).
-    envelope = wrap(
-        "run_scout_request",
-        ExecutionContext.for_scout_request(
-            organization_id=request.organization_id,
-            workspace_id=request.workspace_id,
-            location_id=request.location_id,
-            campaign_id=request.campaign_id,
-            request_id=request.id,
-            trace_id=trace_id_ctx.get(),
-        ),
-        {"scout_request_id": request.id},
-    )
-    queue.enqueue("run_scout_request", envelope.to_message())
-
-    # In-process backend runs synchronously and commits; refresh to read final state.
-    db.refresh(request)
     return ScoutRunResult(
-        scout_request_id=request.id, status=request.status, stats=request.stats or {}
+        scout_request_id=request.id,
+        status=ScoutRequestStatus.QUEUED.value,
+        stats={"job_id": job.id, "job_status": job.status},
     )

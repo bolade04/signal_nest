@@ -6,6 +6,8 @@ import {
   confidenceIntent,
   decisionIntent,
   decisionLabels,
+  jobStatusIntent,
+  jobStatusLabels,
   label,
   riskIntent,
   riskLabels,
@@ -35,6 +37,10 @@ export const StatusBadge = ({ value }: { value: string }) => (
 
 export const ScoutStatusBadge = ({ value }: { value: string }) => (
   <Badge intent={scoutStatusIntent[value] ?? 'neutral'}>{label(scoutStatusLabels, value)}</Badge>
+);
+
+export const JobStatusBadge = ({ value }: { value: string }) => (
+  <Badge intent={jobStatusIntent[value] ?? 'neutral'}>{label(jobStatusLabels, value)}</Badge>
 );
 
 export const ConfidenceBadge = ({ level }: { level: string }) => (

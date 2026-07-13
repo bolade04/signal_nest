@@ -92,6 +92,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Jobs
+         * @description Cross-tenant queue diagnostics for operators.
+         *
+         *     Surfaces status counts and the most recent jobs with safe worker/lease
+         *     detail. This is operational introspection, so it is not workspace-scoped —
+         *     hence the operator gate — but it still never exposes a raw payload or secret.
+         */
+        get: operations["internal_jobs_api_v1_internal_system_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/readiness": {
         parameters: {
             query?: never;
@@ -474,6 +498,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Jobs */
+        get: operations["list_jobs_api_v1_workspaces__workspace_id__jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Job */
+        get: operations["get_job_api_v1_workspaces__workspace_id__jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Job
+         * @description Request cancellation.
+         *
+         *     A not-yet-running job is cancelled immediately; a running job is marked for
+         *     cooperative cancellation and stopped by the worker at its next safe point.
+         */
+        post: operations["cancel_job_api_v1_workspaces__workspace_id__jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Job Events */
+        get: operations["list_job_events_api_v1_workspaces__workspace_id__jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/locations": {
         parameters: {
             query?: never;
@@ -744,7 +842,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run Scout Request Endpoint */
+        /**
+         * Run Scout Request Endpoint
+         * @description Enqueue a durable scout-execute job and return immediately (non-blocking).
+         *
+         *     The pipeline no longer runs inside the request: a worker claims and executes
+         *     the queued job. The caller polls the request/job status for progress. A run
+         *     is accepted only from a settled state (draft / completed / failed), and the
+         *     ``draft/... -> queued`` flip is an atomic compare-and-set so two concurrent
+         *     submissions cannot enqueue duplicate work for the same request.
+         */
         post: operations["run_scout_request_endpoint_api_v1_workspaces__workspace_id__scout_requests__request_id__run_post"];
         delete?: never;
         options?: never;
@@ -1151,6 +1258,175 @@ export interface components {
             mode: string;
             /** Status */
             status: string;
+        };
+        /**
+         * JobDiagnosticsOut
+         * @description Operator queue snapshot: status counts + a page of recent jobs.
+         */
+        JobDiagnosticsOut: {
+            /** Recent */
+            recent: components["schemas"]["JobOperatorOut"][];
+            /** Status Counts */
+            status_counts: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * JobEventOut
+         * @description Customer-safe audit event: what happened, never how/where.
+         */
+        JobEventOut: {
+            /** Attempt */
+            attempt: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Code */
+            error_code: string | null;
+            /** Event Metadata */
+            event_metadata: {
+                [key: string]: unknown;
+            };
+            /** Event Type */
+            event_type: string;
+            /** Id */
+            id: string;
+            /** New Status */
+            new_status: string | null;
+            /** Previous Status */
+            previous_status: string | null;
+        };
+        /**
+         * JobListOut
+         * @description A paginated page of customer-safe jobs.
+         */
+        JobListOut: {
+            /** Items */
+            items: components["schemas"]["JobOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * JobOperatorOut
+         * @description Operator diagnostics view: safe worker/lease detail, never a raw payload.
+         */
+        JobOperatorOut: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Available At */
+            available_at: string | null;
+            /** Cancel Requested At */
+            cancel_requested_at: string | null;
+            /** Cancelled At */
+            cancelled_at: string | null;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Contract Version */
+            contract_version: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Heartbeat At */
+            heartbeat_at: string | null;
+            /** Id */
+            id: string;
+            /** Job Type */
+            job_type: string;
+            /** Last Error Code */
+            last_error_code: string | null;
+            /** Last Error Summary */
+            last_error_summary: string | null;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Location Id */
+            location_id: string | null;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Organization Id */
+            organization_id: string;
+            /** Payload Hash */
+            payload_hash: string;
+            /** Priority */
+            priority: number;
+            /** Result Summary */
+            result_summary: {
+                [key: string]: unknown;
+            } | null;
+            /** Scheduled For */
+            scheduled_for: string | null;
+            /** Scout Request Id */
+            scout_request_id: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Worker Id */
+            worker_id: string | null;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
+         * JobOut
+         * @description Customer-safe job view: lifecycle + outcome, no infrastructure detail.
+         */
+        JobOut: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Cancel Requested At */
+            cancel_requested_at: string | null;
+            /** Cancelled At */
+            cancelled_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Job Type */
+            job_type: string;
+            /** Last Error Code */
+            last_error_code: string | null;
+            /** Location Id */
+            location_id: string | null;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Priority */
+            priority: number;
+            /** Result Summary */
+            result_summary: {
+                [key: string]: unknown;
+            } | null;
+            /** Scheduled For */
+            scheduled_for: string | null;
+            /** Scout Request Id */
+            scout_request_id: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** LocationBase */
         LocationBase: {
@@ -1936,6 +2212,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilitiesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_jobs_api_v1_internal_system_jobs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDiagnosticsOut"];
                 };
             };
             /** @description Validation Error */
@@ -2949,6 +3258,147 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jobs_api_v1_workspaces__workspace_id__jobs_get: {
+        parameters: {
+            query?: {
+                location_id?: string | null;
+                scout_request_id?: string | null;
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_api_v1_workspaces__workspace_id__jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_job_api_v1_workspaces__workspace_id__jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_job_events_api_v1_workspaces__workspace_id__jobs__job_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobEventOut"][];
+                };
             };
             /** @description Validation Error */
             422: {

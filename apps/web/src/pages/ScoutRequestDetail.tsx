@@ -15,6 +15,7 @@ import { sourceTypeLabels } from '@/lib/labels';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
+import { JobsPanel } from './scouts/JobsPanel';
 import { useScoutActions } from './scouts/useScoutActions';
 
 function num(stats: Record<string, unknown>, key: string): number {
@@ -97,7 +98,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
+        <div className="space-y-6 lg:col-span-1">
+        <Card>
           <CardHeader>
             <CardTitle>Configuration</CardTitle>
           </CardHeader>
@@ -153,6 +155,9 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             </div>
           </CardContent>
         </Card>
+
+          <JobsPanel workspaceId={workspaceId} scoutRequestId={requestId} />
+        </div>
 
         <div className="lg:col-span-2">
           <div className="mb-3 flex items-center justify-between">

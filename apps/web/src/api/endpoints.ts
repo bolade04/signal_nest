@@ -14,6 +14,9 @@ import type {
   GeoCoverageOut,
   GeocodeRequest,
   GeocodeResponse,
+  JobEventOut,
+  JobListOut,
+  JobOut,
   LocationBase,
   LocationOut,
   LoginRequest,
@@ -187,6 +190,27 @@ export const runScoutRequest = (workspaceId: string, requestId: string) =>
   apiRequest<ScoutRunResult>(`/workspaces/${workspaceId}/scout-requests/${requestId}/run`, {
     method: 'POST',
   });
+
+// ---- Durable jobs (customer-safe views: lifecycle + outcome, no infra) ----
+export interface JobFilters {
+  location_id?: string | null;
+  scout_request_id?: string | null;
+  status?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export const listJobs = (workspaceId: string, filters: JobFilters = {}, signal?: AbortSignal) =>
+  apiRequest<JobListOut>(`/workspaces/${workspaceId}/jobs`, { query: { ...filters }, signal });
+
+export const getJob = (workspaceId: string, jobId: string, signal?: AbortSignal) =>
+  apiRequest<JobOut>(`/workspaces/${workspaceId}/jobs/${jobId}`, { signal });
+
+export const listJobEvents = (workspaceId: string, jobId: string, signal?: AbortSignal) =>
+  apiRequest<JobEventOut[]>(`/workspaces/${workspaceId}/jobs/${jobId}/events`, { signal });
+
+export const cancelJob = (workspaceId: string, jobId: string) =>
+  apiRequest<JobOut>(`/workspaces/${workspaceId}/jobs/${jobId}/cancel`, { method: 'POST' });
 
 // ---- Opportunities ----
 export const listOpportunities = (

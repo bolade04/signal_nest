@@ -37,15 +37,14 @@ export function useScoutActions(workspaceId: string) {
     mutationFn: (requestId: string) => api.runScoutRequest(workspaceId, requestId),
     onSuccess: async (r) => {
       await invalidate(r.scout_request_id);
-      const found =
-        typeof r.stats.opportunities === 'number' ? r.stats.opportunities : undefined;
+      await queryClient.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'jobs'] });
       toast({
-        title: 'Scout run complete',
-        description: found != null ? `${found} opportunities generated.` : undefined,
+        title: 'Scout queued',
+        description: 'A background job is processing this scout. Results appear as it completes.',
         intent: 'success',
       });
     },
-    onError: (err) => toast({ title: 'Scout run failed', description: msg(err), intent: 'error' }),
+    onError: (err) => toast({ title: 'Could not queue scout', description: msg(err), intent: 'error' }),
   });
 
   return { pause, resume, run };
