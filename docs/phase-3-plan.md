@@ -253,15 +253,19 @@ Classification: **[R] Required before Phase 3** · **[E] Recommended early in Ph
 **[N] Non-blocking technical debt**.
 
 1. **[E]** Review replacement PR #17 (PostCSS `8.5.17 → 8.5.18`, npm-minor-patch group).
-2. **[R]** Upgrade `actions/setup-python@v5` to the latest compatible supported major and
-   remove the Node-runtime deprecation annotation.
-3. **[E]** Decide whether to close or defer TypeScript 7 PR #6 (currently deferred).
-4. **[N]** Review and reduce the frontend large-chunk warning where practical
+2. **[E]** Decide whether to close or defer TypeScript 7 PR #6 (currently deferred).
+3. **[N]** Review and reduce the frontend large-chunk warning where practical
    (route-level code splitting).
-5. **[E]** Migrate Pydantic class-based `Config` to `ConfigDict`.
-6. **[R]** Confirm production environment-variable and secret-management documentation.
-7. **[R]** Confirm local setup documentation matches the current toolchain.
-8. **[N]** Verify no stale Dependabot branches or obsolete documentation remain.
+4. **[E]** Migrate Pydantic class-based `Config` to `ConfigDict`.
+5. **[R]** Confirm production environment-variable and secret-management documentation.
+6. **[R]** Confirm local setup documentation matches the current toolchain.
+7. **[N]** Verify no stale Dependabot branches or obsolete documentation remain.
 
-> Security/tooling health and the `setup-python` warning should be addressed **before**
-> major Phase 3 feature work unless there is a documented reason to defer.
+> Security/tooling health should be addressed **before** major Phase 3 feature work
+> unless there is a documented reason to defer.
+
+### Completed maintenance
+- **`actions/setup-python` upgraded v5 → v6** (PR #19, merged; squash commit
+  `b5965d354a0c2335c2ac9cf283fd28b56d8d612d`). The Node-runtime deprecation annotation
+  is no longer emitted; Python 3.12, pip caching, and `contents: read` permissions are
+  unchanged.
