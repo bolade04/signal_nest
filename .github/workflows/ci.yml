@@ -225,6 +225,69 @@ jobs:
           path: ci-logs/
           retention-days: 7
 
+  container-build:
+    name: Container build and security
+    runs-on: ubuntu-latest
+    # Batch 4: build the production API + worker images, prove they are non-root
+    # and secret-free, and exercise the migration actor + entrypoints end-to-end.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          target: api
+          tags: signalnest-api:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          target: worker
+          tags: signalnest-worker:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Security check — non-root, no secrets (API)
+        run: bash scripts/docker-security-check.sh signalnest-api:ci
+
+      - name: Security check — non-root, no secrets (worker)
+        run: bash scripts/docker-security-check.sh signalnest-worker:ci
+
+      - name: API image imports cleanly
+        run: docker run --rm --entrypoint python signalnest-api:ci -c "import app.main; print('api import ok')"
+
+      - name: Migration actor + schema-compat check run in the image
+        # Point the DB at writable /tmp (the image is read-only-root compatible;
+        # only /tmp is writable). Upgrade a fresh SQLite DB to head, then verify
+        # the startup schema-compatibility check reports compatible (exit 0).
+        run: |
+          docker run --rm -e DATABASE_URL=sqlite:////tmp/ci.db --entrypoint sh signalnest-worker:ci -c '
+            python -m app.db.migrate upgrade &&
+            python -m app.db.migrate check
+          '
+
+      - name: Worker refuses an un-migrated database (schema gate)
+        # A fresh, empty database is "uninitialized"; the compatibility check must
+        # exit non-zero rather than silently running or migrating.
+        run: |
+          if docker run --rm -e DATABASE_URL=sqlite:////tmp/empty.db --entrypoint python signalnest-worker:ci -m app.db.migrate check; then
+            echo "FAIL: check unexpectedly passed on an uninitialized database" >&2
+            exit 1
+          fi
+          echo "ok: schema gate correctly rejects an uninitialized database"
+
   integration-smoke:
     name: Integration smoke
     runs-on: ubuntu-latest
