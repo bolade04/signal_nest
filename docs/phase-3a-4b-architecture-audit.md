@@ -176,3 +176,112 @@ focused commit; the additive `worker_registrations` column can be dropped by the
 migration downgrade without touching business or job data. The draft PR is never
 merged until the full Phase 3A.4b acceptance gates (or a deliberate batch split) are
 satisfied.
+
+---
+
+# Batch 2 — Observability Audit (structured logging, correlation, metrics)
+
+Performed by direct inspection of the repository at branch head after Batch 1.
+
+## Current logging architecture
+
+- `app/core/logging.py` provides a single `JsonFormatter` that emits one JSON object
+  per record with `level`, `logger`, `message`, `request_id`, `trace_id`, optional
+  `exc_info`, plus any `record.extra_fields`. `configure_logging(level)` installs one
+  stdout `StreamHandler` on the root logger. `request_id_ctx` / `trace_id_ctx` are the
+  only correlation context vars.
+- `app/main.py::create_app` calls `configure_logging("DEBUG" if settings.debug else
+  "INFO")`. There is no dev/prod format switch beyond level; JSON is always emitted.
+- Call sites already pass `extra={"extra_fields": {...}}` (worker.py, queue.py). Some
+  of those fields are **raw ids** (e.g. `job_id`, `worker_id`, org/workspace ids at
+  `service.py` enqueue logging) — acceptable in controlled operator/debug logs but not
+  ideal as default production fields; Batch 2 prefers opaque correlation ids.
+
+## Existing structured fields
+
+`level`, `logger`, `message`, `request_id`, `trace_id`, `exc_info`, and free-form
+`extra_fields`. **Missing** vs. the Batch 2 target set: `timestamp`, `severity`,
+`service`, `environment`, `component`, `event`, `outcome`, `duration_ms`,
+`job_correlation_id`, `worker_type`, `job_type`, `dependency`, `status_code`.
+
+## Current secret-leak risks
+
+- **No central redaction.** Nothing scrubs tokens/URLs/keys before serialization; a
+  future careless `extra_fields` (e.g. a `redis_url`, an `Authorization` header, a
+  lease/generation token) would be logged verbatim. `json.dumps(default=str)` would
+  even stringify a secret-bearing object.
+- Exception objects are formatted via `formatException` (stack only, safe today) but a
+  logged exception *message* could carry a secret if a caller ever logs `str(exc)`.
+- Config already sets secret fields `repr=False` and `hide_input_in_errors=True`, so
+  Settings itself does not leak; the gap is the logging path.
+
+## Correlation gaps
+
+- Context vars exist but **no middleware populates them.** Inbound `x-request-id` /
+  `x-trace-id` are read directly in `CorrelationMiddleware` **without validation or
+  length bound**, so a client can inject an arbitrary, unbounded, newline-bearing id
+  straight into every log line (log-injection + unbounded-cardinality risk).
+- Context vars are **never reset** after a request. Under the async stack this is
+  usually isolated per task, but explicit cleanup is required to guarantee no
+  cross-request bleed and to keep the worker (thread-based) safe.
+- **No job correlation.** `ExecutionContext` carries optional `request_id`/`trace_id`
+  used "only for tracing", but the `Job` row has no correlation column, and the worker
+  does not restore any correlation id into logging context during execution. The
+  enqueue→claim→execute→terminal flow has no stable, safe correlation handle.
+
+## Metrics gaps
+
+- **Greenfield.** No Prometheus/OTel/StatsD; zero counters/histograms/gauges. No
+  metric-name registry, no label-cardinality guard, no exporter, no failure isolation.
+
+## Proposed abstractions
+
+- `app/core/redaction.py` — recursive, case-insensitive key/URL/query scrubber with
+  depth+size bounds and cycle guard; never raises (returns a safe placeholder on
+  failure). Applied inside the formatter and reusable by callers.
+- `app/core/logging.py` (hardened) — stable field set, config-driven `json|console`
+  formatter, safe fallback if formatting/redaction fails, and a small structured
+  `log_event(...)` helper.
+- `app/core/log_context.py` — contextvars for `request_id`, `job_correlation_id`,
+  `component`, `worker_type`, `operation`, with a `bound_context(...)` context manager
+  that restores the previous values on exit (async- and thread-safe).
+- `app/core/metrics.py` — `Counter`/`Histogram`/`Gauge` protocols, a `NoOpMetrics`
+  default, an `InMemoryMetrics` test backend, a `metric` name catalog, and a strict
+  label allow-list that rejects forbidden labels at registration/emit time. Core code
+  depends only on this interface; exporter wiring is deferred/minimal and its failures
+  are swallowed.
+- `app/core/middleware.py` (hardened) — strict request-id acceptance (UUID/hex, bounded
+  length), generate-on-missing/invalid, response header, and guaranteed context reset.
+
+## Files likely to change (Batch 2)
+
+- `app/core/logging.py`, `app/core/middleware.py`, `app/core/config.py`, `app/main.py`
+- new `app/core/redaction.py`, `app/core/log_context.py`, `app/core/metrics.py`
+- `app/jobs/models.py` (+ one additive migration for `jobs.correlation_id`)
+- `app/jobs/service.py`, `app/jobs/store.py`, `app/jobs/worker.py`,
+  `app/jobs/context.py`, `app/jobs/coordination.py`
+- `app/system/internal_routes.py`, `app/system/schemas.py` (operator telemetry status)
+- `app/infra/storage.py`, `app/infra/cache.py` (operation metrics)
+- new focused tests under `app/tests/` (logging/redaction/correlation/metrics/telemetry
+  diagnostics)
+
+## Public-contract impact
+
+The job `correlation_id` is **internal**: it is not added to any customer response
+schema, so `openapi.json` for customer routes is unchanged. The only additive schema
+is the operator-only telemetry-status block on an internal route. The
+`git diff --exit-code` generated-contract gate must remain green after `gen:types`.
+
+## Migration impact
+
+One **additive** migration: nullable `jobs.correlation_id` (`String(64)`). Existing
+jobs keep `NULL`; no backfill required (correlation is best-effort and only meaningful
+for jobs created after the migration). Downgrade drops only the new column. The
+Batch 1 migration `df66ff0426d2` is **not** edited; the new revision chains after it.
+
+## Rollback strategy (Batch 2)
+
+Each Batch 2 concern lands as its own focused commit and is independently revertable.
+Telemetry is designed to fail closed to a no-op: if logging/redaction/metrics
+misbehave, the application path is unaffected, so a rollback is low-risk. The additive
+`jobs.correlation_id` column downgrades cleanly without touching business or job data.
