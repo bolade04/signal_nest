@@ -648,6 +648,19 @@ class DurableJobStore:
         return job
 
     # --- Recovery -----------------------------------------------------------
+    def _recovery_candidates_select(self, now: datetime, limit: int) -> Any:
+        """The shared ``SELECT`` of jobs whose lease has expired, oldest-first."""
+        return (
+            select(Job)
+            .where(
+                Job.status.in_([JobStatus.CLAIMED.value, JobStatus.RUNNING.value]),
+                Job.lease_expires_at.is_not(None),
+                Job.lease_expires_at < now,
+            )
+            .order_by(Job.lease_expires_at.asc())
+            .limit(limit)
+        )
+
     def recover_expired_leases(
         self, db: Session, *, now: datetime | None = None, limit: int = 100
     ) -> int:
@@ -656,47 +669,102 @@ class DurableJobStore:
         This is the mechanism behind at-least-once delivery: a worker that
         crashed mid-attempt loses its lease and the job becomes eligible again
         (or dead-letters if it has exhausted its attempts).
+
+        **Single-winner under concurrency.** Two recovery loops (e.g. two workers'
+        poll cycles) can select overlapping expired jobs, so recovery of a given
+        row must be exactly-once — otherwise a job could be re-enqueued twice or
+        emit two ``lease_recovered`` events. The exclusivity mechanism mirrors
+        :meth:`claim_one`:
+
+        * **PostgreSQL** locks each candidate with ``FOR UPDATE SKIP LOCKED`` so a
+          concurrent loop skips the locked row and never re-recovers it.
+        * **SQLite** (and any other dialect) recovers each row with an optimistic
+          compare-and-set whose ``WHERE`` still requires the row to be
+          claimed/running with an expired lease; the first loop to commit flips the
+          status, so the other's guarded ``UPDATE`` matches zero rows and is a
+          no-op.
+
+        Either way each row is won by exactly one loop, which is the only one that
+        records the recovery event and counts it.
         """
         now = now or utcnow()
-        stale = db.execute(
-            select(Job)
-            .where(
-                Job.status.in_([JobStatus.CLAIMED.value, JobStatus.RUNNING.value]),
-                Job.lease_expires_at.is_not(None),
-                Job.lease_expires_at < now,
-            )
-            .limit(limit)
-        ).scalars().all()
+        stmt = self._recovery_candidates_select(now, limit)
+        if db.get_bind().dialect.name == "postgresql":
+            stmt = stmt.with_for_update(skip_locked=True)
+        candidates = db.execute(stmt).scalars().all()
 
         recovered = 0
-        for job in stale:
-            previous = JobStatus(job.status)
-            # Clear ownership *including the token*: this is what fences out the
-            # crashed/slow previous owner — its captured token no longer matches.
-            job.worker_id = None
-            job.lease_token = None
-            job.lease_expires_at = None
-            if job.attempt_count < job.max_attempts:
-                job.available_at = now
-                self._transition(job, JobStatus.PENDING)
-                self._record_event(
-                    db, job, event_type="lease_recovered", previous_status=previous,
-                    new_status=JobStatus.PENDING,
-                    metadata={"reason": "lease_expired"},
-                )
-            else:
-                job.completed_at = now
-                job.last_error_code = JobErrorCode.TIMEOUT.value
-                job.last_error_summary = "lease expired and attempts exhausted"
-                self._transition(job, JobStatus.DEAD_LETTERED)
-                self._record_event(
-                    db, job, event_type="dead_lettered", previous_status=previous,
-                    new_status=JobStatus.DEAD_LETTERED, error_code=JobErrorCode.TIMEOUT,
-                    metadata={"reason": "lease_expired"},
-                )
-            recovered += 1
+        for job in candidates:
+            if self._recover_one(db, job, now=now):
+                recovered += 1
         db.flush()
         return recovered
+
+    def _recover_one(self, db: Session, job: Job, *, now: datetime) -> bool:
+        """Atomically recover one expired-lease job. Returns True if *we* won it.
+
+        The recovery predicate (still claimed/running with an expired lease) lives
+        **inside** the ``UPDATE``'s ``WHERE`` — never a read-then-write in Python —
+        so the check and the mutation are one atomic compare-and-set. If another
+        recovery loop already flipped the row, zero rows match and we neither record
+        an event nor count it. Ownership (including the ``lease_token``) is cleared
+        so the crashed/slow previous owner is fenced out.
+        """
+        previous = JobStatus(job.status)
+        recover_guard = (
+            Job.id == job.id,
+            Job.status.in_([JobStatus.CLAIMED.value, JobStatus.RUNNING.value]),
+            Job.lease_expires_at.is_not(None),
+            Job.lease_expires_at < now,
+        )
+        if job.attempt_count < job.max_attempts:
+            target = JobStatus.PENDING
+            values: dict[str, Any] = {
+                "status": JobStatus.PENDING.value,
+                "available_at": now,
+                "worker_id": None,
+                "lease_token": None,
+                "lease_expires_at": None,
+            }
+        else:
+            target = JobStatus.DEAD_LETTERED
+            values = {
+                "status": JobStatus.DEAD_LETTERED.value,
+                "completed_at": now,
+                "last_error_code": JobErrorCode.TIMEOUT.value,
+                "last_error_summary": "lease expired and attempts exhausted",
+                "worker_id": None,
+                "lease_token": None,
+                "lease_expires_at": None,
+            }
+        ensure_transition(previous, target)
+        # ``synchronize_session=False``: the guard compares ``lease_expires_at``
+        # against ``now``, and the ORM's in-Python session-sync would try to
+        # evaluate that predicate against the loaded instance — which fails on
+        # SQLite's naive datetimes vs an aware ``now``. We reconcile the instance
+        # explicitly with ``db.refresh`` below, so no session sync is needed.
+        result = db.execute(
+            update(Job).where(*recover_guard).values(**values),
+            execution_options={"synchronize_session": False},
+        )
+        if result.rowcount != 1:
+            # Another recovery loop won this row first; leave its event to it.
+            return False
+        # Reflect the won row back onto the in-memory instance so the audit event
+        # records the true post-recovery state.
+        db.refresh(job)
+        if target is JobStatus.PENDING:
+            self._record_event(
+                db, job, event_type="lease_recovered", previous_status=previous,
+                new_status=JobStatus.PENDING, metadata={"reason": "lease_expired"},
+            )
+        else:
+            self._record_event(
+                db, job, event_type="dead_lettered", previous_status=previous,
+                new_status=JobStatus.DEAD_LETTERED, error_code=JobErrorCode.TIMEOUT,
+                metadata={"reason": "lease_expired"},
+            )
+        return True
 
     # --- Reads --------------------------------------------------------------
     def get_job(self, db: Session, *, workspace_id: str, job_id: str) -> Job | None:

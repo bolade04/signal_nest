@@ -662,3 +662,75 @@ def test_race_expired_lease_reclaimed_twice_single_owner_mutation(
                  if e.event_type == "succeeded"]
     assert len(successes) == 1
     s.close()
+
+
+def test_expired_lease_dead_letters_when_attempts_exhausted(store, db) -> None:
+    """An expired lease with no attempts left dead-letters (audited), not requeues."""
+    past = datetime(2026, 7, 12, tzinfo=UTC)
+    job = _enqueue(store, db, now=past, max_attempts=1)
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30, now=past)
+    store.mark_running(db, job, worker_id=claimed.worker_id,
+                       lease_token=claimed.lease_token, now=past)
+    db.commit()
+    db.refresh(job)
+    # The single permitted attempt is spent, so recovery must dead-letter.
+    assert job.attempt_count == 1 and job.max_attempts == 1
+
+    recovered = store.recover_expired_leases(db, now=past + timedelta(hours=1))
+    db.commit()
+    assert recovered == 1
+    db.refresh(job)
+    assert job.status == JobStatus.DEAD_LETTERED.value
+    assert job.worker_id is None and job.lease_token is None
+    assert job.last_error_code == JobErrorCode.TIMEOUT.value
+    events = store.list_events(db, job_id=job.id)
+    dead = [e for e in events if e.event_type == "dead_lettered"]
+    assert len(dead) == 1
+    assert dead[0].new_status == JobStatus.DEAD_LETTERED.value
+
+
+def test_concurrent_recovery_of_one_lease_has_a_single_winner(store, session_factory) -> None:
+    """Two recovery loops selecting the same expired job recover it exactly once.
+
+    Both sessions observe the row while it is still claimed with an expired lease
+    (the pre-condition two racing poll cycles would see). The first to commit wins
+    via the guarded compare-and-set; the second's ``UPDATE`` then matches zero rows,
+    so it recovers nothing and writes no second ``lease_recovered`` event.
+    """
+    t0 = datetime(2026, 7, 12, tzinfo=UTC)
+    later = t0 + timedelta(hours=1)
+
+    setup = session_factory()
+    job = _enqueue(store, setup, job_type="test.ok", now=t0)
+    job_id = job.id
+    claimed = store.claim_one(setup, worker_id="w1", lease_seconds=30, now=t0)
+    store.mark_running(setup, job, worker_id=claimed.worker_id,
+                       lease_token=claimed.lease_token, now=t0)
+    setup.commit()
+    setup.close()
+
+    # Two independent loops both load the same expired candidate before either
+    # mutates it — the exact interleaving single-winner recovery must survive.
+    s1 = session_factory()
+    s2 = session_factory()
+    j1 = s1.get(Job, job_id)
+    j2 = s2.get(Job, job_id)
+    assert j1.status == JobStatus.RUNNING.value and j2.status == JobStatus.RUNNING.value
+
+    won_first = store._recover_one(s1, j1, now=later)
+    s1.commit()
+    won_second = store._recover_one(s2, j2, now=later)
+    s2.commit()
+
+    assert won_first is True
+    assert won_second is False  # the guarded CAS matched zero rows for the loser
+    s1.close()
+    s2.close()
+
+    check = session_factory()
+    final = check.get(Job, job_id)
+    assert final.status == JobStatus.PENDING.value
+    recoveries = [e for e in store.list_events(check, job_id=job_id)
+                  if e.event_type == "lease_recovered"]
+    assert len(recoveries) == 1  # exactly one audited recovery, never two
+    check.close()
