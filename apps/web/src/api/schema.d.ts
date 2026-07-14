@@ -133,6 +133,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Workers
+         * @description Coarse worker-fleet diagnostics for operators.
+         *
+         *     Reports the fleet's aggregate health (status counts, active/stale totals)
+         *     and a per-worker lifecycle summary. Stale is derived live from the configured
+         *     threshold so the count is accurate regardless of sweep cadence. This never
+         *     exposes a worker id, build revision, host fingerprint, URL or raw error.
+         */
+        get: operations["internal_workers_api_v1_internal_system_workers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations": {
         parameters: {
             query?: never;
@@ -2028,6 +2053,44 @@ export interface components {
             /** Weight */
             weight: number;
         };
+        /**
+         * WorkerFleetDiagnosticsOut
+         * @description Operator fleet snapshot: aggregate health + coarse per-worker summaries.
+         */
+        WorkerFleetDiagnosticsOut: {
+            /** Active Count */
+            active_count: number;
+            /** Stale Count */
+            stale_count: number;
+            /** Status Counts */
+            status_counts: {
+                [key: string]: number;
+            };
+            /** Workers */
+            workers: components["schemas"]["WorkerSummaryOut"][];
+        };
+        /**
+         * WorkerSummaryOut
+         * @description Coarse per-worker lifecycle summary (no identity or build metadata).
+         */
+        WorkerSummaryOut: {
+            /** Concurrency */
+            concurrency: number;
+            /** Last Heartbeat At */
+            last_heartbeat_at: string | null;
+            /** Queue Backend */
+            queue_backend: string;
+            /** Started At */
+            started_at: string | null;
+            /** Status */
+            status: string;
+            /** Stopped At */
+            stopped_at: string | null;
+            /** Supported Job Types */
+            supported_job_types: string[];
+            /** Worker Type */
+            worker_type: string;
+        };
         /** WorkspaceCreate */
         WorkspaceCreate: {
             /** Name */
@@ -2276,6 +2339,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessDiagnosticsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_workers_api_v1_internal_system_workers_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerFleetDiagnosticsOut"];
                 };
             };
             /** @description Validation Error */

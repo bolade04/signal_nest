@@ -22,11 +22,13 @@ job.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 import signal
 import socket
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 
@@ -34,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.errors import WorkerRegistrationFailedError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import SessionLocal
 from app.jobs.context import ExecutionContext
@@ -44,8 +47,11 @@ from app.jobs.status import (
     JobErrorCode,
     JobExecutionError,
     JobStatus,
+    JobType,
 )
 from app.jobs.store import DurableJobStore, JobLeaseLostError, job_store, utcnow
+from app.jobs.worker_registry import WorkerRegistry, worker_registry
+from app.jobs.worker_status import WorkerStatus
 
 logger = get_logger("signalnest.jobs.worker")
 
@@ -62,6 +68,17 @@ def derive_worker_id(configured: str | None = None) -> str:
     if configured:
         return configured
     return f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(3)}"
+
+
+def host_fingerprint() -> str | None:
+    """A non-reversible, truncated hash of the hostname (never the raw name/IP).
+
+    Lets operators correlate co-located workers without persisting the hostname.
+    """
+    try:
+        return hashlib.sha256(socket.gethostname().encode()).hexdigest()[:16]
+    except Exception:  # pragma: no cover - hostname always available in practice
+        return None
 
 
 def _context_from_job(job: Job) -> ExecutionContext:
@@ -294,6 +311,7 @@ class Worker:
         session_factory: SessionFactory = SessionLocal,
         store: DurableJobStore = job_store,
         clock: Clock = utcnow,
+        registry: WorkerRegistry = worker_registry,
     ) -> None:
         self._settings = settings or get_settings()
         self.worker_id = derive_worker_id(self._settings.worker_id)
@@ -304,12 +322,15 @@ class Worker:
             clock=clock,
         )
         self._session_factory = session_factory
+        self._registry = registry
+        self._clock = clock
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._registry_hb: tuple[threading.Event, threading.Thread] | None = None
 
     # -- startup validation -------------------------------------------------
     def validate(self) -> None:
-        """Confirm configuration and that the durable schema is present."""
+        """Confirm configuration and that the durable + registry schema is present."""
         if self._settings.job_queue_backend != "local":  # pragma: no cover - future
             raise RuntimeError(
                 f"Unsupported job_queue_backend={self._settings.job_queue_backend!r}; "
@@ -318,6 +339,9 @@ class Worker:
         db = self._session_factory()
         try:
             db.execute(select(Job.id).limit(1)).first()
+            # The worker-fleet registry table must exist too; the worker writes to
+            # it at startup and on every heartbeat.
+            self._registry.status_counts(db)
         except Exception as exc:  # pragma: no cover - surfaced as a clear message
             raise RuntimeError(
                 "Durable job schema is not initialized. Run migrations first "
@@ -325,6 +349,92 @@ class Worker:
             ) from exc
         finally:
             db.close()
+
+    # -- fleet registration -------------------------------------------------
+    def register(self) -> None:
+        """Register this worker (STARTING), retrying per configuration.
+
+        Registration is the last startup gate: only after it succeeds does the
+        worker mark itself READY and begin claiming. Exhausting the retry budget
+        raises :class:`WorkerRegistrationFailedError` so the process exits rather
+        than silently running unregistered.
+        """
+        attempts = self._settings.worker_registration_retry_limit + 1
+        delay = self._settings.worker_registration_retry_delay_seconds
+        last_exc: Exception | None = None
+        for i in range(attempts):
+            db = self._session_factory()
+            try:
+                self._registry.register(
+                    db,
+                    worker_id=self.worker_id,
+                    worker_type=self._settings.worker_type,
+                    concurrency=self._settings.worker_concurrency,
+                    supported_job_types=[t.value for t in JobType],
+                    queue_backend=self._settings.job_queue_backend,
+                    application_version=self._settings.application_version,
+                    build_revision=self._settings.build_revision,
+                    host_fingerprint=host_fingerprint(),
+                    now=self._clock(),
+                )
+                db.commit()
+                return
+            except Exception as exc:  # noqa: BLE001 - retried, then re-raised sanitized
+                db.rollback()
+                last_exc = exc
+                if i < attempts - 1:
+                    time.sleep(delay)
+            finally:
+                db.close()
+        raise WorkerRegistrationFailedError() from last_exc
+
+    def _set_registry_status(self, target: WorkerStatus) -> None:
+        """Best-effort registry status transition (never fatal to the worker)."""
+        db = self._session_factory()
+        try:
+            self._registry._transition(db, self.worker_id, target, now=self._clock())
+            db.commit()
+        except Exception:  # pragma: no cover - status change is advisory
+            db.rollback()
+            logger.warning(
+                "worker.registry_status_failed",
+                extra={"extra_fields": {"worker_id": self.worker_id, "target": target.value}},
+            )
+        finally:
+            db.close()
+
+    def _start_registry_heartbeat(self) -> tuple[threading.Event, threading.Thread]:
+        """Bounded fleet heartbeat: refresh last-seen + sweep stale peers.
+
+        Distinct from the per-job lease heartbeat. It writes no audit rows and
+        persists no error detail; a failed beat is logged as a warning and retried
+        on the next tick (its retry cadence is independent of job retries).
+        """
+        stop = threading.Event()
+        interval = self._settings.worker_heartbeat_seconds
+        stale_after = self._settings.worker_stale_after_seconds
+
+        def _beat() -> None:
+            while not stop.wait(interval):
+                db = self._session_factory()
+                try:
+                    self._registry.heartbeat(db, self.worker_id, now=self._clock())
+                    self._registry.sweep_stale(
+                        db, stale_after_seconds=stale_after, now=self._clock()
+                    )
+                    db.commit()
+                except Exception:  # pragma: no cover - best-effort liveness
+                    db.rollback()
+                    logger.warning(
+                        "worker.registry_heartbeat_failed",
+                        extra={"extra_fields": {"worker_id": self.worker_id}},
+                    )
+                finally:
+                    db.close()
+
+        thread = threading.Thread(target=_beat, name="reg-hb", daemon=True)
+        thread.start()
+        return stop, thread
 
     # -- loop ---------------------------------------------------------------
     def _loop(self) -> None:
@@ -366,8 +476,11 @@ class Worker:
             t.join(timeout=grace)
 
     def run(self) -> None:
-        """Blocking entrypoint: validate, spawn slots, wait, drain."""
+        """Blocking entrypoint: validate, register, spawn slots, wait, drain."""
         self.validate()
+        # Register (STARTING) before claiming; only mark READY once startup checks
+        # and registration have all passed.
+        self.register()
         self._install_signal_handlers()
         logger.info(
             "worker.start",
@@ -380,17 +493,26 @@ class Worker:
                 }
             },
         )
+        self._set_registry_status(WorkerStatus.READY)
+        self._registry_hb = self._start_registry_heartbeat()
         self.start()
         try:
             while not self._stop.is_set():
                 self._stop.wait(0.5)
         except KeyboardInterrupt:  # pragma: no cover - redundant with SIGINT handler
             self._stop.set()
+        # Stop the fleet heartbeat before flipping to DRAINING so a late beat
+        # cannot overwrite the draining status.
+        if self._registry_hb is not None:
+            self._registry_hb[0].set()
+            self._registry_hb[1].join(timeout=1.0)
         logger.info(
             "worker.draining",
             extra={"extra_fields": {"grace_seconds": self._settings.worker_shutdown_grace_seconds}},
         )
+        self._set_registry_status(WorkerStatus.DRAINING)
         self.join()
+        self._set_registry_status(WorkerStatus.STOPPED)
         logger.info("worker.stopped", extra={"extra_fields": {"worker_id": self.worker_id}})
 
 

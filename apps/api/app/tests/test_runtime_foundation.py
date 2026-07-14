@@ -203,6 +203,7 @@ def test_local_defaults_are_fully_local_and_configured() -> None:
         "vector",
         "storage",
         "llm",
+        "worker_registry",
     }
 
 
@@ -215,7 +216,10 @@ def test_unconfigured_production_backends_are_flagged_not_healthy() -> None:
     )
     report = build_runtime_report(settings)
     unconfigured = {c.name for c in report.unconfigured}
-    assert unconfigured == {"queue", "storage", "vector"}
+    # The worker registry coordinates over the queue transport, so selecting Redis
+    # without a redis_url leaves both the queue and the fleet coordination
+    # unconfigured.
+    assert unconfigured == {"queue", "storage", "vector", "worker_registry"}
     assert report.all_configured is False
     assert report.is_local_mode is False
 

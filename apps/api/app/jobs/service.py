@@ -23,16 +23,46 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.errors import RedisNotifyFailedError
 from app.core.logging import get_logger
 from app.jobs import handlers as _handlers  # noqa: F401 — registers handlers on import
 from app.jobs.context import ExecutionContext
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope
+from app.jobs.coordination import JobNotifier, build_job_notifier
 from app.jobs.models import Job
 from app.jobs.registry import is_known_job_type
-from app.jobs.status import JobErrorCode, JobExecutionError, JobType
+from app.jobs.status import ENQUEUED_STATUSES, JobErrorCode, JobExecutionError, JobStatus, JobType
 from app.jobs.store import job_store
 
 logger = get_logger("signalnest.jobs.service")
+
+#: Process-wide wake-up notifier (best-effort). Built lazily so importing this
+#: module never requires a coordination backend in local mode.
+_notifier: JobNotifier | None = None
+
+
+def _get_notifier() -> JobNotifier:
+    global _notifier
+    if _notifier is None:
+        _notifier = build_job_notifier()
+    return _notifier
+
+
+def _notify_available(job: Job) -> None:
+    """Best-effort wake-up for a freshly enqueued, immediately-due job.
+
+    Coordination only: the job is already persisted, so any failure here is a
+    warning — a worker's bounded DB poll still finds the job. Scheduled (future)
+    jobs are not signalled; they become due later and are found by polling.
+    """
+    if JobStatus(job.status) not in ENQUEUED_STATUSES or job.status == JobStatus.SCHEDULED.value:
+        return
+    try:
+        _get_notifier().notify_job_available()
+    except RedisNotifyFailedError:
+        logger.warning("job.notify_failed", extra={"extra_fields": {"job_id": job.id}})
+    except Exception:  # pragma: no cover - defensive: never fail enqueue on notify
+        logger.warning("job.notify_error", extra={"extra_fields": {"job_id": job.id}})
 
 
 def _payload_hash(job_type: str, context: ExecutionContext, payload: dict) -> str:
@@ -112,6 +142,7 @@ def enqueue_job(
             }
         },
     )
+    _notify_available(job)
     return job
 
 

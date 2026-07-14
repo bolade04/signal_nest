@@ -35,6 +35,7 @@ def test_local_stack_probes_are_ready() -> None:
         "vector",
         "storage",
         "llm",
+        "worker_registry",
     }
     # The default local backends actively verify as healthy.
     by_name = {r.name: r for r in report.results}

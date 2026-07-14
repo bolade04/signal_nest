@@ -168,7 +168,25 @@ class DurableJobStore:
         self._record_event(db, job, event_type="enqueued", new_status=status)
         return job
 
-    # --- Claiming (atomic compare-and-set) ----------------------------------
+    # --- Claiming -----------------------------------------------------------
+    def _due_candidates_select(self, now: datetime, limit: int) -> Any:
+        """The shared ``SELECT`` of due, enqueued candidates in claim priority.
+
+        Priority order is identical across dialects — ``priority DESC`` then FIFO
+        (``available_at ASC``, ``created_at ASC``) — so PostgreSQL and SQLite
+        claim the same job first. The PostgreSQL path layers ``FOR UPDATE SKIP
+        LOCKED`` on top of this; the SQLite path scans it with a compare-and-set.
+        """
+        return (
+            select(Job.id, Job.status)
+            .where(
+                Job.status.in_([s.value for s in ENQUEUED_STATUSES]),
+                Job.available_at <= now,
+            )
+            .order_by(Job.priority.desc(), Job.available_at.asc(), Job.created_at.asc())
+            .limit(limit)
+        )
+
     def claim_one(
         self,
         db: Session,
@@ -180,30 +198,83 @@ class DurableJobStore:
     ) -> Job | None:
         """Atomically claim the highest-priority due job for ``worker_id``.
 
-        Returns the claimed job, or ``None`` if nothing is due. Concurrency-safe:
-        the claiming ``UPDATE`` is guarded by ``status = <observed>`` so only one
-        worker transitions a given row; a lost race simply scans the next
-        candidate (bounded by ``max_scan``).
+        Returns the claimed job, or ``None`` if nothing is due. Dialect-aware but
+        with a single shared lifecycle: the claim mints a fresh ``lease_token``,
+        assigns ``worker_id``/lease, records a ``claimed`` audit event and commits
+        — the *only* difference between backends is the concurrency mechanism that
+        guarantees exactly one winner per row:
+
+        * **PostgreSQL** locks a due row with ``SELECT ... FOR UPDATE SKIP
+          LOCKED`` (concurrent claimers skip it and take the next row), then
+          updates the locked row.
+        * **SQLite** (and any other dialect) uses an optimistic compare-and-set
+          ``UPDATE ... WHERE status = <observed>`` and scans the next candidate on
+          a lost race (bounded by ``max_scan``).
+
+        Attempt counting is deliberately *not* done here — it happens once in
+        :meth:`mark_running`, identically for both dialects — so the two paths
+        share one lifecycle and can never diverge on the attempt budget.
         """
         now = now or utcnow()
         lease_expires = now + timedelta(seconds=lease_seconds)
 
-        candidates = db.execute(
-            select(Job.id, Job.status)
-            .where(
-                Job.status.in_(
-                    [s.value for s in ENQUEUED_STATUSES]
-                ),
-                Job.available_at <= now,
+        if db.get_bind().dialect.name == "postgresql":
+            claimed_id, observed = self._claim_skip_locked(
+                db, worker_id=worker_id, now=now, lease_expires=lease_expires
             )
-            .order_by(Job.priority.desc(), Job.available_at.asc(), Job.created_at.asc())
-            .limit(max_scan)
-        ).all()
+        else:
+            claimed_id, observed = self._claim_compare_and_set(
+                db, worker_id=worker_id, now=now, lease_expires=lease_expires, max_scan=max_scan
+            )
 
+        if claimed_id is None:
+            return None
+        return self._finalize_claim(db, claimed_id, observed, worker_id)
+
+    def _claim_skip_locked(
+        self, db: Session, *, worker_id: str, now: datetime, lease_expires: datetime
+    ) -> tuple[str | None, JobStatus | None]:
+        """PostgreSQL claim: lock one due row with SKIP LOCKED, then update it.
+
+        The row lock (held for the surrounding transaction) is the exclusivity
+        guarantee, so two concurrent workers can never lock the same row — one
+        takes it, the other skips to the next unlocked candidate. A fresh
+        ``lease_token`` rotates ownership so any prior owner is fenced out.
+        """
+        row = db.execute(
+            self._due_candidates_select(now, 1).with_for_update(skip_locked=True)
+        ).first()
+        if row is None:
+            return None, None
+        job_id, observed_status = row
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(
+                status=JobStatus.CLAIMED.value,
+                worker_id=worker_id,
+                claimed_at=now,
+                lease_expires_at=lease_expires,
+                heartbeat_at=now,
+                lease_token=_new_lease_token(),
+            )
+        )
+        return job_id, JobStatus(observed_status)
+
+    def _claim_compare_and_set(
+        self,
+        db: Session,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_expires: datetime,
+        max_scan: int,
+    ) -> tuple[str | None, JobStatus | None]:
+        """SQLite-safe claim: optimistic compare-and-set over ranked candidates."""
+        candidates = db.execute(self._due_candidates_select(now, max_scan)).all()
         for job_id, observed_status in candidates:
             # A fresh token on every claim rotates ownership: any previous owner's
             # captured token no longer matches, so its late writes are fenced out.
-            lease_token = _new_lease_token()
             result = db.execute(
                 update(Job)
                 .where(Job.id == job_id, Job.status == observed_status)
@@ -213,31 +284,41 @@ class DurableJobStore:
                     claimed_at=now,
                     lease_expires_at=lease_expires,
                     heartbeat_at=now,
-                    lease_token=lease_token,
+                    lease_token=_new_lease_token(),
                 )
             )
             if result.rowcount == 1:
-                db.flush()
-                job = db.get(Job, job_id)
-                assert job is not None
-                # A core UPDATE does not refresh an already-identity-mapped row, so
-                # reload it: the caller relies on the persisted worker_id/lease_token
-                # to fence its subsequent mutations.
-                db.refresh(job)
-                self._record_event(
-                    db,
-                    job,
-                    event_type="claimed",
-                    previous_status=JobStatus(observed_status),
-                    new_status=JobStatus.CLAIMED,
-                    worker_id=worker_id,
-                )
-                db.commit()
-                return job
-            # Lost the race for this row; try the next candidate.
+                return job_id, JobStatus(observed_status)
+            # Lost the race for this row; roll back and try the next candidate.
             db.rollback()
+        return None, None
 
-        return None
+    def _finalize_claim(
+        self, db: Session, job_id: str, observed_status: JobStatus, worker_id: str
+    ) -> Job:
+        """Shared post-claim bookkeeping: refresh, audit and commit atomically.
+
+        The claim ``UPDATE`` and its ``claimed`` audit event commit together, so
+        ownership assignment and its audit record are one atomic step for both
+        dialects.
+        """
+        db.flush()
+        job = db.get(Job, job_id)
+        assert job is not None
+        # A core UPDATE does not refresh an already-identity-mapped row, so reload
+        # it: the caller relies on the persisted worker_id/lease_token to fence its
+        # subsequent mutations.
+        db.refresh(job)
+        self._record_event(
+            db,
+            job,
+            event_type="claimed",
+            previous_status=observed_status,
+            new_status=JobStatus.CLAIMED,
+            worker_id=worker_id,
+        )
+        db.commit()
+        return job
 
     # --- Lease fencing ------------------------------------------------------
     def _fenced_update(

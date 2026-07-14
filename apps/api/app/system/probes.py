@@ -34,7 +34,7 @@ from sqlalchemy import inspect, text
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
 
 logger = get_logger("signalnest.probes")
 
@@ -286,6 +286,45 @@ def _check_llm(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
     )
 
 
+def _check_worker_registry(
+    settings: Settings,
+) -> tuple[ProbeStatus, str, str | None, bool]:
+    # Schema/connectivity check plus a policy-gated liveness check. Worker
+    # presence is *informational by default*: the API can serve traffic without a
+    # worker fleet. Only when ``require_worker_fleet`` is enabled does the absence
+    # of a live worker block readiness. Never names worker ids or build metadata.
+    with engine.connect() as conn:
+        tables = set(inspect(conn).get_table_names())
+    if "worker_registrations" not in tables:
+        return (
+            ProbeStatus.UNAVAILABLE,
+            "worker registry schema is not migrated",
+            "missing worker_registrations table",
+            False,
+        )
+    if not settings.require_worker_fleet:
+        return (
+            ProbeStatus.HEALTHY,
+            "worker registry available (fleet presence informational)",
+            None,
+            False,
+        )
+    from app.jobs.worker_registry import worker_registry
+
+    with SessionLocal() as db:
+        active = worker_registry.active_count(
+            db, stale_after_seconds=settings.worker_stale_after_seconds
+        )
+    if active < 1:
+        return (
+            ProbeStatus.UNAVAILABLE,
+            "no active worker in the fleet",
+            "require_worker_fleet is enabled but no worker is ready/busy with a fresh heartbeat",
+            True,
+        )
+    return (ProbeStatus.HEALTHY, "worker fleet has an active worker", None, False)
+
+
 def _ping_redis(
     settings: Settings, capability: str
 ) -> tuple[ProbeStatus, str, str | None, bool]:  # pragma: no cover - full mode only
@@ -303,7 +342,7 @@ def _ping_redis(
     return (ProbeStatus.HEALTHY, f"{capability} backend reachable", None, False)
 
 
-def _build_probes() -> list[ReadinessProbe]:
+def _build_probes(settings: Settings) -> list[ReadinessProbe]:
     return [
         ReadinessProbe("database", required=True, check=_check_database),
         ReadinessProbe("queue", required=True, check=_check_queue),
@@ -312,6 +351,11 @@ def _build_probes() -> list[ReadinessProbe]:
         ReadinessProbe("storage", required=True, check=_check_storage),
         ReadinessProbe("vector", required=True, check=_check_vector),
         ReadinessProbe("llm", required=False, check=_check_llm),
+        ReadinessProbe(
+            "worker_registry",
+            required=settings.require_worker_fleet,
+            check=_check_worker_registry,
+        ),
     ]
 
 
@@ -333,7 +377,7 @@ def run_readiness_probes(settings: Settings | None = None) -> ReadinessReport:
     bounded even if several backends hang at once.
     """
     s = settings or get_settings()
-    probes = _build_probes()
+    probes = _build_probes(s)
     per_probe = s.readiness_probe_timeout_seconds
     deadline = time.perf_counter() + s.readiness_total_timeout_seconds
 

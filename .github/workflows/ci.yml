@@ -98,6 +98,24 @@ jobs:
   backend-quality:
     name: Backend quality
     runs-on: ubuntu-latest
+    # A disposable PostgreSQL service so the dialect-aware durable-job claim
+    # (FOR UPDATE SKIP LOCKED) is exercised against a real database. The app under
+    # test still runs in default local mode (SQLite) — only the opt-in, gated
+    # integration test reads TEST_POSTGRES_URL and connects here directly.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: signalnest
+          POSTGRES_PASSWORD: signalnest
+          POSTGRES_DB: signalnest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U signalnest"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -123,6 +141,10 @@ jobs:
         # Invoke the repo bash scripts directly (they use apps/api/.venv); this
         # job sets up Python only, so it must not depend on npm/Node.
         # A migrated + seeded DB is required for the HTTP-isolation integration tests.
+        # TEST_POSTGRES_URL points the opt-in, gated cross-worker claim test at the
+        # disposable postgres service above; every other test stays on local SQLite.
+        env:
+          TEST_POSTGRES_URL: postgresql+psycopg://signalnest:signalnest@localhost:5432/signalnest_test
         run: |
           bash scripts/demo-setup.sh 2>&1 | tee ci-logs/backend-demo-setup.log
           bash scripts/run-tests-api.sh 2>&1 | tee ci-logs/backend-pytest.log

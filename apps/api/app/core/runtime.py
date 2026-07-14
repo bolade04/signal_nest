@@ -34,6 +34,7 @@ _LOCAL_BACKENDS = {
     "vector": {"bruteforce"},
     "storage": {"local"},
     "llm": {"mock"},
+    "worker_registry": {"inprocess"},
 }
 
 
@@ -165,6 +166,20 @@ def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
             detail=(
                 "llm_api_key is not set"
                 if s.llm_provider != "mock" and not s.llm_api_key
+                else None
+            ),
+        ),
+        # Worker fleet coordination. The registry itself lives in the primary
+        # database (always available once migrated); the capability's backend
+        # reflects the wake-up transport the fleet coordinates over — in-process
+        # locally, Redis in full mode (which requires a redis_url to be usable).
+        _status(
+            "worker_registry",
+            s.queue_backend,
+            configured=s.queue_backend != "redis" or s.redis_url is not None,
+            detail=(
+                "redis_url is not set"
+                if s.queue_backend == "redis" and not s.redis_url
                 else None
             ),
         ),
