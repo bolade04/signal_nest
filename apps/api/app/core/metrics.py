@@ -73,6 +73,11 @@ REDIS_NOTIFY_TOTAL = "redis_notify_total"
 DEPENDENCY_OPERATION_TOTAL = "dependency_operation_total"
 DEPENDENCY_OPERATION_DURATION_MS = "dependency_operation_duration_ms"
 
+# Process lifecycle (startup / shutdown / migration)
+SERVICE_STARTUPS_TOTAL = "service_startups_total"
+SERVICE_SHUTDOWNS_TOTAL = "service_shutdowns_total"
+MIGRATION_RUNS_TOTAL = "migration_runs_total"
+
 # Telemetry self-observation
 TELEMETRY_FAILURES_TOTAL = "telemetry_failures_total"
 
@@ -95,6 +100,9 @@ METRIC_NAMES: frozenset[str] = frozenset(
         REDIS_NOTIFY_TOTAL,
         DEPENDENCY_OPERATION_TOTAL,
         DEPENDENCY_OPERATION_DURATION_MS,
+        SERVICE_STARTUPS_TOTAL,
+        SERVICE_SHUTDOWNS_TOTAL,
+        MIGRATION_RUNS_TOTAL,
         TELEMETRY_FAILURES_TOTAL,
     }
 )
@@ -249,6 +257,21 @@ def configure_metrics(backend: MetricsBackend | None) -> None:
     _backend = backend if backend is not None else NoOpMetrics()
 
 
+def flush_metrics() -> None:
+    """Best-effort flush of the installed backend on shutdown.
+
+    A no-op unless the backend exposes a ``flush``; any flush failure is swallowed
+    so a telemetry outage can never delay or fail process exit.
+    """
+    flush = getattr(_backend, "flush", None)
+    if flush is None:
+        return
+    try:
+        flush()
+    except Exception:
+        pass
+
+
 def telemetry_failure_count() -> int:
     """Isolated-and-counted runtime recording failures on the current backend."""
     return int(getattr(_backend, "telemetry_failures", 0))
@@ -275,6 +298,7 @@ __all__ = [
     "InMemoryMetrics",
     "get_metrics",
     "configure_metrics",
+    "flush_metrics",
     "validate_metric",
     "telemetry_failure_count",
     "exporter_status",
@@ -295,5 +319,8 @@ __all__ = [
     "REDIS_NOTIFY_TOTAL",
     "DEPENDENCY_OPERATION_TOTAL",
     "DEPENDENCY_OPERATION_DURATION_MS",
+    "SERVICE_STARTUPS_TOTAL",
+    "SERVICE_SHUTDOWNS_TOTAL",
+    "MIGRATION_RUNS_TOTAL",
     "TELEMETRY_FAILURES_TOTAL",
 ]
