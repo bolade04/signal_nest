@@ -56,10 +56,11 @@ Delivered on this branch (base `main` @ `3fefb36`), all focused commits:
 - Collision-resistant Redis cache-key encoding (percent-encoded components).
 - Additive migration `df66ff0426d2` (nullable `worker_registrations.generation_token`).
 
-Gate at completion: backend **224 passed** / 2 skipped (PG-gated), frontend
-**20/20**, smoke **13/13** (four-market isolation, no cross-market contamination),
-migration upgrade/check/downgrade/re-upgrade green, ruff clean, no contract drift,
-`npm audit` 0 vulnerabilities.
+Gate at completion (_historical Batch 1 checkpoint — superseded by the current
+authoritative total of **364 passed / 0 skipped** in CI_): backend **224 passed** /
+2 skipped (PG-gated), frontend **20/20**, smoke **13/13** (four-market isolation, no
+cross-market contamination), migration upgrade/check/downgrade/re-upgrade green, ruff
+clean, no contract drift, `npm audit` 0 vulnerabilities.
 
 ### Batch 2 — scope (this session)
 
@@ -122,10 +123,11 @@ Delivered on this branch as focused commits:
   health, swallowed-failure count, and correlation/redaction flags — bounded status
   only, no ids/URLs/credentials/tokens.
 
-Gate at completion: backend **309 passed** / 2 skipped (PG-gated), ruff clean,
-migration head `e7c2a9b4f1d3` upgrade/check/downgrade/re-upgrade green. Full
-repository gate (frontend, smoke, contracts, `npm audit`) recorded in
-`phase-3a-4b-acceptance.md`.
+Gate at completion (_historical Batch 2 checkpoint — superseded by the current
+authoritative total of **364 passed / 0 skipped** in CI_): backend **309 passed** /
+2 skipped (PG-gated), ruff clean, migration head `e7c2a9b4f1d3`
+upgrade/check/downgrade/re-upgrade green. Full repository gate (frontend, smoke,
+contracts, `npm audit`) recorded in `phase-3a-4b-acceptance.md`.
 
 **Batch 2 is complete.**
 
@@ -207,10 +209,12 @@ Delivered on this branch as focused commits:
   asserting against the in-memory exporter with no external collector, plus the
   isolation-test extensions for the new telemetry fields.
 
-Gate at completion: backend **348 passed** / 2 skipped (PG-gated), ruff clean, migration
-head `a1b2c3d4e5f6` upgrade/check/downgrade/re-upgrade green, frontend lint/type-check
-clean + **20/20** tests, contracts regenerated with no residual drift, smoke **13/13**
-(four-market isolation), `npm audit` **0 vulnerabilities**.
+Gate at completion (_historical Batch 3 checkpoint — superseded by the current
+authoritative total of **364 passed / 0 skipped** in CI_): backend **348 passed** /
+2 skipped (PG-gated), ruff clean, migration head `a1b2c3d4e5f6`
+upgrade/check/downgrade/re-upgrade green, frontend lint/type-check clean + **20/20**
+tests, contracts regenerated with no residual drift, smoke **13/13** (four-market
+isolation), `npm audit` **0 vulnerabilities**.
 
 **Batch 3 is complete.**
 
@@ -286,8 +290,11 @@ Delivered on branch `feat/phase-3a-observability-deployment` as focused commits:
   migrate check/downgrade contract, bounded idempotent shutdown, worker forced
   drain).
 
-Gate: backend `ruff` clean, `pytest` **362 passed / 2 skipped** (PG-gated in CI);
-alembic head `a1b2c3d4e5f6` unchanged, no drift, downgrade/re-upgrade green;
+Gate (_local run; the current authoritative CI total is **364 passed / 0 skipped**,
+see "Batch 4 authoritative validation evidence" below_): backend `ruff` clean,
+`pytest` **362 passed / 2 skipped** (the 2 skips are the PostgreSQL-gated tests, which
+run and pass in CI); alembic head `a1b2c3d4e5f6` unchanged, no drift,
+downgrade/re-upgrade green;
 frontend lint/type-check clean, **20/20** tests, build green; `npm audit` **0**;
 contract regenerated with no drift; smoke **13/13**, four-market isolation. Docker
 and PostgreSQL are unavailable locally, so the `container-build` job and the
@@ -365,17 +372,14 @@ All five jobs succeeded:
 - It is **not** an application defect, **not** a failed test, and **not** a skipped
   required test. All five jobs succeeded.
 
-#### Documentation-head verification
+#### Documentation-synchronization note
 
-- Documentation stamp head: `9ac997f9698827e799a103f2e1bba13a94a4a3f7`
-- Documentation-head CI run: `29350028924`
-- URL: <https://github.com/bolade04/signal_nest/actions/runs/29350028924>
-- Conclusion: `success` — all five jobs remained green.
-
-Distinction: `e9e1678` (run `29347362541`) is the **substantive Batch 4
-implementation** evidence; `9ac997f` (run `29350028924`) is the later
-acceptance-report **documentation stamp**. The docs-only run does not replace the
-implementation evidence.
+The substantive Batch 4 **implementation** evidence is `e9e1678` (run
+`29347362541`). Subsequent **documentation-only** commits (the acceptance, plan and
+architecture-audit stamps) each re-ran the full CI and stayed green without changing
+any implementation; those docs-only runs do not replace the implementation evidence
+and are not re-tabulated here (the per-run breakdown lives once in
+`phase-3a-4b-architecture-audit.md`).
 
 ### Phase status
 

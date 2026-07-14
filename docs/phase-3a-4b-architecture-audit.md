@@ -103,9 +103,18 @@ Audit performed by direct inspection of the repository (no assumptions).
   `/workers`. Coarse, secret-free, operator-gated.
 
 ### Migration execution strategy
-- Alembic; single head `d4f6a8c0b2e1`. `npm run migrate` / `migrate:down` /
-  `migrate:status` wrap `scripts/*.sh`. **No documented single-actor production
-  migration policy** — Batch 5.
+- Alembic migrations form a single **linear** chain. The current head is
+  `a1b2c3d4e5f6` (`add_job_trace_context`); `d4f6a8c0b2e1` is a **mid-chain**
+  revision (`add_worker_registrations`), **not** the head. (An earlier draft of this
+  inventory recorded `d4f6a8c0b2e1` as the head — that was accurate only before the
+  Batch 2–3 additive columns `df66ff0426d2` → `e7c2a9b4f1d3` → `a1b2c3d4e5f6` were
+  added; it is corrected here.)
+- Supported migration tooling: the single-actor command `python -m app.db.migrate`
+  (`upgrade` / `check` / `downgrade`) and the `scripts/migrate.sh` wrapper
+  (`alembic upgrade head`). The `npm run migrate*` scripts are thin dev wrappers over
+  those shell scripts, not a separate mechanism. The documented single-actor
+  production migration policy was subsequently delivered in **Batch 4** (see the
+  Batch 4 audit section below), not deferred to Batch 5.
 
 ## Gaps (by batch)
 
@@ -744,23 +753,18 @@ Container validation:
 
 ### Documentation synchronization validation
 
-Acceptance-report stamp:
+Later **documentation-only** commits on this branch each re-ran the full CI and
+stayed green, confirming the doc updates did not disturb the implementation:
 
-- Head: `9ac997f9698827e799a103f2e1bba13a94a4a3f7`
-- CI run: `29350028924`
-- URL: <https://github.com/bolade04/signal_nest/actions/runs/29350028924>
-- Result: all five jobs succeeded.
+| Doc-only head | CI run | Result |
+| --- | --- | --- |
+| `9ac997f` (acceptance-report stamp) | `29350028924` | all five jobs succeeded |
+| `06939c6` (plan-document stamp) | `29350656763` | all five jobs succeeded |
+| `e64879b` (architecture-audit stamp) | `29351126593` | all five jobs succeeded |
 
-Plan-document stamp:
-
-- Head: `06939c61b944e1e2e471f5b50008bbe8fa1fc3ea`
-- CI run: `29350656763`
-- URL: <https://github.com/bolade04/signal_nest/actions/runs/29350656763>
-- Result: all five jobs succeeded.
-
-These later runs verify that documentation updates did not disturb the branch. The
-substantive Batch 4 implementation evidence remains `e9e1678` and run `29347362541`;
-the docs-only runs do not replace it.
+All later documentation-only heads remained CI-green. The substantive Batch 4
+implementation evidence remains `e9e1678` (run `29347362541`); these docs-only runs
+do not replace it, and the full job/test tables are not repeated per run.
 
 ### CI annotation
 
@@ -801,6 +805,28 @@ Remaining Batch 5 gaps (outstanding):
 Optional / future unless separately approved: Kubernetes manifests, Terraform,
 cloud-specific infrastructure, hosted monitoring vendor integration, and
 orchestrator-specific deployment configuration.
+
+### Rate limiting — current state (PARTIALLY COMPLETED)
+
+`RateLimitMiddleware` (`app/core/middleware.py`) is wired into the API
+(`app/main.py`), but it is a **process-local, in-memory** fixed-window limiter: it
+counts requests per client host in an in-process dictionary (default 240 requests /
+60 s).
+
+- Current rate limiting is **process-local and in-memory**.
+- It is **not** a distributed, production-grade control.
+- It does **not** coordinate limits across API replicas — each replica enforces its
+  own window independently, so the effective global limit scales with replica count
+  and a client rebalanced across replicas is counted separately per replica.
+- Redis-backed or gateway/edge-level distributed rate limiting remains **future
+  work** (the middleware docstring already notes "production uses Redis adapter",
+  which is not yet implemented).
+- It must **not** be represented as a completed production security control.
+
+Classification: **PARTIALLY COMPLETED — production distributed enforcement not
+implemented.** Assigned to the Batch 5 security-review follow-up (or a later phase).
+It is **not** an automatic Batch 5 blocker unless the documented product threat model
+requires distributed rate limiting.
 
 ### Status
 

@@ -124,9 +124,13 @@ so far**; the phase is **not** complete until the deferred batch (below) lands.
 Run locally unless noted; PostgreSQL-gated tests run in CI (no local PostgreSQL — see
 note).
 
+The totals below are the **local** run; the current **authoritative** CI total is
+**364 passed / 0 skipped** (the 2 local skips are the PostgreSQL-gated tests, which
+run and pass in CI — see "Batch 4 — authoritative CI-green evidence" below).
+
 | Gate | Result |
 | --- | --- |
-| Backend `pytest` | **362 passed, 2 skipped** (PG-gated; run in CI) |
+| Backend `pytest` | **362 passed, 2 skipped** local · **364 passed, 0 skipped** in CI |
 | Backend `ruff check app/` | clean |
 | Alembic drift (`alembic check`) | no new operations; head `a1b2c3d4e5f6` |
 | Migration upgrade/downgrade/re-upgrade | green |
@@ -259,6 +263,27 @@ were verified locally and re-run green in run `29347362541`:
 | `bc89974` | deployment and migration documentation |
 | `ef3fe7b` | Batch 4 completion documentation |
 | `e9e1678` | narrow CI correction (secret-scan scope + metric-label derivation) |
+
+### Documentation-synchronization note
+
+The substantive Batch 4 **implementation** evidence is `e9e1678` (run `29347362541`,
+above). Later **documentation-only** commits (plan, acceptance and architecture-audit
+stamps, plus this evidence-reconciliation commit) each re-ran the full CI and stayed
+green without touching implementation, tests, workflows or migrations; they do not
+replace the implementation evidence. The per-run doc-only breakdown is kept once, in
+`phase-3a-4b-architecture-audit.md`, to avoid recursive stamping.
+
+### Residual risks
+
+- **Rate limiting is a process-local, in-memory placeholder** (`RateLimitMiddleware`).
+  It does not coordinate across API replicas and is **not** a production-grade
+  distributed control; Redis-backed or gateway-level rate limiting is future work.
+  Classification: **PARTIALLY COMPLETED — production distributed enforcement not
+  implemented** (Batch 5 security-review follow-up or a later phase; not an automatic
+  blocker unless the threat model requires it). See
+  `phase-3a-4b-architecture-audit.md` → "Rate limiting — current state".
+- Full-mode Redis/S3 adapters are exercised in CI via injected fakes, not against live
+  managed backends; live-backend integration remains future operational validation.
 
 ### Remaining work (Batch 5 — outstanding)
 
