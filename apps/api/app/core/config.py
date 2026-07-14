@@ -173,6 +173,11 @@ class Settings(BaseSettings):
     #: Grace period a worker allows in-flight jobs to finish on shutdown before it
     #: stops. Bounded so shutdown always terminates.
     worker_shutdown_grace_seconds: float = 10.0
+    #: Shortened grace applied after a *second* shutdown signal (an operator asking
+    #: to exit now). In-flight jobs still running past this window lose their lease
+    #: on forced exit and are recovered by the next worker. Bounded, <= the normal
+    #: grace.
+    worker_force_shutdown_grace_seconds: float = 1.0
     #: Default attempt ceiling for a job when the enqueuer does not specify one.
     job_default_max_attempts: int = 5
     #: Exponential-backoff base and cap for retryable failures (seconds).
@@ -395,6 +400,13 @@ class Settings(BaseSettings):
             )
         if self.worker_shutdown_grace_seconds < 0:
             errors.append("worker_shutdown_grace_seconds must be >= 0")
+        if self.worker_force_shutdown_grace_seconds < 0:
+            errors.append("worker_force_shutdown_grace_seconds must be >= 0")
+        if self.worker_force_shutdown_grace_seconds > self.worker_shutdown_grace_seconds:
+            errors.append(
+                "worker_force_shutdown_grace_seconds must be <= "
+                "worker_shutdown_grace_seconds"
+            )
         if self.worker_concurrency < 1:
             errors.append("worker_concurrency must be >= 1")
         if self.job_claim_batch_size < 1:

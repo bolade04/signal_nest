@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.errors import WorkerRegistrationFailedError
+from app.core.lifecycle import graceful_shutdown
 from app.core.log_context import bound_context
 from app.core.logging import configure_logging, get_logger, log_event
 from app.core.metrics import (
@@ -479,6 +480,10 @@ class Worker:
         self._registry = registry
         self._clock = clock
         self._stop = threading.Event()
+        # Set by a *second* shutdown signal: an operator asking to exit now. It
+        # shortens the drain grace so in-flight work is abandoned promptly (its
+        # lease then expires and the job is recovered by the next worker).
+        self._fast_stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._registry_hb: tuple[threading.Event, threading.Thread] | None = None
         # Captured at register(); fences this process's registry mutations so an
@@ -623,8 +628,7 @@ class Worker:
     # -- signals ------------------------------------------------------------
     def _install_signal_handlers(self) -> None:
         def _handle(signum, _frame):  # noqa: ANN001
-            logger.info("worker.signal", extra={"extra_fields": {"signal": signum}})
-            self._stop.set()
+            self.request_stop(signum=signum)
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -632,8 +636,25 @@ class Worker:
             except ValueError:  # pragma: no cover - not on main thread (tests)
                 pass
 
-    def request_stop(self) -> None:
+    def request_stop(self, *, signum: int | None = None) -> None:
+        """Begin draining. A second call escalates to a shortened (forced) grace."""
+        if self._stop.is_set():
+            # Already draining: a second signal means "exit now".
+            logger.info(
+                "worker.signal.force",
+                extra={"extra_fields": {"signal": signum}},
+            )
+            self._fast_stop.set()
+            return
+        logger.info("worker.signal", extra={"extra_fields": {"signal": signum}})
         self._stop.set()
+
+    def _resolve_grace(self) -> float:
+        """The drain grace to use, shortened when a second signal has escalated."""
+        grace = self._settings.worker_shutdown_grace_seconds
+        if self._fast_stop.is_set():
+            return min(grace, self._settings.worker_force_shutdown_grace_seconds)
+        return grace
 
     def start(self) -> None:
         for i in range(self._settings.worker_concurrency):
@@ -642,9 +663,15 @@ class Worker:
             self._threads.append(t)
 
     def join(self, grace: float | None = None) -> None:
-        grace = self._settings.worker_shutdown_grace_seconds if grace is None else grace
+        # A shared deadline (not a per-thread timeout) bounds the *total* drain, so
+        # N slots never sum to N×grace. A second signal shortens the deadline.
+        grace = self._resolve_grace() if grace is None else grace
+        deadline = time.monotonic() + grace
         for t in self._threads:
-            t.join(timeout=grace)
+            remaining = deadline - time.monotonic()
+            if self._fast_stop.is_set():
+                remaining = min(remaining, self._settings.worker_force_shutdown_grace_seconds)
+            t.join(timeout=max(0.0, remaining))
 
     def run(self) -> None:
         """Blocking entrypoint: validate, register, spawn slots, wait, drain."""
@@ -685,6 +712,10 @@ class Worker:
         self.join()
         self._set_registry_status(WorkerStatus.STOPPED)
         logger.info("worker.stopped", extra={"extra_fields": {"worker_id": self.worker_id}})
+        # Bounded, best-effort telemetry flush + resource cleanup on the way out,
+        # after STOPPED is recorded so a slow exporter never delays the fenced
+        # terminal transition. Never raises into the process exit.
+        graceful_shutdown(self._settings)
 
 
 def main() -> None:
