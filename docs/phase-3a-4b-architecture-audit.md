@@ -538,3 +538,274 @@ the acceptance report.
 None to the customer contract. Lifecycle metrics/traces use the existing bounded seams;
 if any operator-only telemetry field is added it is additive and secret-free. The
 `git diff --exit-code` generated-contract gate must stay green.
+
+## Batch 4 implementation and CI validation evidence
+
+This section connects the original architecture audit and the *proposed* Batch 4
+design above to the **implemented and CI-validated** architecture. Batches 1–4 are
+complete; Batch 5 remains outstanding; **Phase 3A.4b is still in progress** and PR #31
+remains draft and unmerged. Phase 3B has not started. This is not a final acceptance.
+
+### Implemented deployment architecture
+
+#### Container architecture
+
+- One production Dockerfile: `apps/api/Dockerfile`.
+- Two separate production runtime targets selected by `--target`: `api` and `worker`.
+- Multi-stage build (`base` → `builder` → thin runtime targets); the dependency-build
+  stage is shared, so the locked `.[full]` install happens once.
+- Separate runtime commands: `api` runs `uvicorn app.main:app`; `worker` runs
+  `python -m app.jobs.worker`.
+- Neither API nor worker runs as root; runtime UID `10001`.
+- Application source and the built virtualenv are copied into the runtime image
+  without local development artifacts (no `.env`, no local SQLite DB, no VCS metadata,
+  no test suite).
+- Logs emit to stdout/stderr as structured JSON; the app writes no log files.
+- The migration command is a **separate** operational command
+  (`python -m app.db.migrate`), never folded into the API or worker command, so no
+  migration runs automatically in every replica.
+
+Architectural reasoning (as implemented):
+
+- The shared build stage reduces duplication and keeps the locked install singular and
+  reproducible.
+- Separate runtime targets preserve API/worker process separation.
+- Non-root execution reduces container privilege.
+- Migration separation prevents replica-level migration races.
+- The database remains the authoritative store for durable job state; Redis stays
+  advisory (wake-up/notify) and is **not** promoted to the durable queue.
+
+#### Build-context security
+
+- `.dockerignore` was hardened (excludes `.env*`, local `*.db`/`*.sqlite`, private
+  keys, VCS metadata, caches, the venv, and the test suite).
+- The image validation (`scripts/docker-security-check.sh`) checks for `.env` files,
+  Git metadata, credential/key files, local SQLite databases, and development
+  artifacts, and asserts a non-root UID.
+- The secret scan was correctly scoped to `/app`. The original full-filesystem scan
+  produced **false positives** against the base image's public CA trust bundles
+  (`/etc/ssl/certs/*.pem`, certifi's `cacert.pem`). This was corrected without
+  weakening application-source scanning; **no application secret leak was found**.
+- Scanning `/app` is intentional: `/app` is the application build context and the
+  copied application content, whereas base-image CA bundles are **public trust
+  material**, not repository secrets.
+
+### API lifecycle architecture (implemented)
+
+Ordered startup and bounded shutdown, as implemented in `app/main.py` (lifespan) and
+`app/core/lifecycle.py`:
+
+1. Validate configuration (Pydantic Settings; production fails fast on local backends,
+   a weak secret, or a missing production dependency).
+2. Initialize logging.
+3. Initialize metrics.
+4. Initialize tracing (fail-closed no-op).
+5. Initialize database resources.
+6. Verify schema compatibility (read-only gate; verify, never mutate).
+7. Initialize optional dependencies per policy.
+8. Enable readiness.
+9. Serve requests.
+10. On shutdown, enter draining.
+11. Mark readiness false.
+12. Close dependencies (Redis cache/notifier, database pool).
+13. Flush telemetry (metrics + traces) with bounded timeouts.
+14. Exit even if telemetry flushing fails.
+
+Validated properties:
+
+- Startup is ordered.
+- Required configuration failures prevent serving.
+- Schema incompatibility prevents readiness (fails fast with an instruction to run the
+  migration actor).
+- Liveness (`GET /health`) and readiness (probe surface) remain distinct.
+- Shutdown is bounded and idempotent.
+- Telemetry-flush failure does not block shutdown.
+- No implicit migration runs from any API process.
+- API lifecycle tests passed.
+
+### Worker lifecycle and draining architecture (implemented)
+
+State model: `starting` → `ready` → `busy` → `draining` → `stopped`; existing
+stale-worker sweep behavior remains.
+
+Startup:
+
+1. Validate configuration.
+2. Initialize telemetry and dependencies.
+3. Register with a fresh generation token.
+4. Start the heartbeat.
+5. Mark ready.
+6. Begin claiming work.
+
+Shutdown:
+
+- SIGTERM enters draining; no new jobs are claimed after draining begins.
+- An idle worker stops promptly.
+- A busy worker may finish in-flight work within a bounded grace
+  (`worker_shutdown_grace_seconds`); a second signal shortens it to
+  `worker_force_shutdown_grace_seconds`.
+- Heartbeat/lease extension continue only while safely completing active work; the
+  worker does not extend a lease indefinitely.
+- On grace expiry: lease extension stops, the unfinished job becomes recoverable
+  through normal lease-expiry semantics, and the worker never falsely records
+  completion.
+- Registry updates remain generation-fenced; job updates remain lease-token fenced;
+  duplicate completion is prevented.
+- Telemetry flushing is bounded; repeated signals are handled safely.
+
+Worker graceful-drain and bounded-shutdown tests passed.
+
+### Migration and schema-compatibility architecture (implemented)
+
+Production migration model:
+
+- One explicit migration actor; API and worker replicas do not run migrations.
+- Migration actor command: `python -m app.db.migrate upgrade`.
+- A compatibility check (`python -m app.db.migrate check`) is separate from schema
+  mutation.
+- Migration failure blocks rollout; downgrade is an explicit operator decision.
+- Additive-first migration discipline remains in force; rolling application deploys
+  depend on schema compatibility; destructive migrations require a future explicit
+  phase.
+
+Schema-gate validation (CI):
+
+- An un-migrated database was rejected.
+- A migrated database was reported as compatible.
+- Alembic upgrade, drift check, downgrade, and re-upgrade passed (head `a1b2c3d4e5f6`).
+
+Architectural benefit: separates schema ownership from process startup; prevents
+concurrent migration races; lets deployment systems fail before admitting traffic or
+starting workers; supports controlled rollback decisions.
+
+### Rolling-deployment and rollback implications (validated)
+
+API rollout: run the single migration actor first → start new API replicas → admit
+only after readiness passes → drain old replicas before termination. Application
+rollback may occur without schema rollback when schema compatibility permits.
+
+Worker rollout: new workers register with fresh generation tokens; old workers drain
+and stop claiming; lease fencing prevents stale ownership; generation fencing prevents
+a replaced worker from updating registry state; durable jobs remain recoverable after a
+forced worker exit.
+
+Rollback: prefer application rollback without schema downgrade; schema downgrade is
+operator-controlled; backup expectations apply before high-risk migrations; an
+incompatible schema/application combination must fail its compatibility gate.
+
+### Observability integration with deployment
+
+The Batch 2/3 foundations integrate with Batch 4: structured startup/shutdown logs;
+lifecycle metrics (`service_startups_total`, `service_shutdowns_total`,
+`migration_runs_total`); lifecycle spans; API readiness/shutdown telemetry; worker
+drain telemetry; schema-compatibility and migration telemetry; bounded exporter flush;
+telemetry-failure isolation. No high-cardinality deployment labels; no container id,
+host name, worker id, request id, or trace id is used as a metric label; operator
+diagnostics expose no credentials or endpoint URLs.
+
+The lifecycle metric test was corrected to derive `environment` and `service` from
+`Settings()` rather than hardcoding `development`. This was a **test-environment
+correctness fix** and did **not** alter production lifecycle behavior.
+
+### Authoritative Batch 4 implementation validation
+
+- Implementation head: `e9e1678e3137748c4e5cd3ccf8a792f275c657ec`
+- CI run: `29347362541`
+- URL: <https://github.com/bolade04/signal_nest/actions/runs/29347362541>
+- Conclusion: `success`
+
+All five jobs succeeded:
+
+- Frontend quality — success
+- Backend quality — success
+- Migrations and API contract — success
+- Container build and security — success
+- Integration smoke — success
+
+Validation totals:
+
+- Backend: **364 passed, 0 skipped**.
+- PostgreSQL-gated tests: executed with `TEST_POSTGRES_URL` (0 skips remaining).
+- Frontend: **20/20**.
+- Smoke: **13/13**.
+- Four-market isolation: passed, no cross-market contamination.
+- Ruff: clean.
+- Generated contracts: no residual drift.
+- `npm audit`: **0 vulnerabilities**.
+
+Container validation:
+
+- API image build passed; worker image build passed.
+- Both images ran as UID `10001`.
+- API import/startup validation passed.
+- Migration actor validation passed.
+- Schema-compatibility rejection and success paths passed.
+- Secret/context validation passed (scoped to `/app`).
+
+### Documentation synchronization validation
+
+Acceptance-report stamp:
+
+- Head: `9ac997f9698827e799a103f2e1bba13a94a4a3f7`
+- CI run: `29350028924`
+- URL: <https://github.com/bolade04/signal_nest/actions/runs/29350028924>
+- Result: all five jobs succeeded.
+
+Plan-document stamp:
+
+- Head: `06939c61b944e1e2e471f5b50008bbe8fa1fc3ea`
+- CI run: `29350656763`
+- URL: <https://github.com/bolade04/signal_nest/actions/runs/29350656763>
+- Result: all five jobs succeeded.
+
+These later runs verify that documentation updates did not disturb the branch. The
+substantive Batch 4 implementation evidence remains `e9e1678` and run `29347362541`;
+the docs-only runs do not replace it.
+
+### CI annotation
+
+- Annotation count: **1** — a non-blocking GitHub platform notice.
+- It concerns Docker third-party actions running on Node.js 24 rather than the
+  deprecated Node.js 20 runner.
+- It is **not** an application defect, **not** a test failure, **not** a skipped
+  required test, and **not** a container-security failure.
+- All five jobs succeeded (the run is not annotation-free, but the sole annotation is
+  the platform runtime notice).
+
+### Architecture conclusions — gaps now addressed
+
+The following original architecture gaps are now **implemented and CI-validated**:
+
+- No production API image → delivered.
+- No production worker image → delivered.
+- Root-runtime concern → both images run as non-root UID `10001`.
+- Missing explicit API lifecycle → ordered startup + bounded idempotent shutdown.
+- Missing worker-drain contract → draining state machine with bounded/forced grace.
+- Migration actor ambiguity → single-actor `python -m app.db.migrate`.
+- Schema-compatibility ambiguity → read-only startup gate (verify, never mutate).
+- Missing container CI validation → `container-build` job.
+- Missing deployment and migration documentation → `docs/operations/deployment.md`,
+  `docs/operations/migrations.md`, plus the observability lifecycle section.
+
+Remaining Batch 5 gaps (outstanding):
+
+- Final worker-operations runbook
+- Incident-response runbook
+- Dashboard recommendations
+- Alert definitions
+- Expanded failure-injection coverage
+- Final security review
+- Final acceptance review
+- Merge-readiness classification
+
+Optional / future unless separately approved: Kubernetes manifests, Terraform,
+cloud-specific infrastructure, hosted monitoring vendor integration, and
+orchestrator-specific deployment configuration.
+
+### Status
+
+- Batches 1–4 are complete.
+- Batch 5 remains outstanding.
+- Phase 3A.4b is still **in progress**.
+- PR #31 remains **draft and unmerged**.
+- Phase 3B has **not** started.
