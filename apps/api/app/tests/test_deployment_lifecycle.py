@@ -141,6 +141,10 @@ def test_service_lifecycle_metrics_recorded_across_app_boot():
     from app.core.metrics import SERVICE_SHUTDOWNS_TOTAL, SERVICE_STARTUPS_TOTAL, InMemoryMetrics
     from app.main import app
 
+    # The lifespan labels the metric with the live settings, so derive the
+    # expected service/environment from Settings rather than hardcoding them
+    # (CI runs with ENVIRONMENT=test, local defaults to development).
+    settings = Settings()
     backend = InMemoryMetrics()
     metrics.configure_metrics(backend)
     try:
@@ -149,10 +153,10 @@ def test_service_lifecycle_metrics_recorded_across_app_boot():
     finally:
         metrics.configure_metrics(None)
 
-    assert backend.counter_value(SERVICE_STARTUPS_TOTAL, service="signalnest-api",
-                                 environment="development", outcome="ready") == 1
-    assert backend.counter_value(SERVICE_SHUTDOWNS_TOTAL, service="signalnest-api",
-                                 environment="development", outcome="clean") == 1
+    assert backend.counter_value(SERVICE_STARTUPS_TOTAL, service=settings.service_name,
+                                 environment=settings.environment, outcome="ready") == 1
+    assert backend.counter_value(SERVICE_SHUTDOWNS_TOTAL, service=settings.service_name,
+                                 environment=settings.environment, outcome="clean") == 1
 
 
 # --------------------------------------------------------------------------- #

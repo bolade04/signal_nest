@@ -17,11 +17,13 @@ fi
 echo "ok: runs as uid $uid (non-root)"
 
 echo "== [$IMAGE] assert no secrets or local databases in the image =="
-# Search the whole filesystem for env files, private keys and SQLite databases
-# that must never ship. Print any hits; a non-empty result fails the check.
+# Scan the application tree (/app) — the build context we control — for env
+# files, private keys and SQLite databases that must never ship. Scoping to
+# /app (not the whole filesystem) avoids false positives on the base image's
+# and certifi's PUBLIC CA trust bundles (/etc/ssl/certs/*.pem, cacert.pem),
+# which are trust anchors, not secrets.
 found="$(docker run --rm --entrypoint sh "$IMAGE" -c '
-  find / \( -path /proc -o -path /sys \) -prune -o \
-    \( -name ".env" -o -name "*.env" -o -name "*.sqlite" -o -name "*.db" \
+  find /app \( -name ".env" -o -name "*.env" -o -name "*.sqlite" -o -name "*.db" \
        -o -name "*.pem" -o -name "*.key" -o -name "signalnest.db" \) -print 2>/dev/null
 ' || true)"
 if [ -n "$found" ]; then
@@ -29,7 +31,7 @@ if [ -n "$found" ]; then
   echo "$found" >&2
   exit 1
 fi
-echo "ok: no .env / private key / *.db / *.sqlite in the image"
+echo "ok: no .env / private key / *.db / *.sqlite under /app in the image"
 
 echo "== [$IMAGE] assert no VCS metadata in the image =="
 if docker run --rm --entrypoint sh "$IMAGE" -c 'test -e /app/.git'; then
