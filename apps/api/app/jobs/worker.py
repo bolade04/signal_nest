@@ -327,6 +327,9 @@ class Worker:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._registry_hb: tuple[threading.Event, threading.Thread] | None = None
+        # Captured at register(); fences this process's registry mutations so an
+        # older process sharing the worker_id cannot heartbeat/transition our row.
+        self._generation_token: str | None = None
 
     # -- startup validation -------------------------------------------------
     def validate(self) -> None:
@@ -365,7 +368,7 @@ class Worker:
         for i in range(attempts):
             db = self._session_factory()
             try:
-                self._registry.register(
+                row = self._registry.register(
                     db,
                     worker_id=self.worker_id,
                     worker_type=self._settings.worker_type,
@@ -377,6 +380,9 @@ class Worker:
                     host_fingerprint=host_fingerprint(),
                     now=self._clock(),
                 )
+                # Capture our generation token before committing; every later
+                # registry mutation presents it so a stale peer is fenced out.
+                self._generation_token = row.generation_token
                 db.commit()
                 return
             except Exception as exc:  # noqa: BLE001 - retried, then re-raised sanitized
@@ -392,7 +398,13 @@ class Worker:
         """Best-effort registry status transition (never fatal to the worker)."""
         db = self._session_factory()
         try:
-            self._registry._transition(db, self.worker_id, target, now=self._clock())
+            self._registry._transition(
+                db,
+                self.worker_id,
+                target,
+                now=self._clock(),
+                generation_token=self._generation_token,
+            )
             db.commit()
         except Exception:  # pragma: no cover - status change is advisory
             db.rollback()
@@ -418,7 +430,12 @@ class Worker:
             while not stop.wait(interval):
                 db = self._session_factory()
                 try:
-                    self._registry.heartbeat(db, self.worker_id, now=self._clock())
+                    self._registry.heartbeat(
+                        db,
+                        self.worker_id,
+                        now=self._clock(),
+                        generation_token=self._generation_token,
+                    )
                     self._registry.sweep_stale(
                         db, stale_after_seconds=stale_after, now=self._clock()
                     )

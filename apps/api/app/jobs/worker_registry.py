@@ -21,6 +21,7 @@ Design guarantees:
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -33,6 +34,11 @@ from app.jobs.worker_status import (
     WorkerStatus,
     ensure_worker_transition,
 )
+
+
+def _new_generation_token() -> str:
+    """A fresh opaque per-registration fencing token (never a credential)."""
+    return secrets.token_hex(16)
 
 
 class WorkerRegistry:
@@ -53,7 +59,14 @@ class WorkerRegistry:
         host_fingerprint: str | None = None,
         now: datetime | None = None,
     ) -> WorkerRegistration:
-        """Register (or self-replace) this worker, initializing it to STARTING."""
+        """Register (or self-replace) this worker, initializing it to STARTING.
+
+        A fresh ``generation_token`` is minted on every registration. The caller
+        (the worker process) captures it and presents it on every heartbeat and
+        status transition; because a restart rotates the token, any *older* process
+        still holding a stale token is fenced out and can no longer mutate the row
+        that replaced it.
+        """
         now = now or utcnow()
         row = db.scalar(
             select(WorkerRegistration).where(WorkerRegistration.worker_id == worker_id)
@@ -75,6 +88,8 @@ class WorkerRegistry:
         row.application_version = application_version
         row.build_revision = build_revision
         row.host_fingerprint = host_fingerprint
+        # Rotate the fencing token so any prior generation is locked out.
+        row.generation_token = _new_generation_token()
         db.flush()
         return row
 
@@ -84,6 +99,20 @@ class WorkerRegistry:
             select(WorkerRegistration).where(WorkerRegistration.worker_id == worker_id)
         )
 
+    @staticmethod
+    def _fenced_out(row: WorkerRegistration, generation_token: str | None) -> bool:
+        """True if a supplied generation token does not match the row's current one.
+
+        When ``generation_token`` is ``None`` the caller opts out of fencing (used
+        by operator-driven sweeps that are not tied to a single worker generation).
+        When it is supplied, a mismatch means an *older* process is trying to mutate
+        a registration that a newer one has already replaced — so the mutation is
+        refused. The row's token only ever changes at ``register`` (serialized by the
+        unique ``worker_id``), so comparing the caller's fixed token to the row's
+        current value is a sound fence.
+        """
+        return generation_token is not None and row.generation_token != generation_token
+
     def _transition(
         self,
         db: Session,
@@ -91,9 +120,12 @@ class WorkerRegistry:
         target: WorkerStatus,
         *,
         now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
         row = self._get(db, worker_id)
         if row is None:
+            return None
+        if self._fenced_out(row, generation_token):
             return None
         current = WorkerStatus(row.status)
         if current == target:
@@ -106,29 +138,64 @@ class WorkerRegistry:
         return row
 
     def mark_ready(
-        self, db: Session, worker_id: str, *, now: datetime | None = None
+        self,
+        db: Session,
+        worker_id: str,
+        *,
+        now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
-        return self._transition(db, worker_id, WorkerStatus.READY, now=now)
+        return self._transition(
+            db, worker_id, WorkerStatus.READY, now=now, generation_token=generation_token
+        )
 
     def mark_busy(
-        self, db: Session, worker_id: str, *, now: datetime | None = None
+        self,
+        db: Session,
+        worker_id: str,
+        *,
+        now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
-        return self._transition(db, worker_id, WorkerStatus.BUSY, now=now)
+        return self._transition(
+            db, worker_id, WorkerStatus.BUSY, now=now, generation_token=generation_token
+        )
 
     def mark_draining(
-        self, db: Session, worker_id: str, *, now: datetime | None = None
+        self,
+        db: Session,
+        worker_id: str,
+        *,
+        now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
-        return self._transition(db, worker_id, WorkerStatus.DRAINING, now=now)
+        return self._transition(
+            db, worker_id, WorkerStatus.DRAINING, now=now, generation_token=generation_token
+        )
 
     def mark_stopped(
-        self, db: Session, worker_id: str, *, now: datetime | None = None
+        self,
+        db: Session,
+        worker_id: str,
+        *,
+        now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
-        return self._transition(db, worker_id, WorkerStatus.STOPPED, now=now)
+        return self._transition(
+            db, worker_id, WorkerStatus.STOPPED, now=now, generation_token=generation_token
+        )
 
     def mark_failed(
-        self, db: Session, worker_id: str, *, now: datetime | None = None
+        self,
+        db: Session,
+        worker_id: str,
+        *,
+        now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
-        return self._transition(db, worker_id, WorkerStatus.FAILED, now=now)
+        return self._transition(
+            db, worker_id, WorkerStatus.FAILED, now=now, generation_token=generation_token
+        )
 
     # --- Heartbeat ----------------------------------------------------------
     def heartbeat(
@@ -138,15 +205,20 @@ class WorkerRegistry:
         *,
         status: WorkerStatus | None = None,
         now: datetime | None = None,
+        generation_token: str | None = None,
     ) -> WorkerRegistration | None:
         """Record liveness. Optionally set the coarse ready/busy/draining status.
 
         A stale worker that heartbeats again recovers to the reported status (or
-        ``ready`` by default). No audit row is written.
+        ``ready`` by default). No audit row is written. When a ``generation_token``
+        is supplied it fences the heartbeat: a stale process whose token no longer
+        matches the row cannot keep a replaced registration alive.
         """
         now = now or utcnow()
         row = self._get(db, worker_id)
         if row is None:
+            return None
+        if self._fenced_out(row, generation_token):
             return None
         current = WorkerStatus(row.status)
         row.last_heartbeat_at = now
