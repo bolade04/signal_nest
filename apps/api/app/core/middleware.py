@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from app.core.log_context import bound_context, new_request_id, normalize_request_id
 from app.core.logging import get_logger, log_event
+from app.core.metrics import HTTP_REQUEST_DURATION_MS, HTTP_REQUESTS_TOTAL, get_metrics
 
 logger = get_logger("signalnest.request")
 
@@ -20,6 +21,11 @@ def _status_outcome(status_code: int) -> str:
     if status_code >= 400:
         return "client_error"
     return "success"
+
+
+def _status_class(status_code: int) -> str:
+    # Bounded label: the status *class* only, never the raw code or the path.
+    return f"{status_code // 100}xx"
 
 
 class CorrelationMiddleware(BaseHTTPMiddleware):
@@ -40,16 +46,23 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
             response.headers["x-request-id"] = rid
+            outcome = _status_outcome(response.status_code)
+            status_class = _status_class(response.status_code)
             log_event(
                 logger,
                 "http.request",
                 component="api",
-                outcome=_status_outcome(response.status_code),
+                outcome=outcome,
                 duration_ms=elapsed_ms,
                 method=request.method,
                 path=request.url.path,
                 status_code=response.status_code,
             )
+            # Metrics carry only bounded labels — never the path or raw code, which
+            # would explode series cardinality.
+            m = get_metrics()
+            m.increment(HTTP_REQUESTS_TOTAL, outcome=outcome, status_class=status_class)
+            m.observe(HTTP_REQUEST_DURATION_MS, elapsed_ms, outcome=outcome)
             return response
 
 

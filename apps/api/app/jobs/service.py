@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.core.errors import RedisNotifyFailedError
 from app.core.log_context import bound_context, new_correlation_id
 from app.core.logging import get_logger, log_event
+from app.core.metrics import JOBS_ENQUEUED_TOTAL, REDIS_NOTIFY_TOTAL, get_metrics
 from app.jobs import handlers as _handlers  # noqa: F401 — registers handlers on import
 from app.jobs.context import ExecutionContext
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope
@@ -59,11 +60,17 @@ def _notify_available(job: Job) -> None:
     """
     if JobStatus(job.status) not in ENQUEUED_STATUSES or job.status == JobStatus.SCHEDULED.value:
         return
+    metrics = get_metrics()
     try:
         _get_notifier().notify_job_available()
+        metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="success")
     except RedisNotifyFailedError:
+        # A notify failure is a *coordination* degradation, tracked separately from an
+        # enqueue failure (the job is already durable and will be found by polling).
+        metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="failure")
         log_event(logger, "job.notify_failed", level=WARNING, component="jobs", outcome="degraded")
     except Exception:  # pragma: no cover - defensive: never fail enqueue on notify
+        metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="failure")
         log_event(logger, "job.notify_error", level=WARNING, component="jobs", outcome="degraded")
 
 
@@ -144,6 +151,11 @@ def enqueue_job(
             outcome="enqueued",
             job_type=type_str,
             job_status=job.status,
+        )
+        # The caller owns the surrounding transaction; the row is persisted here, so
+        # this is the single choke point through which every enqueue passes.
+        get_metrics().increment(
+            JOBS_ENQUEUED_TOTAL, outcome="enqueued", job_type=type_str, job_status=job.status
         )
         _notify_available(job)
     return job
