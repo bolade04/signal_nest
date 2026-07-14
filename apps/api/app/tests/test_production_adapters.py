@@ -353,6 +353,30 @@ def test_redis_cache_tenant_keys_do_not_collide(fake_redis) -> None:
     assert cache.get(tenant_cache_key("org-2", "ws-1", "x")) == "b"
 
 
+def test_tenant_cache_key_encoding_is_collision_resistant() -> None:
+    """A component containing the ``:`` delimiter cannot forge a key boundary."""
+    from app.infra.cache import tenant_cache_key
+
+    # One part "a:b" must not collide with two parts "a","b".
+    assert tenant_cache_key("org", "ws", "a:b") != tenant_cache_key("org", "ws", "a", "b")
+    # A colon smuggled into a tenant id cannot cross the tenant boundary.
+    assert tenant_cache_key("org", "ws:x", "k") != tenant_cache_key("org", "ws", "x", "k")
+    assert tenant_cache_key("a:b", "ws", "k") != tenant_cache_key("a", "b", "ws", "k")
+    # Ordinary ids (no ':' or '%') are encoded to themselves — stable, readable keys.
+    assert tenant_cache_key("org-1", "ws-1", "profile") == "t:org-1:ws-1:profile"
+
+
+def test_redis_cache_colon_bearing_tenant_ids_do_not_collide(fake_redis) -> None:
+    from app.infra.cache import RedisCache, tenant_cache_key
+
+    cache = RedisCache(fake_redis, key_prefix="sn")
+    cache.set(tenant_cache_key("org", "ws:x", "k"), "a")
+    cache.set(tenant_cache_key("org", "ws", "x", "k"), "b")
+    # Distinct logical scopes remain distinct physical entries.
+    assert cache.get(tenant_cache_key("org", "ws:x", "k")) == "a"
+    assert cache.get(tenant_cache_key("org", "ws", "x", "k")) == "b"
+
+
 def test_redis_cache_rejects_nonpositive_ttl(fake_redis) -> None:
     from app.infra.cache import RedisCache
 

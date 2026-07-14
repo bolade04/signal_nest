@@ -40,15 +40,29 @@ class _Miss:
 MISS: Final[_Miss] = _Miss()
 
 
+def _encode_key_component(component: str) -> str:
+    """Escape the ``:`` delimiter so a component can never forge a key boundary.
+
+    ``%`` is escaped first (so the escaping is unambiguous and reversible), then the
+    ``:`` delimiter. Because a raw ``:`` can no longer appear inside an encoded
+    component, joining components with ``:`` stays injective: distinct component
+    tuples always map to distinct keys. Without this, ``("a:b")`` and ``("a", "b")``
+    would collide and one tenant could address another tenant's entry. Components
+    with no ``:`` or ``%`` (ordinary ids) are returned unchanged.
+    """
+    return component.replace("%", "%25").replace(":", "%3A")
+
+
 def tenant_cache_key(organization_id: str, workspace_id: str, *parts: str) -> str:
     """Build a tenant-scoped cache key. Parts are joined under the tenant scope.
 
     The tenant segment is derived server-side from the caller's context, never
-    from client input, so one tenant cannot address another tenant's entries.
+    from client input, so one tenant cannot address another tenant's entries. Every
+    component is delimiter-encoded so a value containing ``:`` cannot collide with a
+    differently-split component tuple.
     """
-    scope = f"t:{organization_id}:{workspace_id}"
-    tail = ":".join(parts)
-    return f"{scope}:{tail}" if tail else scope
+    components = ["t", organization_id, workspace_id, *parts]
+    return ":".join(_encode_key_component(c) for c in components)
 
 
 def _validate_ttl(ttl_seconds: int | None) -> None:
