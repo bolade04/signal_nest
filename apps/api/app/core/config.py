@@ -55,6 +55,33 @@ class Settings(BaseSettings):
     #: hosted vendor. A disabled backend is a no-op, never an error.
     metrics_enabled: bool = False
 
+    # --- Distributed tracing (Phase 3A.4b Batch 3) ---------------------------
+    #: Master switch for span emission. Off by default (and in tests) so tracing
+    #: is strictly opt-in; core code depends only on the provider-neutral seam,
+    #: never a hosted vendor. Disabled → a no-op tracer, never an error.
+    tracing_enabled: bool = False
+    #: Span exporter selection. ``none`` installs the no-op tracer; ``memory`` the
+    #: in-memory test exporter; ``otlp`` an optional, import-guarded OTLP exporter
+    #: (only usable if the OpenTelemetry packages are separately installed).
+    tracing_exporter: Literal["none", "memory", "otlp"] = "none"
+    #: Head sampling ratio for root spans (parent decisions are always honored).
+    #: Bounded 0.0–1.0; conservative default keeps trace volume low in production.
+    tracing_sample_ratio: float = 0.05
+    #: OTLP collector endpoint (only read when ``tracing_exporter=otlp``). Secret-
+    #: bearing/host-identifying, so repr=False and never logged in full.
+    otlp_endpoint: str | None = Field(default=None, repr=False)
+    #: Bounded per-export timeout for the exporter (seconds). Must be > 0.
+    tracing_export_timeout_seconds: float = 10.0
+    #: Bounded flush budget on shutdown (seconds). Must be > 0 so shutdown always
+    #: terminates even if the collector is slow or unreachable.
+    tracing_shutdown_flush_seconds: float = 5.0
+    #: Upper bound on buffered spans before the processor drops (never blocks the
+    #: caller). Must be >= 1.
+    tracing_max_queue_size: int = 2048
+    #: Wire format for trace-context propagation. Only W3C ``tracecontext`` is
+    #: implemented (the ``traceparent`` header / persisted job trace context).
+    tracing_propagation: Literal["tracecontext"] = "tracecontext"
+
     # --- Security ------------------------------------------------------------
     # Secret-bearing fields set repr=False so they never appear in model reprs,
     # tracebacks or pydantic ValidationError output (config errors are logged).
@@ -327,6 +354,21 @@ class Settings(BaseSettings):
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")
+
+        # Distributed-tracing bounds. Sampling must be a probability; timeouts and
+        # queue bounds must be positive so tracing can never stall or busy-block the
+        # caller. The OTLP endpoint is only required when tracing is actually enabled
+        # with the OTLP exporter (a disabled/memory tracer needs no collector).
+        if not 0.0 <= self.tracing_sample_ratio <= 1.0:
+            errors.append("tracing_sample_ratio must be between 0.0 and 1.0")
+        if self.tracing_export_timeout_seconds <= 0:
+            errors.append("tracing_export_timeout_seconds must be greater than 0")
+        if self.tracing_shutdown_flush_seconds <= 0:
+            errors.append("tracing_shutdown_flush_seconds must be greater than 0")
+        if self.tracing_max_queue_size < 1:
+            errors.append("tracing_max_queue_size must be >= 1")
+        if self.tracing_enabled and self.tracing_exporter == "otlp" and not self.otlp_endpoint:
+            errors.append("tracing_exporter=otlp requires otlp_endpoint")
 
         if self.readiness_probe_timeout_seconds <= 0:
             errors.append("readiness_probe_timeout_seconds must be greater than 0")
