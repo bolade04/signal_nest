@@ -458,6 +458,39 @@ def test_object_key_validation_accepts_safe_key() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "org,ws",
+    [
+        ("../org", "ws-1"),        # traversal in the org segment
+        ("org-1", "../ws"),        # traversal in the workspace segment
+        ("a/b", "ws-1"),           # separator smuggles an extra segment
+        ("org-1", "a/b"),
+        ("org\\1", "ws-1"),        # backslash separator
+        ("", "ws-1"),              # empty tenant id
+        ("org-1", ""),
+        ("..", "ws-1"),            # bare relative segment
+        ("org-1", "."),
+        ("org\x001", "ws-1"),      # null byte
+    ],
+)
+def test_tenant_object_key_rejects_hostile_tenant_identifiers(org, ws) -> None:
+    """A hostile org/workspace id cannot inject a separator or traversal."""
+    from app.infra.storage import tenant_object_key
+
+    with pytest.raises(InvalidObjectKeyError):
+        tenant_object_key(org, ws, "assets", "logo.png")
+
+
+def test_tenant_object_key_rejects_hostile_relative_parts() -> None:
+    """The relative parts remain validated, and the composed key is re-checked."""
+    from app.infra.storage import tenant_object_key
+
+    with pytest.raises(InvalidObjectKeyError):
+        tenant_object_key("org-1", "ws-1", "..", "escape")
+    with pytest.raises(InvalidObjectKeyError):
+        tenant_object_key("org-1", "ws-1", "a", "../b")
+
+
 class _FakeS3:
     """In-memory stand-in for a boto3 S3 client. Records put kwargs."""
 

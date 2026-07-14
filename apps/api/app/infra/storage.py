@@ -58,11 +58,38 @@ def validate_object_key(key: str) -> str:
     return key
 
 
+def _validate_key_segment(segment: str, *, label: str) -> str:
+    """Return ``segment`` if it is a single safe path segment, else raise.
+
+    A tenant identifier must occupy exactly one path segment: no separators, null
+    byte or ``.``/``..`` traversal. This is what stops a hostile organization or
+    workspace id from smuggling extra segments (or an escape) into a composed key.
+    """
+    if not isinstance(segment, str) or segment == "":
+        raise InvalidObjectKeyError(f"{label} must be a non-empty string")
+    if "\x00" in segment:
+        raise InvalidObjectKeyError(f"{label} must not contain a null byte")
+    if "/" in segment or "\\" in segment:
+        raise InvalidObjectKeyError(f"{label} must not contain a path separator")
+    if segment in (".", ".."):
+        raise InvalidObjectKeyError(f"{label} must not be a relative segment")
+    return segment
+
+
 def tenant_object_key(organization_id: str, workspace_id: str, *parts: str) -> str:
-    """Build a validated, tenant-scoped object key from server-side context."""
+    """Build a validated, tenant-scoped object key from server-side context.
+
+    Every component is validated, not only the caller-supplied relative parts: the
+    organization and workspace identifiers must each be a single safe path segment,
+    and the *fully composed* key is re-validated. A hostile tenant identifier can
+    therefore not inject a separator or a path traversal into the physical key.
+    """
+    _validate_key_segment(organization_id, label="organization id")
+    _validate_key_segment(workspace_id, label="workspace id")
     relative = "/".join(parts)
     validate_object_key(relative)
-    return f"{organization_id}/{workspace_id}/{relative}"
+    composed = f"{organization_id}/{workspace_id}/{relative}"
+    return validate_object_key(composed)
 
 
 class Storage(Protocol):
