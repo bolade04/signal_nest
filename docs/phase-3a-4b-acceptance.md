@@ -157,3 +157,119 @@ No customer-facing route or schema changed; the durable-job `correlation_id` and
 Batch 4 makes **no** contract change: it adds container images, the single-actor
 migration command, the startup schema gate and the graceful lifecycle — none of which
 touch any HTTP route or schema. `gen:types` produced no diff.
+
+## Batch 4 — authoritative CI-green evidence
+
+This section stamps the authoritative, CI-verified evidence for Batch 4. The phase
+remains **IN PROGRESS** (Batch 5 outstanding); this is not an acceptance of the phase.
+
+### Authoritative branch evidence
+
+- Branch: `feat/phase-3a-observability-deployment`
+- Final Batch 4 head: `e9e1678e3137748c4e5cd3ccf8a792f275c657ec`
+- Base: `main`
+- Draft PR: `#31`
+- PR state: `OPEN / DRAFT / UNMERGED`
+
+### Authoritative CI run
+
+- Run ID: `29347362541`
+- Run URL: <https://github.com/bolade04/signal_nest/actions/runs/29347362541>
+- Head SHA: `e9e1678e3137748c4e5cd3ccf8a792f275c657ec`
+- Conclusion: `success`
+
+### CI job results
+
+| Job | Conclusion |
+| --- | --- |
+| Frontend quality | success |
+| Backend quality | success |
+| Migrations and API contract | success |
+| Container build and security | success |
+| Integration smoke | success |
+
+### Test evidence
+
+- Backend CI: **364 passed, 0 skipped**.
+- PostgreSQL-gated tests: executed in CI with `TEST_POSTGRES_URL`
+  (`postgresql+psycopg://…@localhost:5432/signalnest_test`); **no** PostgreSQL-gated
+  skips remained (0 skipped confirms the gated cross-worker claim/recovery test ran).
+- Local backend: **362 passed, 2 skipped** — the two skips are exactly the local
+  PostgreSQL-gated tests (no local PostgreSQL); they run in CI, where they pass.
+- Frontend: **20/20**.
+- Smoke: **13/13**.
+- Four-market isolation: passed, no cross-market contamination.
+- Ruff: clean.
+- Alembic: upgrade → drift check → downgrade → re-upgrade all passed; head
+  `a1b2c3d4e5f6` unchanged.
+- Generated contracts (`gen:types` + `git diff --exit-code`): no residual drift.
+- `npm audit`: **0 vulnerabilities**.
+
+### Container evidence
+
+- API image built successfully.
+- Worker image built successfully.
+- Runtime UID: `10001` — non-root validation passed for both images.
+- Build-context secret scan passed after being correctly scoped to `/app` (the
+  application build context).
+- API startup/import validation passed (`import app.main` inside the API image).
+- Migration actor command passed (`python -m app.db.migrate upgrade && … check` in the
+  worker image).
+- Schema-compatibility gate: rejected an un-migrated database (non-zero exit) and
+  reported `compatible` after migration.
+- Worker graceful-drain lifecycle tests passed.
+- API lifecycle tests passed.
+
+### Batch 4 correction evidence
+
+Two narrowly scoped CI corrections were made after the first run on this head; both
+were verified locally and re-run green in run `29347362541`:
+
+1. `scripts/docker-security-check.sh` — the original scan inspected the full
+   base-image filesystem and flagged **public CA trust bundles** (e.g.
+   `/etc/ssl/certs/*.pem` and the certifi CA bundle). These are trust anchors, not
+   secrets. The scan was corrected to inspect `/app`, the actual application build
+   context. This was a **false positive** in the check, **not** a secret leak.
+2. `test_service_lifecycle_metrics_recorded_across_app_boot` — the test hardcoded
+   `environment="development"`, but CI runs with `ENVIRONMENT=test`. The test was
+   corrected to derive `service` and `environment` from `Settings()`. **No production
+   lifecycle behavior changed** — only the test's expected label values.
+
+### CI annotation
+
+- Annotation count: **1**.
+- Classification: non-blocking GitHub platform notice.
+- Cause: Docker third-party actions (`docker/build-push-action@v6`,
+  `docker/setup-buildx-action@v3`) run on Node.js 24 instead of the deprecated
+  Node.js 20 runner.
+- Explicitly: it is **not** a SignalNest application defect, **not** a failed test, and
+  **not** a skipped required test. All five CI jobs completed successfully.
+
+### Batch 4 delivery evidence (commits)
+
+| SHA | Description |
+| --- | --- |
+| `81086ac` | Batch 4 scope |
+| `3f40dae` | production API and worker images |
+| `59fc111` | migration actor and schema compatibility |
+| `9408211` | API lifecycle |
+| `26d98dc` | worker draining and bounded shutdown |
+| `830928c` | deployment lifecycle tests |
+| `3719040` | container CI |
+| `bc89974` | deployment and migration documentation |
+| `ef3fe7b` | Batch 4 completion documentation |
+| `e9e1678` | narrow CI correction (secret-scan scope + metric-label derivation) |
+
+### Remaining work (Batch 5 — outstanding)
+
+- Final worker-operations runbook
+- Incident-response runbook
+- Dashboard recommendations
+- Alert definitions
+- Expanded deployment and failure-injection tests
+- Final security review
+- Final acceptance review
+- Final merge-readiness confirmation
+
+Orchestrator manifests (Kubernetes/Nomad) and cloud infrastructure remain **optional /
+future work**, not a mandatory Batch 5 gate unless the plan later requires them.
