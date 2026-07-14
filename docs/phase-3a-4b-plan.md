@@ -22,15 +22,69 @@ Harden SignalNest's production runtime with:
 This phase is large. It is delivered as reviewable batches, each a coherent set of
 focused commits that passes the full repository gate before the next batch begins.
 
-- **Batch 1 (this session) — concurrency and data-plane hardening.** The seven
+- **Batch 1 (complete) — concurrency and data-plane hardening.** The seven
   accepted Phase 3A.4a follow-ups below that concern correctness under concurrency
-  and hostile input. Opened as a **draft** PR once green.
-- **Batch 2 — structured logging, redaction, request/job correlation.**
-- **Batch 3 — bounded metrics.**
-- **Batch 4 — distributed tracing.**
-- **Batch 5 — production containers + graceful lifecycle + migration strategy.**
-- **Batch 6 — operational runbooks, dashboards/alerts, failure-injection expansion,
+  and hostile input. Opened as a **draft** PR (#31) once green.
+- **Batch 2 (this session) — structured logging, redaction, request/job
+  correlation, and bounded/provider-neutral metrics.** Merges the original
+  "structured logging" and "bounded metrics" batches: the two share the same
+  telemetry seams (config, contextvars, failure isolation) and are cheaper to land
+  and review together.
+- **Batch 3 — distributed tracing.**
+- **Batch 4 — production containers + graceful lifecycle + migration strategy.**
+- **Batch 5 — operational runbooks, dashboards/alerts, failure-injection expansion,
   CI hardening, security review, acceptance report.**
+
+### Batch 1 — completion record
+
+Delivered on this branch (base `main` @ `3fefb36`), all focused commits:
+
+- Single-winner expired-lease recovery (dialect-aware guarded CAS; exactly one
+  winner, exactly one `lease_recovered` event).
+- True PostgreSQL `FOR UPDATE SKIP LOCKED` lock-contention test (CI, `postgres:16`).
+- Worker-registration generation fencing (opaque token rotated on register; a stale
+  generation cannot heartbeat or transition its replacement).
+- SQLite claim compare-and-set isolated in a per-candidate SAVEPOINT (a lost race
+  rolls back only that attempt and preserves uncommitted caller work).
+- Final S3 tenant-key validation (org/workspace segments validated individually and
+  the fully composed key re-validated).
+- Collision-resistant Redis cache-key encoding (percent-encoded components).
+- Additive migration `df66ff0426d2` (nullable `worker_registrations.generation_token`).
+
+Gate at completion: backend **224 passed** / 2 skipped (PG-gated), frontend
+**20/20**, smoke **13/13** (four-market isolation, no cross-market contamination),
+migration upgrade/check/downgrade/re-upgrade green, ruff clean, no contract drift,
+`npm audit` 0 vulnerabilities.
+
+### Batch 2 — scope (this session)
+
+1. **Structured logging.** Centralized JSON logging with a stable field set; a
+   human-readable dev formatter behind validated configuration.
+2. **Secret redaction.** One recursive redaction layer applied before any structured
+   value is emitted; never raises into application code.
+3. **HTTP request correlation.** Strict, bounded request-id middleware storing an id
+   in request-local context, echoing it in a response header, and clearing context
+   after every request.
+4. **Durable-job correlation.** A safe opaque correlation id, distinct from the
+   database job id / lease token / worker id / tenant ids, generated at enqueue,
+   persisted (additive migration), and propagated through the whole job lifecycle.
+5. **Worker correlation restoration.** The worker restores a job's correlation id
+   into logging context for the duration of execution and clears it afterward.
+6. **Provider-neutral metrics abstraction.** Counter/histogram/gauge behind an
+   interface with a no-op default and an in-memory test backend; no hosted vendor in
+   core code.
+7. **Safe metric instrumentation.** Counters incremented only at authoritative
+   commit points; durations recorded with monotonic time.
+8. **Cardinality controls.** A controlled label allow-list with enforced rejection of
+   forbidden high-cardinality labels; routes normalized to templates.
+9. **Telemetry failure isolation.** Formatter/redaction/metrics/exporter failure can
+   never break a request, a commit, job claiming, worker execution, or shutdown.
+10. **Operator-safe observability diagnostics.** Coarse, operator-only telemetry
+    status (modes/enabled flags/recent failure counts) with no secrets or ids.
+
+Deferred to later batches (not in Batch 2): distributed tracing, production
+containers, graceful deployment lifecycle, deployment runbooks, dashboards and
+alerts, and the broad failure-injection suite.
 
 If the draft PR's diff grows beyond what stays reviewable, the remaining
 observability and deployment batches split into their own follow-up PRs.
