@@ -79,6 +79,13 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: created before this column simply carry ``NULL``.
     correlation_id: Mapped[str | None] = mapped_column(String(64))
 
+    #: Safe W3C ``traceparent`` captured at enqueue (trace/span ids + flags only).
+    #: Restored by the worker as the remote parent of the job's execution span so a
+    #: durable job links back to the request that enqueued it. Never a credential,
+    #: tenant id, URL or payload; never exposed by any customer API. Nullable so
+    #: jobs created before this column (or enqueued with tracing off) carry ``NULL``.
+    trace_context: Mapped[str | None] = mapped_column(String(64))
+
     # --- Contract + payload -------------------------------------------------
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     contract_version: Mapped[str] = mapped_column(String(8), nullable=False, default="1")

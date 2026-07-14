@@ -51,6 +51,7 @@ from app.core.metrics import (
     WORKER_POLL_TOTAL,
     get_metrics,
 )
+from app.core.tracing import JOB_EXECUTE, extract_context, start_span
 from app.db.session import SessionLocal
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
@@ -368,7 +369,23 @@ class JobRunner:
                 worker_type=worker_type,
                 job_correlation_id=job.correlation_id,
             ):
-                self.run_claimed(db, job)
+                # Restore the traceparent captured at enqueue as the remote parent of
+                # this execution span, so the whole run_claimed lifecycle links back to
+                # the request/scheduler that enqueued it. A job with no persisted context
+                # (created before this column, or enqueued with tracing off) starts a
+                # fresh root span.
+                parent = extract_context(job.trace_context)
+                with start_span(
+                    JOB_EXECUTE,
+                    kind="consumer",
+                    parent=parent,
+                    attributes={
+                        "component": "jobs",
+                        "worker.type": worker_type,
+                        "job.type": job.job_type,
+                    },
+                ):
+                    self.run_claimed(db, job)
             return True
         finally:
             db.close()
