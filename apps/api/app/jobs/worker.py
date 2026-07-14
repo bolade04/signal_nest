@@ -51,7 +51,16 @@ from app.core.metrics import (
     WORKER_POLL_TOTAL,
     get_metrics,
 )
-from app.core.tracing import JOB_EXECUTE, extract_context, start_span
+from app.core.tracing import (
+    JOB_CLAIM,
+    JOB_COMPLETE,
+    JOB_EXECUTE,
+    JOB_FAIL,
+    JOB_RECOVER,
+    WORKER_POLL,
+    extract_context,
+    start_span,
+)
 from app.db.session import SessionLocal
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
@@ -240,12 +249,21 @@ class JobRunner:
                 is_cancelled=self._cancel_checker(job_id),
             )
             result = handler(ctx)
-            self._store.complete(
-                db, job, worker_id=worker_id, lease_token=lease_token,
-                result_summary=result, now=self._clock(),
-            )
-            # Metrics only after the terminal state is durably committed.
-            db.commit()
+            # A child span over just the terminal transition (not the handler, which
+            # is the work itself), so a lease loss or commit failure at completion is
+            # visible on the trace distinct from the execution.
+            with start_span(
+                JOB_COMPLETE,
+                kind="internal",
+                attributes={"component": "jobs", "job.type": job_type},
+            ) as span:
+                self._store.complete(
+                    db, job, worker_id=worker_id, lease_token=lease_token,
+                    result_summary=result, now=self._clock(),
+                )
+                # Metrics only after the terminal state is durably committed.
+                db.commit()
+                span.set_attribute("outcome", "success")
             elapsed_ms = (time.perf_counter() - started) * 1000
             m = get_metrics()
             m.increment(JOBS_COMPLETED_TOTAL, outcome="success", job_type=job_type)
@@ -299,18 +317,30 @@ class JobRunner:
         started: float, job_type: str,
     ) -> str:
         try:
-            self._store.fail(
-                db,
-                job,
-                worker_id=worker_id,
-                lease_token=lease_token,
-                error=error,
-                base_seconds=self._settings.job_retry_base_seconds,
-                max_seconds=self._settings.job_retry_max_seconds,
-                jitter_seed=job.id,
-                now=self._clock(),
-            )
-            db.commit()
+            # A child span over the failure transition. The concrete terminal outcome
+            # (retry / failed / dead-lettered) is only known after ``fail`` computes it,
+            # so it is carried as the low-cardinality ``job.status`` + ``retryable``
+            # attributes rather than as distinct span names.
+            with start_span(
+                JOB_FAIL,
+                kind="internal",
+                attributes={"component": "jobs", "job.type": job_type},
+            ) as span:
+                self._store.fail(
+                    db,
+                    job,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    error=error,
+                    base_seconds=self._settings.job_retry_base_seconds,
+                    max_seconds=self._settings.job_retry_max_seconds,
+                    jitter_seed=job.id,
+                    now=self._clock(),
+                )
+                db.commit()
+                span.set_attribute("job.status", job.status)
+                span.set_attribute("retryable", job.status == JobStatus.RETRY_WAIT.value)
+                span.set_attribute("outcome", "failure")
             # Only after the failure transition is committed: count the exact terminal
             # outcome (retry / failed / dead-lettered) and record execution duration.
             elapsed_ms = (time.perf_counter() - started) * 1000
@@ -337,56 +367,86 @@ class JobRunner:
         worker_type = self._settings.worker_type
         m = get_metrics()
         try:
-            # Recovery counts only the rows *this* loop won (single-winner CAS), and
-            # only after the recovery transition is committed.
-            recovered = self._store.recover_expired_leases(db, now=self._clock())
-            db.commit()
-            if recovered:
-                m.increment(
-                    WORKER_LEASE_RECOVERED_TOTAL, worker_type=worker_type, amount=recovered
-                )
-            job = self._store.claim_one(
-                db,
-                worker_id=worker_id,
-                lease_seconds=self._settings.worker_lease_seconds,
-                now=self._clock(),
-                max_scan=max(self._settings.job_claim_batch_size, 1) * 20,
-            )
-            if job is None:
-                # Aggregated counter (not a per-idle-poll log) so an idle worker
-                # never produces a log storm.
-                m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="idle")
-                return False
-            # ``claim_one`` commits the claim internally, so the claim is authoritative
-            # here.
-            m.increment(JOBS_CLAIMED_TOTAL, worker_type=worker_type, job_type=job.job_type)
-            m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="claimed")
-            # Restore the job's safe correlation id (and worker type) into logging
-            # context for the whole execution; bound_context clears it on exit so a
-            # later poll never inherits the previous job's correlation.
-            with bound_context(
-                component="jobs",
-                worker_type=worker_type,
-                job_correlation_id=job.correlation_id,
-            ):
-                # Restore the traceparent captured at enqueue as the remote parent of
-                # this execution span, so the whole run_claimed lifecycle links back to
-                # the request/scheduler that enqueued it. A job with no persisted context
-                # (created before this column, or enqueued with tracing off) starts a
-                # fresh root span.
-                parent = extract_context(job.trace_context)
+            # The whole poll (recover + claim + run) under one low-value span. Idle
+            # polls are high-volume, so WORKER_POLL is sampled at a reduced rate at the
+            # root; its recover/claim children inherit that decision. A poll that
+            # actually claims still links execution to the enqueue lineage via the
+            # JOB_EXECUTE span's persisted parent (a separate trace).
+            with start_span(
+                WORKER_POLL,
+                kind="consumer",
+                attributes={"component": "jobs", "worker.type": worker_type},
+            ) as poll_span:
+                # Recovery counts only the rows *this* loop won (single-winner CAS), and
+                # only after the recovery transition is committed.
                 with start_span(
-                    JOB_EXECUTE,
+                    JOB_RECOVER,
+                    kind="internal",
+                    attributes={"component": "jobs", "worker.type": worker_type},
+                ) as recover_span:
+                    recovered = self._store.recover_expired_leases(db, now=self._clock())
+                    db.commit()
+                    recover_span.set_attribute("recovered", bool(recovered))
+                    recover_span.set_attribute(
+                        "outcome", "recovered" if recovered else "idle"
+                    )
+                if recovered:
+                    m.increment(
+                        WORKER_LEASE_RECOVERED_TOTAL, worker_type=worker_type, amount=recovered
+                    )
+                with start_span(
+                    JOB_CLAIM,
                     kind="consumer",
-                    parent=parent,
-                    attributes={
-                        "component": "jobs",
-                        "worker.type": worker_type,
-                        "job.type": job.job_type,
-                    },
+                    attributes={"component": "jobs", "worker.type": worker_type},
+                ) as claim_span:
+                    job = self._store.claim_one(
+                        db,
+                        worker_id=worker_id,
+                        lease_seconds=self._settings.worker_lease_seconds,
+                        now=self._clock(),
+                        max_scan=max(self._settings.job_claim_batch_size, 1) * 20,
+                    )
+                    claim_span.set_attribute("outcome", "idle" if job is None else "claimed")
+                    if job is not None:
+                        claim_span.set_attribute("job.type", job.job_type)
+                if job is None:
+                    # Aggregated counter (not a per-idle-poll log) so an idle worker
+                    # never produces a log storm.
+                    m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="idle")
+                    poll_span.set_attribute("outcome", "idle")
+                    return False
+                # ``claim_one`` commits the claim internally, so the claim is authoritative
+                # here.
+                m.increment(JOBS_CLAIMED_TOTAL, worker_type=worker_type, job_type=job.job_type)
+                m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="claimed")
+                poll_span.set_attribute("outcome", "claimed")
+                poll_span.set_attribute("job.type", job.job_type)
+                # Restore the job's safe correlation id (and worker type) into logging
+                # context for the whole execution; bound_context clears it on exit so a
+                # later poll never inherits the previous job's correlation.
+                with bound_context(
+                    component="jobs",
+                    worker_type=worker_type,
+                    job_correlation_id=job.correlation_id,
                 ):
-                    self.run_claimed(db, job)
-            return True
+                    # Restore the traceparent captured at enqueue as the remote parent of
+                    # this execution span, so the whole run_claimed lifecycle links back to
+                    # the request/scheduler that enqueued it. A job with no persisted context
+                    # (created before this column, or enqueued with tracing off) starts a
+                    # fresh root span.
+                    parent = extract_context(job.trace_context)
+                    with start_span(
+                        JOB_EXECUTE,
+                        kind="consumer",
+                        parent=parent,
+                        attributes={
+                            "component": "jobs",
+                            "worker.type": worker_type,
+                            "job.type": job.job_type,
+                        },
+                    ):
+                        self.run_claimed(db, job)
+                return True
         finally:
             db.close()
 

@@ -34,6 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.core.tracing import DATABASE_TRANSACTION, start_span
 from app.jobs.backoff import compute_backoff_seconds
 from app.jobs.models import Job, JobEvent
 from app.jobs.status import (
@@ -222,18 +223,29 @@ class DurableJobStore:
         now = now or utcnow()
         lease_expires = now + timedelta(seconds=lease_seconds)
 
-        if db.get_bind().dialect.name == "postgresql":
-            claimed_id, observed = self._claim_skip_locked(
-                db, worker_id=worker_id, now=now, lease_expires=lease_expires
-            )
-        else:
-            claimed_id, observed = self._claim_compare_and_set(
-                db, worker_id=worker_id, now=now, lease_expires=lease_expires, max_scan=max_scan
-            )
+        # A single controlled span over the claim *transaction* (candidate scan +
+        # compare-and-set + audit + commit) — a deliberate transaction-level boundary,
+        # never a per-statement span, so DB tracing stays bounded and low-cardinality.
+        with start_span(
+            DATABASE_TRANSACTION,
+            kind="client",
+            attributes={"component": "jobs", "dependency": "database", "operation": "claim"},
+        ) as span:
+            if db.get_bind().dialect.name == "postgresql":
+                claimed_id, observed = self._claim_skip_locked(
+                    db, worker_id=worker_id, now=now, lease_expires=lease_expires
+                )
+            else:
+                claimed_id, observed = self._claim_compare_and_set(
+                    db, worker_id=worker_id, now=now, lease_expires=lease_expires, max_scan=max_scan
+                )
 
-        if claimed_id is None:
-            return None
-        return self._finalize_claim(db, claimed_id, observed, worker_id)
+            if claimed_id is None:
+                span.set_attribute("outcome", "idle")
+                return None
+            job = self._finalize_claim(db, claimed_id, observed, worker_id)
+            span.set_attribute("outcome", "claimed")
+            return job
 
     def _claim_skip_locked(
         self, db: Session, *, worker_id: str, now: datetime, lease_expires: datetime
