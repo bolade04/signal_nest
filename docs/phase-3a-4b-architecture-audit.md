@@ -405,3 +405,136 @@ Each concern lands as its own focused, revertable commit. Tracing fails closed t
 no-op: with `TRACING_ENABLED=false` (default) every helper is inert. The additive
 `jobs.trace_context` column downgrades cleanly. No customer contract changes, so a
 revert is low-risk.
+
+# Batch 4 — Deployment Audit (containers, lifecycle, migration strategy)
+
+Performed by direct inspection of the repository at branch head after Batch 3. (Note:
+the Batch 1 gaps table above mapped "Containers" to a later batch number under the
+original numbering; the delivery plan now assigns production containers + graceful
+lifecycle + migration strategy to **Batch 4**, with runbooks/dashboards/acceptance in
+Batch 5.)
+
+## Current state
+
+- **Container artifacts: none.** No `Dockerfile`, `.dockerignore` or Compose file exists
+  anywhere in the tree. This is greenfield.
+- **Process entrypoints already exist and are production-shaped.**
+  - API: `app.main:app` (an `asgi` app) started via `scripts/run-api.sh` with
+    `uvicorn --reload` (dev only). The FastAPI `lifespan` (a) fails fast if the schema
+    is not migrated (checks `users` + `alembic_version` table presence), (b) installs
+    the configured tracer (fail-closed no-op), and (c) on shutdown runs a bounded
+    `_shutdown_flush` of the trace exporter. There is **no explicit metrics flush, db/redis
+    close, or readiness gate** in the API lifespan yet, and the schema guard is
+    table-presence only (not an Alembic-revision compatibility check).
+  - Worker: `python -m app.jobs.worker` (`scripts/run-worker.sh`). `Worker.run()` already
+    validates config + schema, registers STARTING→READY (register-before-claim),
+    installs SIGINT/SIGTERM handlers that set a stop event, runs a bounded registry
+    heartbeat + stale sweep, and drains READY/BUSY→DRAINING→STOPPED within
+    `worker_shutdown_grace_seconds`, with generation-fenced registry mutations and
+    per-job lease fencing. Gaps: a second signal does not shorten the grace; there is no
+    explicit worker-side telemetry flush on exit; and lease-expiry-on-forced-exit is a
+    property of the design (lease simply not renewed) rather than an asserted test.
+- **Config validation is already strong** (`app/core/config.py`): production rejects
+  every local backend by name, requires a strong `secret_key`, bounds numerics, and sets
+  `repr=False` on every secret field so URLs/keys never reach logs or `ValidationError`
+  output. Missing: a bounded **min/max** on `worker_shutdown_grace_seconds` and an
+  explicit API shutdown-grace / migration-mode setting.
+- **Migration execution:** Alembic head `a1b2c3d4e5f6`; `scripts/migrate.sh`
+  (`alembic upgrade head`) wrapped by `npm run migrate`. **No single-actor production
+  policy or schema-compatibility module is documented or enforced** — the API lifespan's
+  table-presence guard is the only startup schema check.
+- **Health endpoints:** public `GET /health` (liveness, static ok) and operator-gated
+  `GET /internal/system/readiness` (probe diagnostics). The liveness/readiness split
+  already exists and is appropriate for a container liveness probe.
+- **CI:** four PR-gated jobs (frontend, backend+postgres:16, migration+contract, smoke).
+  No container build/validation job. Branch push trigger is `feature/**`; this branch
+  (`feat/…`) is exercised via the `pull_request` trigger on PR #31.
+
+## Missing production requirements
+
+- Two production images (API + worker), multi-stage, non-root, minimal runtime.
+- A hardened `.dockerignore` + a build-context secret-exclusion check.
+- A single-actor migration command distinct from the API/worker commands.
+- A startup schema-compatibility check (Alembic revision vs. application head) that
+  verifies without mutating and blocks on an incompatible/too-old schema.
+- Explicit API shutdown cleanup (metrics flush, db/redis close) alongside the existing
+  trace flush.
+- Bounded lifecycle metrics/traces (startup/shutdown/drain/migration/schema-compat).
+- Deployment + migration operator docs; observability lifecycle coverage.
+- CI validation that the images build, run non-root, and start their commands.
+
+## Proposed image layout
+
+- `apps/api/Dockerfile` with three stages: `base` (pinned `python:3.12-slim`, non-root
+  user, env hardening), `builder` (installs the locked project into a venv), and two
+  thin runtime targets selected by `--target` — `api` (uvicorn) and `worker`
+  (`python -m app.jobs.worker`) — sharing the copied venv + source. A single Dockerfile
+  with two targets avoids duplicating the dependency install while keeping the API and
+  worker commands and surfaces distinct. (If two files read more clearly to reviewers,
+  the worker target can be split later; one file is chosen to keep the locked-install
+  step singular and reproducible.)
+- No separate frontend image this phase: the web app is a statically-built SPA
+  (`npm run build`) served by existing static hosting, and the approved architecture
+  does not call for a Node runtime container here.
+
+## Runtime user strategy
+
+A dedicated `app` user/group (fixed non-root UID/GID, e.g. 10001) owns the venv and
+app source (read-only at runtime). No shell is required for operation; the container
+runs the server process as PID-adjacent so signals reach it directly (no `sh -c`
+wrapper that would swallow SIGTERM). `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes
+into the source tree; `/tmp` is the only writable path required.
+
+## Filesystem write requirements
+
+Local-only backends (SQLite file, `./storage` object dir, in-memory cache) are
+**development conveniences** that production config rejects by name, so a production
+container writes nothing to the source tree. Temporary files use `/tmp`. The image is
+therefore compatible with a read-only root filesystem plus a writable `/tmp`.
+
+## Port and command expectations
+
+- API: listens on `${API_PORT:-8000}`, bind `${API_HOST:-0.0.0.0}` inside the container,
+  command `uvicorn app.main:app` (no `--reload`); liveness probe `GET /health`.
+- Worker: exposes no port; command `python -m app.jobs.worker`; health is process
+  liveness + registry heartbeat (optionally an operator readiness query).
+- Migration: a distinct one-shot command `python -m app.db.migrate` (never baked into
+  the API/worker command).
+
+## Migration ownership
+
+Exactly one actor runs `alembic upgrade head` per rollout (a pre-rollout job / CI stage),
+never every replica. API and worker startup only **verify** compatibility and refuse to
+serve/claim on an incompatible schema; they never upgrade or downgrade implicitly.
+
+## Graceful-shutdown model
+
+- API: SIGTERM → readiness flips to draining → in-flight requests get a bounded grace →
+  db/redis closed → metrics + traces flushed (bounded) → exit. Idempotent; telemetry
+  flush failure never blocks exit.
+- Worker: SIGTERM → stop claiming immediately → finish in-flight within grace (lease
+  renewed only while actively finishing) → on grace expiry stop renewing so the lease
+  expires for safe recovery (never a false completion) → generation-fenced STOPPED →
+  flush telemetry (bounded) → exit. A second signal shortens the grace.
+
+## Rollback path
+
+Application rollback without schema rollback where the additive-first discipline keeps
+old and new app versions compatible with the current head. Schema downgrade is an
+explicit, backed-up operator action, never automatic startup behavior. Each Batch 4
+concern is an independently revertable commit; no migration is edited in place.
+
+## Security risks (Batch 4)
+
+Container-specific risks and mitigations: run as non-root (UID ≠ 0); no Docker socket,
+no privileged mode, no added Linux capabilities; no secrets in image layers or build
+args (only non-secret build labels); no dev server / debug mode in production; safe
+signal forwarding (no shell wrapper); `/tmp`-only writes; health endpoint discloses no
+secret; migration logs are structured and URL-free. Residual risks are documented in
+the acceptance report.
+
+## Contract impact (Batch 4)
+
+None to the customer contract. Lifecycle metrics/traces use the existing bounded seams;
+if any operator-only telemetry field is added it is additive and secret-free. The
+`git diff --exit-code` generated-contract gate must stay green.

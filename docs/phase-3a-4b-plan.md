@@ -214,6 +214,53 @@ clean + **20/20** tests, contracts regenerated with no residual drift, smoke **1
 
 **Batch 3 is complete.**
 
+### Batch 4 — scope (this session)
+
+Production containers, graceful lifecycle, and migration strategy, delivered as focused
+commits. Fourteen items:
+
+1. **Production API image.** Multi-stage, pinned base, explicit Python version,
+   non-root runtime, minimal final layer (runtime deps only, no build toolchain, no
+   test deps, no VCS metadata), an explicit production server command.
+2. **Production worker image.** A separate command from the API on the same verified
+   runtime base; non-root; no bundled API server; no exposed ports it does not need.
+3. **Multi-stage builds.** A shared build stage installs locked dependencies; the
+   runtime stage copies only what it needs.
+4. **Non-root runtime.** Both images create and run as a dedicated unprivileged user;
+   the effective UID is never 0.
+5. **Minimal runtime filesystem.** No package-manager cache, no compilers, no `.git`,
+   no `.env`, no local databases; compatible with a read-only root filesystem.
+6. **Health checks.** A container liveness probe hitting `/health` (liveness, not
+   readiness); readiness stays the operator/probe surface.
+7. **API startup + shutdown lifecycle.** Explicit ordered startup (config → logging →
+   metrics → tracing → db → schema-compat → optional deps → readiness) and a bounded,
+   idempotent drain that closes db/redis and flushes telemetry within a grace budget.
+8. **Worker draining + shutdown lifecycle.** Register-before-claim, drain on SIGTERM
+   (stop claiming, finish in-flight within grace, let the lease expire on a forced
+   exit), generation-fenced STOPPED — hardening/covering the existing state machine.
+9. **Telemetry flush during shutdown.** Bounded metrics + trace flush that can never
+   block or fail the exit.
+10. **Database, Redis, and tracing cleanup.** Engines/pools and Redis clients closed on
+    shutdown; tracer flushed; all best-effort and bounded.
+11. **Migration single-actor strategy.** One explicit migration actor
+    (`python -m app.db.migrate`); API and worker replicas never auto-migrate. Documented
+    in `docs/operations/migrations.md`.
+12. **Rolling-deployment compatibility.** A startup schema-compatibility check (verify,
+    never mutate) plus a documented additive-first, exact-head policy for this phase.
+13. **Container CI validation.** A CI job that builds both images, proves non-root,
+    proves the build context excludes secrets, and exercises the API/worker commands.
+14. **Deployment documentation foundation.** `docs/operations/deployment.md` and updated
+    `docs/operations/observability.md` lifecycle coverage.
+
+Deferred to Batch 5 (not in Batch 4): final operations runbooks, the incident-response
+runbook, dashboards and alert definitions, the broad failure-injection expansion, the
+final security acceptance and independent review, and the final acceptance
+classification. Phase 3B is not started.
+
+### Batch 4 — completion record
+
+_(recorded on completion.)_
+
 ## Accepted Phase 3A.4a follow-ups (Batch 1 scope)
 
 1. Make expired-lease recovery single-winner under concurrent workers.
