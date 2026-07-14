@@ -1,0 +1,46 @@
+# Build-context exclusions for the SignalNest API/worker images
+# (Phase 3A.4b Batch 4). The build context is ``apps/api``; anything listed here
+# never enters a layer. A CI check additionally fails the build if a secret or a
+# local database would have been shipped.
+
+# --- Secrets and environment files (never bake into an image) ---
+.env
+.env.*
+*.env
+secrets/
+*.pem
+*.key
+
+# --- Local databases and object storage ---
+*.db
+*.sqlite
+*.sqlite3
+signalnest.db
+storage/
+
+# --- Virtualenvs and installed packages ---
+.venv/
+venv/
+*.egg-info/
+signalnest_api.egg-info/
+
+# --- Python caches / build artifacts ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- Test suite (not needed at runtime) ---
+app/tests/
+
+# --- Generated / operator artifacts not needed at runtime ---
+openapi.json
+*.log
+
+# --- VCS and editor metadata ---
+.git/
+.gitignore
+.DS_Store
