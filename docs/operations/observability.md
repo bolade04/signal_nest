@@ -1,13 +1,13 @@
-# Observability (Phase 3A.4b Batch 2)
+# Observability (Phase 3A.4b Batches 2–3)
 
-SignalNest's runtime observability is built from four cooperating, provider-neutral
-pieces: **structured logging**, **secret redaction**, **request/job correlation**, and
-**bounded metrics**. All are safe by construction — they never emit secrets or
-high-cardinality identifiers, and a telemetry failure can never break a request, a
-database commit, job claiming, worker execution, or shutdown.
+SignalNest's runtime observability is built from five cooperating, provider-neutral
+pieces: **structured logging**, **secret redaction**, **request/job correlation**,
+**bounded metrics**, and **distributed tracing**. All are safe by construction — they
+never emit secrets or high-cardinality identifiers, and a telemetry failure can never
+break a request, a database commit, job claiming, worker execution, or shutdown.
 
-Distributed tracing, production containers, deployment lifecycle, dashboards/alerts,
-and the broad failure-injection suite are **deferred** to later batches.
+Production containers, deployment lifecycle, dashboards/alerts, and the broad
+failure-injection suite are **deferred** to later batches.
 
 ## Structured logging
 
@@ -103,10 +103,58 @@ notify is counted separately from enqueue, so a coordination degradation is neve
 confused with an enqueue failure. Idle worker polls increment an aggregated counter
 rather than logging, avoiding a log storm.
 
+## Distributed tracing
+
+`app/core/tracing.py` is a pure-Python, provider-neutral tracing seam that mirrors the
+metrics seam: core code opens spans through it and never imports an OpenTelemetry SDK.
+
+- **Off by default.** The process tracer is a `NoOpTracer` unless one is installed via
+  `configure_tracer(...)`. `configure_tracing_from_settings` selects the backend from
+  config: `TRACING_ENABLED=false` → no-op; `TRACING_EXPORTER=memory` → `InMemoryTracer`
+  (used in tests); `TRACING_EXPORTER=otlp` → import-guarded OTLP builder that
+  **fails closed to a no-op** if the SDK is absent, so tracing can never block startup.
+  A no-op span never touches `trace_id` context, so disabled tracing leaves existing
+  log-correlation behavior unchanged.
+- **Bounded span names + attributes.** Every span name must be in the catalog
+  (`http.request`, `job.enqueue/claim/execute/complete/fail/retry/recover/dead_letter`,
+  `worker.poll/heartbeat/register/shutdown`, `redis.notify/cache/lock`,
+  `storage.upload/sign_url`, `database.transaction`, `readiness.check`) and every
+  attribute key in the allow-list (`component`, `dependency`, `operation`, `outcome`,
+  `http.request.method`, `http.route`, `http.response.status_code`, `worker.type`,
+  `job.type`, `recovered`, `retryable`, `job.status`). A forbidden key (any id, URL,
+  message, payload or token) raises `TraceError` at dev/test time.
+- **W3C propagation.** Spans serialize to a strict `traceparent`
+  (`00-<32hex>-<16hex>-<2hex>`); `parse_traceparent` rejects wrong-version, malformed,
+  all-zero and newline-bearing headers. Inbound HTTP `traceparent` becomes the remote
+  parent of the request span. Enqueue persists the active traceparent on the `jobs`
+  row (additive nullable `trace_context`, migration `a1b2c3d4e5f6`); the worker
+  restores it as the remote parent of `job.execute`, so a job's execution links back to
+  the request or scheduler that enqueued it. A job with no persisted context starts a
+  fresh root.
+- **Deterministic, parent-based sampling.** The decision is derived from the trace id
+  (RNG-free, so tests are deterministic) against `TRACING_SAMPLE_RATIO`. A parent's
+  sampled flag is always honored (a child of a sampled parent records even at ratio 0).
+  High-volume low-value roots (`worker.poll`, `readiness.check`, heartbeats) sample at
+  one tenth of the ratio. `worker.poll` scopes only recovery + claim; `job.execute`
+  runs after it closes so a claimed job's trace is never parented to the reduced-sampled
+  poll.
+- **Safe exception recording.** A span records only the exception **class** and an error
+  status — never the message (which could carry a secret) and never a stack trace.
+- **Bounded dependency spans.** Redis cache, S3 upload/sign-url and the job-claim DB
+  transaction carry only `component`/`dependency`/`operation`/`outcome`; never a key,
+  value, object key, bucket, endpoint or signed URL. DB tracing is a single
+  transaction-level span, never a per-statement span, so cardinality stays bounded.
+- **Failure isolation.** A `_SafeTracer` swallows and counts runtime export/flush
+  failures (`trace_export_failure_count()`), never propagating them into the caller;
+  only validation errors (coding bugs) raise.
+
 ## Operator diagnostics
 
 `GET /internal/system/telemetry` (operator-only: 401 anonymous, 403 non-operator, 200
 operator) returns the observability posture — `logging_format`, `metrics_enabled`,
 `exporter_status` (`disabled`/`healthy`/`degraded`), `telemetry_failures`,
-`correlation_enabled`, `redaction_enabled`. It exposes bounded status values only:
-no endpoint, credential, URL, payload, token, or tenant/request/job identifier.
+`correlation_enabled`, `redaction_enabled`, plus the coarse tracing posture
+`tracing_enabled`, `tracing_exporter` (`none`/`memory`/`otlp`), `tracing_status`
+(`disabled`/`healthy`/`degraded`), `tracing_sample_ratio`, and `trace_export_failures`.
+It exposes bounded status values and counts only: no endpoint, credential, URL,
+payload, token, or tenant/request/job identifier.

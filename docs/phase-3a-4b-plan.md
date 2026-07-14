@@ -176,7 +176,43 @@ alerts, the broad failure-injection suite, and Phase 3B.
 
 ### Batch 3 — completion record
 
-_(recorded on completion.)_
+Delivered on this branch as focused commits:
+
+- **Provider-neutral tracing seam** — a pure-Python, OTel-compatible tracer
+  (`app/core/tracing.py`) with a `NoOpTracer` default, an `InMemoryTracer` test
+  exporter, an import-guarded OTLP builder that fails closed to no-op, a bounded
+  span-name catalog + attribute allow-list, strict W3C `traceparent` parse/format, and
+  deterministic parent-based ratio sampling (low-value roots reduced ×1/10). Core code
+  imports no hosted vendor SDK; validated config (`app/core/config.py`).
+- **HTTP request spans** — `CorrelationMiddleware` opens a bounded server span per
+  request: inbound `traceparent` becomes the remote parent, route template (never the
+  raw path), method + status code, safe error class; `trace_id` is bound into the log
+  context only while a recording span is active and reset on exit.
+- **Durable-job propagation** — enqueue persists the active traceparent on the `jobs`
+  row via additive nullable migration `a1b2c3d4e5f6` (chains after `e7c2a9b4f1d3`); the
+  worker restores it as the remote parent of `job.execute`. `worker.poll` scopes only
+  recovery + claim, and execution runs after it closes so a claimed job's trace is never
+  parented to the reduced-sampled poll (fresh root when no context was persisted).
+- **Lifecycle + dependency spans** — job claim/complete/fail/recover, a single
+  transaction-level DB claim span (never per-statement), and bounded Redis cache and S3
+  upload/sign-url spans carrying only component/dependency/operation/outcome — never a
+  key, value, object key, bucket, endpoint or signed URL.
+- **Safe exception recording** — spans record only the exception class + error status,
+  never the message or a stack trace.
+- **Operator-safe trace diagnostics** — `GET /internal/system/telemetry` gains
+  `tracing_enabled`, `tracing_exporter`, `tracing_status`, `tracing_sample_ratio` and
+  `trace_export_failures` (bounded enums + counts only; no endpoint, credential, trace
+  or span id).
+- **Collector-free tests** — a 39-test tracing suite (`app/tests/test_tracing.py`)
+  asserting against the in-memory exporter with no external collector, plus the
+  isolation-test extensions for the new telemetry fields.
+
+Gate at completion: backend **348 passed** / 2 skipped (PG-gated), ruff clean, migration
+head `a1b2c3d4e5f6` upgrade/check/downgrade/re-upgrade green, frontend lint/type-check
+clean + **20/20** tests, contracts regenerated with no residual drift, smoke **13/13**
+(four-market isolation), `npm audit` **0 vulnerabilities**.
+
+**Batch 3 is complete.**
 
 ## Accepted Phase 3A.4a follow-ups (Batch 1 scope)
 

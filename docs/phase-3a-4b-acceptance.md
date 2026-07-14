@@ -1,6 +1,6 @@
 # Phase 3A.4b — Acceptance Report
 
-**Classification: IN PROGRESS — Batches 1 and 2 complete; tracing and deployment remain.**
+**Classification: IN PROGRESS — Batches 1–3 complete; deployment hardening remains.**
 
 Branch: `feat/phase-3a-observability-deployment` · Draft PR: #31 (kept in **draft**;
 not marked ready, not merged) · Base: `main` @ `3fefb36`.
@@ -46,9 +46,36 @@ so far**; the phase is **not** complete until the deferred batches (below) land.
   403 non-operator / 200 operator), bounded status only.
 - Operator guide: `docs/operations/observability.md`.
 
+### Batch 3 — distributed tracing and end-to-end telemetry (accepted)
+
+- **Provider-neutral tracing seam** — pure-Python, OTel-compatible tracer
+  (`app/core/tracing.py`): `NoOpTracer` default, `InMemoryTracer` test exporter,
+  import-guarded OTLP builder that fails closed to no-op, bounded span-name catalog +
+  attribute allow-list, strict W3C `traceparent` parse/format, deterministic
+  parent-based ratio sampling (low-value roots reduced ×1/10). No hosted vendor SDK in
+  core code.
+- **HTTP request spans** — a bounded server span per request via `CorrelationMiddleware`:
+  inbound `traceparent` becomes the remote parent, route template (never the raw path),
+  method + status code, safe error class; `trace_id` bound into the log context only
+  while a recording span is active, reset on exit.
+- **Durable-job propagation** — enqueue persists the active traceparent on the `jobs` row
+  via additive nullable migration `a1b2c3d4e5f6`; the worker restores it as the remote
+  parent of `job.execute`. `worker.poll` scopes only recovery + claim; execution runs
+  after it closes, so a claimed job's trace is never parented to the reduced-sampled
+  poll (fresh root when nothing was persisted).
+- **Lifecycle + dependency spans** — job claim/complete/fail/recover, a single
+  transaction-level DB claim span, and bounded Redis cache and S3 upload/sign-url spans
+  carrying only component/dependency/operation/outcome; never a key, value, object key,
+  bucket, endpoint or signed URL.
+- **Safe exception recording** — class + error status only, never the message or a
+  stack trace.
+- **Operator-safe trace diagnostics** — `GET /internal/system/telemetry` gains
+  `tracing_enabled`, `tracing_exporter`, `tracing_status`, `tracing_sample_ratio` and
+  `trace_export_failures` (bounded enums + counts only).
+- **Collector-free tests** — 39-test tracing suite (`app/tests/test_tracing.py`).
+
 ## Deferred (phase not complete)
 
-- **Batch 3** — distributed tracing (API-to-worker), export-failure isolation.
 - **Batch 4** — production API + worker containers, graceful SIGTERM lifecycle,
   single-actor migration strategy.
 - **Batch 5** — deployment/migration/worker/incident runbooks, dashboards + alert
@@ -61,25 +88,26 @@ note).
 
 | Gate | Result |
 | --- | --- |
-| Backend `pytest` | **309 passed, 2 skipped** (PG-gated; run in CI) |
+| Backend `pytest` | **348 passed, 2 skipped** (PG-gated; run in CI) |
 | Backend `ruff check app/` | clean |
-| Alembic drift (`alembic check`) | no new operations; head `e7c2a9b4f1d3` |
-| Migration upgrade/downgrade/re-upgrade | green (`test_worker_migration.py`) |
+| Alembic drift (`alembic check`) | no new operations; head `a1b2c3d4e5f6` |
+| Migration upgrade/downgrade/re-upgrade | green |
 | Frontend lint | pass |
 | Frontend type-check | pass |
 | Frontend tests | **20/20** |
-| Frontend build | pass |
-| Generated contract (`gen:types` + `git diff --exit-code`) | clean (telemetry additions committed) |
+| Generated contract (`gen:types` + `git diff --exit-code`) | clean (tracing telemetry additions committed) |
 | Smoke | **13/13**, four-market isolation, no cross-market contamination |
 | `npm audit` | **0 vulnerabilities** |
 
 **PostgreSQL note.** This environment has no local PostgreSQL, so the opt-in gated
 cross-worker PostgreSQL claim/recovery test was **not** executed locally. It runs in CI
-against the `postgres:16` service via `TEST_POSTGRES_URL`. Batch 2 introduces no new
+against the `postgres:16` service via `TEST_POSTGRES_URL`. Batch 3 introduces no new
 external-service dependencies, so CI required no changes for this batch.
 
 ## Contract impact
 
-Additive only: the operator-only `GET /internal/system/telemetry` route and its
-`TelemetryStatusOut` schema. No customer-facing route or schema changed; the durable-job
-`correlation_id` is internal and is not exposed by any customer API.
+Additive only: the operator-only `GET /internal/system/telemetry` schema
+(`TelemetryStatusOut`) gains five coarse tracing fields (`tracing_enabled`,
+`tracing_exporter`, `tracing_status`, `tracing_sample_ratio`, `trace_export_failures`).
+No customer-facing route or schema changed; the durable-job `correlation_id` and
+`trace_context` are internal and are not exposed by any customer API.
