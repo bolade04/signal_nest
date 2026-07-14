@@ -24,7 +24,7 @@ acceptance is in [`acceptance-report.md`](acceptance-report.md).
 | Current reviewed head | the `fix(workers): require fresh heartbeats for fleet readiness` commit (this branch HEAD, supersedes `6039066`; see *Findings* §3) |
 | Baseline is ancestor of head | yes |
 | Prior validated CI run | `29279995309` (success, head `6039066`) |
-| Fix-head CI run | re-validated on the fix head — all four required jobs green (see *CI evidence*) |
+| Fix-head CI run | `29305640415` (success, fix head `a259529`) — all four required jobs green |
 | Working tree at review | clean (`git status --short` empty) |
 
 ## Governance invariants (verified unchanged)
@@ -138,11 +138,11 @@ TypeScript 7 migration are present. Default local mode remains zero-dependency.
 
 ## CI evidence
 
-CI run `29279995309` on head `6039066` — **all four required jobs succeeded** (Frontend
-quality, Backend quality, Migrations and API contract, Integration smoke) with **0
-annotations**. The Backend-quality job runs the gated cross-worker claim test against a
-disposable `postgres:16` service via `TEST_POSTGRES_URL`, exercising the real `FOR UPDATE
-SKIP LOCKED` path in CI.
+CI run `29305640415` on the fix head `a259529` — **all four required jobs succeeded**
+(Frontend quality, Backend quality, Migrations and API contract, Integration smoke). The
+prior baseline run `29279995309` on head `6039066` was likewise fully green. The
+Backend-quality job runs the gated cross-worker claim test against a disposable `postgres:16`
+service via `TEST_POSTGRES_URL`, exercising the real `FOR UPDATE SKIP LOCKED` path in CI.
 
 ## Findings and corrective changes
 
@@ -216,9 +216,9 @@ or rollback defect was reproduced in production code.
 
 ## Final classification
 
-**Accepted, conditional on the fix-head CI re-validation.** Phase 3A.4a is complete, scoped,
-secure, migration-safe, and green on the required CI (re-run on the fix head; prior baseline
-run `29279995309`, head `6039066`). One production defect was found and corrected during
+**Accepted.** Phase 3A.4a is complete, scoped, secure, migration-safe, and green on the
+required CI (fix-head run `29305640415`, head `a259529`; prior baseline run `29279995309`,
+head `6039066`). One production defect was found and corrected during
 review — **M1**, worker-fleet readiness ignoring heartbeat freshness (*Findings* §3) — with a
 failing-first regression and 9 new covering cases. The single accepted residual (duplicate
 worker-ID overwrite) is a documented, non-blocking operational limitation mitigated by lease
