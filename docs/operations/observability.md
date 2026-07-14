@@ -6,8 +6,10 @@ pieces: **structured logging**, **secret redaction**, **request/job correlation*
 never emit secrets or high-cardinality identifiers, and a telemetry failure can never
 break a request, a database commit, job claiming, worker execution, or shutdown.
 
-Production containers, deployment lifecycle, dashboards/alerts, and the broad
-failure-injection suite are **deferred** to later batches.
+Production containers and the deployment lifecycle are covered in
+[deployment.md](./deployment.md). Dashboard and alert recommendations built on the
+metrics below are in [dashboards.md](./dashboards.md) and [alerts.md](./alerts.md);
+the incident playbook is [incident_response.md](./incident_response.md).
 
 ## Structured logging
 

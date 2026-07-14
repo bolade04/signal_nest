@@ -5,10 +5,12 @@ and the **rolling-deployment** model. Migrations are covered in
 [migrations.md](./migrations.md); runtime observability in
 [observability.md](./observability.md).
 
-> Scope note: Batch 4 delivers images, lifecycle and the migration model.
-> Orchestrator manifests (Kubernetes/Nomad), cloud infrastructure, dashboards,
-> alerts and the incident-response runbook are **deferred to Batch 5**. This
-> document describes the contract those artifacts must honor, not the artifacts.
+> Scope note: Batch 4 delivers images, lifecycle and the migration model. Batch 5
+> adds the operator runbooks — [worker_operations.md](./worker_operations.md),
+> [incident_response.md](./incident_response.md), [dashboards.md](./dashboards.md),
+> and [alerts.md](./alerts.md). Orchestrator manifests (Kubernetes/Nomad) and
+> cloud infrastructure remain **out of scope / future** unless separately approved.
+> This document describes the runtime contract those artifacts must honor.
 
 ## Images
 
