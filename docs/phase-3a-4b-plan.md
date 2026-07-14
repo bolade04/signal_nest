@@ -259,7 +259,39 @@ classification. Phase 3B is not started.
 
 ### Batch 4 — completion record
 
-_(recorded on completion.)_
+Delivered on branch `feat/phase-3a-observability-deployment` as focused commits:
+
+- **Production images.** A single multi-stage `apps/api/Dockerfile` with `api`
+  (uvicorn) and `worker` (`python -m app.jobs.worker`) targets sharing one locked
+  `.[full]` install; both non-root (UID/GID 10001), read-only-root compatible
+  (only `/tmp` written), no build toolchain / dev deps / secrets / local DB. A
+  build-context `.dockerignore` plus a CI secret-exclusion check.
+- **Graceful API lifecycle.** Ordered startup (tracer → read-only schema-compat
+  gate → readiness) and a bounded, idempotent drain (`app/core/lifecycle.py`) that
+  flushes telemetry and closes the Redis clients + database pool, best-effort.
+- **Worker draining.** Second-signal-shortens-grace
+  (`worker_force_shutdown_grace_seconds`), a shared drain deadline, and the same
+  telemetry-flush + resource-close after the generation-fenced `STOPPED`.
+- **Single-actor migrations.** `python -m app.db.migrate`
+  (upgrade/check/downgrade) with a startup schema-compatibility classifier
+  (compatible/ahead/pending/uninitialized); replicas verify, never migrate.
+  Documented in `docs/operations/migrations.md`.
+- **Lifecycle telemetry.** Bounded `service_startups_total`,
+  `service_shutdowns_total`, `migration_runs_total` on the existing metrics seam.
+- **CI + compose + docs.** A `container-build` job (build both targets, prove
+  non-root + secret-free, exercise the migration actor and the schema gate), an
+  optional `infra/docker-compose.yml` local full-mode stack, and
+  `docs/operations/deployment.md` + updated `observability.md`.
+- **Tests.** `app/tests/test_deployment_lifecycle.py` (schema classifier + gate,
+  migrate check/downgrade contract, bounded idempotent shutdown, worker forced
+  drain).
+
+Gate: backend `ruff` clean, `pytest` **362 passed / 2 skipped** (PG-gated in CI);
+alembic head `a1b2c3d4e5f6` unchanged, no drift, downgrade/re-upgrade green;
+frontend lint/type-check clean, **20/20** tests, build green; `npm audit` **0**;
+contract regenerated with no drift; smoke **13/13**, four-market isolation. Docker
+and PostgreSQL are unavailable locally, so the `container-build` job and the
+PG-gated claim test run in CI. **Batch 4 is complete; Batch 5 remains deferred.**
 
 ## Accepted Phase 3A.4a follow-ups (Batch 1 scope)
 
