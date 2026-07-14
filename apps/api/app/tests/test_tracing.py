@@ -62,7 +62,6 @@ from app.core.tracing import (
 )
 from app.db.base import Base
 from app.jobs.context import ExecutionContext
-from app.jobs.models import Job
 from app.jobs.registry import HandlerContext, register_handler
 from app.jobs.service import enqueue_job
 from app.jobs.worker import JobRunner
@@ -192,7 +191,9 @@ def test_low_value_span_is_reduced_rate() -> None:
 def test_child_records_under_sampled_parent_even_at_zero_ratio(restore_tracer) -> None:
     configure_tracer(InMemoryTracer(sample_ratio=0.0))
     parent = SpanContext(trace_id="a" * 32, span_id="b" * 16, sampled=True, remote=True)
-    with start_span(JOB_EXECUTE, kind="consumer", parent=parent, attributes={"component": "jobs"}) as s:
+    with start_span(
+        JOB_EXECUTE, kind="consumer", parent=parent, attributes={"component": "jobs"}
+    ) as s:
         assert s.recording is True
         assert s.trace_id == "a" * 32
 
@@ -205,7 +206,7 @@ def test_exception_records_class_not_message(memory_tracer) -> None:
         pass
 
     with pytest.raises(DownstreamTimeout):
-        with start_span(HTTP_REQUEST, kind="server", attributes={"component": "api"}) as span:
+        with start_span(HTTP_REQUEST, kind="server", attributes={"component": "api"}):
             raise DownstreamTimeout("password=hunter2 db=postgres://user:pw@host")
 
     finished = memory_tracer.finished(HTTP_REQUEST)[-1]
