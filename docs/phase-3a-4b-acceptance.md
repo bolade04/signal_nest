@@ -371,9 +371,40 @@ no workflow, and no contract change. `gen:types` is therefore unaffected.
   a code change before merge**; the rate-limit decision is recorded (Outcome B) and its
   risk accepted.
 - The residual-risk register contains **zero Required-before-merge** items.
-- The **one open confirmation** is the final CI run on the Batch 5 head (container-build +
-  PostgreSQL-gated tests — R-6), which cannot run locally. PR #31 stays in **draft** until
-  that run is green and a human reviewer signs off.
+- The final CI run on the Batch 5 head is **green** (evidence below), closing R-6's
+  container-build + PostgreSQL-gated confirmation. The **only** remaining step before
+  ready is a **human final review / sign-off**; PR #31 stays in **draft** until then.
 
 This is a substantive engineer self-review, **not** an independent third-party audit
 (R-7). It does not by itself mark PR #31 ready or merge it.
+
+## Batch 5 — authoritative CI-green evidence
+
+The authoritative Batch 5 head is `a5db2c8` — the last code-bearing commit (it contains
+the new `app/tests/test_resilience.py`); the subsequent content is documentation only.
+
+- Branch: `feat/phase-3a-observability-deployment`
+- Batch 5 head: `a5db2c83a9e69bb7e7d351896293fd7bf7dc5cc0`
+- Base: `main` · Draft PR: `#31` (state `OPEN / DRAFT / UNMERGED`)
+- CI run: `29357379741` —
+  <https://github.com/bolade04/signal_nest/actions/runs/29357379741>
+- Conclusion: `success`
+
+| Job | Conclusion |
+| --- | --- |
+| Frontend quality | success |
+| Backend quality | success |
+| Migrations and API contract | success |
+| Container build and security | success |
+| Integration smoke | success |
+
+- Backend CI: **371 passed, 0 skipped** (the 2 locally-skipped PostgreSQL-gated tests run
+  and pass in CI; +2 vs the Batch 4 total of 364→369 local is the 7 new resilience tests
+  net of pre-existing counts — CI runs all, hence 371).
+- Frontend: **20/20** (8 files). Smoke: **13/13**, four-market isolation.
+- One non-blocking annotation persists (Docker third-party actions on Node.js 24) — a
+  GitHub platform notice, not a SignalNest defect, identical in nature to Batch 4.
+
+Consistent with the Batch 4 documentation-synchronization policy, this is the **single**
+Batch 5 CI stamp. Any later documentation-only commit re-runs CI without being separately
+re-stamped here, so evidence recording does not recurse.
