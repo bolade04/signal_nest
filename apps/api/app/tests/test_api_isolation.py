@@ -278,6 +278,50 @@ def test_internal_workers_is_coarse_and_secret_free(
         assert forbidden not in blob
 
 
+def test_internal_telemetry_requires_operator(client: TestClient):
+    # Anonymous -> 401; authenticated non-operator -> 403.
+    assert client.get(f"{API}/internal/system/telemetry").status_code == 401
+    non_operator = _register_non_operator(client)
+    resp = client.get(f"{API}/internal/system/telemetry", headers=non_operator)
+    assert resp.status_code == 403
+
+
+def test_internal_telemetry_is_operator_safe_posture(
+    client: TestClient, auth: dict[str, str]
+):
+    resp = client.get(f"{API}/internal/system/telemetry", headers=auth)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {
+        "logging_format",
+        "metrics_enabled",
+        "exporter_status",
+        "telemetry_failures",
+        "correlation_enabled",
+        "redaction_enabled",
+    }
+    assert body["logging_format"] in ("json", "console")
+    assert body["exporter_status"] in ("disabled", "healthy", "degraded")
+    assert isinstance(body["metrics_enabled"], bool)
+    assert isinstance(body["telemetry_failures"], int)
+    assert body["correlation_enabled"] is True
+    assert body["redaction_enabled"] is True
+    # Posture only: no endpoint, credential, id or token of any kind.
+    blob = resp.text.lower()
+    for forbidden in (
+        "password",
+        "api_key",
+        "secret",
+        "token",
+        "redis://",
+        "postgresql://",
+        "request_id",
+        "correlation_id",
+        "job_id",
+    ):
+        assert forbidden not in blob
+
+
 def test_unfiltered_feed_is_superset_of_each_location(
     client: TestClient, auth: dict[str, str]
 ):

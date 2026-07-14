@@ -249,6 +249,23 @@ def configure_metrics(backend: MetricsBackend | None) -> None:
     _backend = backend if backend is not None else NoOpMetrics()
 
 
+def telemetry_failure_count() -> int:
+    """Isolated-and-counted runtime recording failures on the current backend."""
+    return int(getattr(_backend, "telemetry_failures", 0))
+
+
+def exporter_status(*, metrics_enabled: bool) -> str:
+    """Operator-safe backend health: ``disabled`` / ``healthy`` / ``degraded``.
+
+    ``disabled`` when metrics are off or the no-op backend is installed; otherwise
+    ``degraded`` if any recording failure has been swallowed, else ``healthy``.
+    Carries no identifiers, endpoints or credentials.
+    """
+    if not metrics_enabled or isinstance(_backend, NoOpMetrics):
+        return "disabled"
+    return "degraded" if telemetry_failure_count() > 0 else "healthy"
+
+
 __all__ = [
     "ALLOWED_LABELS",
     "METRIC_NAMES",
@@ -259,6 +276,8 @@ __all__ = [
     "get_metrics",
     "configure_metrics",
     "validate_metric",
+    "telemetry_failure_count",
+    "exporter_status",
     # names
     "HTTP_REQUESTS_TOTAL",
     "HTTP_REQUEST_DURATION_MS",

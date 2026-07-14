@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_operator
 from app.core.config import get_settings
+from app.core.metrics import exporter_status, telemetry_failure_count
 from app.core.runtime import build_runtime_report
 from app.db.session import get_db
 from app.jobs.models import Job
@@ -45,6 +46,19 @@ class CapabilitiesOut(BaseModel):
     is_local_mode: bool
     all_configured: bool
     capabilities: list[CapabilityOut]
+
+
+class TelemetryStatusOut(BaseModel):
+    """Operator-safe observability posture. Deliberately free of any endpoint,
+    credential, URL, payload, tenant/request/job identifier or token — only
+    bounded, enumerable status values and a failure *count*."""
+
+    logging_format: str  # "json" | "console"
+    metrics_enabled: bool
+    exporter_status: str  # "disabled" | "healthy" | "degraded"
+    telemetry_failures: int
+    correlation_enabled: bool
+    redaction_enabled: bool
 
 
 class ProbeDiagnosticOut(BaseModel):
@@ -77,6 +91,26 @@ def internal_readiness(
     return ReadinessDiagnosticsOut(
         ready=report.ready,
         probes=[ProbeDiagnosticOut(**r.to_operator_dict()) for r in report.results],
+    )
+
+
+@router.get("/telemetry", response_model=TelemetryStatusOut)
+def internal_telemetry(_operator: User = Depends(require_operator)) -> TelemetryStatusOut:
+    """Operator-only observability posture: logging mode, metrics/exporter health,
+    swallowed-telemetry-failure count, and whether correlation + redaction are on.
+
+    Correlation and redaction are structural in this build (the middleware and the
+    log formatter are always installed), so both are reported ``True``. Nothing here
+    is customer-enumerable and nothing is a secret.
+    """
+    settings = get_settings()
+    return TelemetryStatusOut(
+        logging_format=settings.effective_log_format,
+        metrics_enabled=settings.metrics_enabled,
+        exporter_status=exporter_status(metrics_enabled=settings.metrics_enabled),
+        telemetry_failures=telemetry_failure_count(),
+        correlation_enabled=True,
+        redaction_enabled=True,
     )
 
 

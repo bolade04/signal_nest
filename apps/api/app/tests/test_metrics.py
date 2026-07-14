@@ -21,7 +21,9 @@ from app.core.metrics import (
     NoOpMetrics,
     _SafeBackend,
     configure_metrics,
+    exporter_status,
     get_metrics,
+    telemetry_failure_count,
     validate_metric,
 )
 
@@ -154,3 +156,33 @@ def test_validation_error_is_not_swallowed_even_on_failing_backend() -> None:
 def test_catalog_contains_expected_families() -> None:
     for name in (JOBS_ENQUEUED_TOTAL, JOB_EXECUTION_DURATION_MS, JOBS_QUEUE_DEPTH):
         assert name in METRIC_NAMES
+
+
+# --------------------------------------------------------------------------- #
+# Operator-safe status helpers
+# --------------------------------------------------------------------------- #
+def test_exporter_status_disabled_when_metrics_off_or_noop() -> None:
+    configure_metrics(None)  # NoOp default
+    assert exporter_status(metrics_enabled=False) == "disabled"
+    assert exporter_status(metrics_enabled=True) == "disabled"  # still no-op backend
+
+
+def test_exporter_status_healthy_then_degraded() -> None:
+    m = InMemoryMetrics()
+    configure_metrics(m)
+    try:
+        assert exporter_status(metrics_enabled=True) == "healthy"
+        assert telemetry_failure_count() == 0
+    finally:
+        configure_metrics(None)
+
+
+def test_exporter_status_degraded_after_swallowed_failure() -> None:
+    m = _ExplodingMetrics()
+    configure_metrics(m)
+    try:
+        m.increment(JOBS_ENQUEUED_TOTAL, outcome="enqueued")  # swallowed, counted
+        assert telemetry_failure_count() == 1
+        assert exporter_status(metrics_enabled=True) == "degraded"
+    finally:
+        configure_metrics(None)
