@@ -25,6 +25,7 @@ from typing import Any, Final, Protocol
 
 from app.core.config import Settings, get_settings
 from app.core.errors import RedisUnavailableError
+from app.core.tracing import REDIS_CACHE, start_span
 
 
 class _Miss:
@@ -126,32 +127,53 @@ class RedisCache:
         return f"{self._prefix}:cache:{key}"
 
     def get(self, key: str, default: Any = None) -> Any:
-        try:
-            raw = self._client.get(self._redis_key(key))
-        except Exception as exc:  # redis.RedisError and friends
-            raise RedisUnavailableError() from exc
-        if raw is None:
-            return default
-        try:
-            return json.loads(raw)["v"]
-        except (ValueError, KeyError, TypeError):
-            # A corrupt/foreign entry is treated as a miss rather than crashing a
-            # request; it will be overwritten on the next set.
-            return default
+        # Dependency span carries only the bounded operation + outcome — never the
+        # key, value or Redis URL.
+        with start_span(
+            REDIS_CACHE,
+            kind="client",
+            attributes={"component": "cache", "dependency": "redis", "operation": "get"},
+        ) as span:
+            try:
+                raw = self._client.get(self._redis_key(key))
+            except Exception as exc:  # redis.RedisError and friends
+                raise RedisUnavailableError() from exc
+            if raw is None:
+                span.set_attribute("outcome", "miss")
+                return default
+            span.set_attribute("outcome", "hit")
+            try:
+                return json.loads(raw)["v"]
+            except (ValueError, KeyError, TypeError):
+                # A corrupt/foreign entry is treated as a miss rather than crashing a
+                # request; it will be overwritten on the next set.
+                return default
 
     def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
         _validate_ttl(ttl_seconds)
         payload = json.dumps({"v": value})
-        try:
-            self._client.set(self._redis_key(key), payload, ex=ttl_seconds)
-        except Exception as exc:
-            raise RedisUnavailableError() from exc
+        with start_span(
+            REDIS_CACHE,
+            kind="client",
+            attributes={"component": "cache", "dependency": "redis", "operation": "set"},
+        ) as span:
+            try:
+                self._client.set(self._redis_key(key), payload, ex=ttl_seconds)
+            except Exception as exc:
+                raise RedisUnavailableError() from exc
+            span.set_attribute("outcome", "success")
 
     def delete(self, key: str) -> None:
-        try:
-            self._client.delete(self._redis_key(key))
-        except Exception as exc:
-            raise RedisUnavailableError() from exc
+        with start_span(
+            REDIS_CACHE,
+            kind="client",
+            attributes={"component": "cache", "dependency": "redis", "operation": "delete"},
+        ) as span:
+            try:
+                self._client.delete(self._redis_key(key))
+            except Exception as exc:
+                raise RedisUnavailableError() from exc
+            span.set_attribute("outcome", "success")
 
     def ping(self) -> bool:
         try:
