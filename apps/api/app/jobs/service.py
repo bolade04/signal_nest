@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from logging import WARNING
 
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import RedisNotifyFailedError
-from app.core.logging import get_logger
+from app.core.log_context import bound_context, new_correlation_id
+from app.core.logging import get_logger, log_event
 from app.jobs import handlers as _handlers  # noqa: F401 — registers handlers on import
 from app.jobs.context import ExecutionContext
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope
@@ -60,9 +62,9 @@ def _notify_available(job: Job) -> None:
     try:
         _get_notifier().notify_job_available()
     except RedisNotifyFailedError:
-        logger.warning("job.notify_failed", extra={"extra_fields": {"job_id": job.id}})
+        log_event(logger, "job.notify_failed", level=WARNING, component="jobs", outcome="degraded")
     except Exception:  # pragma: no cover - defensive: never fail enqueue on notify
-        logger.warning("job.notify_error", extra={"extra_fields": {"job_id": job.id}})
+        log_event(logger, "job.notify_error", level=WARNING, component="jobs", outcome="degraded")
 
 
 def _payload_hash(job_type: str, context: ExecutionContext, payload: dict) -> str:
@@ -112,6 +114,7 @@ def enqueue_job(
             f"payload is {size} bytes; limit is {settings.job_max_payload_bytes}",
         )
 
+    correlation_id = new_correlation_id()
     job = job_store.enqueue(
         db,
         organization_id=context.organization_id,
@@ -128,21 +131,21 @@ def enqueue_job(
         ),
         priority=priority,
         scheduled_for=scheduled_for,
+        correlation_id=correlation_id,
         now=now,
     )
-    logger.info(
-        "job.enqueued",
-        extra={
-            "extra_fields": {
-                "job_id": job.id,
-                "job_type": type_str,
-                "status": job.status,
-                "organization_id": context.organization_id,
-                "workspace_id": context.workspace_id,
-            }
-        },
-    )
-    _notify_available(job)
+    # Bind the (possibly pre-existing, for an idempotent hit) correlation id so the
+    # enqueue event is followable without logging the raw job/tenant identifiers.
+    with bound_context(job_correlation_id=job.correlation_id or correlation_id):
+        log_event(
+            logger,
+            "job.enqueued",
+            component="jobs",
+            outcome="enqueued",
+            job_type=type_str,
+            job_status=job.status,
+        )
+        _notify_available(job)
     return job
 
 

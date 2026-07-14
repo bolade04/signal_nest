@@ -72,6 +72,13 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ForeignKey("scout_requests.id", ondelete="SET NULL"), index=True
     )
 
+    #: Opaque, safe correlation id for logs/support. Distinct from the primary
+    #: key, the lease token, the worker id and every tenant identifier; generated
+    #: at enqueue and restored into the worker's logging context during execution.
+    #: Never a credential and never exposed by any customer API. Nullable so jobs
+    #: created before this column simply carry ``NULL``.
+    correlation_id: Mapped[str | None] = mapped_column(String(64))
+
     # --- Contract + payload -------------------------------------------------
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     contract_version: Mapped[str] = mapped_column(String(8), nullable=False, default="1")

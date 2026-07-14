@@ -104,6 +104,7 @@ class DurableJobStore:
         max_attempts: int = 5,
         priority: int = 0,
         scheduled_for: datetime | None = None,
+        correlation_id: str | None = None,
         now: datetime | None = None,
     ) -> Job:
         """Persist a new job (or return the existing one for a repeated key)."""
@@ -131,6 +132,7 @@ class DurableJobStore:
             workspace_id=workspace_id,
             location_id=location_id,
             scout_request_id=scout_request_id,
+            correlation_id=correlation_id,
             job_type=job_type,
             contract_version=contract_version,
             payload=payload,

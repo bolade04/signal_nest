@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.errors import WorkerRegistrationFailedError
+from app.core.log_context import bound_context
 from app.core.logging import configure_logging, get_logger
 from app.db.session import SessionLocal
 from app.jobs.context import ExecutionContext
@@ -295,7 +296,15 @@ class JobRunner:
             )
             if job is None:
                 return False
-            self.run_claimed(db, job)
+            # Restore the job's safe correlation id (and worker type) into logging
+            # context for the whole execution; bound_context clears it on exit so a
+            # later poll never inherits the previous job's correlation.
+            with bound_context(
+                component="jobs",
+                worker_type=self._settings.worker_type,
+                job_correlation_id=job.correlation_id,
+            ):
+                self.run_claimed(db, job)
             return True
         finally:
             db.close()

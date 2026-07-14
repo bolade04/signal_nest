@@ -3,39 +3,54 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections import defaultdict
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from app.core.logging import get_logger, request_id_ctx, trace_id_ctx
+from app.core.log_context import bound_context, new_request_id, normalize_request_id
+from app.core.logging import get_logger, log_event
 
 logger = get_logger("signalnest.request")
 
 
+def _status_outcome(status_code: int) -> str:
+    if status_code >= 500:
+        return "server_error"
+    if status_code >= 400:
+        return "client_error"
+    return "success"
+
+
 class CorrelationMiddleware(BaseHTTPMiddleware):
+    """Attach a bounded, validated request id to request-local context.
+
+    An inbound ``x-request-id`` (or ``x-trace-id``) is accepted only when it matches
+    the strict opaque format; anything else is discarded and a fresh id is generated,
+    so a client can never inject an arbitrary/oversized/newline-bearing id into logs.
+    The context is set for the duration of the request and **reset on exit**
+    (``bound_context``), guaranteeing no cross-request contamination even on error.
+    """
+
     async def dispatch(self, request: Request, call_next):
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex
-        tid = request.headers.get("x-trace-id") or rid
-        request_id_ctx.set(rid)
-        trace_id_ctx.set(tid)
+        rid = normalize_request_id(request.headers.get("x-request-id")) or new_request_id()
+        tid = normalize_request_id(request.headers.get("x-trace-id")) or rid
         start = time.perf_counter()
-        response = await call_next(request)
-        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        response.headers["x-request-id"] = rid
-        logger.info(
-            "request",
-            extra={
-                "extra_fields": {
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": response.status_code,
-                    "elapsed_ms": elapsed_ms,
-                }
-            },
-        )
-        return response
+        with bound_context(request_id=rid, trace_id=tid):
+            response = await call_next(request)
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+            response.headers["x-request-id"] = rid
+            log_event(
+                logger,
+                "http.request",
+                component="api",
+                outcome=_status_outcome(response.status_code),
+                duration_ms=elapsed_ms,
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+            )
+            return response
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
