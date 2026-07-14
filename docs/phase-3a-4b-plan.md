@@ -381,6 +381,93 @@ any implementation; those docs-only runs do not replace the implementation evide
 and are not re-tabulated here (the per-run breakdown lives once in
 `phase-3a-4b-architecture-audit.md`).
 
+### Batch 5 — scope (this session)
+
+Operational readiness, resilience validation, security review, and final
+acceptance — the closing batch of Phase 3A.4b. Delivered as focused commits across
+three internal workstreams. Batch 5 adds **no customer features, no real external
+connectors, and no orchestrator/cloud infrastructure**; it hardens, documents, and
+validates the runtime that Batches 1–4 already built, then determines PR #31
+merge-readiness.
+
+#### Batch 5A — Operational documentation
+
+Operator-facing runbooks and monitoring recommendations, grounded in the actual
+repository (real commands, real config keys, and only metrics that the code emits).
+
+1. **Worker-operations runbook** (`docs/operations/worker_operations.md`): starting,
+   stopping, scaling, health inspection, lease/generation-fencing behavior, draining
+   semantics (second-signal-shortens-grace), and troubleshooting — using real
+   `python -m app.jobs.worker` invocation and real `worker_*` settings.
+2. **Incident-response runbook** (`docs/operations/incident_response.md`): PostgreSQL
+   outage, Redis outage, object-storage outage, worker-fleet loss, queue backlog,
+   dead-letter spike, lease-recovery spike, connection-pool exhaustion, migration
+   failure, telemetry outage, credential rotation, and a suspected cross-tenant
+   incident — each with detection signal, triage, containment, and recovery.
+3. **Dashboard recommendations** (`docs/operations/dashboards.md`): API health,
+   durable jobs, worker fleet, Redis, storage, and deployment views built **only**
+   from metrics in the `metrics.py` catalog; any useful-but-not-yet-emitted signal
+   (oldest-job age, fencing-rejection counters, polling fallback) is explicitly
+   labelled *recommended / not yet emitted*.
+4. **Alert definitions** (`docs/operations/alerts.md`): a catalog of alerts, each with
+   name, purpose, signal, recommended starting threshold, window, severity,
+   false-positive notes, operator action, and the backing metric. Thresholds are
+   documented as **starting points for tuning**, not validated production values.
+5. **Rate-limit production decision**: resolve the `RateLimitMiddleware` placeholder
+   as either (A) implement distributed enforcement now, or (B) defer with a documented
+   accepted risk plus compensating controls. The decision is recorded in the security
+   review and the residual-risk register, and finalized after the threat model.
+
+#### Batch 5B — Resilience and failure injection
+
+Deterministic, seam- and fake-based failure-injection tests (no brittle sleeps, no
+real network) proving the runtime degrades safely. Adds a dedicated resilience test
+module rather than editing unrelated suites.
+
+6. **Dependency outages**: PostgreSQL, Redis, and object-storage unavailability —
+   API liveness stays independent of optional dependencies; errors are typed and
+   contained; no secret leaks into logs or responses.
+7. **Worker termination mid-job**: a job in flight when the worker exits is not lost —
+   the lease expires and a single winner recovers exactly one event.
+8. **Worker-fleet loss**: with `require_worker_fleet=False`, API liveness/readiness
+   never depend on worker presence; the queue simply accumulates.
+9. **Queue backlog / poison job**: backlog does not corrupt state; a repeatedly
+   failing ("poison") job is retried within policy and then dead-lettered, not looped
+   forever.
+10. **Connection-pool pressure**: pool exhaustion surfaces as a bounded, typed timeout
+    rather than an unbounded hang.
+11. **Migration failure**: a failed/incompatible migration is caught by the read-only
+    schema gate; replicas refuse to start against an incompatible schema and never
+    mutate it.
+12. **Telemetry failure**: metrics/trace exporter failures fail closed to no-op and
+    never break request handling or job execution (`telemetry_failures_total`).
+13. **Invalid configuration**: production rejects local backends by name at `Settings`
+    construction with a typed, secret-safe error.
+
+#### Batch 5C — Security review and final acceptance
+
+14. **Security review** (`docs/security/phase-3a-4b-security-review.md`): authn/authz,
+    tenant isolation, secret handling, header/proxy trust, container security, durable-
+    job security, and availability-abuse surface — each finding with id, severity,
+    evidence, exploitability, mitigation, required-before-merge flag, action, and owner.
+15. **Residual-risk register** (in `phase-3a-4b-acceptance.md`): distributed rate
+    limiting, live Redis/S3 coverage, PR review burden, monitoring-threshold tuning,
+    cloud/orchestrator validation, incident rehearsal, and capacity testing — each
+    classified Resolved / Accepted-before-merge / Required-before-merge / Deferred.
+16. **Live-integration decision**: decide whether live Redis/S3 integration is required
+    before merge or acceptably covered by the existing fakes plus CI service coverage.
+17. **Full-repository validation gate**: the complete regression + integration gate is
+    re-run green in CI before acceptance.
+18. **Final acceptance**: a single merge-readiness classification — exactly one of
+    `BLOCKED`, `CHANGES RECOMMENDED`, `ACCEPTABLE WITH FOLLOW-UPS`, or
+    `ACCEPTABLE TO REQUEST FINAL REVIEW` — with the PR kept **draft** until a human
+    performs the final review.
+
+Deferred beyond Batch 5 (explicitly **not** in scope): Phase 3B, real external
+connectors, customer-facing features, Kubernetes/Nomad manifests, Terraform, and any
+cloud-provider-specific infrastructure. These remain future work and are not Batch 5
+gates unless separately approved.
+
 ### Phase status
 
 - Batches 1–4 are complete.

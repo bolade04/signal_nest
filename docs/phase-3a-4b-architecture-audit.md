@@ -828,6 +828,96 @@ implemented.** Assigned to the Batch 5 security-review follow-up (or a later pha
 It is **not** an automatic Batch 5 blocker unless the documented product threat model
 requires distributed rate limiting.
 
+## Batch 5 — workstreams and gap analysis
+
+Batch 5 is the closing batch of Phase 3A.4b. It is organized as three internal
+workstreams — **5A Operational documentation**, **5B Resilience and failure
+injection**, and **5C Security review and final acceptance** — and it changes **no
+runtime behavior except** the resilience-hardening the failure-injection tests
+require and, if chosen, a rate-limit enforcement change. This section records the
+existing capability, the missing capability, the implementation plan, the files
+likely to change, the test strategy, and the security / rollback implications, so the
+work can proceed as focused, reviewable commits.
+
+### 5A — Operational documentation
+
+- **Existing capability.** `docs/operations/` already contains `deployment.md`,
+  `migrations.md`, and `observability.md` (delivered in Batch 4). The metrics catalog
+  (`app/core/metrics.py`) defines the authoritative emitted-metric set and the bounded
+  label allow-list. The worker lifecycle, lease/generation fencing, and draining
+  semantics exist in `app/jobs/`.
+- **Missing capability.** No worker-operations runbook, no incident-response runbook,
+  no dashboard recommendations, and no alert definitions. No resolved decision on the
+  rate-limit placeholder.
+- **Implementation plan.** Author four new operator documents grounded in real
+  commands, real `Settings` keys, and only metrics the code emits. Any recommended-
+  but-not-emitted signal is labelled as such. Record the rate-limit decision in the
+  security review and residual-risk register.
+- **Files likely to change / added.** New: `docs/operations/worker_operations.md`,
+  `docs/operations/incident_response.md`, `docs/operations/dashboards.md`,
+  `docs/operations/alerts.md`. Possibly updated: `docs/operations/observability.md`
+  (cross-links only).
+- **Test strategy.** Documentation-only; validated by review against the actual
+  metric catalog, config keys, and CLI commands. No code tests.
+- **Security implications.** The incident-response and security material must not leak
+  secret values or embed real credentials; examples use placeholders.
+- **Rollback implications.** None (documentation only).
+
+### 5B — Resilience and failure injection
+
+- **Existing capability.** Typed dependency errors (`RedisUnavailableError`,
+  `ObjectStorageUnavailableError`, `ObjectTooLargeError`), swappable infra seams
+  (queue/cache/storage), the DB-authoritative job store with lease-token +
+  generation-token fencing, single-winner expired-lease recovery, the read-only schema
+  gate, telemetry fail-closed-to-no-op behavior, and `Settings` construction-time
+  validation. Existing tests: `test_durable_jobs`, `test_worker_fleet`,
+  `test_production_adapters`, `test_deployment_lifecycle`, `test_readiness_probes`,
+  `test_metrics`, `test_tracing`.
+- **Missing capability.** No dedicated failure-injection / resilience module that
+  systematically drives dependency outages, worker termination mid-job, fleet loss,
+  backlog / poison-job handling, pool pressure, migration failure, telemetry failure,
+  and invalid-configuration rejection as one cohesive suite.
+- **Implementation plan.** Add a dedicated resilience test module (seam- and
+  fake-based, deterministic, no real network, no brittle sleeps). Prefer injecting
+  failures through the existing infra seams and fakes. Add only the minimal runtime
+  hardening a test exposes; do not refactor unrelated code.
+- **Files likely to change / added.** New: `app/tests/test_resilience.py` (or a small
+  focused set). Minimal, evidence-driven hardening in `app/jobs/` or `app/infra/`
+  **only if** a test surfaces a real gap. No migration edits in place; the DB remains
+  the authoritative queue (Redis stays advisory-only).
+- **Test strategy.** Each scenario asserts a specific safe-degradation invariant
+  (typed error, bounded timeout, single-winner recovery, retry-then-dead-letter,
+  fail-closed telemetry, refuse-to-start on incompatible schema). PostgreSQL-specific
+  contention stays CI-gated via `TEST_POSTGRES_URL`.
+- **Security implications.** Assert that failure paths surface typed errors without
+  leaking secrets or connection strings.
+- **Rollback implications.** Test-only unless a hardening fix lands; any fix is small,
+  additive, and independently revertible.
+
+### 5C — Security review and final acceptance
+
+- **Existing capability.** Tenant-scoped isolation (four-market tests), secret fields
+  marked `repr=False` / `hide_input_in_errors=True`, recursive log-secret redaction,
+  correlation middleware, non-root read-only-root containers, secret-free build context
+  (CI-enforced), production rejection of local backends, and the operator-only
+  telemetry diagnostics endpoint.
+- **Missing capability.** No consolidated security-review document, no explicit threat
+  model / residual-risk register for this phase, and no final merge-readiness
+  classification.
+- **Implementation plan.** Author `docs/security/phase-3a-4b-security-review.md`
+  (per-finding id/severity/evidence/exploitability/mitigation/required-before-merge/
+  action/owner), consolidate the residual-risk register into `acceptance.md`, decide
+  the live Redis/S3 question, re-run the full CI gate, and record exactly one
+  acceptance classification. Keep PR #31 draft.
+- **Files likely to change / added.** New: `docs/security/phase-3a-4b-security-review.md`.
+  Updated: `docs/phase-3a-4b-acceptance.md` (residual-risk register + final
+  classification), PR #31 body.
+- **Test strategy.** Cross-reference every claim to a passing test or CI job; do not
+  claim production readiness without test evidence.
+- **Security implications.** This workstream **is** the security assessment; its output
+  gates the merge-readiness decision.
+- **Rollback implications.** Documentation and classification only.
+
 ### Status
 
 - Batches 1–4 are complete.
