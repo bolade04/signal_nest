@@ -148,6 +148,37 @@ metrics seam: core code opens spans through it and never imports an OpenTelemetr
   failures (`trace_export_failure_count()`), never propagating them into the caller;
   only validation errors (coding bugs) raise.
 
+## Process lifecycle (Batch 4)
+
+Startup and shutdown are instrumented through the same bounded metrics seam — no
+new telemetry transport and no high-cardinality labels.
+
+- **Ordered startup.** The API lifespan installs the tracer, runs the read-only
+  schema-compatibility gate (`app/db/schema.py`; verify, never mutate), then records
+  `service_startups_total{service,environment,outcome=ready}`. A schema that is
+  `pending`/`uninitialized` fails startup fast with an actionable message instead of
+  silently migrating.
+- **Bounded, idempotent shutdown.** On drain the API records
+  `service_shutdowns_total{...,outcome=clean}` and then runs the shared
+  `app/core/lifecycle.py` sequence: flush metrics, flush traces under
+  `TRACING_SHUTDOWN_FLUSH_SECONDS`, close the Redis cache/notifier clients, and
+  dispose the database pool. Every step is best-effort and swallows its own failure,
+  so a slow exporter or unreachable backend can never block process exit; the whole
+  sequence is safe to call twice.
+- **Worker draining.** The worker shares the same shutdown sequence after its
+  generation-fenced `STOPPED` transition. A first `SIGTERM` stops claiming and lets
+  in-flight jobs finish within `WORKER_SHUTDOWN_GRACE_SECONDS`; a second signal
+  escalates to `WORKER_FORCE_SHUTDOWN_GRACE_SECONDS`, abandoning still-running work
+  so its lease expires and the next worker recovers it. The total drain is bounded by
+  a shared deadline (never N×grace).
+- **Migrations.** The single migration actor (`python -m app.db.migrate`) records
+  `migration_runs_total{operation,outcome}` for `upgrade`/`downgrade`/`check`.
+  Replicas never migrate; they only verify.
+
+Tracing is unchanged for this batch: the existing request/job/dependency span
+catalog already covers the operational paths, and one-shot startup/shutdown are
+observed through the lifecycle counters above rather than through new spans.
+
 ## Operator diagnostics
 
 `GET /internal/system/telemetry` (operator-only: 401 anonymous, 403 non-operator, 200
