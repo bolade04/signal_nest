@@ -19,6 +19,7 @@ from app.auth.dependencies import require_operator
 from app.core.config import get_settings
 from app.core.metrics import exporter_status, telemetry_failure_count
 from app.core.runtime import build_runtime_report
+from app.core.tracing import trace_export_failure_count, tracing_exporter_status
 from app.db.session import get_db
 from app.jobs.models import Job
 from app.jobs.schemas import JobDiagnosticsOut, JobOperatorOut
@@ -59,6 +60,12 @@ class TelemetryStatusOut(BaseModel):
     telemetry_failures: int
     correlation_enabled: bool
     redaction_enabled: bool
+    # Coarse distributed-tracing posture — bounded enums + counts only.
+    tracing_enabled: bool
+    tracing_exporter: str  # "none" | "memory" | "otlp"
+    tracing_status: str  # "disabled" | "healthy" | "degraded"
+    tracing_sample_ratio: float
+    trace_export_failures: int
 
 
 class ProbeDiagnosticOut(BaseModel):
@@ -111,6 +118,11 @@ def internal_telemetry(_operator: User = Depends(require_operator)) -> Telemetry
         telemetry_failures=telemetry_failure_count(),
         correlation_enabled=True,
         redaction_enabled=True,
+        tracing_enabled=settings.tracing_enabled,
+        tracing_exporter=settings.tracing_exporter,
+        tracing_status=tracing_exporter_status(tracing_enabled=settings.tracing_enabled),
+        tracing_sample_ratio=settings.tracing_sample_ratio,
+        trace_export_failures=trace_export_failure_count(),
     )
 
 

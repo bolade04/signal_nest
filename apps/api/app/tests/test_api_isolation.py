@@ -299,6 +299,11 @@ def test_internal_telemetry_is_operator_safe_posture(
         "telemetry_failures",
         "correlation_enabled",
         "redaction_enabled",
+        "tracing_enabled",
+        "tracing_exporter",
+        "tracing_status",
+        "tracing_sample_ratio",
+        "trace_export_failures",
     }
     assert body["logging_format"] in ("json", "console")
     assert body["exporter_status"] in ("disabled", "healthy", "degraded")
@@ -306,6 +311,12 @@ def test_internal_telemetry_is_operator_safe_posture(
     assert isinstance(body["telemetry_failures"], int)
     assert body["correlation_enabled"] is True
     assert body["redaction_enabled"] is True
+    # Coarse tracing posture: bounded enums + counts only.
+    assert isinstance(body["tracing_enabled"], bool)
+    assert body["tracing_exporter"] in ("none", "memory", "otlp")
+    assert body["tracing_status"] in ("disabled", "healthy", "degraded")
+    assert 0.0 <= body["tracing_sample_ratio"] <= 1.0
+    assert isinstance(body["trace_export_failures"], int)
     # Posture only: no endpoint, credential, id or token of any kind.
     blob = resp.text.lower()
     for forbidden in (
