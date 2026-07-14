@@ -25,7 +25,7 @@ import pytest
 
 # apps/api (holds alembic.ini) — three levels up from this test file.
 API_DIR = Path(__file__).resolve().parents[2]
-HEAD = "d4f6a8c0b2e1"
+# Revision immediately before the worker_registrations table migration.
 PREV = "c3e5a7b9d1f2"
 
 
@@ -105,7 +105,10 @@ def test_downgrade_is_surgical_and_preserves_business_data(db_path) -> None:
     finally:
         con.close()
 
-    result = _alembic(db_path, "downgrade", "-1")
+    # Downgrade to the revision immediately before the worker table was created.
+    # (Additive migrations may sit on top of the worker table, e.g. the
+    # generation-token column, so ``-1`` no longer targets the table migration.)
+    result = _alembic(db_path, "downgrade", PREV)
     assert result.returncode == 0, result.stderr
 
     tables = _tables(db_path)
