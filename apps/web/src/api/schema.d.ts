@@ -2056,6 +2056,16 @@ export interface components {
             redaction_enabled: boolean;
             /** Telemetry Failures */
             telemetry_failures: number;
+            /** Trace Export Failures */
+            trace_export_failures: number;
+            /** Tracing Enabled */
+            tracing_enabled: boolean;
+            /** Tracing Exporter */
+            tracing_exporter: string;
+            /** Tracing Sample Ratio */
+            tracing_sample_ratio: number;
+            /** Tracing Status */
+            tracing_status: string;
         };
         /** UserOut */
         UserOut: {

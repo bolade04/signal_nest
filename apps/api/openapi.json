@@ -3639,6 +3639,26 @@
           "telemetry_failures": {
             "title": "Telemetry Failures",
             "type": "integer"
+          },
+          "trace_export_failures": {
+            "title": "Trace Export Failures",
+            "type": "integer"
+          },
+          "tracing_enabled": {
+            "title": "Tracing Enabled",
+            "type": "boolean"
+          },
+          "tracing_exporter": {
+            "title": "Tracing Exporter",
+            "type": "string"
+          },
+          "tracing_sample_ratio": {
+            "title": "Tracing Sample Ratio",
+            "type": "number"
+          },
+          "tracing_status": {
+            "title": "Tracing Status",
+            "type": "string"
           }
         },
         "required": [
@@ -3647,7 +3667,12 @@
           "exporter_status",
           "telemetry_failures",
           "correlation_enabled",
-          "redaction_enabled"
+          "redaction_enabled",
+          "tracing_enabled",
+          "tracing_exporter",
+          "tracing_status",
+          "tracing_sample_ratio",
+          "trace_export_failures"
         ],
         "title": "TelemetryStatusOut",
         "type": "object"
