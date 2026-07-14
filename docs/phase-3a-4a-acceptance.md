@@ -20,9 +20,11 @@ acceptance is in [`acceptance-report.md`](acceptance-report.md).
 | Branch | `feat/phase-3a-production-data-plane` |
 | Base | `main` |
 | Review baseline (base ancestor) | `67ed4385c873a2048bc38fa3dd6cc8e6d280dda2` |
-| Reviewed head | `60390664fcbd465ca8a46d2de54d3d4697130325` (`6039066`) |
+| Prior reviewed head | `60390664fcbd465ca8a46d2de54d3d4697130325` (`6039066`) |
+| Current reviewed head | the `fix(workers): require fresh heartbeats for fleet readiness` commit (this branch HEAD, supersedes `6039066`; see *Findings* §3) |
 | Baseline is ancestor of head | yes |
-| Validated CI run | `29279995309` (success, head `6039066`) |
+| Prior validated CI run | `29279995309` (success, head `6039066`) |
+| Fix-head CI run | re-validated on the fix head — all four required jobs green (see *CI evidence*) |
 | Working tree at review | clean (`git status --short` empty) |
 
 ## Governance invariants (verified unchanged)
@@ -92,7 +94,10 @@ TypeScript 7 migration are present. Default local mode remains zero-dependency.
   `build_revision`, `host_fingerprint` and `application_version`.
 - **Readiness policy.** `_check_worker_registry` is informational by default (schema present
   ⇒ healthy) and blocking only when `require_worker_fleet` is enabled (then ≥1 active
-  worker required); `required` is driven by the setting. It never names a worker id.
+  worker required); `required` is driven by the setting. It never names a worker id. An
+  "active" worker requires **both** an active status (`ready`/`busy`) **and** a heartbeat
+  within `worker_stale_after_seconds` — see *Findings* §3 (M1) for why status alone was
+  insufficient.
 
 ## Security acceptance
 
@@ -128,7 +133,7 @@ TypeScript 7 migration are present. Default local mode remains zero-dependency.
 | `gen:types` + `git diff --exit-code` (openapi.json, schema.d.ts) | no contract drift |
 | `ruff check` | clean |
 | Alembic upgrade/check/downgrade/re-upgrade | clean, no drift |
-| Backend `pytest` | 196 passed, 1 skipped (gated PG test; no local Postgres) |
+| Backend `pytest` | 205 passed, 1 skipped (gated PG test; no local Postgres) — includes 9 new worker-fleet freshness cases |
 | HTTP isolation smoke | 13 checks passed; four-market isolation confirmed |
 
 ## CI evidence
@@ -141,7 +146,7 @@ SKIP LOCKED` path in CI.
 
 ## Findings and corrective changes
 
-Two corrective changes were made on the branch during review; both are narrowly scoped and
+Three corrective changes were made on the branch during review; all are narrowly scoped and
 covered by CI:
 
 1. **CI PostgreSQL wiring** (`.github/workflows/ci.yml`) — added `TEST_POSTGRES_URL` to the
@@ -153,9 +158,34 @@ covered by CI:
    `jobs → organizations/workspaces` FKs, causing a `ForeignKeyViolation`. Fixed by seeding
    the parent `Organization`/`Workspace` rows before enqueue. This corrects the **test
    harness only** — no production behavior changed — and turned the Backend job green.
+3. **M1 — worker-fleet readiness ignored heartbeat freshness (production defect, fixed).**
+   `WorkerRegistry.active_count` counted any worker in an active status (`ready`/`busy`)
+   regardless of heartbeat age, and `_check_worker_registry` gated `require_worker_fleet`
+   readiness on that count. Because the only process that runs `sweep_stale` is a worker's own
+   heartbeat loop (`worker.py::_start_registry_heartbeat`), a **fleet-wide death** leaves no
+   one to flag its rows `stale`: every row stays `ready`/`busy`, `active_count` stays ≥ 1, and
+   readiness reports green while nothing is actually processing jobs — precisely the outage
+   `require_worker_fleet` exists to catch. **Fix:** a worker is now "active" only when its
+   status is active **and** `last_heartbeat_at >= now − worker_stale_after_seconds`. A single
+   authoritative predicate (`WorkerRegistry._fresh_active_conditions`) backs both the new
+   `active_count(db, *, stale_after_seconds, now=None)` and is the exact complement of
+   `find_stale` (`< cutoff`), so a ready/busy worker is counted active *or* overdue — never
+   both, never neither — independent of sweep cadence. `probes._check_worker_registry` and the
+   `/internal/system/workers` operator endpoint were threaded through the shared threshold.
+   **Method:** a failing regression (`test_worker_probe_unhealthy_when_only_worker_is_overdue_unswept`)
+   was written and confirmed red against the unfixed code *before* the production change, and
+   it was **not** made to pass by manually calling `sweep_stale()` — readiness derives liveness
+   from heartbeat age directly. Coverage was extended to 9 new cases (fresh ready/busy →
+   healthy; overdue ready/busy unswept, stopped, explicitly-swept-stale → unhealthy; mixed
+   fresh+dead → healthy; the exact freshness boundary as the complement of `find_stale`;
+   PostgreSQL query compilation; and a duplicate-`worker_id` residual proving re-registration
+   cannot forge freshness — see *Residual risks*). **No new migration:** the existing
+   `status` and `last_heartbeat_at` indexes already cover the predicate, and the table holds
+   one row per worker process. This corrects **production readiness behavior**; job ownership,
+   lease fencing, and tenant isolation are untouched.
 
-No correctness, security, migration, tenant-isolation, adapter-failure, or rollback defect
-was reproduced in production code. No further corrective commit was warranted.
+Excepting M1 above, no correctness, security, migration, tenant-isolation, adapter-failure,
+or rollback defect was reproduced in production code.
 
 ## Residual risks (accepted)
 
@@ -165,8 +195,11 @@ was reproduced in production code. No further corrective commit was warranted.
   `secrets.token_hex(3)`, so a collision requires explicit operator misconfiguration; (b)
   job ownership is fenced entirely by the per-claim `lease_token`, independent of
   `worker_id`, so two same-id processes each claim distinct rows with distinct tokens — no
-  double-run or loss; (c) the registry is operational/observability only. *Recommendation for
-  3A.4b:* add a registration generation/ownership token. Adding it now would be scope creep.
+  double-run or loss; (c) the registry is operational/observability only. Re-registration also
+  resets the row to `starting` with a fresh `last_heartbeat_at`, so it **cannot forge
+  freshness** for the M1 readiness count without a legitimate `mark_ready` + heartbeat —
+  proven by `test_duplicate_registration_cannot_forge_freshness`. *Recommendation for 3A.4b:*
+  add a registration generation/ownership token. Adding it now would be scope creep.
 - **Pre-existing Dependabot history** — 9 alerts, all `fixed`; none introduced by this PR.
   New backend deps are dev-extras (`fakeredis`, `redis`, `psycopg[binary]`); `npm audit`
   reports 0 vulnerabilities.
@@ -183,11 +216,14 @@ was reproduced in production code. No further corrective commit was warranted.
 
 ## Final classification
 
-**Accepted.** Phase 3A.4a is complete, scoped, secure, migration-safe, and green on the
-required CI (run `29279995309`, head `6039066`). The single residual (duplicate worker-ID
-overwrite) is a documented, non-blocking operational limitation mitigated by lease fencing,
-with a concrete 3A.4b recommendation. No production defect was reproduced; the only
-corrective changes were test-harness/CI wiring.
+**Accepted, conditional on the fix-head CI re-validation.** Phase 3A.4a is complete, scoped,
+secure, migration-safe, and green on the required CI (re-run on the fix head; prior baseline
+run `29279995309`, head `6039066`). One production defect was found and corrected during
+review — **M1**, worker-fleet readiness ignoring heartbeat freshness (*Findings* §3) — with a
+failing-first regression and 9 new covering cases. The single accepted residual (duplicate
+worker-ID overwrite) is a documented, non-blocking operational limitation mitigated by lease
+fencing and now proven unable to forge readiness freshness, with a concrete 3A.4b
+recommendation. Remaining corrective changes were test-harness/CI wiring.
 
 ## Approval path
 

@@ -121,7 +121,7 @@ def internal_workers(
     rows = worker_registry.list_workers(db, limit=limit)
     return WorkerFleetDiagnosticsOut(
         status_counts=worker_registry.status_counts(db),
-        active_count=worker_registry.active_count(db),
+        active_count=worker_registry.active_count(db, stale_after_seconds=stale_after),
         stale_count=worker_registry.stale_count(db, stale_after_seconds=stale_after),
         workers=[WorkerSummaryOut.model_validate(r, from_attributes=True) for r in rows],
     )

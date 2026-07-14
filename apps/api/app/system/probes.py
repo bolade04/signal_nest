@@ -312,12 +312,14 @@ def _check_worker_registry(
     from app.jobs.worker_registry import worker_registry
 
     with SessionLocal() as db:
-        active = worker_registry.active_count(db)
+        active = worker_registry.active_count(
+            db, stale_after_seconds=settings.worker_stale_after_seconds
+        )
     if active < 1:
         return (
             ProbeStatus.UNAVAILABLE,
             "no active worker in the fleet",
-            "require_worker_fleet is enabled but zero workers are ready/busy",
+            "require_worker_fleet is enabled but no worker is ready/busy with a fresh heartbeat",
             True,
         )
     return (ProbeStatus.HEALTHY, "worker fleet has an active worker", None, False)

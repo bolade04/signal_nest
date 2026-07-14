@@ -225,12 +225,46 @@ class WorkerRegistry:
         ).all()
         return {str(k): int(v) for k, v in rows}
 
-    def active_count(self, db: Session, *, now: datetime | None = None) -> int:
-        """Workers currently ready or busy (a live, working fleet)."""
+    def _fresh_active_conditions(
+        self, *, stale_after_seconds: float, now: datetime
+    ) -> tuple:
+        """The single authoritative predicate for a *currently live* worker.
+
+        A worker is active only when it is in an active status (``ready``/``busy``)
+        *and* its heartbeat is fresh (within the stale threshold). The freshness
+        cutoff is the exact complement of :meth:`find_stale` (which flags
+        ``last_heartbeat_at < cutoff``), so a ready/busy worker is either counted
+        active here or counted overdue by stale detection — never both, never
+        neither. This is why readiness stays accurate even when the whole fleet is
+        dead and no sweep has run: liveness is derived from heartbeat age, not from
+        a status another process must have swept.
+        """
+        cutoff = now - timedelta(seconds=stale_after_seconds)
         active = {WorkerStatus.READY.value, WorkerStatus.BUSY.value}
+        return (
+            WorkerRegistration.status.in_(active),
+            WorkerRegistration.last_heartbeat_at.is_not(None),
+            WorkerRegistration.last_heartbeat_at >= cutoff,
+        )
+
+    def active_count(
+        self, db: Session, *, stale_after_seconds: float, now: datetime | None = None
+    ) -> int:
+        """Workers currently ready/busy *and* fresh (a live, working fleet).
+
+        Requires a fresh heartbeat within ``stale_after_seconds``, so an overdue
+        worker that has not yet been swept to ``stale`` is not mistaken for a live
+        one. This keeps ``require_worker_fleet`` readiness accurate for a dead
+        fleet, where nothing is left to run the sweep.
+        """
+        now = now or utcnow()
         return int(
             db.scalar(
-                select(func.count()).where(WorkerRegistration.status.in_(active))
+                select(func.count()).where(
+                    *self._fresh_active_conditions(
+                        stale_after_seconds=stale_after_seconds, now=now
+                    )
+                )
             )
             or 0
         )
