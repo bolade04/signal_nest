@@ -367,11 +367,12 @@ class JobRunner:
         worker_type = self._settings.worker_type
         m = get_metrics()
         try:
-            # The whole poll (recover + claim + run) under one low-value span. Idle
+            # WORKER_POLL scopes only recovery + claim (the high-volume idle path). Idle
             # polls are high-volume, so WORKER_POLL is sampled at a reduced rate at the
-            # root; its recover/claim children inherit that decision. A poll that
-            # actually claims still links execution to the enqueue lineage via the
-            # JOB_EXECUTE span's persisted parent (a separate trace).
+            # root and its recover/claim children inherit that decision. Claimed-job
+            # execution runs *after* this span closes, as its own JOB_EXECUTE span, so it
+            # is never nested under the reduced-sampled poll and can start a fresh trace
+            # (or link to the enqueue lineage via its persisted parent).
             with start_span(
                 WORKER_POLL,
                 kind="consumer",
@@ -421,32 +422,35 @@ class JobRunner:
                 m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="claimed")
                 poll_span.set_attribute("outcome", "claimed")
                 poll_span.set_attribute("job.type", job.job_type)
-                # Restore the job's safe correlation id (and worker type) into logging
-                # context for the whole execution; bound_context clears it on exit so a
-                # later poll never inherits the previous job's correlation.
-                with bound_context(
-                    component="jobs",
-                    worker_type=worker_type,
-                    job_correlation_id=job.correlation_id,
+
+            # The WORKER_POLL span has closed. Execute the claimed job as its own span so
+            # its trace is not parented to the reduced-sampled poll.
+            # Restore the job's safe correlation id (and worker type) into logging context
+            # for the whole execution; bound_context clears it on exit so a later poll
+            # never inherits the previous job's correlation.
+            with bound_context(
+                component="jobs",
+                worker_type=worker_type,
+                job_correlation_id=job.correlation_id,
+            ):
+                # Restore the traceparent captured at enqueue as the remote parent of
+                # this execution span, so the whole run_claimed lifecycle links back to
+                # the request/scheduler that enqueued it. A job with no persisted context
+                # (created before this column, or enqueued with tracing off) starts a
+                # fresh root span.
+                parent = extract_context(job.trace_context)
+                with start_span(
+                    JOB_EXECUTE,
+                    kind="consumer",
+                    parent=parent,
+                    attributes={
+                        "component": "jobs",
+                        "worker.type": worker_type,
+                        "job.type": job.job_type,
+                    },
                 ):
-                    # Restore the traceparent captured at enqueue as the remote parent of
-                    # this execution span, so the whole run_claimed lifecycle links back to
-                    # the request/scheduler that enqueued it. A job with no persisted context
-                    # (created before this column, or enqueued with tracing off) starts a
-                    # fresh root span.
-                    parent = extract_context(job.trace_context)
-                    with start_span(
-                        JOB_EXECUTE,
-                        kind="consumer",
-                        parent=parent,
-                        attributes={
-                            "component": "jobs",
-                            "worker.type": worker_type,
-                            "job.type": job.job_type,
-                        },
-                    ):
-                        self.run_claimed(db, job)
-                return True
+                    self.run_claimed(db, job)
+            return True
         finally:
             db.close()
 
