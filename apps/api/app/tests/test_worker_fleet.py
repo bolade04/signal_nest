@@ -184,6 +184,54 @@ def test_heartbeat_for_unknown_worker_returns_none(registry, db) -> None:
     assert registry.mark_ready(db, "nope") is None
 
 
+def test_register_mints_a_fresh_generation_token_on_restart(registry, db) -> None:
+    first = _register(registry, db, "w-1").generation_token
+    assert first is not None and len(first) >= 16
+    # A restart of the same worker id rotates the token to a new value.
+    second = _register(registry, db, "w-1").generation_token
+    assert second is not None and second != first
+
+
+def test_stale_generation_cannot_heartbeat_or_transition_replacement(registry, db) -> None:
+    """An old process's token must not keep alive or move the row that replaced it."""
+    t0 = datetime(2026, 7, 13, 12, 0, 0, tzinfo=UTC)
+    old_token = _register(registry, db, "w-1", now=t0).generation_token
+    registry.mark_ready(db, "w-1", now=t0, generation_token=old_token)
+
+    # The worker restarts: a new generation replaces the row and rotates the token.
+    t1 = t0 + timedelta(seconds=5)
+    new_token = _register(registry, db, "w-1", now=t1).generation_token
+    assert new_token != old_token
+
+    # The *old* process keeps trying with its stale token and is fenced out: no
+    # heartbeat is recorded and no transition is applied.
+    t2 = t1 + timedelta(seconds=5)
+    assert registry.heartbeat(db, "w-1", now=t2, generation_token=old_token) is None
+    assert registry.mark_ready(db, "w-1", now=t2, generation_token=old_token) is None
+    row = registry.get(db, "w-1")
+    assert row.status == WorkerStatus.STARTING.value  # unmoved by the stale process
+    # Only the new registration's stamp remains (SQLite returns a naive datetime).
+    assert row.last_heartbeat_at.replace(tzinfo=UTC) == t1
+
+    # The current generation's token still works.
+    assert registry.heartbeat(db, "w-1", now=t2, generation_token=new_token) is not None
+    assert registry.get(db, "w-1").last_heartbeat_at.replace(tzinfo=UTC) == t2
+
+
+def test_generation_token_is_never_exposed_by_worker_schemas(registry, db) -> None:
+    """The fencing token is internal only: no operator schema serializes it."""
+    from app.jobs.worker_schemas import WorkerFleetDiagnosticsOut, WorkerSummaryOut
+
+    assert "generation_token" not in WorkerSummaryOut.model_fields
+    assert "generation_token" not in WorkerFleetDiagnosticsOut.model_fields
+    # And a real registered worker (which HAS a token) never serializes it.
+    _register(registry, db, "w-1")
+    row = registry.get(db, "w-1")
+    assert row.generation_token is not None  # the token exists on the row ...
+    dumped = WorkerSummaryOut.model_validate(row, from_attributes=True).model_dump()
+    assert "generation_token" not in dumped  # ... but is never disclosed.
+
+
 # --------------------------------------------------------------------------- #
 # Readiness probe policy gate
 # --------------------------------------------------------------------------- #

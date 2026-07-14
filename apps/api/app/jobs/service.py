@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from logging import WARNING
 
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import RedisNotifyFailedError
-from app.core.logging import get_logger
+from app.core.log_context import bound_context, new_correlation_id
+from app.core.logging import get_logger, log_event
+from app.core.metrics import JOBS_ENQUEUED_TOTAL, REDIS_NOTIFY_TOTAL, get_metrics
+from app.core.tracing import JOB_ENQUEUE, REDIS_NOTIFY, inject_context, start_span
 from app.jobs import handlers as _handlers  # noqa: F401 — registers handlers on import
 from app.jobs.context import ExecutionContext
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope
@@ -48,6 +52,23 @@ def _get_notifier() -> JobNotifier:
     return _notifier
 
 
+def shutdown_notifier() -> None:
+    """Close the process-wide wake-up notifier if one was built (best-effort).
+
+    Idempotent: resets the singleton so a later enqueue rebuilds it. Any close
+    failure is swallowed — shutdown must never be blocked by coordination cleanup.
+    """
+    global _notifier
+    if _notifier is None:
+        return
+    try:
+        _notifier.close()
+    except Exception:  # pragma: no cover - best-effort cleanup
+        pass
+    finally:
+        _notifier = None
+
+
 def _notify_available(job: Job) -> None:
     """Best-effort wake-up for a freshly enqueued, immediately-due job.
 
@@ -57,12 +78,31 @@ def _notify_available(job: Job) -> None:
     """
     if JobStatus(job.status) not in ENQUEUED_STATUSES or job.status == JobStatus.SCHEDULED.value:
         return
-    try:
-        _get_notifier().notify_job_available()
-    except RedisNotifyFailedError:
-        logger.warning("job.notify_failed", extra={"extra_fields": {"job_id": job.id}})
-    except Exception:  # pragma: no cover - defensive: never fail enqueue on notify
-        logger.warning("job.notify_error", extra={"extra_fields": {"job_id": job.id}})
+    metrics = get_metrics()
+    # A child span for the wake-up so a coordination degradation is visible in the
+    # trace separately from the (already-durable) enqueue, and never fails it.
+    with start_span(
+        REDIS_NOTIFY, kind="producer", attributes={"component": "jobs", "dependency": "redis"}
+    ) as span:
+        try:
+            _get_notifier().notify_job_available()
+            metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="success")
+            span.set_attribute("outcome", "success")
+        except RedisNotifyFailedError:
+            # A notify failure is a *coordination* degradation, tracked separately from
+            # an enqueue failure (the job is already durable and will be found by
+            # polling).
+            metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="failure")
+            span.set_attribute("outcome", "degraded")
+            log_event(
+                logger, "job.notify_failed", level=WARNING, component="jobs", outcome="degraded"
+            )
+        except Exception:  # pragma: no cover - defensive: never fail enqueue on notify
+            metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="failure")
+            span.set_attribute("outcome", "degraded")
+            log_event(
+                logger, "job.notify_error", level=WARNING, component="jobs", outcome="degraded"
+            )
 
 
 def _payload_hash(job_type: str, context: ExecutionContext, payload: dict) -> str:
@@ -112,37 +152,53 @@ def enqueue_job(
             f"payload is {size} bytes; limit is {settings.job_max_payload_bytes}",
         )
 
-    job = job_store.enqueue(
-        db,
-        organization_id=context.organization_id,
-        workspace_id=context.workspace_id,
-        job_type=type_str,
-        payload=payload,
-        payload_hash=_payload_hash(type_str, context, payload),
-        contract_version=CURRENT_CONTRACT_VERSION,
-        location_id=location_id if location_id is not None else context.location_id,
-        scout_request_id=scout_request_id,
-        idempotency_key=idempotency_key,
-        max_attempts=(
-            max_attempts if max_attempts is not None else settings.job_default_max_attempts
-        ),
-        priority=priority,
-        scheduled_for=scheduled_for,
-        now=now,
-    )
-    logger.info(
-        "job.enqueued",
-        extra={
-            "extra_fields": {
-                "job_id": job.id,
-                "job_type": type_str,
-                "status": job.status,
-                "organization_id": context.organization_id,
-                "workspace_id": context.workspace_id,
-            }
-        },
-    )
-    _notify_available(job)
+    correlation_id = new_correlation_id()
+    # Open the enqueue span first so its context is the parent persisted on the row;
+    # the worker restores it to link execution back to this enqueue. Only a recording
+    # span yields a traceparent to persist — with tracing disabled the column stays
+    # NULL and the worker simply starts a fresh root span.
+    with start_span(
+        JOB_ENQUEUE, kind="producer", attributes={"component": "jobs", "job.type": type_str}
+    ) as span:
+        trace_context = inject_context(span) if span.recording else None
+        job = job_store.enqueue(
+            db,
+            organization_id=context.organization_id,
+            workspace_id=context.workspace_id,
+            job_type=type_str,
+            payload=payload,
+            payload_hash=_payload_hash(type_str, context, payload),
+            contract_version=CURRENT_CONTRACT_VERSION,
+            location_id=location_id if location_id is not None else context.location_id,
+            scout_request_id=scout_request_id,
+            idempotency_key=idempotency_key,
+            max_attempts=(
+                max_attempts if max_attempts is not None else settings.job_default_max_attempts
+            ),
+            priority=priority,
+            scheduled_for=scheduled_for,
+            correlation_id=correlation_id,
+            trace_context=trace_context,
+            now=now,
+        )
+        span.set_attribute("job.status", job.status)
+        # Bind the (possibly pre-existing, for an idempotent hit) correlation id so the
+        # enqueue event is followable without logging the raw job/tenant identifiers.
+        with bound_context(job_correlation_id=job.correlation_id or correlation_id):
+            log_event(
+                logger,
+                "job.enqueued",
+                component="jobs",
+                outcome="enqueued",
+                job_type=type_str,
+                job_status=job.status,
+            )
+            # The caller owns the surrounding transaction; the row is persisted here, so
+            # this is the single choke point through which every enqueue passes.
+            get_metrics().increment(
+                JOBS_ENQUEUED_TOTAL, outcome="enqueued", job_type=type_str, job_status=job.status
+            )
+            _notify_available(job)
     return job
 
 

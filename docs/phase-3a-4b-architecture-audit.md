@@ -1,0 +1,927 @@
+# Phase 3A.4b — Architecture Audit
+
+Base `main` SHA: `3fefb36d432c7c9c46118e29bf631c32120f5e65`
+Audit performed by direct inspection of the repository (no assumptions).
+
+## Current-state inventory
+
+### Logging
+- `apps/api/app/core/logging.py`: a `JsonFormatter` emitting JSON to stdout with
+  `level`, `logger`, `message`, `request_id`, `trace_id`, `exc_info`, plus any
+  `record.extra_fields`. `request_id_ctx` / `trace_id_ctx` are `ContextVar`s.
+- **No redaction utility exists.** Structured logs today rely on callers to pass
+  only safe fields; there is no central scrubber for tokens/URLs/keys.
+- Log call sites already use `extra={"extra_fields": {...}}` (see `worker.py`).
+
+### Request correlation
+- `request_id_ctx` and `trace_id_ctx` exist as context vars, but there is **no
+  middleware** that populates them from inbound headers or generates them, and no
+  propagation onto durable jobs. Correlation across the job boundary is absent.
+
+### Error handling
+- `app/core/errors.py` holds sanitized domain exceptions
+  (`ObjectStorageUnavailableError`, `RedisUnavailableError`,
+  `RedisNotifyFailedError`, `InvalidObjectKeyError`, `WorkerRegistrationFailedError`,
+  …). Driver errors are converted to static-message exceptions at each adapter seam.
+
+### Metrics / telemetry libraries
+- **None.** No Prometheus client, no OpenTelemetry, no StatsD. No counters or
+  histograms are emitted anywhere. This is a greenfield area.
+
+### Sentry
+- **Not integrated.** No `sentry_sdk` dependency or init.
+
+### API lifecycle
+- FastAPI app in `app/main.py` (mounts routers incl. `internal_routes`).
+- Readiness probes: `app/system/probes.py` + operator `/internal/system/readiness`.
+  Liveness vs readiness separation needs confirmation/adjustment in Batch 5.
+
+### Worker lifecycle
+- `app/jobs/worker.py`: separate process (`python -m app.jobs.worker`). Validates
+  config + schema, registers (STARTING→READY), spawns N daemon loop threads, runs a
+  bounded registry heartbeat + stale sweep, and drains on SIGINT/SIGTERM
+  (READY→DRAINING→STOPPED) within `worker_shutdown_grace_seconds`.
+- Observations for Batch 1/5: the worker never sets `BUSY` while executing;
+  `_set_registry_status` reaches into the registry's private `_transition`.
+
+### Database engine & pool
+- `app/db/session.py::build_engine` — SQLite (local) vs bounded PostgreSQL
+  `QueuePool` (size/overflow/timeout from settings). Dialect resolved via SQLAlchemy
+  URL parsing, not string matching.
+- No pool-utilization visibility is exported yet.
+
+### Redis lifecycle
+- `app/infra/cache.py` (cache) and `app/jobs/coordination.py` (wake-up + advisory
+  lock). Bounded pool + socket timeouts; lazy driver import; sanitized errors.
+  Redis is strictly advisory — the DB is the only authoritative queue.
+- **Key construction risk (Batch 1):** `tenant_cache_key` joins parts with `:` and
+  `_redis_key` interpolates `{prefix}:cache:{key}`. Colon-joining is ambiguous —
+  `("a:b")` and `("a","b")` can collide. Needs collision-resistant encoding.
+
+### S3 client lifecycle
+- `app/infra/storage.py`: `LocalStorage` (default) and `S3Storage` (full mode),
+  built via `build_storage`. Bounded timeouts/retries; private-by-default puts;
+  sanitized errors; `validate_object_key` rejects hostile relative keys.
+- **Composed-key gap (Batch 1):** `tenant_object_key` validates only the *relative*
+  part, then prefixes `{org}/{ws}/`. The org/workspace segments and the final
+  composed key are **not** re-validated, so a hostile tenant identifier could inject
+  separators/traversal into the physical key.
+
+### Existing Dockerfiles / containers
+- **None.** No `Dockerfile`, `docker-compose`, or `.dockerignore` in the repo.
+  Batch 5 is greenfield container work.
+
+### Deployment documentation
+- **None.** No `docs/operations/` directory exists yet.
+
+### Health / readiness endpoints
+- `/internal/system/readiness`, `/capabilities`, `/jobs`, `/workers` — all operator
+  gated (`require_operator`). Coarse public liveness/readiness split to be confirmed
+  in Batch 5.
+
+### CI services
+- `.github/workflows/ci.yml`: four protected jobs (Frontend quality, Backend
+  quality, Migrations and API contract, Integration smoke). postgres:16 service with
+  `TEST_POSTGRES_URL`; Redis/S3 exercised via fakeredis/injected fakes. Strict
+  `bash --noprofile --norc -euo pipefail`; `git diff --exit-code` contract gate.
+
+### Environment validation
+- `app/core/config.py`: Pydantic Settings with extensive bounded validation;
+  production mode rejects local backends by name; secret fields `repr=False`.
+
+### Secret-redaction utilities
+- **None** beyond per-adapter static-message exceptions. Batch 2 must add a reusable
+  scrubber and prove known secret patterns never reach logs.
+
+### Job event / audit models
+- `app/jobs/models.py`: `Job`, `JobEvent` (append-only, safe metadata only).
+- `app/jobs/worker_models.py`: `WorkerRegistration` (no credentials/IP/token; unique
+  `worker_id`; indexes on status/heartbeat/type). **No generation token today.**
+
+### Operator endpoints
+- `app/system/internal_routes.py`: `/capabilities`, `/readiness`, `/jobs`,
+  `/workers`. Coarse, secret-free, operator-gated.
+
+### Migration execution strategy
+- Alembic migrations form a single **linear** chain. The current head is
+  `a1b2c3d4e5f6` (`add_job_trace_context`); `d4f6a8c0b2e1` is a **mid-chain**
+  revision (`add_worker_registrations`), **not** the head. (An earlier draft of this
+  inventory recorded `d4f6a8c0b2e1` as the head — that was accurate only before the
+  Batch 2–3 additive columns `df66ff0426d2` → `e7c2a9b4f1d3` → `a1b2c3d4e5f6` were
+  added; it is corrected here.)
+- Supported migration tooling: the single-actor command `python -m app.db.migrate`
+  (`upgrade` / `check` / `downgrade`) and the `scripts/migrate.sh` wrapper
+  (`alembic upgrade head`). The `npm run migrate*` scripts are thin dev wrappers over
+  those shell scripts, not a separate mechanism. The documented single-actor
+  production migration policy was subsequently delivered in **Batch 4** (see the
+  Batch 4 audit section below), not deferred to Batch 5.
+
+## Gaps (by batch)
+
+| Area | Gap | Batch |
+|---|---|---|
+| Lease recovery | `recover_expired_leases` selects-then-mutates in Python; two loops can double-recover / double-event | 1 |
+| PG contention test | Existing gated test is sequential, not true concurrent lock contention | 1 |
+| Worker identity | No generation fencing; an old process with the same `worker_id` can still heartbeat the replacement row | 1 |
+| SQLite CAS | Lost-race path calls full `db.rollback()`, which can discard unrelated caller work | 1 |
+| S3 keys | Composed `{org}/{ws}/{rel}` key not revalidated | 1 |
+| Redis keys | Ambiguous colon joining; delimiter collisions possible | 1 |
+| Logging | No redaction; no correlation middleware | 2 |
+| Metrics | None | 3 |
+| Tracing | None | 4 |
+| Containers | None | 5 |
+| Lifecycle | Liveness/readiness split, worker BUSY/drain hardening | 5 |
+| Runbooks/alerts | None | 6 |
+
+## Proposed implementation order (Batch 1)
+
+1. Single-winner expired-lease recovery (`store.py`) + tests.
+2. True PG `SKIP LOCKED` contention test (gated) — proves the existing claim path.
+3. Worker-registration generation fencing (`worker_models.py`, `worker_registry.py`,
+   `worker.py`, additive migration) + tests.
+4. SQLite CAS transaction contract hardening (`store.py`) + tests.
+5. Composed S3 tenant-key revalidation (`storage.py`) + hostile-key tests.
+6. Collision-resistant Redis key encoding (`cache.py`, and structured components in
+   `coordination.py` where applicable) + tests.
+
+## Files likely to change (Batch 1)
+
+- `apps/api/app/jobs/store.py`
+- `apps/api/app/jobs/worker_registry.py`
+- `apps/api/app/jobs/worker_models.py`
+- `apps/api/app/jobs/worker.py`
+- `apps/api/app/infra/storage.py`
+- `apps/api/app/infra/cache.py`
+- `apps/api/alembic/versions/*` (one additive migration for the generation column)
+- `apps/api/app/tests/test_durable_jobs.py`, `test_production_adapters.py`,
+  `test_worker_fleet.py` (+ possibly a new focused test module)
+
+## Migration requirements
+
+One **additive** migration: add a nullable `generation_token` (and, if needed, a
+coarse `generation` integer) column to `worker_registrations`. No existing column is
+altered; downgrade drops only the new column(s). ORM-only inserts, consistent with
+the existing table. No existing migration is edited in place.
+
+## Contract-impact assessment
+
+Batch 1 changes are internal to the data plane and worker registry. Operator
+diagnostics may expose a coarse generation indicator but **never** the token.
+No customer-facing API schema changes are expected; the `git diff --exit-code`
+generated-contract gate must stay green.
+
+## Security risks addressed / considered
+
+- Path traversal via tenant identifiers in composed S3 keys (closed in Batch 1).
+- Redis key collision / tenant-boundary ambiguity (closed in Batch 1).
+- Stale-process takeover of a replacement worker registration (closed in Batch 1).
+- Generation tokens must never be logged or returned to customer APIs.
+
+## Rollback strategy
+
+Every Batch 1 change is behavior-preserving for the happy path and covered by the
+additive migration's clean downgrade. If a regression appears, revert the offending
+focused commit; the additive `worker_registrations` column can be dropped by the
+migration downgrade without touching business or job data. The draft PR is never
+merged until the full Phase 3A.4b acceptance gates (or a deliberate batch split) are
+satisfied.
+
+---
+
+# Batch 2 — Observability Audit (structured logging, correlation, metrics)
+
+Performed by direct inspection of the repository at branch head after Batch 1.
+
+## Current logging architecture
+
+- `app/core/logging.py` provides a single `JsonFormatter` that emits one JSON object
+  per record with `level`, `logger`, `message`, `request_id`, `trace_id`, optional
+  `exc_info`, plus any `record.extra_fields`. `configure_logging(level)` installs one
+  stdout `StreamHandler` on the root logger. `request_id_ctx` / `trace_id_ctx` are the
+  only correlation context vars.
+- `app/main.py::create_app` calls `configure_logging("DEBUG" if settings.debug else
+  "INFO")`. There is no dev/prod format switch beyond level; JSON is always emitted.
+- Call sites already pass `extra={"extra_fields": {...}}` (worker.py, queue.py). Some
+  of those fields are **raw ids** (e.g. `job_id`, `worker_id`, org/workspace ids at
+  `service.py` enqueue logging) — acceptable in controlled operator/debug logs but not
+  ideal as default production fields; Batch 2 prefers opaque correlation ids.
+
+## Existing structured fields
+
+`level`, `logger`, `message`, `request_id`, `trace_id`, `exc_info`, and free-form
+`extra_fields`. **Missing** vs. the Batch 2 target set: `timestamp`, `severity`,
+`service`, `environment`, `component`, `event`, `outcome`, `duration_ms`,
+`job_correlation_id`, `worker_type`, `job_type`, `dependency`, `status_code`.
+
+## Current secret-leak risks
+
+- **No central redaction.** Nothing scrubs tokens/URLs/keys before serialization; a
+  future careless `extra_fields` (e.g. a `redis_url`, an `Authorization` header, a
+  lease/generation token) would be logged verbatim. `json.dumps(default=str)` would
+  even stringify a secret-bearing object.
+- Exception objects are formatted via `formatException` (stack only, safe today) but a
+  logged exception *message* could carry a secret if a caller ever logs `str(exc)`.
+- Config already sets secret fields `repr=False` and `hide_input_in_errors=True`, so
+  Settings itself does not leak; the gap is the logging path.
+
+## Correlation gaps
+
+- Context vars exist but **no middleware populates them.** Inbound `x-request-id` /
+  `x-trace-id` are read directly in `CorrelationMiddleware` **without validation or
+  length bound**, so a client can inject an arbitrary, unbounded, newline-bearing id
+  straight into every log line (log-injection + unbounded-cardinality risk).
+- Context vars are **never reset** after a request. Under the async stack this is
+  usually isolated per task, but explicit cleanup is required to guarantee no
+  cross-request bleed and to keep the worker (thread-based) safe.
+- **No job correlation.** `ExecutionContext` carries optional `request_id`/`trace_id`
+  used "only for tracing", but the `Job` row has no correlation column, and the worker
+  does not restore any correlation id into logging context during execution. The
+  enqueue→claim→execute→terminal flow has no stable, safe correlation handle.
+
+## Metrics gaps
+
+- **Greenfield.** No Prometheus/OTel/StatsD; zero counters/histograms/gauges. No
+  metric-name registry, no label-cardinality guard, no exporter, no failure isolation.
+
+## Proposed abstractions
+
+- `app/core/redaction.py` — recursive, case-insensitive key/URL/query scrubber with
+  depth+size bounds and cycle guard; never raises (returns a safe placeholder on
+  failure). Applied inside the formatter and reusable by callers.
+- `app/core/logging.py` (hardened) — stable field set, config-driven `json|console`
+  formatter, safe fallback if formatting/redaction fails, and a small structured
+  `log_event(...)` helper.
+- `app/core/log_context.py` — contextvars for `request_id`, `job_correlation_id`,
+  `component`, `worker_type`, `operation`, with a `bound_context(...)` context manager
+  that restores the previous values on exit (async- and thread-safe).
+- `app/core/metrics.py` — `Counter`/`Histogram`/`Gauge` protocols, a `NoOpMetrics`
+  default, an `InMemoryMetrics` test backend, a `metric` name catalog, and a strict
+  label allow-list that rejects forbidden labels at registration/emit time. Core code
+  depends only on this interface; exporter wiring is deferred/minimal and its failures
+  are swallowed.
+- `app/core/middleware.py` (hardened) — strict request-id acceptance (UUID/hex, bounded
+  length), generate-on-missing/invalid, response header, and guaranteed context reset.
+
+## Files likely to change (Batch 2)
+
+- `app/core/logging.py`, `app/core/middleware.py`, `app/core/config.py`, `app/main.py`
+- new `app/core/redaction.py`, `app/core/log_context.py`, `app/core/metrics.py`
+- `app/jobs/models.py` (+ one additive migration for `jobs.correlation_id`)
+- `app/jobs/service.py`, `app/jobs/store.py`, `app/jobs/worker.py`,
+  `app/jobs/context.py`, `app/jobs/coordination.py`
+- `app/system/internal_routes.py`, `app/system/schemas.py` (operator telemetry status)
+- `app/infra/storage.py`, `app/infra/cache.py` (operation metrics)
+- new focused tests under `app/tests/` (logging/redaction/correlation/metrics/telemetry
+  diagnostics)
+
+## Public-contract impact
+
+The job `correlation_id` is **internal**: it is not added to any customer response
+schema, so `openapi.json` for customer routes is unchanged. The only additive schema
+is the operator-only telemetry-status block on an internal route. The
+`git diff --exit-code` generated-contract gate must remain green after `gen:types`.
+
+## Migration impact
+
+One **additive** migration: nullable `jobs.correlation_id` (`String(64)`). Existing
+jobs keep `NULL`; no backfill required (correlation is best-effort and only meaningful
+for jobs created after the migration). Downgrade drops only the new column. The
+Batch 1 migration `df66ff0426d2` is **not** edited; the new revision chains after it.
+
+## Rollback strategy (Batch 2)
+
+Each Batch 2 concern lands as its own focused commit and is independently revertable.
+Telemetry is designed to fail closed to a no-op: if logging/redaction/metrics
+misbehave, the application path is unaffected, so a rollback is low-risk. The additive
+`jobs.correlation_id` column downgrades cleanly without touching business or job data.
+
+## Batch 2 — delivered
+
+Implemented as proposed above, no scope drift:
+
+- `app/core/redaction.py`, `app/core/logging.py` (JSON + console formatters, stable
+  fields, safe fallback), `app/core/log_context.py` (contextvar helpers, strict
+  request-id normalization, correlation-id generation).
+- `app/core/middleware.py` `CorrelationMiddleware` rewritten for strict inbound
+  request ids, response header, per-request context reset, and bounded HTTP metrics.
+- `jobs.correlation_id` column + migration `e7c2a9b4f1d3`; `service.py`/`store.py`/
+  `worker.py` propagate and restore it (including the heartbeat thread).
+- `app/core/metrics.py` (catalog, allow-list, no-op default, in-memory backend,
+  failure isolation, operator-safe status helpers) with lifecycle instrumentation at
+  authoritative commit points.
+- Operator-only `GET /internal/system/telemetry`.
+
+The public customer contract is unchanged (`openapi.json` diff clean); the only
+additive schema is the operator-only `TelemetryStatusOut`.
+
+# Batch 3 — Distributed-tracing Audit (spans, propagation, exporter)
+
+## Existing tracing surface
+
+- **No tracing libraries.** `pyproject.toml` declares no `opentelemetry-*`, no
+  `sentry-sdk`, no vendor APM agent — in any of the `full`/`dev` extras. The repo has
+  never depended on a hosted or heavyweight tracing SDK.
+- **A correlation `trace_id` already exists but is not a real trace context.**
+  `app/core/logging.py` defines `trace_id_ctx` and stamps `trace_id` onto every
+  structured record. `CorrelationMiddleware` accepts an inbound `x-trace-id` (through
+  the same strict `normalize_request_id` bound as the request id) and otherwise mirrors
+  the request id into `trace_id`. This is an opaque *log-correlation* id — there is no
+  span, no parent/child relationship, and no W3C `traceparent` parsing/propagation.
+- **`ExecutionContext` carries optional `request_id`/`trace_id`** (documented "used only
+  for tracing, never for authorization") but those fields are **not persisted** on the
+  `jobs` row: only `correlation_id` is a column. So today a trace id is *lost* between
+  the HTTP enqueue and the worker; the worker restores `correlation_id` only.
+- **Redis wake-up is payload-free** (`RedisJobNotifier` publishes `"1"`); there is no
+  place a trace context is smuggled through Redis, and correctness never depends on it.
+- **No DB/S3 auto-instrumentation.** SQLAlchemy and boto3 are used directly with no
+  event-listener span hooks.
+- **No tracing configuration.** `Settings` has observability fields (`service_name`,
+  `log_format`, `metrics_enabled`) but nothing for tracing (enabled, exporter, endpoint,
+  sampling, timeouts).
+- **No tracing startup/shutdown hooks.** `create_app()` calls `configure_logging`; the
+  lifespan does only the migration guard. The worker `main()` calls `configure_logging`.
+  Neither installs a tracer provider nor flushes a span exporter on shutdown.
+- **CI** installs no tracing dependency and provisions no collector.
+
+## Design decision — a provider-neutral, pure-Python tracing seam
+
+Batch 2's metrics seam (`app/core/metrics.py`) is the precedent: a small pure-Python
+abstraction with a no-op default, an in-memory test backend, strict cardinality
+validation, and runtime-failure isolation — **no hosted SDK in core code**. Batch 3
+mirrors that precedent for tracing rather than taking a hard dependency on
+`opentelemetry-sdk`:
+
+- **OTel-*compatible* in shape, not OTel-*dependent*.** Propagation uses the **W3C
+  `traceparent`** wire format (implemented directly and validated strictly), and span
+  names/attributes follow OTel semantic-convention shapes, so a real OTLP exporter can
+  be attached later without reworking call sites. Adding `opentelemetry-api/sdk` as a
+  *hard* dependency is deliberately avoided: it is heavy, it was not required by the
+  repo before, and the metrics precedent shows the seam pattern keeps `npm audit`/deps
+  unchanged and tests collector-free. An OTLP path remains possible as an **optional,
+  import-guarded** exporter (installed only if the operator provides the packages).
+- **No-op default.** The process tracer is a `NoOpTracer` unless one is installed via
+  `configure_tracer(...)`. Tests use an `InMemoryTracer`. Disabled by default via
+  `TRACING_ENABLED=false`.
+- **Failure isolation.** A `_SafeTracer` base validates span names + attributes
+  (cardinality/secret policy) — a policy violation raises at dev/test time (a coding
+  bug) — then isolates and counts any runtime recording/export failure so a broken
+  exporter can never break a request, a DB transaction, job claiming, worker execution,
+  readiness, or shutdown.
+
+## Gaps Batch 3 closes
+
+- No span model or provider-neutral tracer seam → `app/core/tracing.py`.
+- No validated tracing config → tracing fields on `Settings`.
+- HTTP requests uncovered by spans; inbound `traceparent` not parsed → extend
+  `CorrelationMiddleware`.
+- Trace context lost across the durable-job boundary → persist a W3C `traceparent` in a
+  new additive nullable `jobs.trace_context` column (new migration chaining after
+  `e7c2a9b4f1d3`); worker restores it and starts a linked execution span.
+- Job lifecycle / Redis / S3 / controlled DB operations uninstrumented → bounded spans
+  at authoritative boundaries.
+- No trace/log correlation beyond the flat `trace_id` field → set `trace_id` (and
+  optional `span_id`) from the active span, cleared after.
+- No operator-visible tracing posture → extend `GET /internal/system/telemetry`.
+
+## Migration requirements (Batch 3)
+
+One additive, nullable migration adding `jobs.trace_context` (a bounded `String`, W3C
+`traceparent` ≤ 55 chars, so a generous `String(64)`), chaining after `e7c2a9b4f1d3`.
+Existing jobs carry `NULL` and remain executable (a missing parent simply starts a new
+root span). Downgrade drops the column without touching business or job data.
+
+## Contract-impact assessment (Batch 3)
+
+Additive only: the operator-only `TelemetryStatusOut` gains coarse tracing fields. No
+customer-facing route or schema changes; `trace_context` is internal and never exposed
+by any customer API.
+
+## Security / cardinality risks (Batch 3)
+
+- Span **names** are a fixed low-cardinality catalog; never an id/URL/path.
+- Span **attributes** are allow-listed (bounded enums + normalized route templates only);
+  tokens, headers, DSNs, URLs, object keys, payloads, emails, tenant/job/worker ids, and
+  exception *messages* are rejected. Trace/span ids may appear in logs but never as a
+  metric label or span attribute value that would explode cardinality.
+- Exception recording uses the existing `sanitize_exception`/redaction layer (class name
+  + redacted message), never the raw message.
+- Exporter endpoints/credentials are never logged; the operator endpoint reports only
+  coarse status.
+
+## Rollback strategy (Batch 3)
+
+Each concern lands as its own focused, revertable commit. Tracing fails closed to a
+no-op: with `TRACING_ENABLED=false` (default) every helper is inert. The additive
+`jobs.trace_context` column downgrades cleanly. No customer contract changes, so a
+revert is low-risk.
+
+# Batch 4 — Deployment Audit (containers, lifecycle, migration strategy)
+
+Performed by direct inspection of the repository at branch head after Batch 3. (Note:
+the Batch 1 gaps table above mapped "Containers" to a later batch number under the
+original numbering; the delivery plan now assigns production containers + graceful
+lifecycle + migration strategy to **Batch 4**, with runbooks/dashboards/acceptance in
+Batch 5.)
+
+## Current state
+
+- **Container artifacts: none.** No `Dockerfile`, `.dockerignore` or Compose file exists
+  anywhere in the tree. This is greenfield.
+- **Process entrypoints already exist and are production-shaped.**
+  - API: `app.main:app` (an `asgi` app) started via `scripts/run-api.sh` with
+    `uvicorn --reload` (dev only). The FastAPI `lifespan` (a) fails fast if the schema
+    is not migrated (checks `users` + `alembic_version` table presence), (b) installs
+    the configured tracer (fail-closed no-op), and (c) on shutdown runs a bounded
+    `_shutdown_flush` of the trace exporter. There is **no explicit metrics flush, db/redis
+    close, or readiness gate** in the API lifespan yet, and the schema guard is
+    table-presence only (not an Alembic-revision compatibility check).
+  - Worker: `python -m app.jobs.worker` (`scripts/run-worker.sh`). `Worker.run()` already
+    validates config + schema, registers STARTING→READY (register-before-claim),
+    installs SIGINT/SIGTERM handlers that set a stop event, runs a bounded registry
+    heartbeat + stale sweep, and drains READY/BUSY→DRAINING→STOPPED within
+    `worker_shutdown_grace_seconds`, with generation-fenced registry mutations and
+    per-job lease fencing. Gaps: a second signal does not shorten the grace; there is no
+    explicit worker-side telemetry flush on exit; and lease-expiry-on-forced-exit is a
+    property of the design (lease simply not renewed) rather than an asserted test.
+- **Config validation is already strong** (`app/core/config.py`): production rejects
+  every local backend by name, requires a strong `secret_key`, bounds numerics, and sets
+  `repr=False` on every secret field so URLs/keys never reach logs or `ValidationError`
+  output. Missing: a bounded **min/max** on `worker_shutdown_grace_seconds` and an
+  explicit API shutdown-grace / migration-mode setting.
+- **Migration execution:** Alembic head `a1b2c3d4e5f6`; `scripts/migrate.sh`
+  (`alembic upgrade head`) wrapped by `npm run migrate`. **No single-actor production
+  policy or schema-compatibility module is documented or enforced** — the API lifespan's
+  table-presence guard is the only startup schema check.
+- **Health endpoints:** public `GET /health` (liveness, static ok) and operator-gated
+  `GET /internal/system/readiness` (probe diagnostics). The liveness/readiness split
+  already exists and is appropriate for a container liveness probe.
+- **CI:** four PR-gated jobs (frontend, backend+postgres:16, migration+contract, smoke).
+  No container build/validation job. Branch push trigger is `feature/**`; this branch
+  (`feat/…`) is exercised via the `pull_request` trigger on PR #31.
+
+## Missing production requirements
+
+- Two production images (API + worker), multi-stage, non-root, minimal runtime.
+- A hardened `.dockerignore` + a build-context secret-exclusion check.
+- A single-actor migration command distinct from the API/worker commands.
+- A startup schema-compatibility check (Alembic revision vs. application head) that
+  verifies without mutating and blocks on an incompatible/too-old schema.
+- Explicit API shutdown cleanup (metrics flush, db/redis close) alongside the existing
+  trace flush.
+- Bounded lifecycle metrics/traces (startup/shutdown/drain/migration/schema-compat).
+- Deployment + migration operator docs; observability lifecycle coverage.
+- CI validation that the images build, run non-root, and start their commands.
+
+## Proposed image layout
+
+- `apps/api/Dockerfile` with three stages: `base` (pinned `python:3.12-slim`, non-root
+  user, env hardening), `builder` (installs the locked project into a venv), and two
+  thin runtime targets selected by `--target` — `api` (uvicorn) and `worker`
+  (`python -m app.jobs.worker`) — sharing the copied venv + source. A single Dockerfile
+  with two targets avoids duplicating the dependency install while keeping the API and
+  worker commands and surfaces distinct. (If two files read more clearly to reviewers,
+  the worker target can be split later; one file is chosen to keep the locked-install
+  step singular and reproducible.)
+- No separate frontend image this phase: the web app is a statically-built SPA
+  (`npm run build`) served by existing static hosting, and the approved architecture
+  does not call for a Node runtime container here.
+
+## Runtime user strategy
+
+A dedicated `app` user/group (fixed non-root UID/GID, e.g. 10001) owns the venv and
+app source (read-only at runtime). No shell is required for operation; the container
+runs the server process as PID-adjacent so signals reach it directly (no `sh -c`
+wrapper that would swallow SIGTERM). `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes
+into the source tree; `/tmp` is the only writable path required.
+
+## Filesystem write requirements
+
+Local-only backends (SQLite file, `./storage` object dir, in-memory cache) are
+**development conveniences** that production config rejects by name, so a production
+container writes nothing to the source tree. Temporary files use `/tmp`. The image is
+therefore compatible with a read-only root filesystem plus a writable `/tmp`.
+
+## Port and command expectations
+
+- API: listens on `${API_PORT:-8000}`, bind `${API_HOST:-0.0.0.0}` inside the container,
+  command `uvicorn app.main:app` (no `--reload`); liveness probe `GET /health`.
+- Worker: exposes no port; command `python -m app.jobs.worker`; health is process
+  liveness + registry heartbeat (optionally an operator readiness query).
+- Migration: a distinct one-shot command `python -m app.db.migrate` (never baked into
+  the API/worker command).
+
+## Migration ownership
+
+Exactly one actor runs `alembic upgrade head` per rollout (a pre-rollout job / CI stage),
+never every replica. API and worker startup only **verify** compatibility and refuse to
+serve/claim on an incompatible schema; they never upgrade or downgrade implicitly.
+
+## Graceful-shutdown model
+
+- API: SIGTERM → readiness flips to draining → in-flight requests get a bounded grace →
+  db/redis closed → metrics + traces flushed (bounded) → exit. Idempotent; telemetry
+  flush failure never blocks exit.
+- Worker: SIGTERM → stop claiming immediately → finish in-flight within grace (lease
+  renewed only while actively finishing) → on grace expiry stop renewing so the lease
+  expires for safe recovery (never a false completion) → generation-fenced STOPPED →
+  flush telemetry (bounded) → exit. A second signal shortens the grace.
+
+## Rollback path
+
+Application rollback without schema rollback where the additive-first discipline keeps
+old and new app versions compatible with the current head. Schema downgrade is an
+explicit, backed-up operator action, never automatic startup behavior. Each Batch 4
+concern is an independently revertable commit; no migration is edited in place.
+
+## Security risks (Batch 4)
+
+Container-specific risks and mitigations: run as non-root (UID ≠ 0); no Docker socket,
+no privileged mode, no added Linux capabilities; no secrets in image layers or build
+args (only non-secret build labels); no dev server / debug mode in production; safe
+signal forwarding (no shell wrapper); `/tmp`-only writes; health endpoint discloses no
+secret; migration logs are structured and URL-free. Residual risks are documented in
+the acceptance report.
+
+## Contract impact (Batch 4)
+
+None to the customer contract. Lifecycle metrics/traces use the existing bounded seams;
+if any operator-only telemetry field is added it is additive and secret-free. The
+`git diff --exit-code` generated-contract gate must stay green.
+
+## Batch 4 implementation and CI validation evidence
+
+This section connects the original architecture audit and the *proposed* Batch 4
+design above to the **implemented and CI-validated** architecture. Batches 1–4 are
+complete; Batch 5 remains outstanding; **Phase 3A.4b is still in progress** and PR #31
+remains draft and unmerged. Phase 3B has not started. This is not a final acceptance.
+
+### Implemented deployment architecture
+
+#### Container architecture
+
+- One production Dockerfile: `apps/api/Dockerfile`.
+- Two separate production runtime targets selected by `--target`: `api` and `worker`.
+- Multi-stage build (`base` → `builder` → thin runtime targets); the dependency-build
+  stage is shared, so the locked `.[full]` install happens once.
+- Separate runtime commands: `api` runs `uvicorn app.main:app`; `worker` runs
+  `python -m app.jobs.worker`.
+- Neither API nor worker runs as root; runtime UID `10001`.
+- Application source and the built virtualenv are copied into the runtime image
+  without local development artifacts (no `.env`, no local SQLite DB, no VCS metadata,
+  no test suite).
+- Logs emit to stdout/stderr as structured JSON; the app writes no log files.
+- The migration command is a **separate** operational command
+  (`python -m app.db.migrate`), never folded into the API or worker command, so no
+  migration runs automatically in every replica.
+
+Architectural reasoning (as implemented):
+
+- The shared build stage reduces duplication and keeps the locked install singular and
+  reproducible.
+- Separate runtime targets preserve API/worker process separation.
+- Non-root execution reduces container privilege.
+- Migration separation prevents replica-level migration races.
+- The database remains the authoritative store for durable job state; Redis stays
+  advisory (wake-up/notify) and is **not** promoted to the durable queue.
+
+#### Build-context security
+
+- `.dockerignore` was hardened (excludes `.env*`, local `*.db`/`*.sqlite`, private
+  keys, VCS metadata, caches, the venv, and the test suite).
+- The image validation (`scripts/docker-security-check.sh`) checks for `.env` files,
+  Git metadata, credential/key files, local SQLite databases, and development
+  artifacts, and asserts a non-root UID.
+- The secret scan was correctly scoped to `/app`. The original full-filesystem scan
+  produced **false positives** against the base image's public CA trust bundles
+  (`/etc/ssl/certs/*.pem`, certifi's `cacert.pem`). This was corrected without
+  weakening application-source scanning; **no application secret leak was found**.
+- Scanning `/app` is intentional: `/app` is the application build context and the
+  copied application content, whereas base-image CA bundles are **public trust
+  material**, not repository secrets.
+
+### API lifecycle architecture (implemented)
+
+Ordered startup and bounded shutdown, as implemented in `app/main.py` (lifespan) and
+`app/core/lifecycle.py`:
+
+1. Validate configuration (Pydantic Settings; production fails fast on local backends,
+   a weak secret, or a missing production dependency).
+2. Initialize logging.
+3. Initialize metrics.
+4. Initialize tracing (fail-closed no-op).
+5. Initialize database resources.
+6. Verify schema compatibility (read-only gate; verify, never mutate).
+7. Initialize optional dependencies per policy.
+8. Enable readiness.
+9. Serve requests.
+10. On shutdown, enter draining.
+11. Mark readiness false.
+12. Close dependencies (Redis cache/notifier, database pool).
+13. Flush telemetry (metrics + traces) with bounded timeouts.
+14. Exit even if telemetry flushing fails.
+
+Validated properties:
+
+- Startup is ordered.
+- Required configuration failures prevent serving.
+- Schema incompatibility prevents readiness (fails fast with an instruction to run the
+  migration actor).
+- Liveness (`GET /health`) and readiness (probe surface) remain distinct.
+- Shutdown is bounded and idempotent.
+- Telemetry-flush failure does not block shutdown.
+- No implicit migration runs from any API process.
+- API lifecycle tests passed.
+
+### Worker lifecycle and draining architecture (implemented)
+
+State model: `starting` → `ready` → `busy` → `draining` → `stopped`; existing
+stale-worker sweep behavior remains.
+
+Startup:
+
+1. Validate configuration.
+2. Initialize telemetry and dependencies.
+3. Register with a fresh generation token.
+4. Start the heartbeat.
+5. Mark ready.
+6. Begin claiming work.
+
+Shutdown:
+
+- SIGTERM enters draining; no new jobs are claimed after draining begins.
+- An idle worker stops promptly.
+- A busy worker may finish in-flight work within a bounded grace
+  (`worker_shutdown_grace_seconds`); a second signal shortens it to
+  `worker_force_shutdown_grace_seconds`.
+- Heartbeat/lease extension continue only while safely completing active work; the
+  worker does not extend a lease indefinitely.
+- On grace expiry: lease extension stops, the unfinished job becomes recoverable
+  through normal lease-expiry semantics, and the worker never falsely records
+  completion.
+- Registry updates remain generation-fenced; job updates remain lease-token fenced;
+  duplicate completion is prevented.
+- Telemetry flushing is bounded; repeated signals are handled safely.
+
+Worker graceful-drain and bounded-shutdown tests passed.
+
+### Migration and schema-compatibility architecture (implemented)
+
+Production migration model:
+
+- One explicit migration actor; API and worker replicas do not run migrations.
+- Migration actor command: `python -m app.db.migrate upgrade`.
+- A compatibility check (`python -m app.db.migrate check`) is separate from schema
+  mutation.
+- Migration failure blocks rollout; downgrade is an explicit operator decision.
+- Additive-first migration discipline remains in force; rolling application deploys
+  depend on schema compatibility; destructive migrations require a future explicit
+  phase.
+
+Schema-gate validation (CI):
+
+- An un-migrated database was rejected.
+- A migrated database was reported as compatible.
+- Alembic upgrade, drift check, downgrade, and re-upgrade passed (head `a1b2c3d4e5f6`).
+
+Architectural benefit: separates schema ownership from process startup; prevents
+concurrent migration races; lets deployment systems fail before admitting traffic or
+starting workers; supports controlled rollback decisions.
+
+### Rolling-deployment and rollback implications (validated)
+
+API rollout: run the single migration actor first → start new API replicas → admit
+only after readiness passes → drain old replicas before termination. Application
+rollback may occur without schema rollback when schema compatibility permits.
+
+Worker rollout: new workers register with fresh generation tokens; old workers drain
+and stop claiming; lease fencing prevents stale ownership; generation fencing prevents
+a replaced worker from updating registry state; durable jobs remain recoverable after a
+forced worker exit.
+
+Rollback: prefer application rollback without schema downgrade; schema downgrade is
+operator-controlled; backup expectations apply before high-risk migrations; an
+incompatible schema/application combination must fail its compatibility gate.
+
+### Observability integration with deployment
+
+The Batch 2/3 foundations integrate with Batch 4: structured startup/shutdown logs;
+lifecycle metrics (`service_startups_total`, `service_shutdowns_total`,
+`migration_runs_total`); lifecycle spans; API readiness/shutdown telemetry; worker
+drain telemetry; schema-compatibility and migration telemetry; bounded exporter flush;
+telemetry-failure isolation. No high-cardinality deployment labels; no container id,
+host name, worker id, request id, or trace id is used as a metric label; operator
+diagnostics expose no credentials or endpoint URLs.
+
+The lifecycle metric test was corrected to derive `environment` and `service` from
+`Settings()` rather than hardcoding `development`. This was a **test-environment
+correctness fix** and did **not** alter production lifecycle behavior.
+
+### Authoritative Batch 4 implementation validation
+
+- Implementation head: `e9e1678e3137748c4e5cd3ccf8a792f275c657ec`
+- CI run: `29347362541`
+- URL: <https://github.com/bolade04/signal_nest/actions/runs/29347362541>
+- Conclusion: `success`
+
+All five jobs succeeded:
+
+- Frontend quality — success
+- Backend quality — success
+- Migrations and API contract — success
+- Container build and security — success
+- Integration smoke — success
+
+Validation totals:
+
+- Backend: **364 passed, 0 skipped**.
+- PostgreSQL-gated tests: executed with `TEST_POSTGRES_URL` (0 skips remaining).
+- Frontend: **20/20**.
+- Smoke: **13/13**.
+- Four-market isolation: passed, no cross-market contamination.
+- Ruff: clean.
+- Generated contracts: no residual drift.
+- `npm audit`: **0 vulnerabilities**.
+
+Container validation:
+
+- API image build passed; worker image build passed.
+- Both images ran as UID `10001`.
+- API import/startup validation passed.
+- Migration actor validation passed.
+- Schema-compatibility rejection and success paths passed.
+- Secret/context validation passed (scoped to `/app`).
+
+### Documentation synchronization validation
+
+Later **documentation-only** commits on this branch each re-ran the full CI and
+stayed green, confirming the doc updates did not disturb the implementation:
+
+| Doc-only head | CI run | Result |
+| --- | --- | --- |
+| `9ac997f` (acceptance-report stamp) | `29350028924` | all five jobs succeeded |
+| `06939c6` (plan-document stamp) | `29350656763` | all five jobs succeeded |
+| `e64879b` (architecture-audit stamp) | `29351126593` | all five jobs succeeded |
+
+All later documentation-only heads remained CI-green. The substantive Batch 4
+implementation evidence remains `e9e1678` (run `29347362541`); these docs-only runs
+do not replace it, and the full job/test tables are not repeated per run.
+
+### CI annotation
+
+- Annotation count: **1** — a non-blocking GitHub platform notice.
+- It concerns Docker third-party actions running on Node.js 24 rather than the
+  deprecated Node.js 20 runner.
+- It is **not** an application defect, **not** a test failure, **not** a skipped
+  required test, and **not** a container-security failure.
+- All five jobs succeeded (the run is not annotation-free, but the sole annotation is
+  the platform runtime notice).
+
+### Architecture conclusions — gaps now addressed
+
+The following original architecture gaps are now **implemented and CI-validated**:
+
+- No production API image → delivered.
+- No production worker image → delivered.
+- Root-runtime concern → both images run as non-root UID `10001`.
+- Missing explicit API lifecycle → ordered startup + bounded idempotent shutdown.
+- Missing worker-drain contract → draining state machine with bounded/forced grace.
+- Migration actor ambiguity → single-actor `python -m app.db.migrate`.
+- Schema-compatibility ambiguity → read-only startup gate (verify, never mutate).
+- Missing container CI validation → `container-build` job.
+- Missing deployment and migration documentation → `docs/operations/deployment.md`,
+  `docs/operations/migrations.md`, plus the observability lifecycle section.
+
+Remaining Batch 5 gaps (outstanding):
+
+- Final worker-operations runbook
+- Incident-response runbook
+- Dashboard recommendations
+- Alert definitions
+- Expanded failure-injection coverage
+- Final security review
+- Final acceptance review
+- Merge-readiness classification
+
+Optional / future unless separately approved: Kubernetes manifests, Terraform,
+cloud-specific infrastructure, hosted monitoring vendor integration, and
+orchestrator-specific deployment configuration.
+
+### Rate limiting — current state (PARTIALLY COMPLETED)
+
+`RateLimitMiddleware` (`app/core/middleware.py`) is wired into the API
+(`app/main.py`), but it is a **process-local, in-memory** fixed-window limiter: it
+counts requests per client host in an in-process dictionary (default 240 requests /
+60 s).
+
+- Current rate limiting is **process-local and in-memory**.
+- It is **not** a distributed, production-grade control.
+- It does **not** coordinate limits across API replicas — each replica enforces its
+  own window independently, so the effective global limit scales with replica count
+  and a client rebalanced across replicas is counted separately per replica.
+- Redis-backed or gateway/edge-level distributed rate limiting remains **future
+  work** (the middleware docstring already notes "production uses Redis adapter",
+  which is not yet implemented).
+- It must **not** be represented as a completed production security control.
+
+Classification: **PARTIALLY COMPLETED — production distributed enforcement not
+implemented.** Assigned to the Batch 5 security-review follow-up (or a later phase).
+It is **not** an automatic Batch 5 blocker unless the documented product threat model
+requires distributed rate limiting.
+
+## Batch 5 — workstreams and gap analysis
+
+Batch 5 is the closing batch of Phase 3A.4b. It is organized as three internal
+workstreams — **5A Operational documentation**, **5B Resilience and failure
+injection**, and **5C Security review and final acceptance** — and it changes **no
+runtime behavior except** the resilience-hardening the failure-injection tests
+require and, if chosen, a rate-limit enforcement change. This section records the
+existing capability, the missing capability, the implementation plan, the files
+likely to change, the test strategy, and the security / rollback implications, so the
+work can proceed as focused, reviewable commits.
+
+### 5A — Operational documentation
+
+- **Existing capability.** `docs/operations/` already contains `deployment.md`,
+  `migrations.md`, and `observability.md` (delivered in Batch 4). The metrics catalog
+  (`app/core/metrics.py`) defines the authoritative emitted-metric set and the bounded
+  label allow-list. The worker lifecycle, lease/generation fencing, and draining
+  semantics exist in `app/jobs/`.
+- **Missing capability.** No worker-operations runbook, no incident-response runbook,
+  no dashboard recommendations, and no alert definitions. No resolved decision on the
+  rate-limit placeholder.
+- **Implementation plan.** Author four new operator documents grounded in real
+  commands, real `Settings` keys, and only metrics the code emits. Any recommended-
+  but-not-emitted signal is labelled as such. Record the rate-limit decision in the
+  security review and residual-risk register.
+- **Files likely to change / added.** New: `docs/operations/worker_operations.md`,
+  `docs/operations/incident_response.md`, `docs/operations/dashboards.md`,
+  `docs/operations/alerts.md`. Possibly updated: `docs/operations/observability.md`
+  (cross-links only).
+- **Test strategy.** Documentation-only; validated by review against the actual
+  metric catalog, config keys, and CLI commands. No code tests.
+- **Security implications.** The incident-response and security material must not leak
+  secret values or embed real credentials; examples use placeholders.
+- **Rollback implications.** None (documentation only).
+
+### 5B — Resilience and failure injection
+
+- **Existing capability.** Typed dependency errors (`RedisUnavailableError`,
+  `ObjectStorageUnavailableError`, `ObjectTooLargeError`), swappable infra seams
+  (queue/cache/storage), the DB-authoritative job store with lease-token +
+  generation-token fencing, single-winner expired-lease recovery, the read-only schema
+  gate, telemetry fail-closed-to-no-op behavior, and `Settings` construction-time
+  validation. Existing tests: `test_durable_jobs`, `test_worker_fleet`,
+  `test_production_adapters`, `test_deployment_lifecycle`, `test_readiness_probes`,
+  `test_metrics`, `test_tracing`.
+- **Missing capability.** No dedicated failure-injection / resilience module that
+  systematically drives dependency outages, worker termination mid-job, fleet loss,
+  backlog / poison-job handling, pool pressure, migration failure, telemetry failure,
+  and invalid-configuration rejection as one cohesive suite.
+- **Implementation plan.** Add a dedicated resilience test module (seam- and
+  fake-based, deterministic, no real network, no brittle sleeps). Prefer injecting
+  failures through the existing infra seams and fakes. Add only the minimal runtime
+  hardening a test exposes; do not refactor unrelated code.
+- **Files likely to change / added.** New: `app/tests/test_resilience.py` (or a small
+  focused set). Minimal, evidence-driven hardening in `app/jobs/` or `app/infra/`
+  **only if** a test surfaces a real gap. No migration edits in place; the DB remains
+  the authoritative queue (Redis stays advisory-only).
+- **Test strategy.** Each scenario asserts a specific safe-degradation invariant
+  (typed error, bounded timeout, single-winner recovery, retry-then-dead-letter,
+  fail-closed telemetry, refuse-to-start on incompatible schema). PostgreSQL-specific
+  contention stays CI-gated via `TEST_POSTGRES_URL`.
+- **Security implications.** Assert that failure paths surface typed errors without
+  leaking secrets or connection strings.
+- **Rollback implications.** Test-only unless a hardening fix lands; any fix is small,
+  additive, and independently revertible.
+
+### 5C — Security review and final acceptance
+
+- **Existing capability.** Tenant-scoped isolation (four-market tests), secret fields
+  marked `repr=False` / `hide_input_in_errors=True`, recursive log-secret redaction,
+  correlation middleware, non-root read-only-root containers, secret-free build context
+  (CI-enforced), production rejection of local backends, and the operator-only
+  telemetry diagnostics endpoint.
+- **Missing capability.** No consolidated security-review document, no explicit threat
+  model / residual-risk register for this phase, and no final merge-readiness
+  classification.
+- **Implementation plan.** Author `docs/security/phase-3a-4b-security-review.md`
+  (per-finding id/severity/evidence/exploitability/mitigation/required-before-merge/
+  action/owner), consolidate the residual-risk register into `acceptance.md`, decide
+  the live Redis/S3 question, re-run the full CI gate, and record exactly one
+  acceptance classification. Keep PR #31 draft.
+- **Files likely to change / added.** New: `docs/security/phase-3a-4b-security-review.md`.
+  Updated: `docs/phase-3a-4b-acceptance.md` (residual-risk register + final
+  classification), PR #31 body.
+- **Test strategy.** Cross-reference every claim to a passing test or CI job; do not
+  claim production readiness without test evidence.
+- **Security implications.** This workstream **is** the security assessment; its output
+  gates the merge-readiness decision.
+- **Rollback implications.** Documentation and classification only.
+
+### Status
+
+- Batches 1–4 are complete.
+- Batch 5 remains outstanding.
+- Phase 3A.4b is still **in progress**.
+- PR #31 remains **draft and unmerged**.
+- Phase 3B has **not** started.

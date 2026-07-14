@@ -59,3 +59,9 @@ class WorkerRegistration(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     build_revision: Mapped[str | None] = mapped_column(String(64))
     #: Optional non-reversible hostname hash; never an IP or raw hostname.
     host_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    #: Opaque per-registration fencing token. A fresh value is minted on every
+    #: ``register`` (a process restart), so heartbeats or status transitions carrying
+    #: a stale generation's token no longer match the row and are refused — an old
+    #: process cannot mutate the registration that replaced it. Not a credential and
+    #: never exposed by any operator or customer response.
+    generation_token: Mapped[str | None] = mapped_column(String(64))

@@ -15,8 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
+from app.core.lifecycle import graceful_shutdown
 from app.core.logging import configure_logging, get_logger
+from app.core.metrics import SERVICE_SHUTDOWNS_TOTAL, SERVICE_STARTUPS_TOTAL, get_metrics
 from app.core.middleware import CorrelationMiddleware, RateLimitMiddleware
+from app.core.tracing import configure_tracing_from_settings
 
 logger = get_logger("signalnest.main")
 
@@ -24,20 +27,27 @@ logger = get_logger("signalnest.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    # Migrations (Alembic) are the authoritative schema path in every mode. We do not
-    # call create_all() here; instead we fail fast with a clear instruction if the
-    # database has not been migrated yet.
-    from sqlalchemy import inspect
+    # Ordered startup. Config + logging are already applied in create_app(); the
+    # tracer is installed first so a startup failure below is still traced. It is a
+    # no-op unless tracing is enabled, and fails closed (a missing collector/SDK
+    # degrades to no-op) so it can never block startup.
+    configure_tracing_from_settings(settings)
 
+    # Schema-compatibility gate (verify, never mutate). Migrations are owned by a
+    # single actor (``python -m app.db.migrate``); replicas never migrate. Fails
+    # fast with an actionable message if the live schema is uninitialized or behind.
+    from app.db.schema import require_startup_schema
     from app.db.session import engine
 
-    tables = inspect(engine).get_table_names()
-    if "users" not in tables or "alembic_version" not in tables:
-        raise RuntimeError(
-            "Database schema is not initialized. Run migrations first:\n"
-            "  npm run migrate        # or: npm run demo:setup (migrate + seed)\n"
-            f"(database_url={settings.database_url})"
-        )
+    compat = require_startup_schema(engine, settings=settings)
+
+    metrics = get_metrics()
+    metrics.increment(
+        SERVICE_STARTUPS_TOTAL,
+        service=settings.service_name,
+        environment=settings.environment,
+        outcome="ready",
+    )
     logger.info(
         "startup",
         extra={
@@ -45,10 +55,24 @@ async def lifespan(app: FastAPI):
                 "app_mode": settings.app_mode,
                 "environment": settings.environment,
                 "llm_provider": settings.llm_provider,
+                "schema_state": compat.state.value,
             }
         },
     )
-    yield
+    try:
+        yield
+    finally:
+        # Bounded, idempotent drain: count the shutdown, then flush telemetry and
+        # close the Redis clients + database pool. Every step is best-effort so a
+        # slow exporter or backend can never prevent the process from exiting.
+        logger.info("shutdown", extra={"extra_fields": {"environment": settings.environment}})
+        metrics.increment(
+            SERVICE_SHUTDOWNS_TOTAL,
+            service=settings.service_name,
+            environment=settings.environment,
+            outcome="clean",
+        )
+        graceful_shutdown(settings)
 
 
 def create_app() -> FastAPI:

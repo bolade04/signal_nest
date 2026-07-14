@@ -215,6 +215,90 @@ def test_postgres_two_workers_claim_different_jobs() -> None:  # pragma: no cove
         engine.dispose()
 
 
+@pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRES_URL"),
+    reason="TEST_POSTGRES_URL not set; skipping live PostgreSQL contention test",
+)
+def test_postgres_skip_locked_claimer_skips_a_locked_row() -> None:  # pragma: no cover - gated
+    """True lock contention: a claim skips a row another txn holds locked.
+
+    Unlike the sequential two-worker test above, this holds transaction A's
+    ``FOR UPDATE SKIP LOCKED`` row lock *open* while transaction B claims. B must
+    step over the locked candidate and take the next one rather than block on A —
+    which is the whole point of ``SKIP LOCKED``. A short ``statement_timeout`` on
+    B turns a regression (B blocking on the lock) into a fast, unambiguous failure
+    instead of a hang.
+    """
+    import hashlib
+    import json
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+    from app.jobs.store import DurableJobStore
+    from app.organizations.models import Organization, Workspace
+
+    url = os.environ["TEST_POSTGRES_URL"]
+    engine = create_engine(url, future=True)
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    store = DurableJobStore()
+
+    with factory() as tenant:
+        tenant.add(Organization(id="org-1", name="Org One", slug="org-one"))
+        tenant.add(Workspace(id="ws-1", organization_id="org-1", name="WS One", slug="ws-one"))
+        tenant.commit()
+
+    def _enqueue(db, key):
+        payload = {"scout_request_id": key}
+        store.enqueue(
+            db,
+            organization_id="org-1",
+            workspace_id="ws-1",
+            job_type="test.ok",
+            payload=payload,
+            payload_hash=hashlib.sha256(
+                json.dumps(payload, sort_keys=True).encode()
+            ).hexdigest(),
+        )
+        db.commit()
+
+    with factory() as seed:
+        _enqueue(seed, "a")
+        _enqueue(seed, "b")
+
+    now = datetime.now(UTC)
+    db_a, db_b = factory(), factory()
+    try:
+        # A locks exactly one due row with SKIP LOCKED and holds the lock open.
+        locked = db_a.execute(
+            store._due_candidates_select(now, 1).with_for_update(skip_locked=True)
+        ).first()
+        assert locked is not None
+        locked_id = locked[0]
+
+        # B must not wait on A's lock; if it ever does, fail fast instead of hanging.
+        db_b.execute(text("SET LOCAL statement_timeout = '5000'"))
+        claimed = store.claim_one(db_b, worker_id="w-b", lease_seconds=30, now=now)
+        assert claimed is not None
+        assert claimed.id != locked_id  # B skipped A's locked row and took the other
+        db_b.commit()
+
+        # A now releases its lock and claims what remains — the row it had locked.
+        db_a.rollback()
+        remaining = store.claim_one(db_a, worker_id="w-a", lease_seconds=30, now=now)
+        assert remaining is not None
+        assert remaining.id == locked_id
+        assert remaining.lease_token != claimed.lease_token
+    finally:
+        db_a.close()
+        db_b.close()
+        engine.dispose()
+
+
 # --------------------------------------------------------------------------- #
 # Redis cache — fakeredis
 # --------------------------------------------------------------------------- #
@@ -267,6 +351,30 @@ def test_redis_cache_tenant_keys_do_not_collide(fake_redis) -> None:
     cache.set(tenant_cache_key("org-2", "ws-1", "x"), "b")
     assert cache.get(tenant_cache_key("org-1", "ws-1", "x")) == "a"
     assert cache.get(tenant_cache_key("org-2", "ws-1", "x")) == "b"
+
+
+def test_tenant_cache_key_encoding_is_collision_resistant() -> None:
+    """A component containing the ``:`` delimiter cannot forge a key boundary."""
+    from app.infra.cache import tenant_cache_key
+
+    # One part "a:b" must not collide with two parts "a","b".
+    assert tenant_cache_key("org", "ws", "a:b") != tenant_cache_key("org", "ws", "a", "b")
+    # A colon smuggled into a tenant id cannot cross the tenant boundary.
+    assert tenant_cache_key("org", "ws:x", "k") != tenant_cache_key("org", "ws", "x", "k")
+    assert tenant_cache_key("a:b", "ws", "k") != tenant_cache_key("a", "b", "ws", "k")
+    # Ordinary ids (no ':' or '%') are encoded to themselves — stable, readable keys.
+    assert tenant_cache_key("org-1", "ws-1", "profile") == "t:org-1:ws-1:profile"
+
+
+def test_redis_cache_colon_bearing_tenant_ids_do_not_collide(fake_redis) -> None:
+    from app.infra.cache import RedisCache, tenant_cache_key
+
+    cache = RedisCache(fake_redis, key_prefix="sn")
+    cache.set(tenant_cache_key("org", "ws:x", "k"), "a")
+    cache.set(tenant_cache_key("org", "ws", "x", "k"), "b")
+    # Distinct logical scopes remain distinct physical entries.
+    assert cache.get(tenant_cache_key("org", "ws:x", "k")) == "a"
+    assert cache.get(tenant_cache_key("org", "ws", "x", "k")) == "b"
 
 
 def test_redis_cache_rejects_nonpositive_ttl(fake_redis) -> None:
@@ -372,6 +480,39 @@ def test_object_key_validation_accepts_safe_key() -> None:
     assert tenant_object_key("org-1", "ws-1", "assets", "logo.png") == (
         "org-1/ws-1/assets/logo.png"
     )
+
+
+@pytest.mark.parametrize(
+    "org,ws",
+    [
+        ("../org", "ws-1"),        # traversal in the org segment
+        ("org-1", "../ws"),        # traversal in the workspace segment
+        ("a/b", "ws-1"),           # separator smuggles an extra segment
+        ("org-1", "a/b"),
+        ("org\\1", "ws-1"),        # backslash separator
+        ("", "ws-1"),              # empty tenant id
+        ("org-1", ""),
+        ("..", "ws-1"),            # bare relative segment
+        ("org-1", "."),
+        ("org\x001", "ws-1"),      # null byte
+    ],
+)
+def test_tenant_object_key_rejects_hostile_tenant_identifiers(org, ws) -> None:
+    """A hostile org/workspace id cannot inject a separator or traversal."""
+    from app.infra.storage import tenant_object_key
+
+    with pytest.raises(InvalidObjectKeyError):
+        tenant_object_key(org, ws, "assets", "logo.png")
+
+
+def test_tenant_object_key_rejects_hostile_relative_parts() -> None:
+    """The relative parts remain validated, and the composed key is re-checked."""
+    from app.infra.storage import tenant_object_key
+
+    with pytest.raises(InvalidObjectKeyError):
+        tenant_object_key("org-1", "ws-1", "..", "escape")
+    with pytest.raises(InvalidObjectKeyError):
+        tenant_object_key("org-1", "ws-1", "a", "../b")
 
 
 class _FakeS3:

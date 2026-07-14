@@ -25,6 +25,7 @@ from typing import Any, Final, Protocol
 
 from app.core.config import Settings, get_settings
 from app.core.errors import RedisUnavailableError
+from app.core.tracing import REDIS_CACHE, start_span
 
 
 class _Miss:
@@ -40,15 +41,29 @@ class _Miss:
 MISS: Final[_Miss] = _Miss()
 
 
+def _encode_key_component(component: str) -> str:
+    """Escape the ``:`` delimiter so a component can never forge a key boundary.
+
+    ``%`` is escaped first (so the escaping is unambiguous and reversible), then the
+    ``:`` delimiter. Because a raw ``:`` can no longer appear inside an encoded
+    component, joining components with ``:`` stays injective: distinct component
+    tuples always map to distinct keys. Without this, ``("a:b")`` and ``("a", "b")``
+    would collide and one tenant could address another tenant's entry. Components
+    with no ``:`` or ``%`` (ordinary ids) are returned unchanged.
+    """
+    return component.replace("%", "%25").replace(":", "%3A")
+
+
 def tenant_cache_key(organization_id: str, workspace_id: str, *parts: str) -> str:
     """Build a tenant-scoped cache key. Parts are joined under the tenant scope.
 
     The tenant segment is derived server-side from the caller's context, never
-    from client input, so one tenant cannot address another tenant's entries.
+    from client input, so one tenant cannot address another tenant's entries. Every
+    component is delimiter-encoded so a value containing ``:`` cannot collide with a
+    differently-split component tuple.
     """
-    scope = f"t:{organization_id}:{workspace_id}"
-    tail = ":".join(parts)
-    return f"{scope}:{tail}" if tail else scope
+    components = ["t", organization_id, workspace_id, *parts]
+    return ":".join(_encode_key_component(c) for c in components)
 
 
 def _validate_ttl(ttl_seconds: int | None) -> None:
@@ -112,32 +127,53 @@ class RedisCache:
         return f"{self._prefix}:cache:{key}"
 
     def get(self, key: str, default: Any = None) -> Any:
-        try:
-            raw = self._client.get(self._redis_key(key))
-        except Exception as exc:  # redis.RedisError and friends
-            raise RedisUnavailableError() from exc
-        if raw is None:
-            return default
-        try:
-            return json.loads(raw)["v"]
-        except (ValueError, KeyError, TypeError):
-            # A corrupt/foreign entry is treated as a miss rather than crashing a
-            # request; it will be overwritten on the next set.
-            return default
+        # Dependency span carries only the bounded operation + outcome — never the
+        # key, value or Redis URL.
+        with start_span(
+            REDIS_CACHE,
+            kind="client",
+            attributes={"component": "cache", "dependency": "redis", "operation": "get"},
+        ) as span:
+            try:
+                raw = self._client.get(self._redis_key(key))
+            except Exception as exc:  # redis.RedisError and friends
+                raise RedisUnavailableError() from exc
+            if raw is None:
+                span.set_attribute("outcome", "miss")
+                return default
+            span.set_attribute("outcome", "hit")
+            try:
+                return json.loads(raw)["v"]
+            except (ValueError, KeyError, TypeError):
+                # A corrupt/foreign entry is treated as a miss rather than crashing a
+                # request; it will be overwritten on the next set.
+                return default
 
     def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
         _validate_ttl(ttl_seconds)
         payload = json.dumps({"v": value})
-        try:
-            self._client.set(self._redis_key(key), payload, ex=ttl_seconds)
-        except Exception as exc:
-            raise RedisUnavailableError() from exc
+        with start_span(
+            REDIS_CACHE,
+            kind="client",
+            attributes={"component": "cache", "dependency": "redis", "operation": "set"},
+        ) as span:
+            try:
+                self._client.set(self._redis_key(key), payload, ex=ttl_seconds)
+            except Exception as exc:
+                raise RedisUnavailableError() from exc
+            span.set_attribute("outcome", "success")
 
     def delete(self, key: str) -> None:
-        try:
-            self._client.delete(self._redis_key(key))
-        except Exception as exc:
-            raise RedisUnavailableError() from exc
+        with start_span(
+            REDIS_CACHE,
+            kind="client",
+            attributes={"component": "cache", "dependency": "redis", "operation": "delete"},
+        ) as span:
+            try:
+                self._client.delete(self._redis_key(key))
+            except Exception as exc:
+                raise RedisUnavailableError() from exc
+            span.set_attribute("outcome", "success")
 
     def ping(self) -> bool:
         try:

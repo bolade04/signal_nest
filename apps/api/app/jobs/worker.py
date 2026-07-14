@@ -31,13 +31,37 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
+from logging import WARNING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.errors import WorkerRegistrationFailedError
-from app.core.logging import configure_logging, get_logger
+from app.core.lifecycle import graceful_shutdown
+from app.core.log_context import bound_context
+from app.core.logging import configure_logging, get_logger, log_event
+from app.core.metrics import (
+    JOB_EXECUTION_DURATION_MS,
+    JOBS_CLAIMED_TOTAL,
+    JOBS_COMPLETED_TOTAL,
+    JOBS_DEAD_LETTERED_TOTAL,
+    JOBS_FAILED_TOTAL,
+    JOBS_RETRIED_TOTAL,
+    WORKER_LEASE_RECOVERED_TOTAL,
+    WORKER_POLL_TOTAL,
+    get_metrics,
+)
+from app.core.tracing import (
+    JOB_CLAIM,
+    JOB_COMPLETE,
+    JOB_EXECUTE,
+    JOB_FAIL,
+    JOB_RECOVER,
+    WORKER_POLL,
+    extract_context,
+    start_span,
+)
 from app.db.session import SessionLocal
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
@@ -61,6 +85,13 @@ Clock = Callable[[], datetime]
 #: Sentinel returned when a mutation is rejected because the lease was reclaimed
 #: by another worker. The losing worker simply stops; the new owner drives on.
 LEASE_LOST = "lease_lost"
+
+#: Terminal non-success status -> the counter that records it. Bounded set.
+_FAIL_METRIC = {
+    JobStatus.RETRY_WAIT.value: JOBS_RETRIED_TOTAL,
+    JobStatus.FAILED.value: JOBS_FAILED_TOTAL,
+    JobStatus.DEAD_LETTERED.value: JOBS_DEAD_LETTERED_TOTAL,
+}
 
 
 def derive_worker_id(configured: str | None = None) -> str:
@@ -126,39 +157,44 @@ class JobRunner:
 
     # -- heartbeat ----------------------------------------------------------
     def _start_heartbeat(
-        self, job_id: str, *, worker_id: str, lease_token: str
+        self, job_id: str, *, worker_id: str, lease_token: str, correlation_id: str | None
     ) -> tuple[threading.Event, threading.Thread]:
         stop = threading.Event()
         interval = self._settings.worker_heartbeat_seconds
         lease = self._settings.worker_lease_seconds
 
         def _beat() -> None:
-            # ``wait`` returns True when signalled to stop, so a healthy run ticks
-            # every ``interval`` and stops promptly when the job finishes.
-            while not stop.wait(interval):
-                hs = self._session_factory()
-                try:
-                    job = hs.get(Job, job_id)
-                    if job is not None and job.status == JobStatus.RUNNING.value:
-                        # Fenced by the credential captured at claim: if the lease
-                        # was reclaimed the token no longer matches and we stop
-                        # beating rather than reviving another worker's job.
-                        self._store.heartbeat(
-                            hs, job, worker_id=worker_id,
-                            lease_token=lease_token, lease_seconds=lease,
+            # The heartbeat runs in its own thread, so contextvars set on the runner
+            # thread do not propagate here; re-bind the job's safe correlation id so
+            # a lease-loss log in this thread is still followable (and carries no raw
+            # job id).
+            with bound_context(component="jobs", job_correlation_id=correlation_id):
+                # ``wait`` returns True when signalled to stop, so a healthy run ticks
+                # every ``interval`` and stops promptly when the job finishes.
+                while not stop.wait(interval):
+                    hs = self._session_factory()
+                    try:
+                        job = hs.get(Job, job_id)
+                        if job is not None and job.status == JobStatus.RUNNING.value:
+                            # Fenced by the credential captured at claim: if the lease
+                            # was reclaimed the token no longer matches and we stop
+                            # beating rather than reviving another worker's job.
+                            self._store.heartbeat(
+                                hs, job, worker_id=worker_id,
+                                lease_token=lease_token, lease_seconds=lease,
+                            )
+                            hs.commit()
+                    except JobLeaseLostError:
+                        hs.rollback()
+                        log_event(
+                            logger, "worker.heartbeat.lease_lost",
+                            component="jobs", outcome="degraded", stage="heartbeat",
                         )
-                        hs.commit()
-                except JobLeaseLostError:
-                    hs.rollback()
-                    logger.info(
-                        "worker.heartbeat.lease_lost",
-                        extra={"extra_fields": {"job_id": job_id}},
-                    )
-                    stop.set()
-                except Exception:  # pragma: no cover - best-effort lease renewal
-                    hs.rollback()
-                finally:
-                    hs.close()
+                        stop.set()
+                    except Exception:  # pragma: no cover - best-effort lease renewal
+                        hs.rollback()
+                    finally:
+                        hs.close()
 
         thread = threading.Thread(target=_beat, name=f"hb-{job_id[:8]}", daemon=True)
         thread.start()
@@ -181,6 +217,7 @@ class JobRunner:
         assert worker_id is not None and lease_token is not None
 
         job_id = job.id
+        job_type = job.job_type
         # Persist RUNNING (and count the attempt) before doing any work, so a crash
         # mid-handler leaves an accurate, recoverable record.
         try:
@@ -190,15 +227,17 @@ class JobRunner:
             db.commit()
         except JobLeaseLostError:
             db.rollback()
-            logger.warning(
-                "worker.lease_lost",
-                extra={"extra_fields": {"job_id": job_id, "stage": "mark_running"}},
+            log_event(
+                logger, "worker.lease_lost", level=WARNING,
+                component="jobs", outcome="degraded", stage="mark_running",
             )
             return LEASE_LOST
 
         stop_hb, hb_thread = self._start_heartbeat(
-            job_id, worker_id=worker_id, lease_token=lease_token
+            job_id, worker_id=worker_id, lease_token=lease_token,
+            correlation_id=job.correlation_id,
         )
+        started = time.perf_counter()
         try:
             handler = resolve_handler(job.job_type)
             ctx = HandlerContext(
@@ -211,17 +250,33 @@ class JobRunner:
                 is_cancelled=self._cancel_checker(job_id),
             )
             result = handler(ctx)
-            self._store.complete(
-                db, job, worker_id=worker_id, lease_token=lease_token,
-                result_summary=result, now=self._clock(),
+            # A child span over just the terminal transition (not the handler, which
+            # is the work itself), so a lease loss or commit failure at completion is
+            # visible on the trace distinct from the execution.
+            with start_span(
+                JOB_COMPLETE,
+                kind="internal",
+                attributes={"component": "jobs", "job.type": job_type},
+            ) as span:
+                self._store.complete(
+                    db, job, worker_id=worker_id, lease_token=lease_token,
+                    result_summary=result, now=self._clock(),
+                )
+                # Metrics only after the terminal state is durably committed.
+                db.commit()
+                span.set_attribute("outcome", "success")
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            m = get_metrics()
+            m.increment(JOBS_COMPLETED_TOTAL, outcome="success", job_type=job_type)
+            m.observe(
+                JOB_EXECUTION_DURATION_MS, elapsed_ms, outcome="success", job_type=job_type
             )
-            db.commit()
             return JobStatus.SUCCEEDED.value
         except JobLeaseLostError:
             db.rollback()
-            logger.warning(
-                "worker.lease_lost",
-                extra={"extra_fields": {"job_id": job_id, "stage": "complete"}},
+            log_event(
+                logger, "worker.lease_lost", level=WARNING,
+                component="jobs", outcome="degraded", stage="complete",
             )
             return LEASE_LOST
         except JobExecutionError as exc:
@@ -236,12 +291,15 @@ class JobRunner:
                     return JobStatus.CANCELLED.value
                 except JobLeaseLostError:
                     db.rollback()
-                    logger.warning(
-                        "worker.lease_lost",
-                        extra={"extra_fields": {"job_id": job_id, "stage": "finish_cancel"}},
+                    log_event(
+                        logger, "worker.lease_lost", level=WARNING,
+                        component="jobs", outcome="degraded", stage="finish_cancel",
                     )
                     return LEASE_LOST
-            return self._fail(db, job, exc.error, worker_id=worker_id, lease_token=lease_token)
+            return self._fail(
+                db, job, exc.error, worker_id=worker_id, lease_token=lease_token,
+                started=started, job_type=job_type,
+            )
         except Exception as exc:  # unclassified escape -> conservative retryable
             db.rollback()
             # Record only the exception *class name*, never its message (which may
@@ -249,33 +307,57 @@ class JobRunner:
             return self._fail(
                 db, job, JobError(JobErrorCode.TRANSIENT, type(exc).__name__),
                 worker_id=worker_id, lease_token=lease_token,
+                started=started, job_type=job_type,
             )
         finally:
             stop_hb.set()
             hb_thread.join(timeout=1.0)
 
     def _fail(
-        self, db: Session, job: Job, error: JobError, *, worker_id: str, lease_token: str
+        self, db: Session, job: Job, error: JobError, *, worker_id: str, lease_token: str,
+        started: float, job_type: str,
     ) -> str:
         try:
-            self._store.fail(
-                db,
-                job,
-                worker_id=worker_id,
-                lease_token=lease_token,
-                error=error,
-                base_seconds=self._settings.job_retry_base_seconds,
-                max_seconds=self._settings.job_retry_max_seconds,
-                jitter_seed=job.id,
-                now=self._clock(),
+            # A child span over the failure transition. The concrete terminal outcome
+            # (retry / failed / dead-lettered) is only known after ``fail`` computes it,
+            # so it is carried as the low-cardinality ``job.status`` + ``retryable``
+            # attributes rather than as distinct span names.
+            with start_span(
+                JOB_FAIL,
+                kind="internal",
+                attributes={"component": "jobs", "job.type": job_type},
+            ) as span:
+                self._store.fail(
+                    db,
+                    job,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    error=error,
+                    base_seconds=self._settings.job_retry_base_seconds,
+                    max_seconds=self._settings.job_retry_max_seconds,
+                    jitter_seed=job.id,
+                    now=self._clock(),
+                )
+                db.commit()
+                span.set_attribute("job.status", job.status)
+                span.set_attribute("retryable", job.status == JobStatus.RETRY_WAIT.value)
+                span.set_attribute("outcome", "failure")
+            # Only after the failure transition is committed: count the exact terminal
+            # outcome (retry / failed / dead-lettered) and record execution duration.
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            m = get_metrics()
+            counter = _FAIL_METRIC.get(job.status)
+            if counter is not None:
+                m.increment(counter, job_type=job_type, error_class=error.code.value)
+            m.observe(
+                JOB_EXECUTION_DURATION_MS, elapsed_ms, outcome="failure", job_type=job_type
             )
-            db.commit()
             return job.status
         except JobLeaseLostError:
             db.rollback()
-            logger.warning(
-                "worker.lease_lost",
-                extra={"extra_fields": {"job_id": job.id, "stage": "fail"}},
+            log_event(
+                logger, "worker.lease_lost", level=WARNING,
+                component="jobs", outcome="degraded", stage="fail",
             )
             return LEASE_LOST
 
@@ -283,19 +365,92 @@ class JobRunner:
     def poll_once(self, *, worker_id: str) -> bool:
         """Recover leases, claim one due job and run it. Returns True if it ran."""
         db = self._session_factory()
+        worker_type = self._settings.worker_type
+        m = get_metrics()
         try:
-            self._store.recover_expired_leases(db, now=self._clock())
-            db.commit()
-            job = self._store.claim_one(
-                db,
-                worker_id=worker_id,
-                lease_seconds=self._settings.worker_lease_seconds,
-                now=self._clock(),
-                max_scan=max(self._settings.job_claim_batch_size, 1) * 20,
-            )
-            if job is None:
-                return False
-            self.run_claimed(db, job)
+            # WORKER_POLL scopes only recovery + claim (the high-volume idle path). Idle
+            # polls are high-volume, so WORKER_POLL is sampled at a reduced rate at the
+            # root and its recover/claim children inherit that decision. Claimed-job
+            # execution runs *after* this span closes, as its own JOB_EXECUTE span, so it
+            # is never nested under the reduced-sampled poll and can start a fresh trace
+            # (or link to the enqueue lineage via its persisted parent).
+            with start_span(
+                WORKER_POLL,
+                kind="consumer",
+                attributes={"component": "jobs", "worker.type": worker_type},
+            ) as poll_span:
+                # Recovery counts only the rows *this* loop won (single-winner CAS), and
+                # only after the recovery transition is committed.
+                with start_span(
+                    JOB_RECOVER,
+                    kind="internal",
+                    attributes={"component": "jobs", "worker.type": worker_type},
+                ) as recover_span:
+                    recovered = self._store.recover_expired_leases(db, now=self._clock())
+                    db.commit()
+                    recover_span.set_attribute("recovered", bool(recovered))
+                    recover_span.set_attribute(
+                        "outcome", "recovered" if recovered else "idle"
+                    )
+                if recovered:
+                    m.increment(
+                        WORKER_LEASE_RECOVERED_TOTAL, worker_type=worker_type, amount=recovered
+                    )
+                with start_span(
+                    JOB_CLAIM,
+                    kind="consumer",
+                    attributes={"component": "jobs", "worker.type": worker_type},
+                ) as claim_span:
+                    job = self._store.claim_one(
+                        db,
+                        worker_id=worker_id,
+                        lease_seconds=self._settings.worker_lease_seconds,
+                        now=self._clock(),
+                        max_scan=max(self._settings.job_claim_batch_size, 1) * 20,
+                    )
+                    claim_span.set_attribute("outcome", "idle" if job is None else "claimed")
+                    if job is not None:
+                        claim_span.set_attribute("job.type", job.job_type)
+                if job is None:
+                    # Aggregated counter (not a per-idle-poll log) so an idle worker
+                    # never produces a log storm.
+                    m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="idle")
+                    poll_span.set_attribute("outcome", "idle")
+                    return False
+                # ``claim_one`` commits the claim internally, so the claim is authoritative
+                # here.
+                m.increment(JOBS_CLAIMED_TOTAL, worker_type=worker_type, job_type=job.job_type)
+                m.increment(WORKER_POLL_TOTAL, worker_type=worker_type, outcome="claimed")
+                poll_span.set_attribute("outcome", "claimed")
+                poll_span.set_attribute("job.type", job.job_type)
+
+            # The WORKER_POLL span has closed. Execute the claimed job as its own span so
+            # its trace is not parented to the reduced-sampled poll.
+            # Restore the job's safe correlation id (and worker type) into logging context
+            # for the whole execution; bound_context clears it on exit so a later poll
+            # never inherits the previous job's correlation.
+            with bound_context(
+                component="jobs",
+                worker_type=worker_type,
+                job_correlation_id=job.correlation_id,
+            ):
+                # Restore the traceparent captured at enqueue as the remote parent of
+                # this execution span, so the whole run_claimed lifecycle links back to
+                # the request/scheduler that enqueued it. A job with no persisted context
+                # (created before this column, or enqueued with tracing off) starts a
+                # fresh root span.
+                parent = extract_context(job.trace_context)
+                with start_span(
+                    JOB_EXECUTE,
+                    kind="consumer",
+                    parent=parent,
+                    attributes={
+                        "component": "jobs",
+                        "worker.type": worker_type,
+                        "job.type": job.job_type,
+                    },
+                ):
+                    self.run_claimed(db, job)
             return True
         finally:
             db.close()
@@ -325,8 +480,15 @@ class Worker:
         self._registry = registry
         self._clock = clock
         self._stop = threading.Event()
+        # Set by a *second* shutdown signal: an operator asking to exit now. It
+        # shortens the drain grace so in-flight work is abandoned promptly (its
+        # lease then expires and the job is recovered by the next worker).
+        self._fast_stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._registry_hb: tuple[threading.Event, threading.Thread] | None = None
+        # Captured at register(); fences this process's registry mutations so an
+        # older process sharing the worker_id cannot heartbeat/transition our row.
+        self._generation_token: str | None = None
 
     # -- startup validation -------------------------------------------------
     def validate(self) -> None:
@@ -365,7 +527,7 @@ class Worker:
         for i in range(attempts):
             db = self._session_factory()
             try:
-                self._registry.register(
+                row = self._registry.register(
                     db,
                     worker_id=self.worker_id,
                     worker_type=self._settings.worker_type,
@@ -377,6 +539,9 @@ class Worker:
                     host_fingerprint=host_fingerprint(),
                     now=self._clock(),
                 )
+                # Capture our generation token before committing; every later
+                # registry mutation presents it so a stale peer is fenced out.
+                self._generation_token = row.generation_token
                 db.commit()
                 return
             except Exception as exc:  # noqa: BLE001 - retried, then re-raised sanitized
@@ -392,7 +557,13 @@ class Worker:
         """Best-effort registry status transition (never fatal to the worker)."""
         db = self._session_factory()
         try:
-            self._registry._transition(db, self.worker_id, target, now=self._clock())
+            self._registry._transition(
+                db,
+                self.worker_id,
+                target,
+                now=self._clock(),
+                generation_token=self._generation_token,
+            )
             db.commit()
         except Exception:  # pragma: no cover - status change is advisory
             db.rollback()
@@ -418,7 +589,12 @@ class Worker:
             while not stop.wait(interval):
                 db = self._session_factory()
                 try:
-                    self._registry.heartbeat(db, self.worker_id, now=self._clock())
+                    self._registry.heartbeat(
+                        db,
+                        self.worker_id,
+                        now=self._clock(),
+                        generation_token=self._generation_token,
+                    )
                     self._registry.sweep_stale(
                         db, stale_after_seconds=stale_after, now=self._clock()
                     )
@@ -452,8 +628,7 @@ class Worker:
     # -- signals ------------------------------------------------------------
     def _install_signal_handlers(self) -> None:
         def _handle(signum, _frame):  # noqa: ANN001
-            logger.info("worker.signal", extra={"extra_fields": {"signal": signum}})
-            self._stop.set()
+            self.request_stop(signum=signum)
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -461,8 +636,25 @@ class Worker:
             except ValueError:  # pragma: no cover - not on main thread (tests)
                 pass
 
-    def request_stop(self) -> None:
+    def request_stop(self, *, signum: int | None = None) -> None:
+        """Begin draining. A second call escalates to a shortened (forced) grace."""
+        if self._stop.is_set():
+            # Already draining: a second signal means "exit now".
+            logger.info(
+                "worker.signal.force",
+                extra={"extra_fields": {"signal": signum}},
+            )
+            self._fast_stop.set()
+            return
+        logger.info("worker.signal", extra={"extra_fields": {"signal": signum}})
         self._stop.set()
+
+    def _resolve_grace(self) -> float:
+        """The drain grace to use, shortened when a second signal has escalated."""
+        grace = self._settings.worker_shutdown_grace_seconds
+        if self._fast_stop.is_set():
+            return min(grace, self._settings.worker_force_shutdown_grace_seconds)
+        return grace
 
     def start(self) -> None:
         for i in range(self._settings.worker_concurrency):
@@ -471,9 +663,15 @@ class Worker:
             self._threads.append(t)
 
     def join(self, grace: float | None = None) -> None:
-        grace = self._settings.worker_shutdown_grace_seconds if grace is None else grace
+        # A shared deadline (not a per-thread timeout) bounds the *total* drain, so
+        # N slots never sum to N×grace. A second signal shortens the deadline.
+        grace = self._resolve_grace() if grace is None else grace
+        deadline = time.monotonic() + grace
         for t in self._threads:
-            t.join(timeout=grace)
+            remaining = deadline - time.monotonic()
+            if self._fast_stop.is_set():
+                remaining = min(remaining, self._settings.worker_force_shutdown_grace_seconds)
+            t.join(timeout=max(0.0, remaining))
 
     def run(self) -> None:
         """Blocking entrypoint: validate, register, spawn slots, wait, drain."""
@@ -514,6 +712,10 @@ class Worker:
         self.join()
         self._set_registry_status(WorkerStatus.STOPPED)
         logger.info("worker.stopped", extra={"extra_fields": {"worker_id": self.worker_id}})
+        # Bounded, best-effort telemetry flush + resource cleanup on the way out,
+        # after STOPPED is recorded so a slow exporter never delays the fenced
+        # terminal transition. Never raises into the process exit.
+        graceful_shutdown(self._settings)
 
 
 def main() -> None:

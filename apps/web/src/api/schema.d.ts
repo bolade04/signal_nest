@@ -133,6 +133,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Telemetry
+         * @description Operator-only observability posture: logging mode, metrics/exporter health,
+         *     swallowed-telemetry-failure count, and whether correlation + redaction are on.
+         *
+         *     Correlation and redaction are structural in this build (the middleware and the
+         *     log formatter are always installed), so both are reported ``True``. Nothing here
+         *     is customer-enumerable and nothing is a secret.
+         */
+        get: operations["internal_telemetry_api_v1_internal_system_telemetry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/workers": {
         parameters: {
             query?: never;
@@ -2012,6 +2037,36 @@ export interface components {
             /** Source Type */
             source_type: string;
         };
+        /**
+         * TelemetryStatusOut
+         * @description Operator-safe observability posture. Deliberately free of any endpoint,
+         *     credential, URL, payload, tenant/request/job identifier or token — only
+         *     bounded, enumerable status values and a failure *count*.
+         */
+        TelemetryStatusOut: {
+            /** Correlation Enabled */
+            correlation_enabled: boolean;
+            /** Exporter Status */
+            exporter_status: string;
+            /** Logging Format */
+            logging_format: string;
+            /** Metrics Enabled */
+            metrics_enabled: boolean;
+            /** Redaction Enabled */
+            redaction_enabled: boolean;
+            /** Telemetry Failures */
+            telemetry_failures: number;
+            /** Trace Export Failures */
+            trace_export_failures: number;
+            /** Tracing Enabled */
+            tracing_enabled: boolean;
+            /** Tracing Exporter */
+            tracing_exporter: string;
+            /** Tracing Sample Ratio */
+            tracing_sample_ratio: number;
+            /** Tracing Status */
+            tracing_status: string;
+        };
         /** UserOut */
         UserOut: {
             /**
@@ -2339,6 +2394,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessDiagnosticsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_telemetry_api_v1_internal_system_telemetry_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryStatusOut"];
                 };
             };
             /** @description Validation Error */
