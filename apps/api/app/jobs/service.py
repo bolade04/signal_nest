@@ -52,6 +52,23 @@ def _get_notifier() -> JobNotifier:
     return _notifier
 
 
+def shutdown_notifier() -> None:
+    """Close the process-wide wake-up notifier if one was built (best-effort).
+
+    Idempotent: resets the singleton so a later enqueue rebuilds it. Any close
+    failure is swallowed — shutdown must never be blocked by coordination cleanup.
+    """
+    global _notifier
+    if _notifier is None:
+        return
+    try:
+        _notifier.close()
+    except Exception:  # pragma: no cover - best-effort cleanup
+        pass
+    finally:
+        _notifier = None
+
+
 def _notify_available(job: Job) -> None:
     """Best-effort wake-up for a freshly enqueued, immediately-due job.
 
