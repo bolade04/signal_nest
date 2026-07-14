@@ -304,3 +304,104 @@ Implemented as proposed above, no scope drift:
 
 The public customer contract is unchanged (`openapi.json` diff clean); the only
 additive schema is the operator-only `TelemetryStatusOut`.
+
+# Batch 3 — Distributed-tracing Audit (spans, propagation, exporter)
+
+## Existing tracing surface
+
+- **No tracing libraries.** `pyproject.toml` declares no `opentelemetry-*`, no
+  `sentry-sdk`, no vendor APM agent — in any of the `full`/`dev` extras. The repo has
+  never depended on a hosted or heavyweight tracing SDK.
+- **A correlation `trace_id` already exists but is not a real trace context.**
+  `app/core/logging.py` defines `trace_id_ctx` and stamps `trace_id` onto every
+  structured record. `CorrelationMiddleware` accepts an inbound `x-trace-id` (through
+  the same strict `normalize_request_id` bound as the request id) and otherwise mirrors
+  the request id into `trace_id`. This is an opaque *log-correlation* id — there is no
+  span, no parent/child relationship, and no W3C `traceparent` parsing/propagation.
+- **`ExecutionContext` carries optional `request_id`/`trace_id`** (documented "used only
+  for tracing, never for authorization") but those fields are **not persisted** on the
+  `jobs` row: only `correlation_id` is a column. So today a trace id is *lost* between
+  the HTTP enqueue and the worker; the worker restores `correlation_id` only.
+- **Redis wake-up is payload-free** (`RedisJobNotifier` publishes `"1"`); there is no
+  place a trace context is smuggled through Redis, and correctness never depends on it.
+- **No DB/S3 auto-instrumentation.** SQLAlchemy and boto3 are used directly with no
+  event-listener span hooks.
+- **No tracing configuration.** `Settings` has observability fields (`service_name`,
+  `log_format`, `metrics_enabled`) but nothing for tracing (enabled, exporter, endpoint,
+  sampling, timeouts).
+- **No tracing startup/shutdown hooks.** `create_app()` calls `configure_logging`; the
+  lifespan does only the migration guard. The worker `main()` calls `configure_logging`.
+  Neither installs a tracer provider nor flushes a span exporter on shutdown.
+- **CI** installs no tracing dependency and provisions no collector.
+
+## Design decision — a provider-neutral, pure-Python tracing seam
+
+Batch 2's metrics seam (`app/core/metrics.py`) is the precedent: a small pure-Python
+abstraction with a no-op default, an in-memory test backend, strict cardinality
+validation, and runtime-failure isolation — **no hosted SDK in core code**. Batch 3
+mirrors that precedent for tracing rather than taking a hard dependency on
+`opentelemetry-sdk`:
+
+- **OTel-*compatible* in shape, not OTel-*dependent*.** Propagation uses the **W3C
+  `traceparent`** wire format (implemented directly and validated strictly), and span
+  names/attributes follow OTel semantic-convention shapes, so a real OTLP exporter can
+  be attached later without reworking call sites. Adding `opentelemetry-api/sdk` as a
+  *hard* dependency is deliberately avoided: it is heavy, it was not required by the
+  repo before, and the metrics precedent shows the seam pattern keeps `npm audit`/deps
+  unchanged and tests collector-free. An OTLP path remains possible as an **optional,
+  import-guarded** exporter (installed only if the operator provides the packages).
+- **No-op default.** The process tracer is a `NoOpTracer` unless one is installed via
+  `configure_tracer(...)`. Tests use an `InMemoryTracer`. Disabled by default via
+  `TRACING_ENABLED=false`.
+- **Failure isolation.** A `_SafeTracer` base validates span names + attributes
+  (cardinality/secret policy) — a policy violation raises at dev/test time (a coding
+  bug) — then isolates and counts any runtime recording/export failure so a broken
+  exporter can never break a request, a DB transaction, job claiming, worker execution,
+  readiness, or shutdown.
+
+## Gaps Batch 3 closes
+
+- No span model or provider-neutral tracer seam → `app/core/tracing.py`.
+- No validated tracing config → tracing fields on `Settings`.
+- HTTP requests uncovered by spans; inbound `traceparent` not parsed → extend
+  `CorrelationMiddleware`.
+- Trace context lost across the durable-job boundary → persist a W3C `traceparent` in a
+  new additive nullable `jobs.trace_context` column (new migration chaining after
+  `e7c2a9b4f1d3`); worker restores it and starts a linked execution span.
+- Job lifecycle / Redis / S3 / controlled DB operations uninstrumented → bounded spans
+  at authoritative boundaries.
+- No trace/log correlation beyond the flat `trace_id` field → set `trace_id` (and
+  optional `span_id`) from the active span, cleared after.
+- No operator-visible tracing posture → extend `GET /internal/system/telemetry`.
+
+## Migration requirements (Batch 3)
+
+One additive, nullable migration adding `jobs.trace_context` (a bounded `String`, W3C
+`traceparent` ≤ 55 chars, so a generous `String(64)`), chaining after `e7c2a9b4f1d3`.
+Existing jobs carry `NULL` and remain executable (a missing parent simply starts a new
+root span). Downgrade drops the column without touching business or job data.
+
+## Contract-impact assessment (Batch 3)
+
+Additive only: the operator-only `TelemetryStatusOut` gains coarse tracing fields. No
+customer-facing route or schema changes; `trace_context` is internal and never exposed
+by any customer API.
+
+## Security / cardinality risks (Batch 3)
+
+- Span **names** are a fixed low-cardinality catalog; never an id/URL/path.
+- Span **attributes** are allow-listed (bounded enums + normalized route templates only);
+  tokens, headers, DSNs, URLs, object keys, payloads, emails, tenant/job/worker ids, and
+  exception *messages* are rejected. Trace/span ids may appear in logs but never as a
+  metric label or span attribute value that would explode cardinality.
+- Exception recording uses the existing `sanitize_exception`/redaction layer (class name
+  + redacted message), never the raw message.
+- Exporter endpoints/credentials are never logged; the operator endpoint reports only
+  coarse status.
+
+## Rollback strategy (Batch 3)
+
+Each concern lands as its own focused, revertable commit. Tracing fails closed to a
+no-op: with `TRACING_ENABLED=false` (default) every helper is inert. The additive
+`jobs.trace_context` column downgrades cleanly. No customer contract changes, so a
+revert is low-risk.

@@ -30,7 +30,12 @@ focused commits that passes the full repository gate before the next batch begin
   "structured logging" and "bounded metrics" batches: the two share the same
   telemetry seams (config, contextvars, failure isolation) and are cheaper to land
   and review together.
-- **Batch 3 — distributed tracing.**
+- **Batch 3 (this session) — distributed tracing + end-to-end telemetry.** A
+  provider-neutral, OTel-compatible tracing seam (no-op default, in-memory test
+  exporter, optional import-guarded OTLP), HTTP server spans, durable-job trace-context
+  propagation, worker execution spans, bounded Redis/S3/DB spans, trace/log correlation,
+  configurable parent-based sampling, exporter-failure isolation, and operator-safe
+  trace diagnostics.
 - **Batch 4 — production containers + graceful lifecycle + migration strategy.**
 - **Batch 5 — operational runbooks, dashboards/alerts, failure-injection expansion,
   CI hardening, security review, acceptance report.**
@@ -121,6 +126,57 @@ Gate at completion: backend **309 passed** / 2 skipped (PG-gated), ruff clean,
 migration head `e7c2a9b4f1d3` upgrade/check/downgrade/re-upgrade green. Full
 repository gate (frontend, smoke, contracts, `npm audit`) recorded in
 `phase-3a-4b-acceptance.md`.
+
+**Batch 2 is complete.**
+
+### Batch 3 — scope (this session)
+
+Distributed tracing and end-to-end telemetry, delivered as focused commits. Twelve
+items:
+
+1. **OpenTelemetry-compatible tracing abstraction.** A pure-Python provider-neutral
+   seam (`app/core/tracing.py`) mirroring the Batch 2 metrics seam: no-op default
+   tracer, in-memory test exporter, optional import-guarded OTLP exporter, W3C
+   `traceparent` propagation. Core code never imports a hosted vendor SDK.
+2. **HTTP request spans.** A server span per request when tracing is enabled, extending
+   `CorrelationMiddleware`: strict inbound `traceparent` extraction, normalized route
+   templates, method + status class, controlled error class, `trace_id` bound into the
+   log context and cleared on exit.
+3. **Durable-job trace propagation.** A safe W3C `traceparent` captured at enqueue and
+   persisted in a new additive nullable `jobs.trace_context` column (migration chaining
+   after `e7c2a9b4f1d3`); the worker restores it from the claimed row.
+4. **Worker execution spans.** A linked execution span for the whole `run_claimed`
+   lifecycle, restored from the persisted parent context.
+5. **Dependency spans.** Bounded Redis (notify/cache/lock), S3 (upload/sign-url) and
+   controlled DB spans (claim txn, recovery, registration, readiness) — no keys, URLs,
+   tenant ids or payloads.
+6. **Trace/log correlation.** Logs carry `trace_id` (and optionally `span_id`) only
+   while a span is active; no leakage between requests/jobs; redaction preserved; trace
+   ids never become metric labels.
+7. **Trace/metric correlation.** The existing bounded metrics keep firing at the same
+   authoritative commit points; spans and metrics agree on outcome without spans adding
+   any high-cardinality label.
+8. **Configurable sampling.** Parent-based ratio sampling, conservative default,
+   reduced/suppressed for health/readiness and idle polls, validated config.
+9. **Exporter-failure isolation.** A collector down at startup degrades to no-op;
+   an export failure mid-request/job never breaks the request, the DB transaction, job
+   claiming, worker execution, or shutdown; a bounded flush on shutdown.
+10. **Operator-safe trace diagnostics.** `GET /internal/system/telemetry` gains coarse
+    tracing fields (enabled, provider, exporter state, sampling mode/ratio, export
+    failure count, last failure category, flush status) — never an endpoint, credential,
+    trace id or span id.
+11. **In-memory tracing tests.** Assertions run against the in-memory exporter with no
+    external collector.
+12. **CI validation.** The existing gates plus the new tracing tests; no real collector,
+    hosted vendor, container, or deployment-pipeline change.
+
+Deferred to later batches (not in Batch 3): production containers, graceful deployment
+lifecycle, migration-execution containers, deployment/incident runbooks, dashboards and
+alerts, the broad failure-injection suite, and Phase 3B.
+
+### Batch 3 — completion record
+
+_(recorded on completion.)_
 
 ## Accepted Phase 3A.4a follow-ups (Batch 1 scope)
 
