@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import CorrelationMiddleware, RateLimitMiddleware
+from app.core.tracing import _shutdown_flush, configure_tracing_from_settings
 
 logger = get_logger("signalnest.main")
 
@@ -38,6 +39,9 @@ async def lifespan(app: FastAPI):
             "  npm run migrate        # or: npm run demo:setup (migrate + seed)\n"
             f"(database_url={settings.database_url})"
         )
+    # Install the configured tracer (no-op unless tracing is enabled). Fails closed:
+    # a missing collector/SDK degrades to no-op rather than blocking startup.
+    configure_tracing_from_settings(settings)
     logger.info(
         "startup",
         extra={
@@ -48,7 +52,12 @@ async def lifespan(app: FastAPI):
             }
         },
     )
-    yield
+    try:
+        yield
+    finally:
+        # Bounded flush so shutdown always terminates even if the exporter is slow
+        # or unreachable; never raises into the lifespan.
+        _shutdown_flush(settings.tracing_shutdown_flush_seconds)
 
 
 def create_app() -> FastAPI:
