@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     debug: bool = True
     api_prefix: str = "/api/v1"
 
+    # --- Observability (Phase 3A.4b Batch 2) ---------------------------------
+    #: Stable, non-secret service identifier stamped onto every structured log
+    #: record and metric (never a hostname, tenant, or credential).
+    service_name: str = "signalnest-api"
+    #: Structured-log output format. ``auto`` resolves to ``console`` in
+    #: development (human-readable) and ``json`` everywhere else (production sinks).
+    log_format: Literal["auto", "json", "console"] = "auto"
+    #: Master switch for metric emission. Off by default (and in tests) so metrics
+    #: are strictly opt-in; core code always depends on the abstraction, never a
+    #: hosted vendor. A disabled backend is a no-op, never an error.
+    metrics_enabled: bool = False
+
     # --- Security ------------------------------------------------------------
     # Secret-bearing fields set repr=False so they never appear in model reprs,
     # tracebacks or pydantic ValidationError output (config errors are logged).
@@ -211,6 +223,13 @@ class Settings(BaseSettings):
     @property
     def is_postgres(self) -> bool:
         return self.db_backend_name == "postgresql"
+
+    @property
+    def effective_log_format(self) -> str:
+        """Resolve ``log_format=auto`` to ``console`` in development, else ``json``."""
+        if self.log_format != "auto":
+            return self.log_format
+        return "console" if self.environment == "development" else "json"
 
     @property
     def is_production_like(self) -> bool:
