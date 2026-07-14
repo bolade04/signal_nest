@@ -3613,6 +3613,45 @@
         "title": "SourcePrefIn",
         "type": "object"
       },
+      "TelemetryStatusOut": {
+        "description": "Operator-safe observability posture. Deliberately free of any endpoint,\ncredential, URL, payload, tenant/request/job identifier or token \u2014 only\nbounded, enumerable status values and a failure *count*.",
+        "properties": {
+          "correlation_enabled": {
+            "title": "Correlation Enabled",
+            "type": "boolean"
+          },
+          "exporter_status": {
+            "title": "Exporter Status",
+            "type": "string"
+          },
+          "logging_format": {
+            "title": "Logging Format",
+            "type": "string"
+          },
+          "metrics_enabled": {
+            "title": "Metrics Enabled",
+            "type": "boolean"
+          },
+          "redaction_enabled": {
+            "title": "Redaction Enabled",
+            "type": "boolean"
+          },
+          "telemetry_failures": {
+            "title": "Telemetry Failures",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "logging_format",
+          "metrics_enabled",
+          "exporter_status",
+          "telemetry_failures",
+          "correlation_enabled",
+          "redaction_enabled"
+        ],
+        "title": "TelemetryStatusOut",
+        "type": "object"
+      },
       "UserOut": {
         "properties": {
           "email": {
@@ -4244,6 +4283,56 @@
           }
         },
         "summary": "Internal Readiness",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/telemetry": {
+      "get": {
+        "description": "Operator-only observability posture: logging mode, metrics/exporter health,\nswallowed-telemetry-failure count, and whether correlation + redaction are on.\n\nCorrelation and redaction are structural in this build (the middleware and the\nlog formatter are always installed), so both are reported ``True``. Nothing here\nis customer-enumerable and nothing is a secret.",
+        "operationId": "internal_telemetry_api_v1_internal_system_telemetry_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelemetryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Telemetry",
         "tags": [
           "internal"
         ]
