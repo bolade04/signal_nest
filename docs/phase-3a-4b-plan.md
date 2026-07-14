@@ -89,6 +89,39 @@ alerts, and the broad failure-injection suite.
 If the draft PR's diff grows beyond what stays reviewable, the remaining
 observability and deployment batches split into their own follow-up PRs.
 
+### Batch 2 — completion record
+
+Delivered on this branch as focused commits:
+
+- **Structured logging + redaction** — a stable-field JSON formatter (human-readable
+  console formatter in development) with a reusable recursive secret-redaction layer
+  applied to every emitted structured value; the formatter never raises into the
+  application (`app/core/logging.py`, `app/core/redaction.py`).
+- **Request + job correlation** — strict bounded request-id middleware (accepts a
+  valid inbound id or mints one, echoes it in a response header, resets context after
+  every request) and an opaque durable-job `correlation_id` distinct from the row id /
+  lease token / worker id / tenant ids, persisted via additive nullable migration
+  `e7c2a9b4f1d3`, restored into the worker (and heartbeat thread) logging context for
+  the duration of execution and cleared afterward (`app/core/middleware.py`,
+  `app/core/log_context.py`, `app/jobs/service.py`, `app/jobs/worker.py`).
+- **Provider-neutral metrics** — a fixed metric-name catalog and a strict label
+  allow-list that rejects unknown names and any high-cardinality/identifying label at
+  dev/test time; no-op default, in-memory test backend, runtime failures isolated and
+  counted (`app/core/metrics.py`).
+- **Lifecycle instrumentation** — bounded metrics at authoritative commit points for
+  the HTTP path, enqueue, claim, completion, retry/fail/dead-letter, execution
+  duration, single-winner lease recovery and Redis notify (counted separately from
+  enqueue); idle polls increment an aggregated counter instead of logging.
+- **Operator-only telemetry status** — `GET /internal/system/telemetry` (401 anon /
+  403 non-operator / 200 operator) reporting logging mode, metrics enabled, exporter
+  health, swallowed-failure count, and correlation/redaction flags — bounded status
+  only, no ids/URLs/credentials/tokens.
+
+Gate at completion: backend **309 passed** / 2 skipped (PG-gated), ruff clean,
+migration head `e7c2a9b4f1d3` upgrade/check/downgrade/re-upgrade green. Full
+repository gate (frontend, smoke, contracts, `npm audit`) recorded in
+`phase-3a-4b-acceptance.md`.
+
 ## Accepted Phase 3A.4a follow-ups (Batch 1 scope)
 
 1. Make expired-lease recovery single-winner under concurrent workers.

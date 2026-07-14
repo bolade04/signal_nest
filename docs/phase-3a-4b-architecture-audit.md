@@ -285,3 +285,22 @@ Each Batch 2 concern lands as its own focused commit and is independently revert
 Telemetry is designed to fail closed to a no-op: if logging/redaction/metrics
 misbehave, the application path is unaffected, so a rollback is low-risk. The additive
 `jobs.correlation_id` column downgrades cleanly without touching business or job data.
+
+## Batch 2 — delivered
+
+Implemented as proposed above, no scope drift:
+
+- `app/core/redaction.py`, `app/core/logging.py` (JSON + console formatters, stable
+  fields, safe fallback), `app/core/log_context.py` (contextvar helpers, strict
+  request-id normalization, correlation-id generation).
+- `app/core/middleware.py` `CorrelationMiddleware` rewritten for strict inbound
+  request ids, response header, per-request context reset, and bounded HTTP metrics.
+- `jobs.correlation_id` column + migration `e7c2a9b4f1d3`; `service.py`/`store.py`/
+  `worker.py` propagate and restore it (including the heartbeat thread).
+- `app/core/metrics.py` (catalog, allow-list, no-op default, in-memory backend,
+  failure isolation, operator-safe status helpers) with lifecycle instrumentation at
+  authoritative commit points.
+- Operator-only `GET /internal/system/telemetry`.
+
+The public customer contract is unchanged (`openapi.json` diff clean); the only
+additive schema is the operator-only `TelemetryStatusOut`.
