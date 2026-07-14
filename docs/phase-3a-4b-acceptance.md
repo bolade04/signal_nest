@@ -1,12 +1,17 @@
 # Phase 3A.4b — Acceptance Report
 
-**Classification: IN PROGRESS — Batches 1–4 complete; final operations and acceptance remain.**
+**Classification: ACCEPTABLE TO REQUEST FINAL REVIEW — Batches 1–5 complete; all local
+gates green; PR #31 stays in draft pending the final CI run on the Batch 5 head and a
+human final review.**
 
 Branch: `feat/phase-3a-observability-deployment` · Draft PR: #31 (kept in **draft**;
 not marked ready, not merged) · Base: `main` @ `3fefb36`.
 
-Phase 3A.4b is delivered as reviewable batches. This report records what is **accepted
-so far**; the phase is **not** complete until the deferred batch (below) lands.
+Phase 3A.4b is delivered as reviewable batches. With Batch 5 (operator runbooks,
+resilience suite, security review) landed, the phase content is complete. This report
+records the consolidated acceptance and the single merge-readiness classification below.
+The PR remains a **draft**: it is not marked ready and not merged until the final CI run
+on the Batch 5 head is green and a human reviewer signs off.
 
 ## Delivered
 
@@ -113,11 +118,53 @@ so far**; the phase is **not** complete until the deferred batch (below) lands.
 - Operator guides: `docs/operations/deployment.md`, `docs/operations/migrations.md`,
   and a process-lifecycle section added to `docs/operations/observability.md`.
 
-## Deferred (phase not complete)
+### Batch 5 — operational readiness, resilience, and security review (accepted)
 
-- **Batch 5** — deployment/migration/worker/incident runbooks, dashboards + alert
-  recommendations, broad failure-injection suite, security review, final acceptance,
-  plus orchestrator manifests (Kubernetes/Nomad) and cloud infrastructure.
+- **Operator runbooks (5A)** — `docs/operations/worker_operations.md` (start/stop/scale/
+  health/troubleshoot, real `python -m app.jobs.worker`, draining semantics),
+  `incident_response.md` (12 grounded scenarios with detection/triage/containment/
+  recovery), `dashboards.md` (honest "emitted today" vs "defined-but-not-yet-emitted"
+  metric inventory + 6 dashboards), and `alerts.md` (20 alerts with signal/threshold/
+  window/severity/false-positives/action, pending-instrumentation alerts flagged). The
+  deployment/observability guides now cross-link these instead of a "deferred" note.
+- **Resilience / failure-injection suite (5B)** — `apps/api/app/tests/test_resilience.py`
+  (7 tests) asserting safe-degradation invariants: enqueue survives a Redis-notify
+  outage (job persists `PENDING`, failure counted); an abandoned in-flight job is
+  recovered by a single winner and completed (`attempt_count==2`, one `succeeded`
+  event); a poison job is dead-lettered within budget (not looped); the queue
+  accumulates durably with no workers; the production engine's pool-checkout is bounded
+  by `DB_POOL_TIMEOUT_SECONDS` and an exhausted pool raises a bounded timeout; and a job
+  completes despite a failing metrics backend (fail-closed telemetry). The suite is
+  deliberately **non-duplicative** — schema-gate/drain, readiness probes, invalid-config
+  and adapter sanitization are already covered by existing suites and are cross-referenced
+  in the module docstring rather than re-tested.
+- **Security review + rate-limit decision (5C)** —
+  `docs/security/phase-3a-4b-security-review.md`: threat model, per-area findings with
+  test-grounded evidence, and the **rate-limit production decision (Outcome B —
+  defer distributed enforcement with accepted, availability-only risk)**. No Critical or
+  High findings; no finding requires a code change before merge (see the register below).
+
+**Out of scope / future (not a Batch 5 gate):** orchestrator manifests (Kubernetes/
+Nomad) and cloud infrastructure, live managed-backend (Redis/S3) integration tests, and
+an independent third-party security audit. These are recorded as deferred residual risks,
+not blockers.
+
+## Residual-risk register
+
+Each risk is classified **Resolved** / **Accepted (not required before merge)** /
+**Required before merge** / **Deferred (future phase)**. There are **no
+Required-before-merge** items.
+
+| # | Risk | Classification | Rationale / disposition |
+| --- | --- | --- | --- |
+| R-1 | Distributed rate limiting not implemented (limiter is process-local; scales with replica count; not accurate behind a proxy) — security findings F-1/F-2 | **Accepted** | Availability/abuse only, not isolation/secret risk. Decision Outcome B: terminate abuse controls at the gateway or a shared-backend limiter. Flagged in code, `alerts.md` (Alert 20), and the security review. |
+| R-2 | Full-mode Redis/S3 exercised via injected fakes in CI, not live managed backends | **Deferred** | Adapter contracts + sanitization are unit-tested; live-backend validation is operational work for a deployment phase. Not a correctness gate (DB is authoritative; Redis advisory). |
+| R-3 | Weak-secret detection is literal-match only (no min length/entropy) — finding F-4 | **Accepted** | Operator-controlled, defense-in-depth. Recommend a min-length assertion as a small follow-up. |
+| R-4 | Several useful signals (`jobs_queue_depth`, `worker_active`, `dependency_operation_*`, `telemetry_failures_total`) are defined but not yet emitted | **Accepted** | Live values are available from operator endpoints today; dashboards/alerts mark these panels/alerts pending-instrumentation. Wiring the emit paths is a tracked follow-up. |
+| R-5 | Alert thresholds are uncalibrated starting points | **Accepted** | Documented as such in `alerts.md`; requires 1–2 weeks of real baseline before paging. Operational tuning, not a code gate. |
+| R-6 | Container-build + PostgreSQL-gated tests cannot run locally (no Docker/PostgreSQL here) | **Accepted** | They run and pass in CI (as in Batch 4). The Batch 5 head must show a green CI run before the PR is marked ready — this is the one open confirmation for the classification above. |
+| R-7 | No independent third-party security audit / pentest | **Deferred** | The security review is a substantive self-review, explicitly not independent. An external review before/after production exposure is recommended. |
+| R-8 | PR #31 is large (multi-batch) | **Accepted** | Delivered as focused, batch-scoped commits with per-batch acceptance evidence; reviewable commit-by-commit. See "Reviewability" below. |
 
 ## Gate results (this update)
 
@@ -273,28 +320,60 @@ green without touching implementation, tests, workflows or migrations; they do n
 replace the implementation evidence. The per-run doc-only breakdown is kept once, in
 `phase-3a-4b-architecture-audit.md`, to avoid recursive stamping.
 
-### Residual risks
+### Batch 4 residual risks (now tracked in the register above)
 
-- **Rate limiting is a process-local, in-memory placeholder** (`RateLimitMiddleware`).
-  It does not coordinate across API replicas and is **not** a production-grade
-  distributed control; Redis-backed or gateway-level rate limiting is future work.
-  Classification: **PARTIALLY COMPLETED — production distributed enforcement not
-  implemented** (Batch 5 security-review follow-up or a later phase; not an automatic
-  blocker unless the threat model requires it). See
-  `phase-3a-4b-architecture-audit.md` → "Rate limiting — current state".
-- Full-mode Redis/S3 adapters are exercised in CI via injected fakes, not against live
-  managed backends; live-backend integration remains future operational validation.
+The Batch 4 residual risks (process-local rate limiter; fakes-not-live Redis/S3) are
+carried forward and dispositioned in the **Residual-risk register** above (R-1, R-2).
 
-### Remaining work (Batch 5 — outstanding)
+## Batch 5 — local gate results
 
-- Final worker-operations runbook
-- Incident-response runbook
-- Dashboard recommendations
-- Alert definitions
-- Expanded deployment and failure-injection tests
-- Final security review
-- Final acceptance review
-- Final merge-readiness confirmation
+Run locally on the Batch 5 head. The container-build and PostgreSQL-gated tests run in
+CI (no local Docker/PostgreSQL — R-6).
 
-Orchestrator manifests (Kubernetes/Nomad) and cloud infrastructure remain **optional /
-future work**, not a mandatory Batch 5 gate unless the plan later requires them.
+| Gate | Result |
+| --- | --- |
+| Backend `pytest` (`app/tests/`) | **369 passed, 2 skipped** (skips = PostgreSQL-gated, run in CI) |
+| New resilience suite (`test_resilience.py`) | **7 passed** |
+| Backend `ruff check app/` | clean |
+| Alembic drift (`alembic check`) | no new operations; head `a1b2c3d4e5f6` |
+| Startup schema gate (`python -m app.db.migrate check`) | `compatible`, exit 0 |
+| Frontend lint | pass |
+| Frontend type-check | pass |
+| Frontend tests (`vitest`) | **20/20** (8 files) |
+| Smoke (`ci-smoke.sh`) | **13/13**, four-market isolation, no cross-market contamination |
+| `npm audit` | **0 vulnerabilities** |
+| Container build + `docker-security-check.sh` | **CI-only** (no local Docker) — pending Batch 5 CI run |
+| PostgreSQL-gated cross-worker claim/recovery | **CI-only** (no local PostgreSQL) — pending Batch 5 CI run |
+
+Batch 5 changes are **docs + one new test file only** — no production code, no migration,
+no workflow, and no contract change. `gen:types` is therefore unaffected.
+
+## Reviewability & rollback
+
+- **Reviewability.** The phase is delivered as focused, batch-scoped commits (Batch 5:
+  workstream definition → 5A runbooks → 5B resilience test → 5C security review →
+  acceptance), each independently reviewable. PR #31 is large in aggregate but is not a
+  single squashed change; a reviewer can read it commit-by-commit against the per-batch
+  acceptance evidence.
+- **Rollback.** Batch 5 adds no production code path, so it carries no runtime rollback
+  surface of its own. The underlying data-plane rollback story is unchanged and
+  additive-first (see `deployment.md`): redeploy the previous image; because migrations
+  are additive-first the previous code runs against the newer schema (`ahead`). Only run
+  a `downgrade` (single actor, explicit target) if a specific migration must be reversed.
+
+## Final merge-readiness classification
+
+**ACCEPTABLE TO REQUEST FINAL REVIEW.**
+
+- All gates that can run in this environment are green (backend 369/2, ruff, schema gate,
+  frontend lint/type-check/20-20, smoke 13/13, `npm audit` 0).
+- The security review found **no Critical or High** issues and **no finding that requires
+  a code change before merge**; the rate-limit decision is recorded (Outcome B) and its
+  risk accepted.
+- The residual-risk register contains **zero Required-before-merge** items.
+- The **one open confirmation** is the final CI run on the Batch 5 head (container-build +
+  PostgreSQL-gated tests — R-6), which cannot run locally. PR #31 stays in **draft** until
+  that run is green and a human reviewer signs off.
+
+This is a substantive engineer self-review, **not** an independent third-party audit
+(R-7). It does not by itself mark PR #31 ready or merge it.
