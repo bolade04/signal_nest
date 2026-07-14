@@ -293,6 +293,103 @@ contract regenerated with no drift; smoke **13/13**, four-market isolation. Dock
 and PostgreSQL are unavailable locally, so the `container-build` job and the
 PG-gated claim test run in CI. **Batch 4 is complete; Batch 5 remains deferred.**
 
+### Batch 4 authoritative validation evidence
+
+CI-verified evidence for Batch 4. Consistent with the acceptance report's
+"authoritative CI-green evidence" section. The phase remains **IN PROGRESS**
+(Batches 1–4 complete, Batch 5 outstanding); this is not a phase acceptance.
+
+#### Implementation head
+
+- SHA: `e9e1678e3137748c4e5cd3ccf8a792f275c657ec`
+- This is the authoritative Batch 4 **implementation** head, containing the
+  production-container, graceful-lifecycle, migration-strategy,
+  schema-compatibility, container-CI, and documentation changes.
+
+#### Implementation CI
+
+- Run ID: `29347362541`
+- URL: <https://github.com/bolade04/signal_nest/actions/runs/29347362541>
+- Conclusion: `success`
+
+All five jobs succeeded:
+
+- Frontend quality — success
+- Backend quality — success
+- Migrations and API contract — success
+- Container build and security — success
+- Integration smoke — success
+
+#### Validation totals
+
+- Backend CI: **364 passed, 0 skipped**.
+- PostgreSQL-gated tests: executed in CI using `TEST_POSTGRES_URL`
+  (0 skips remaining confirms the gated cross-worker claim/recovery test ran).
+- Local backend: **362 passed, 2 PostgreSQL-gated skips** (no local PostgreSQL).
+- Frontend: **20/20**.
+- Smoke: **13/13**.
+- Four-market isolation: passed, no cross-market contamination.
+- Ruff: clean.
+- Alembic: upgrade, drift check, downgrade, and re-upgrade all passed
+  (head `a1b2c3d4e5f6` unchanged).
+- Generated contracts: no residual drift.
+- `npm audit`: **0 vulnerabilities**.
+
+#### Container and lifecycle evidence
+
+- API image built successfully.
+- Worker image built successfully.
+- Both images validated as non-root; runtime UID `10001`.
+- Build-context secret scan passed when correctly scoped to `/app`.
+- API import/startup validation passed.
+- Migration actor command passed.
+- Schema-compatibility gate: rejected an un-migrated database; reported
+  `compatible` after migration.
+- API lifecycle tests passed.
+- Worker graceful-drain and bounded-shutdown tests passed.
+
+#### Narrow CI corrections
+
+1. **Docker security scan** — the original scan inspected the full base-image
+   filesystem and incorrectly flagged public CA trust bundles (e.g.
+   `/etc/ssl/certs/*.pem`, the certifi CA bundle). The scan scope was corrected to
+   `/app`. No application secret leak was present — this was a false positive.
+2. **Lifecycle metrics test** — the test hardcoded the `development` environment,
+   but CI correctly runs with `ENVIRONMENT=test`. The test now derives `service`
+   and `environment` from `Settings()`. No production behavior changed.
+
+#### Annotation
+
+- One non-blocking GitHub platform annotation, concerning Docker third-party
+  actions running on Node.js 24 instead of the deprecated Node.js 20 runner.
+- It is **not** an application defect, **not** a failed test, and **not** a skipped
+  required test. All five jobs succeeded.
+
+#### Documentation-head verification
+
+- Documentation stamp head: `9ac997f9698827e799a103f2e1bba13a94a4a3f7`
+- Documentation-head CI run: `29350028924`
+- URL: <https://github.com/bolade04/signal_nest/actions/runs/29350028924>
+- Conclusion: `success` — all five jobs remained green.
+
+Distinction: `e9e1678` (run `29347362541`) is the **substantive Batch 4
+implementation** evidence; `9ac997f` (run `29350028924`) is the later
+acceptance-report **documentation stamp**. The docs-only run does not replace the
+implementation evidence.
+
+### Phase status
+
+- Batches 1–4 are complete.
+- **Batch 5 remains outstanding**: final worker-operations runbook,
+  incident-response runbook, dashboard recommendations, alert definitions, expanded
+  failure-injection tests, final security review, final acceptance review, and the
+  merge-readiness classification.
+- Phase 3A.4b is **not** complete.
+- PR #31 must remain **draft and unmerged**.
+- Phase 3B has **not** started.
+- Orchestrator manifests (Kubernetes/Nomad) and cloud infrastructure remain
+  **optional / future** work, not a mandatory Batch 5 gate unless later approved.
+
 ## Accepted Phase 3A.4a follow-ups (Batch 1 scope)
 
 1. Make expired-lease recovery single-winner under concurrent workers.
