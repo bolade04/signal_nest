@@ -352,6 +352,46 @@ def test_concurrent_claim_yields_single_winner(store, session_factory) -> None:
     assert len(winners) == 1, f"exactly one worker must claim the job, got {winners}"
 
 
+def test_lost_cas_claim_attempt_preserves_uncommitted_caller_work(
+    store, db, monkeypatch
+) -> None:
+    """A lost compare-and-set attempt unwinds only itself, not the caller's txn.
+
+    The SQLite claim wraps each candidate's CAS in a savepoint. When an attempt
+    loses the race (its guarded UPDATE matches zero rows) the savepoint rollback
+    must leave untouched any *other* work the caller already staged in the same
+    transaction — the previous blanket ``db.rollback()`` would have discarded it.
+    """
+    from sqlalchemy import literal, select
+
+    past = datetime(2026, 7, 12, tzinfo=UTC)
+    target = _enqueue(store, db, now=past)  # a due, committed candidate
+
+    # Unrelated work the caller staged (uncommitted) before claiming.
+    marker_payload = {"scout_request_id": "marker"}
+    marker = store.enqueue(
+        db, organization_id=ORG, workspace_id=WS, job_type="test.ok",
+        payload=marker_payload, payload_hash=_hash(marker_payload),
+    )
+    db.flush()
+    marker_id = marker.id
+
+    # Force the candidate's CAS to miss by reporting a stale observed status that
+    # no longer matches the row, exercising the lost-race branch deterministically.
+    def _stale_candidates(now, limit):  # noqa: ANN001, ARG001
+        return select(Job.id, literal(JobStatus.RUNNING.value)).where(Job.id == target.id)
+
+    monkeypatch.setattr(store, "_due_candidates_select", _stale_candidates)
+
+    claimed = store.claim_one(db, worker_id="w1", lease_seconds=30, now=past)
+    assert claimed is None  # the only candidate lost its race
+
+    # The caller's uncommitted marker survived the lost attempt and still commits.
+    assert db.get(Job, marker_id) is not None
+    db.commit()
+    assert db.get(Job, marker_id) is not None
+
+
 def test_list_jobs_is_tenant_scoped(store, db) -> None:
     mine = _enqueue(store, db)
     _enqueue(store, db, organization_id="org-other", workspace_id="ws-other")

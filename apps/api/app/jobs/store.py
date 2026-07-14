@@ -270,9 +270,20 @@ class DurableJobStore:
         lease_expires: datetime,
         max_scan: int,
     ) -> tuple[str | None, JobStatus | None]:
-        """SQLite-safe claim: optimistic compare-and-set over ranked candidates."""
+        """SQLite-safe claim: optimistic compare-and-set over ranked candidates.
+
+        Each candidate's compare-and-set runs inside its own ``SAVEPOINT`` so a lost
+        race unwinds **only that attempt**, never the surrounding transaction. The
+        earlier implementation issued a blanket ``db.rollback()`` on a lost race,
+        which would also discard any unrelated work the caller had already done in
+        the same transaction; the savepoint keeps that contract narrow and explicit.
+        The winning attempt releases its savepoint and leaves the claim staged in the
+        outer transaction for :meth:`_finalize_claim` to commit atomically with the
+        audit event.
+        """
         candidates = db.execute(self._due_candidates_select(now, max_scan)).all()
         for job_id, observed_status in candidates:
+            savepoint = db.begin_nested()
             # A fresh token on every claim rotates ownership: any previous owner's
             # captured token no longer matches, so its late writes are fenced out.
             result = db.execute(
@@ -288,9 +299,11 @@ class DurableJobStore:
                 )
             )
             if result.rowcount == 1:
+                # Release the savepoint; the claim stays staged in the outer txn.
+                savepoint.commit()
                 return job_id, JobStatus(observed_status)
-            # Lost the race for this row; roll back and try the next candidate.
-            db.rollback()
+            # Lost the race for this row; undo only this attempt and scan the next.
+            savepoint.rollback()
         return None, None
 
     def _finalize_claim(
