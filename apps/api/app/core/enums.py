@@ -145,3 +145,20 @@ class ClaimRisk(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     BLOCKED = "blocked"
+
+
+class RejectionReason(StrEnum):
+    """Structured, explainable reasons a signal is suppressed by the intelligence core.
+
+    Ordered from cheapest/most-decisive to weakest. A suppressed signal always
+    carries exactly one of these plus a human rationale, so a rejection is as
+    auditable as an acceptance.
+    """
+
+    NOISE = "noise"
+    OUT_OF_CONTEXT = "out_of_context"
+    OUT_OF_MARKET = "out_of_market"
+    DUPLICATE = "duplicate"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    POLICY_BLOCKED = "policy_blocked"
+    WEAK_SIGNAL = "weak_signal"
