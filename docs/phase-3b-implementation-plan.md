@@ -843,16 +843,18 @@ below.
 - PR #34 remained unnecessary and untouched.
 
 **Batch 4B — Read-only API exposure**
-**Status:** NOT STARTED
-- extend opportunity-detail schema;
-- enforce authorization;
-- add absent-data compatibility;
+**Status:** PLANNED — IMPLEMENTATION NOT STARTED
+- add a nested read-only intelligence endpoint (do **not** extend the compact
+  opportunity-detail schema);
+- enforce authorization and workspace/opportunity tenancy;
+- add absent-data compatibility (absence is a valid `200` response);
 - contract tests;
 - OpenAPI regeneration;
-- frontend type generation.
+- frontend type generation (types only; no UI — that is Batch 4C).
 
 *Acceptance gate:* intentional additive contract change only; no compact-feed payload
-expansion unless explicitly approved; API and authorization tests green.
+expansion unless explicitly approved; API and authorization tests green. **The full
+implementation-ready plan is §17.21 below.**
 
 **Batch 4C — Frontend intelligence panel**
 **Status:** NOT STARTED
@@ -1019,3 +1021,523 @@ HAS NOT STARTED.
 - Overall Batch 4 remains **incomplete**.
 - Product scope is approved; architecture is additive; no live-egress dependency
   exists.
+
+## 17.21 Batch 4B implementation plan — read-only API exposure
+
+**Status:** PLANNED — IMPLEMENTATION NOT STARTED.
+
+This section is the implementation-ready plan for **Batch 4B only**: an authorized,
+read-only API that returns the already-persisted `SignalIntelligenceRecord`
+(Batch 4A) for one opportunity. It is grounded in the current codebase
+(`app/opportunities/routes.py`, `app/auth/dependencies.py`, `app/intelligence/`).
+It defines *what to build*; it does **not** implement anything. Batch 4C (frontend)
+and Phase 3C (feedback) remain out of scope.
+
+### 17.21.1 Scope
+
+In scope:
+- one authenticated, read-only `GET` endpoint returning the single deterministic
+  *latest eligible* persisted intelligence record for one opportunity;
+- typed public response schemas that keep observed **facts** separate from
+  **inference**, plus evidence, score breakdown, provenance and version metadata;
+- workspace/opportunity tenancy enforcement reusing existing dependencies;
+- intentional OpenAPI regeneration and generated TypeScript **types** (contract sync);
+- full test, threat-model, observability, rollout and rollback plans.
+
+Out of scope (see §17.21.19): any mutation; history/enumeration endpoints; rejected/
+suppressed exposure; compact-feed changes; frontend rendering; feedback; live RSS;
+new connectors; external model calls; rescoring; backfill; Batch 4C/4D; Phase 3C;
+Batch 5.
+
+### 17.21.2 Endpoint decision
+
+Options evaluated:
+
+| Option | Shape | Verdict |
+|--------|-------|---------|
+| **A — nested resource** | `GET …/opportunities/{opportunity_id}/intelligence` | **Recommended** |
+| B — inline in detail | intelligence object inside `GET …/opportunities/{id}` | Rejected — bloats/destabilises the existing `OpportunityDetail`/`OpportunityCard` contract and risks the compact feed; couples cache lifetimes |
+| C — history/records | `…/intelligence/records` + `…/intelligence/latest` | Rejected for 4B — exposes history prematurely; larger surface |
+| D — `?include=intelligence` | query-controlled expansion | Rejected — conditional response shapes are poor for OpenAPI/type-gen and caching |
+
+Rationale for **A**: least privilege and smallest surface; the existing detail
+contract stays byte-for-byte backward compatible; response size is stable and
+independent of the feed; it reuses the established nested-sub-resource convention
+(mirrors the existing `…/opportunities/{opportunity_id}/status` route); it is
+discoverable and OpenAPI-clean; and it leaves a natural place for a future
+`…/intelligence/records` history endpoint (deferred).
+
+**Recommended endpoint:**
+
+```
+GET /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence
+```
+
+### 17.21.3 Exact API contract
+
+- **Method:** `GET` (read-only; no `POST/PUT/PATCH/DELETE` registered on the path).
+- **Route:** `/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence`
+  (the `/api/v1` prefix comes from `settings.api_prefix`).
+- **Path params:** `workspace_id: str`, `opportunity_id: str`.
+- **Query params:** none in 4B (no `version`, no `include`, no history selector).
+- **Auth dependency:** `ctx: TenantContext = Depends(get_tenant_context)` — the same
+  dependency the opportunity detail route already uses (bearer token →
+  `get_current_user` → workspace membership check). A read needs no elevated role, so
+  `require_role` is **not** applied (consistent with `get_opportunity`).
+- **Opportunity scoping:** reuse `_get_scoped(db, workspace_id, opportunity_id)` from
+  `app/opportunities/routes.py`, which raises `NotFoundError` (HTTP 404) when the
+  opportunity does not exist **or** belongs to another workspace — i.e. foreign
+  resources are indistinguishable from missing ones.
+- **Response model:** `OpportunityIntelligenceResponse` (see §17.21.4).
+- **Status codes:**
+  - `200` — opportunity is authorized; body carries `intelligence` (an object) or
+    `intelligence: null` when no eligible record exists (absence is a valid state);
+  - `401` — missing/invalid bearer token (`AuthError`);
+  - `403` — authenticated but not a member of the org (`PermissionDeniedError`);
+  - `404` — opportunity not found in this workspace (`NotFoundError`, via
+    `_get_scoped`); also returned for malformed/foreign IDs;
+  - `422` — path validation failure (framework default);
+  - `500` — unexpected error, via the standard `{"error": {...}}` envelope; never
+    leaks internal detail.
+- **Ordering / version selection:** deterministic *latest eligible* record only
+  (see §17.21.5). History is not exposed.
+- **Never exposed:** internal DB `id` of the record, `fingerprint`, `cluster_key`,
+  `normalized_signal_id`, raw `organization_id`, `updated_at`, and any raw unbounded
+  DB JSON. `analysis_version`/`scoring_version` **are** exposed (safe, auditable). No
+  source URLs are stored, so none are returned. No internal debugging metadata.
+
+Recommended bias honoured: read-only, one opportunity at a time, authorized
+opportunity scope first, latest eligible record only, no mutation/bulk/admin/history
+endpoint, no raw fingerprint, no hidden operational metadata, no fabricated fallback
+from legacy `ingest_metadata`.
+
+### 17.21.4 Public response schemas
+
+New Pydantic models (proposed location `app/intelligence/schemas.py`), each mapping
+from typed columns only — never by dumping raw DB JSON. Facts and inference remain
+structurally separate.
+
+```
+OpportunityIntelligenceResponse
+  opportunity_id: str                      # echo of the path (from the loaded opp)
+  intelligence: IntelligencePayload | None # null = valid "no eligible record" state
+
+IntelligencePayload
+  classification: str                      # from column `classification`
+  decision: str | None                     # from column `decision` (null when n/a)
+  is_simulated: bool                       # from column `is_simulated`
+  rationale: str | None                    # bounded; single-line accept explanation
+  created_at: datetime                     # ISO-8601 UTC; from column `created_at`
+  facts: IntelligenceFacts
+  inference: IntelligenceInference
+  relevance: IntelligenceRelevance
+  score: IntelligenceScoreBreakdown
+  evidence: list[IntelligenceEvidenceItem]
+  provenance: IntelligenceProvenance
+  version: IntelligenceVersionInfo
+
+IntelligenceFacts        # observed only (source column: facts JSON)
+  source_type: str
+  market: str | None
+  language: str
+  published_days_ago: float
+  char_count: int
+  word_count: int
+  excerpt: str                             # sanitized in 4A; re-bounded ≤ 2000
+  distinct_source_types: int
+  duplicate_count: int
+  engagement: int
+  # NOTE: `author` is intentionally EXCLUDED in 4B (PII caution — deferred).
+
+IntelligenceInference    # interpretation only (source column: inference JSON)
+  signal_type: InferredAttribute | None
+  pain_point_dna: InferredAttribute | None
+  sentiment: InferredAttribute | None
+  has_buying_intent: bool
+  has_competitor_dissatisfaction: bool
+
+InferredAttribute
+  value: str
+  confidence: float                        # 0..1, rounded to 3 dp
+  method: str                              # deterministic matcher label (explainability)
+
+IntelligenceEvidenceItem                   # from inference evidence spans
+  quote: str                               # sanitized slice, ≤ 400 chars
+  method: str
+  start: int                               # offset into excerpt (for highlighting)
+  end: int
+
+IntelligenceRelevance    # source column: relevance JSON
+  score: int                               # 0..100
+  below_action_floor: bool
+  keyword_hits: list[str]                  # ≤ 64
+  pain_point_hits: list[str]               # ≤ 64
+  audience_hits: list[str]                 # ≤ 64
+  competitor_hits: list[str]               # ≤ 64
+  # `exclusion_hits` EXCLUDED in 4B (operator-facing tuning detail — deferred).
+
+IntelligenceScoreBreakdown # source column: score_components JSON + `score_total`
+  total: int                               # 0..100 (mirrors `score_total`)
+  classification: str
+  version: str                             # scoring version
+  factors: dict[str, ScoreFactor]          # bounded; named factor → weight/value/points
+
+ScoreFactor
+  weight: float
+  value: float
+  points: float
+
+IntelligenceProvenance   # source column: provenance JSON (fingerprint dropped)
+  enricher: str                            # e.g. "deterministic"
+  analysis_version: str
+  scoring_version: str
+
+IntelligenceVersionInfo
+  analysis_version: str                    # from column `analysis_version`
+  scoring_version: str                     # from column `scoring_version`
+```
+
+Field-by-field discipline: every field has an explicit source column; every list has
+a max item count and every string a max length (§17.21.14); all are validated typed
+schemas (not passthrough JSON); all are safe for authorized customer-facing display
+except those explicitly excluded (`author`, `fingerprint`, `cluster_key`,
+`normalized_signal_id`, `exclusion_hits`, record `id`, `updated_at`). The response
+distinguishes observed facts, inferred interpretation, evidence, score components,
+provenance and version metadata as separate typed structures — facts and inference
+are never collapsed.
+
+### 17.21.5 Latest / version semantics
+
+Established from Batch 4A:
+- multiple rows **can** exist for one `opportunity_id` (an opportunity clusters
+  several normalized signals, each with its own record; and a signal may be re-scored
+  under a new `analysis_version`/`scoring_version`);
+- rows are distinct by the identity tuple `(workspace_id, normalized_signal_id,
+  analysis_version, scoring_version, fingerprint)`;
+- records are immutable and version-aware — there is **no** mutable `is_current`.
+
+Batch 4B selection rule (deterministic *latest eligible* record):
+1. filter `workspace_id == path` **and** `opportunity_id == path` **and**
+   `accepted == True` (only accepted, opportunity-linked rows are eligible);
+2. order by `score_total DESC, created_at DESC, id ASC` and take the first row;
+3. `id ASC` is the final, total tiebreak so the result is byte-stable even if two
+   rows share score and timestamp (defensive against retry/concurrent equivalents).
+
+Boundary decisions:
+- expose exactly one record; **history is not exposed** in 4B;
+- enough version metadata (`analysis_version`, `scoring_version`) is returned for
+  auditability;
+- a future `…/intelligence/records` (full history) is documented as **deferred**;
+- a record for an obsolete opportunity version, or a duplicate-equivalent second row,
+  is handled deterministically by the total ordering above (no error, no ambiguity).
+
+### 17.21.6 Missing-data behavior
+
+- **Opportunity absent / foreign workspace:** `_get_scoped` raises `NotFoundError`
+  → `404` with the standard envelope; the response never reveals that the ID exists
+  in another workspace.
+- **Opportunity present, no eligible record:** return `200` with
+  `intelligence: null`. Chosen over `204`/`404` because absence is a **valid**
+  state (legacy opportunities, or opportunities whose members were all rejected) and
+  a null field keeps the contract and the future 4C client simple.
+- **Row present but malformed** (e.g. a JSON payload that fails schema validation):
+  fail safe — log `intelligence_read_malformed` (record version + outcome only, no
+  payload), and return `intelligence: null` (treat as "no presentable record") rather
+  than surfacing a partial/again-untrusted object or a `500`. The whole request does
+  **not** hard-fail on one malformed row. No internal detail leaks.
+- **Legacy opportunity with only `ingest_metadata["intelligence"]`:** the endpoint
+  returns `intelligence: null`. It **does not** reconstruct, backfill or fabricate a
+  first-class record from the advisory annotation.
+
+### 17.21.7 Rejected / suppressed policy
+
+Batch 4B exposes **only** the accepted, opportunity-linked record. Rejected/
+suppressed candidates (`accepted == False`, carrying a `rejection_reason`),
+low-confidence, policy-filtered, moderation/debug reasons are **not** exposed. The
+`accepted == True` filter in §17.21.5 enforces this at the query. Rationale:
+suppressed intelligence is operator-only signal that could disclose why content was
+filtered (a moderation/abuse-surface risk) and is not a validated customer artifact.
+Whether rejected/suppressed intelligence is ever customer-visible is left as an
+**unresolved product decision** for a later batch (§17.21.24).
+
+### 17.21.8 Tenant and authorization controls
+
+Authorization path (all steps reuse existing code):
+1. authenticate the user — `get_current_user` (bearer token → active `User`);
+2. resolve org/workspace membership — `get_tenant_context` (`workspace_id` path →
+   `Workspace` → `_membership` → `TenantContext`);
+3. load the opportunity within the authorized workspace — `_get_scoped`;
+4. query the record using **both** `opportunity_id` and `workspace_id`;
+5. never query by record `id` or `normalized_signal_id` alone without tenancy scope;
+6. never trust a client-supplied workspace id beyond the membership-checked path;
+7. foreign-workspace resources return the same `404` as missing ones (no existence
+   disclosure, constant behavior);
+8. location/market and scout-request boundaries are preserved because the record
+   carries `workspace_id`/`scout_request_id`/`location_id` and is only reachable
+   through the workspace-scoped opportunity.
+
+Four-market isolation (Dallas, Lagos, London, Nairobi) must be asserted so that one
+market cannot retrieve another's intelligence via: a guessed opportunity ID, a
+guessed record/intelligence ID, an altered `workspace_id`, route reuse, stale browser
+data, a malformed UUID, or a shared/duplicate `normalized_signal_id` across markets.
+
+### 17.21.9 Service and repository boundaries
+
+Minimum layers (tenancy/selection logic lives in repo/service, never in the route):
+
+- **Repository** (add to `app/intelligence/persistence.py`, or a new
+  `app/intelligence/queries.py`): a narrowly scoped read
+  `get_latest_for_opportunity(db, *, workspace_id, opportunity_id) ->
+  SignalIntelligenceRecord | None` implementing the §17.21.5 filter+order+limit-1.
+  Requires both scope args; returns `None` on no row.
+- **Service** (new `app/intelligence/read_service.py`): confirm access is already
+  done by the route's `_get_scoped`; fetch the eligible record; map ORM → public
+  schema; drop internal-only fields; enforce bounds; handle the malformed/absent
+  cases; emit structured logs. Returns `IntelligencePayload | None`.
+- **Router** (add the route to the existing opportunities router in
+  `app/opportunities/routes.py` to reuse `_get_scoped` and `TenantContext`, delegating
+  all mapping to the intelligence read-service): auth dependency, param validation,
+  service call, `response_model`, standard errors only.
+
+### 17.21.10 OpenAPI and generated-type impact
+
+- **OpenAPI path added:** the new `GET …/intelligence` operation.
+- **Schema additions:** the components in §17.21.4; the existing
+  `OpportunityDetail`/`OpportunityCard` schemas are **unchanged** (backward
+  compatible).
+- **Generated TypeScript:** new operation + interfaces in
+  `apps/web/src/api/schema.d.ts`.
+- **Regeneration command (implementation phase only):** `npm run gen:types`
+  (runs `scripts/gen-types.sh` → dumps `apps/api/openapi.json` from `app.openapi()` →
+  `openapi-typescript` → `apps/web/src/api/schema.d.ts`).
+- **Expected changed files:** exactly `apps/api/openapi.json` and
+  `apps/web/src/api/schema.d.ts`.
+- **CI:** the existing "OpenAPI regeneration + contract-drift check" step
+  (`git diff --exit-code -- apps/api/openapi.json apps/web/src/api/schema.d.ts`) will
+  **intentionally** detect these and require them committed; any *unrelated* drift
+  must be zero.
+- **Nothing is regenerated in this planning task.**
+
+### 17.21.11 Frontend boundary
+
+Generated client **types** belong to Batch 4B because they are part of contract
+synchronization and are required for the CI drift gate to pass. Batch 4B must **not**:
+add UI components/panels/badges, fetch intelligence in React, change routing, render
+evidence, or add feedback actions — all of that is Batch 4C.
+
+### 17.21.12 Security and privacy rules
+
+- **Cross-tenant / IDOR / BOLA:** every access goes through membership +
+  `_get_scoped` + a `workspace_id`-scoped query; record IDs are never a lookup key.
+- **Source-URL leakage:** none stored, none returned.
+- **PII leakage:** `author` excluded; `excerpt`/evidence are the Batch-4A sanitized,
+  injection-defanged text, re-bounded before serialization.
+- **Prompt/model-metadata leakage:** no model is called; only `enricher`
+  (`"deterministic"`) and versions are exposed.
+- **Internal scoring internals / raw fingerprints / moderation state:** never
+  returned (`fingerprint`, `cluster_key`, `rejection_reason`, record `id` excluded).
+- **Untrusted HTML/Markdown:** returned as plain JSON strings; no server-side HTML
+  rendering; 4C must render as text (documented for 4C, not implemented here).
+- **Oversized JSON / unsafe URLs / log injection:** bounded typed schemas
+  (§17.21.14); structured logging with safe fields only (§17.21.17).
+- **Exception leakage:** standard `{"error": {...}}` envelope; `500` carries no
+  internal detail.
+- **Timing-based existence disclosure:** foreign and missing both take the
+  `_get_scoped` `404` path — behavior is constant.
+- **Cache isolation:** if any caching is later added, the key **must** include
+  `workspace_id` + `opportunity_id` and auth scope (4B recommends no caching).
+- **SSRF:** not applicable — the endpoint performs no outbound egress.
+
+Fields that must **never** be returned: record `id`, `fingerprint`, `cluster_key`,
+`normalized_signal_id`, `organization_id`, `updated_at`, `author`, `exclusion_hits`,
+`rejection_reason`, and any raw unbounded DB JSON blob.
+
+### 17.21.13 Validation and serialization limits
+
+Reuse the Batch-4A bounds and enforce them again at the API boundary:
+- `excerpt` ≤ 2000 chars; each evidence `quote` ≤ 400 chars; evidence list ≤ 32 items;
+- `keyword_hits`/`pain_point_hits`/`audience_hits`/`competitor_hits` ≤ 64 each;
+- `confidence` a float in `[0,1]` rounded to 3 dp; `score.total`/`relevance.score`
+  integers clamped to `0..100`; factor `weight/value/points` finite floats;
+- timestamps serialized ISO-8601 **UTC**; strings stripped of control chars (already
+  done in 4A) and emitted as plain text; Unicode preserved;
+- **unknown DB-JSON keys are dropped** by mapping through typed schemas — never
+  serialize arbitrary JSON straight from the column;
+- null handling explicit per field (`decision`, `rationale`, nullable inferred
+  attributes may be null; lists default to `[]`).
+
+### 17.21.14 Observability
+
+Structured `log_event` (JSON) with safe fields only: `request_id`, `workspace_id`,
+`opportunity_id`, `outcome`, `duration_ms`, and record `analysis_version`/
+`scoring_version` when present. Events:
+- `intelligence_read_success`
+- `intelligence_read_absent` (no eligible record)
+- `intelligence_read_forbidden` (foreign/absent opportunity → 404)
+- `intelligence_read_malformed` (row failed schema mapping)
+- `intelligence_read_failed` (repository/unexpected error)
+
+Never logged: evidence/quote text, raw source content, tokens/secrets, PII, raw
+`fingerprint`. Suggested metrics (bounded cardinality): request count, success rate,
+no-record rate, error rate, latency, malformed-record count, cross-workspace denial
+count.
+
+### 17.21.15 Tests
+
+**Repository:** latest eligible record selected per §17.21.5 ordering; both scope args
+required; foreign-workspace row excluded; no row → `None`; multiple immutable versions
+ordered deterministically; duplicate-equivalent rows resolved by `id ASC`; rejected
+(`accepted == False`) rows excluded.
+
+**Service:** authorized opportunity → mapped payload; opportunity without record →
+`None` (→ `intelligence: null`); internal fields omitted; facts and inference remain
+separate; malformed row handled safely (→ null + log); legacy `ingest_metadata` is
+**not** fabricated into a response; model/scoring versions serialized; source/evidence
+bounds enforced.
+
+**Route:** authenticated success; unauthenticated `401`; non-member `403`;
+foreign/missing opportunity `404`; opportunity with no record → `200` + null; malformed
+UUID `404`/`422`; response validates against `response_model`; only `GET` is allowed
+(no mutation verbs registered); cache headers (if any) correct.
+
+**Contract:** OpenAPI contains only the intended new path + schemas; generated TS types
+match; existing opportunity endpoints unchanged; `git diff --exit-code` clean after an
+intentional regen commit.
+
+**Isolation (four-market):** Dallas↛Lagos, Lagos↛London, London↛Nairobi,
+Nairobi↛Dallas; same `normalized_signal_id` across markets stays isolated; same brand
+across different business locations stays isolated; separate scout requests independent.
+
+**Security:** guessed opportunity/record IDs; cross-workspace access; internal-field
+exclusion asserted; oversized JSON bounded; script/HTML payload returned inert as text;
+control characters; SQL-injection-shaped IDs; log-injection payloads.
+
+**Regression:** Batch 4A persistence tests stay green; ingestion still succeeds when
+persistence fails open; legacy opportunity detail response is byte-unchanged;
+four-market smoke stays green.
+
+### 17.21.16 Performance expectations
+
+One indexed query scoped by `workspace_id` + `opportunity_id` (both indexed in 4A),
+plus the `_get_scoped` primary-key load — no N+1, no bulk endpoint. Bounded response
+(single record, all lists capped). Latency target p95 < 100 ms in-process. No caching
+in 4B (if later added, tenancy-scoped key + optional ETag from `created_at`+version).
+
+### 17.21.17 Rollout
+
+1. branch from current `main`; 2. repository read method; 3. public schemas;
+4. service mapping; 5. route registration; 6. tests; 7. `npm run gen:types`
+(OpenAPI + TS types); 8. commit generated files; 9. CI (all five jobs);
+10. **draft** PR; 11. review by the genuine reviewer; 12. protected squash merge
+(no `--admin`, no bypass); 13. post-merge CI verification; 14. Batch 4B closeout docs;
+15. only then may Batch 4C planning begin.
+
+**Feature flag:** none. The route is new, authenticated, read-only and unreferenced by
+the frontend until 4C; a flag would add dead configuration. Rollback is a plain revert.
+
+### 17.21.18 Rollback
+
+Covers authorization defect, schema defect, malformed-record serialization, excessive
+latency, accidental internal-field exposure, and OpenAPI/client breakage. Rollback =
+revert the Batch 4B code **and** the contract commit (`openapi.json` +
+`schema.d.ts`); optionally unregister the route if a defect is isolated to it. No
+migration and **no** deletion of persisted intelligence — Batch 4A schema and data are
+untouched; no live-connector impact.
+
+### 17.21.19 Explicit exclusions
+
+`POST/PUT/PATCH/DELETE` intelligence endpoints; manual edits; feedback; approval
+workflows; full version-history UI or endpoint; rejected/suppressed candidate exposure;
+bulk export; analytics dashboards; compact-feed indicators; notifications; live RSS;
+connectors; external LLM calls; rescoring; recomputation; backfill; frontend rendering;
+Phase 3C learning loop; Batch 5.
+
+### 17.21.20 Implementation file map (expected, from the real repo layout)
+
+**Production changes**
+- `app/opportunities/routes.py` — register the nested `GET …/intelligence` route.
+- `app/intelligence/schemas.py` *(new)* — public response models (§17.21.4).
+- `app/intelligence/read_service.py` *(new)* — ORM→schema mapping + safe handling.
+- `app/intelligence/persistence.py` *(or new `queries.py`)* — `get_latest_for_opportunity`.
+
+**Generated changes**
+- `apps/api/openapi.json`
+- `apps/web/src/api/schema.d.ts`
+
+**Tests**
+- `app/tests/test_intelligence_api.py` *(new)* — route + service.
+- `app/tests/test_intelligence_read_repository.py` *(new)* — repository selection.
+- extend `app/tests/test_api_isolation.py` — four-market + IDOR cases.
+- contract assertions alongside the existing OpenAPI drift gate.
+
+**Documentation**
+- this plan section; and a Batch 4B completion record **only after** merge.
+
+(Exact new-file names are proposals; the implementer should confirm against
+conventions at build time.)
+
+### 17.21.21 Acceptance criteria
+
+1. Authenticated, authorized read-only endpoint exists at the §17.21.2 path.
+2. It is scoped by both `workspace_id` and `opportunity_id`.
+3. Foreign-workspace resources are never disclosed (same `404` as missing).
+4. Missing intelligence is a valid, documented `200 { intelligence: null }`.
+5. Legacy `ingest_metadata` is never fabricated into a persisted-intelligence response.
+6. Only the deterministic latest eligible record is returned.
+7. Full history is not exposed.
+8. Observed facts and inference remain structurally separate.
+9. Provenance and evidence are typed and bounded.
+10. Internal fingerprints, record IDs, cluster keys and debug data are omitted.
+11. Rejected/suppressed candidates are not exposed.
+12. No mutation endpoint exists on the path.
+13. No network egress occurs.
+14. No external model call occurs.
+15. The API contract is regenerated intentionally (`openapi.json` committed).
+16. Generated TypeScript types match the OpenAPI contract.
+17. Existing opportunity endpoints remain backward compatible (unchanged schemas).
+18. Four-market isolation passes.
+19. Cross-scout-request independence passes.
+20. Authorization and IDOR/BOLA tests pass.
+21. Malformed persisted data fails safe (null + log, no 500, no leak).
+22. Response size is bounded (all lists/strings capped).
+23. Logs contain no evidence payload, raw source, secrets or PII.
+24. Batch 4A persistence tests remain green.
+25. All five CI jobs pass.
+26. Genuine reviewer approval matches the exact current head.
+27. Protected squash merge occurs without `--admin` or ruleset bypass.
+28. Post-merge CI passes on the merge commit.
+29. Batch 4C remains not started.
+30. Phase 3C remains deferred; Batch 5 remains not started.
+31. `author`, `exclusion_hits` and `updated_at` are excluded from the public schema.
+32. Absence, malformed, and foreign cases are each covered by an explicit test.
+
+### 17.21.22 Decisions resolved by this Batch 4B plan
+
+1. Endpoint shape — nested `GET …/opportunities/{id}/intelligence` (Option A).
+2. Latest-only behavior — one deterministic eligible record; history deferred.
+3. Missing-record response — `200` with `intelligence: null`.
+4. Public schema fields — the typed set in §17.21.4 (facts/inference separated).
+5. Internal-field exclusions — `id`, `fingerprint`, `cluster_key`,
+   `normalized_signal_id`, `organization_id`, `updated_at`, `author`,
+   `exclusion_hits`, `rejection_reason`.
+6. Tenancy enforcement path — `get_tenant_context` + `_get_scoped` +
+   `workspace_id`+`opportunity_id`-scoped query.
+7. Rejected/suppressed exposure — excluded in 4B (`accepted == True` filter).
+8. OpenAPI/type-generation boundary — regenerate contract + client **types** in 4B;
+   UI consumption is 4C.
+9. Feature-flag decision — none; rollback by revert.
+
+### 17.21.23 Decisions intentionally deferred
+
+Compact-feed intelligence indicator; a full intelligence **history** endpoint;
+customer visibility of rejected/suppressed intelligence; long-term retention policy;
+Batch 4C presentation (panel, evidence rendering, score UI); feedback actions;
+bulk export; external-model rescoring; exposure of `author`/`exclusion_hits`.
+
+### 17.21.24 Readiness classification
+
+**Implementation status:** BATCH 4B PLANNED — IMPLEMENTATION NOT STARTED.
+Batch 4A remains merged and post-merge verified; Batch 4C and 4D remain **not
+started**; overall Batch 4 remains **incomplete**. This plan authorizes only a
+separate Batch 4B implementation branch (its own tests, PR, genuine approval and
+protected merge); no later stage begins automatically.
