@@ -335,3 +335,606 @@ and the four-market smoke stay green.
 `main` @ `fe78b39`. Every commit additive; no migration, no contract change —
 reverting the branch (or simply not merging the draft PR) fully restores current
 behavior.
+
+## 17. Batch 4 — Evidence-backed opportunity intelligence
+
+### 17.1 Status
+
+**Status:** OWNER SCOPE CONFIRMED — READY FOR IMPLEMENTATION PLANNING
+
+- The product scope is **approved** by the product owner.
+- Code implementation **has not started**; this section is the implementation
+  contract for Batch 4, not a record of completed work.
+- Batch 4 is **independent of PR #34 and live egress** — neither the live-connector
+  branch nor any network transport is a dependency. Batch 4 reads intelligence that
+  the existing (simulated) deterministic pipeline already produces.
+
+> Note on numbering: this "Phase 3B Batch 4" is distinct from the already-delivered
+> "Phase 3A.4b Batch 4" (production containers/lifecycle). They share a digit only.
+
+### 17.2 Objective
+
+Persist the deterministic Batch 3 intelligence result as a first-class,
+workspace-scoped and opportunity-linked record; expose it through a
+backward-compatible read-only opportunity-detail API field; and render an
+evidence-backed intelligence panel in the **existing** opportunity-detail
+experience.
+
+The customer-facing result must answer:
+
+- What did SignalNest find?
+- What source facts support it?
+- What did SignalNest infer?
+- Why does it match this business and market?
+- What scoring components contributed to the result?
+- Which intelligence and scoring versions produced it?
+- What source and attribution information is available?
+
+This is a **read-first visibility and traceability** batch — not a recommendation,
+generation, feedback-learning, or publishing batch.
+
+### 17.3 Current architecture and gap
+
+**Existing capabilities (already on `main`):**
+
+- Opportunity feed API (`GET /workspaces/{id}/opportunities`, filtered/sorted/scoped).
+- Opportunity-detail API (`GET .../opportunities/{id}`, with score breakdowns + evidence).
+- Status update flow (`PUT .../opportunities/{id}/status`, audited).
+- Opportunity list UI (`apps/web/src/pages/Opportunities.tsx`).
+- Opportunity-detail UI (`apps/web/src/pages/OpportunityDetail.tsx`).
+- Existing score (`opportunity_scores`) and `validation_evidence`.
+- Workspace and location scoping on every query.
+- Deterministic Batch 3 analysis (`app/intelligence/`), scoring version `3b.1`.
+- Fact-versus-inference types (`SignalFacts` vs `ExtractedIntelligence`).
+
+**The missing bridge:**
+
+- Batch 3 intelligence is **not first-class persisted data** — it rides only inside
+  `normalized_signals.ingest_metadata["intelligence"]` JSON.
+- **No opportunity API schema exposes it.**
+- **No frontend component renders it.**
+- Provenance and evidence spans are **not visible to customers**.
+- The UI cannot presently explain the Batch 3 component score.
+
+Batch 4 **extends the existing opportunity workspace rather than rebuilding it.**
+
+### 17.4 Architectural boundary
+
+```
+Normalized signal
+  → deterministic Batch 3 intelligence analysis
+    → persisted intelligence record
+      → opportunity association
+        → read-only opportunity-detail API
+          → evidence-backed frontend panel
+```
+
+- No network call.
+- No external model.
+- No dependency on PR #34.
+- No generalized connector work.
+- No intelligence result may trigger an external action.
+- Frontend rendering is inert and text-only.
+- Existing opportunity decisions remain authoritative unless a later approved phase
+  changes them.
+
+### 17.5 In scope
+
+1. First-class persistence for Batch 3 intelligence.
+2. Workspace, business, location, market, jurisdiction, signal, and opportunity
+   linkage as supported by existing models.
+3. Persisted scoring version (`3b.1`) and analysis version.
+4. Persisted score components and composite score.
+5. Persisted source facts.
+6. Persisted inferred attributes.
+7. Persisted evidence spans.
+8. Persisted structured rejection reason where applicable.
+9. Persisted provenance and simulated-source status.
+10. Idempotent pipeline write or update behavior.
+11. Backward-compatible opportunity-detail API expansion.
+12. Evidence-backed frontend panel.
+13. Visually distinct facts and inferences.
+14. Source and attribution display where reliable provenance exists.
+15. Loading, absent-data, unavailable-data, and error states.
+16. Tenant/workspace/location/market authorization and isolation.
+17. OpenAPI and frontend-client regeneration.
+18. Migration lifecycle and schema-drift verification.
+19. Unit, API, frontend, integration, isolation, and security tests.
+20. Operational, security, and rollback documentation updates.
+
+### 17.6 Out of scope
+
+- Human feedback capture.
+- Automatic learning from feedback.
+- Ranking personalization.
+- Phase 3C feedback loop.
+- Recommendation generation.
+- Advertisement generation.
+- Image or video generation.
+- Publishing or scheduling.
+- Live RSS transport.
+- Source approval for PR #34.
+- New connectors.
+- General web crawling.
+- Model-backed enrichment.
+- Customer connector configuration.
+- Opportunity-list redesign.
+- Billing.
+- Team/role redesign.
+- Cross-market aggregation.
+- Batch 5.
+- Phase 4 work.
+
+### 17.7 Data model proposal
+
+Propose a first-class model with a **neutral name consistent with the repository**,
+such as `SignalIntelligence`, `OpportunityIntelligence`, or another name justified
+by existing naming conventions. This plan **does not mandate the final name** — it is
+a Batch 4A architecture-review decision.
+
+Proposed fields:
+
+- `id`
+- `workspace_id`
+- `business_id` (if supported by existing models)
+- `location_id`
+- `market`
+- `jurisdiction`
+- `scouting_request_id` (if available)
+- `normalized_signal_id`
+- `opportunity_id`
+- `analysis_version`
+- `scoring_version`
+- `decision`
+- `rejection_reason`
+- `composite_score`
+- component-score payload
+- source-facts payload
+- inferred-attributes payload
+- evidence-spans payload
+- provenance payload
+- `is_simulated`
+- content or analysis fingerprint
+- `created_at`
+- `updated_at`
+
+Requirements:
+
+- Proper foreign keys.
+- Tenant/workspace ownership.
+- Unique idempotency constraint.
+- Indexes for opportunity, signal, workspace, location, market, and decision where
+  justified.
+- Bounded payloads.
+- Backward-compatible migration.
+- Downgrade support.
+- No destructive alteration of existing opportunity records.
+
+Frequently filtered values should use **typed columns**; bounded structured analysis
+may use **JSON only where justified**.
+
+### 17.8 Relationship and ownership rules
+
+- One normalized signal may produce separate intelligence outcomes for separate
+  scoped contexts.
+- One opportunity may link to one **current** intelligence result per
+  analysis/scoring version, or a versioned history if architecture review chooses
+  history retention.
+- Intelligence from one location or scouting request must **not** be reused in
+  another.
+- Same-topic signals in Dallas, Lagos, London, and Nairobi remain **independent**.
+- No global deduplication may suppress a valid market-specific record.
+- All reads must enforce workspace and location scope.
+- Opportunity linkage must be **validated**, not accepted through arbitrary IDs.
+
+**Implementation decision (resolve in Batch 4A before migration creation):**
+current-only intelligence record vs. immutable version history.
+
+### 17.9 API proposal
+
+Additive field on the **existing opportunity-detail response** — not necessarily on
+the compact feed response.
+
+```json
+{
+  "intelligence": {
+    "analysis_version": "3b",
+    "scoring_version": "3b.1",
+    "decision": "ACCEPT",
+    "rejection_reason": null,
+    "composite_score": 78.4,
+    "components": [],
+    "source_facts": [],
+    "inferred_attributes": [],
+    "evidence_spans": [],
+    "provenance": {},
+    "is_simulated": true
+  }
+}
+```
+
+- Exact schema must use **typed generated models**.
+- Absence must be represented safely for older opportunity rows (`intelligence: null`).
+- Compact feed payload remains unchanged unless a performance review approves a
+  minimal summary.
+- Internal policy details and unsafe raw source data must **not** be exposed.
+- Response must preserve fact-versus-inference separation.
+- Every opportunity read must enforce **object-level authorization**.
+- Contract changes are additive but intentional.
+- OpenAPI and frontend types must be regenerated and committed.
+
+### 17.10 Frontend proposal
+
+Extend the existing opportunity-detail page with an **intelligence panel**.
+
+**What SignalNest found**
+- bounded problem/topic summary;
+- affected audience;
+- decision state;
+- composite score;
+- confidence.
+
+**Source evidence**
+- source facts;
+- evidence excerpts/spans;
+- publication/source metadata;
+- attribution;
+- simulated-data indicator.
+
+**SignalNest analysis**
+- inferred attributes;
+- business relevance;
+- market relevance;
+- component-score explanation;
+- scoring version.
+
+**Why this matches your business**
+- relevance explanation;
+- matched products/services;
+- matched market/location.
+
+**Required presentation rules:**
+
+- Source facts and inference must be visually and semantically distinct.
+- Inference cannot be styled as a quotation.
+- Evidence must render as plain inert text.
+- External URLs must use existing safe-link behavior.
+- Missing intelligence must show an honest unavailable state.
+- No fabricated explanation may be generated client-side.
+- No color-only status meaning.
+- Accessible headings, labels, focus behavior, and screen-reader text.
+- Responsive behavior must fit the existing application design.
+
+Do **not** redesign the full opportunity feed.
+
+### 17.11 Acceptance criteria
+
+**Persistence**
+
+1. A successful Batch 3 analysis can create or update exactly one correctly scoped
+   intelligence record according to the chosen versioning policy.
+2. Reprocessing the same signal/context/version is idempotent and does not create
+   duplicate records.
+3. Existing opportunities without intelligence remain readable.
+4. Existing opportunity status and score behavior remains backward compatible.
+5. The migration upgrades from `a1b2c3d4e5f6`.
+6. Migration downgrade and re-upgrade complete successfully.
+7. Alembic reports one migration head.
+8. Alembic schema-drift check reports no unintended operations.
+9. Required indexes and uniqueness constraints are present.
+10. No destructive data transformation is introduced.
+
+**Facts and inference**
+
+11. Source facts and inferred attributes use distinct persisted fields and API types.
+12. Every material inference retains method, confidence, and supporting evidence
+    where available.
+13. Source evidence remains traceable to the normalized signal and provenance.
+14. Inference is never rendered as a quoted source statement.
+15. Missing evidence cannot produce a confidently presented claim.
+16. Simulated fixtures remain visibly identifiable.
+17. Scoring version `3b.1` is persisted and exposed for Batch 3 records.
+18. Component scores remain bounded and match the persisted composite result.
+
+**API**
+
+19. Authorized users can retrieve intelligence through the existing
+    opportunity-detail endpoint.
+20. Unauthorized cross-workspace and cross-location reads are denied.
+21. An opportunity ID from another workspace cannot be used to retrieve intelligence.
+22. Opportunities without intelligence return a valid backward-compatible response.
+23. API response schemas are typed and documented.
+24. OpenAPI regeneration produces only intentional additive changes.
+25. Frontend generated types match the API contract.
+26. Compact opportunity-feed performance does not regress through unnecessary
+    intelligence payload expansion.
+
+**Frontend**
+
+27. Opportunity detail displays an evidence-backed intelligence panel when
+    intelligence exists.
+28. Source facts and SignalNest inferences are visibly distinct.
+29. Evidence, source attribution, scoring version, and component scores are displayed
+    accurately.
+30. Missing intelligence displays an honest unavailable or not-yet-analyzed state.
+31. Rejected or weak signals display their structured decision/reason without
+    exposing internal sensitive policy.
+32. Simulated signals show an appropriate indicator.
+33. Evidence text renders inertly with no HTML or script execution.
+34. Loading, empty, error, and partial-data states are tested.
+35. The panel is keyboard accessible and usable with screen readers.
+36. The panel works at supported responsive breakpoints.
+37. Existing opportunity status actions continue to work.
+
+**Isolation**
+
+38. Dallas intelligence cannot appear in Lagos opportunities.
+39. Lagos intelligence cannot appear in London opportunities.
+40. London intelligence cannot appear in Nairobi opportunities.
+41. Separate scouting requests remain independent.
+42. Separate locations of the same business remain independent.
+43. Separate workspaces cannot access each other's intelligence.
+44. Same-topic signals can produce independent market-specific intelligence records.
+45. Reprocessing in one market cannot overwrite another market's record.
+
+**Determinism and safety**
+
+46. Batch 4 introduces no HTTP, socket, model API, subprocess, `eval`, or `exec` path.
+47. `DeterministicEnricher` remains the active default.
+48. `ModelEnricher` remains disabled and fail-closed.
+49. Stored evidence is sanitized and bounded before persistence.
+50. Prompt-injection markers cannot alter pipeline, persistence, API, or UI behavior.
+51. Raw source text cannot modify scoring weights, policy, authorization, or
+    configuration.
+52. No unresolved Critical or High security finding remains.
+53. Security tests cover object-level authorization, stored XSS, mass assignment,
+    oversized payloads, and cross-tenant access.
+
+**Quality gates**
+
+54. Ruff passes.
+55. Full backend test suite passes.
+56. PostgreSQL-gated tests run with zero unexpected skips.
+57. Frontend lint passes.
+58. Frontend type-check passes.
+59. Frontend tests pass.
+60. `npm audit` reports zero known vulnerabilities.
+61. API and worker containers build and run as non-root UID `10001`.
+62. Integration smoke remains at least 13/13.
+63. Dallas, Lagos, London, and Nairobi isolation passes.
+64. No cross-market contamination occurs.
+65. PR #34 remains unnecessary for Batch 4 tests.
+66. Normal CI requires no external network access.
+
+**Governance and scope**
+
+67. PR #34 remains untouched.
+68. PR #6 remains untouched.
+69. Ruleset `18820692` remains unchanged.
+70. No bypass or admin merge is used.
+71. Human feedback and learning are not introduced.
+72. Recommendation, generation, publishing, billing, and new connectors are not
+    introduced.
+73. Batch 5 is not started.
+74. Rollback instructions are documented and tested where practical.
+
+### 17.12 Security acceptance criteria
+
+Threat checklist (unresolved Critical or High findings **block readiness**):
+
+- broken object-level authorization;
+- workspace/tenant leakage;
+- location/market leakage;
+- unsafe opportunity-to-intelligence linkage;
+- ID enumeration;
+- mass assignment;
+- stored XSS;
+- source HTML injection;
+- unsafe external links;
+- oversized JSON/evidence;
+- Unicode/control-character abuse;
+- prompt injection;
+- log injection;
+- score tampering;
+- evidence tampering;
+- migration rollback failure;
+- duplicate/idempotency race;
+- stale or partial data exposure;
+- arbitrary raw error exposure.
+
+### 17.13 Observability requirements
+
+Bounded telemetry:
+
+- intelligence persistence attempts;
+- persistence success/failure;
+- idempotent update;
+- API intelligence present/absent;
+- authorization denial;
+- evidence rendering failure;
+- version mismatch;
+- migration/backfill failure;
+- intelligence-panel load success/error.
+
+Labels must **not** contain: tenant IDs, workspace IDs, opportunity IDs, signal IDs,
+source text, evidence text, raw URLs, arbitrary market names, or exception messages.
+Use bounded outcome, decision, version, and failure-category labels only.
+
+### 17.14 Internal implementation split
+
+**Batch 4A — Persistence foundation**
+- finalize data-model naming;
+- decide current-only vs. immutable version history;
+- migration;
+- ORM model;
+- repository;
+- pipeline write path;
+- idempotency;
+- isolation tests;
+- rollback.
+
+*Acceptance gate:* persistence and migration tests green; no API or frontend change
+required yet; existing outputs remain backward compatible.
+
+**Batch 4B — Read-only API exposure**
+- extend opportunity-detail schema;
+- enforce authorization;
+- add absent-data compatibility;
+- contract tests;
+- OpenAPI regeneration;
+- frontend type generation.
+
+*Acceptance gate:* intentional additive contract change only; no compact-feed payload
+expansion unless explicitly approved; API and authorization tests green.
+
+**Batch 4C — Frontend intelligence panel**
+- add intelligence panel to existing opportunity detail;
+- facts/inference presentation;
+- evidence and attribution;
+- score breakdown;
+- loading/empty/error states;
+- accessibility;
+- frontend tests.
+
+*Acceptance gate:* polished detail experience; no full feed redesign; no human-feedback
+flow.
+
+**Batch 4D — Integration and closeout**
+- deterministic end-to-end read path;
+- four-market isolation;
+- security review;
+- container validation;
+- smoke tests;
+- operational docs;
+- acceptance report;
+- rollback verification.
+
+*Acceptance gate:* all required CI gates green; no unresolved Critical/High finding;
+Batch 5 not started.
+
+These may ship as separate PRs if the final diff becomes too large. **Each PR must
+remain independently green and backward compatible.**
+
+### 17.15 Proposed file-change map
+
+*Labeled **proposed** — final paths depend on Batch 4A architecture review.*
+
+| Area | Proposed file | Change type | Purpose | Batch | Risk |
+|------|---------------|-------------|---------|-------|------|
+| Domain | `apps/api/app/intelligence/models.py` | modify | persistence-facing conversion or separation from pure domain models | 4A | Med |
+| Persistence | `apps/api/app/intelligence/persistence.py` (or repository-consistent equivalent) | create | intelligence repository + idempotent writes | 4A | Med |
+| Domain | `apps/api/app/opportunities/models.py` | modify (only if the relationship belongs here) | opportunity↔intelligence linkage | 4A | Med |
+| Pipeline | `apps/api/app/jobs/pipeline.py` | modify | persist the advisory intelligence result | 4A | Med |
+| Enums | `apps/api/app/core/enums.py` | modify (only if persistence/API enums require it) | decision/rejection typing | 4A | Low |
+| Migration | `apps/api/alembic/versions/<revision>_add_signal_intelligence.py` | create | backward-compatible additive migration from `a1b2c3d4e5f6` | 4A | High |
+| API schema | `apps/api/app/opportunities/schemas.py` | modify | additive read-only `intelligence` field on detail | 4B | Med |
+| API route | `apps/api/app/opportunities/routes.py` | modify | populate intelligence on detail read with object-level authz | 4B | Med |
+| API repo/service | existing opportunity service/repository file (after inspection) | modify | scoped intelligence fetch | 4B | Med |
+| Authz | existing authorization helpers (reuse, do not fork) | modify (only if reuse requires it) | enforce workspace/location scope | 4B | Med |
+| Contract | `apps/api/openapi.json` + `packages/shared` generated types | regenerate | additive contract + frontend types | 4B | Low |
+| Frontend page | `apps/web/src/pages/OpportunityDetail.tsx` | modify | mount the intelligence panel | 4C | Med |
+| Frontend component | `apps/web/src/components/OpportunityIntelligencePanel.tsx` (proposed) | create | evidence-backed panel | 4C | Med |
+| Frontend client | opportunity API hooks/generated types | modify | consume additive field | 4C | Low |
+| Frontend reuse | existing safe-link / evidence presentation components | reuse | inert rendering + safe links | 4C | Low |
+| Tests | domain/persistence, migration, API authz, pipeline idempotency, four-market isolation, frontend panel, contract, smoke | create | full Batch 4 coverage | 4A–4D | Med |
+| Docs | `docs/phase-3b-implementation-plan.md` | modify | this section + closeout | 4A–4D | Low |
+| Docs | `docs/phase-3b/signal-intelligence-design.md` | modify | persistence/exposure design | 4A–4C | Low |
+| Docs | `docs/security/signal-intelligence-threat-model.md` | modify | new persistence/API/UI threats | 4B–4D | Low |
+| Docs | `docs/operations/signal-scoring-operations.md` | modify | operate the persisted/exposed intelligence | 4A–4D | Low |
+| Docs | Batch 4 acceptance report | create (closeout only) | 4D acceptance evidence | 4D | Low |
+
+Use exact current repository paths for the opportunity schema/route/service files
+after inspection. Do **not** invent a parallel route hierarchy — the opportunity-detail
+endpoint already exists.
+
+**Files explicitly NOT to touch:**
+
+- PR #34 branch files (live egress).
+- Connector transport code.
+- Approved-source registry.
+- Billing.
+- Publishing.
+- Ad generation.
+- Unrelated frontend pages.
+- PR #6 branch.
+- Ruleset configuration.
+- Phase 3A acceptance evidence.
+
+Avoid modifying the full opportunity-list page (unless a minimal indicator is
+approved), unrelated dashboard pages, or global styling without necessity.
+
+### 17.16 Migration strategy
+
+- Base migration head: `a1b2c3d4e5f6`.
+- Additive table/relationship only.
+- No destructive column alteration.
+- Nullable association where historical opportunity rows require compatibility.
+- Unique idempotency constraint.
+- Scoped indexes.
+- Verify: upgrade; downgrade; re-upgrade; fresh-database upgrade; populated-database
+  compatibility; `alembic check`; single-head verification.
+
+**No backfill should fabricate Batch 3 intelligence for old opportunities.**
+Historical rows return `intelligence: null` unless a deterministic reprocessing job is
+separately approved.
+
+### 17.17 Rollout strategy
+
+1. Migration deployed.
+2. Pipeline persistence enabled behind a default-safe internal feature flag if
+   existing configuration patterns support one.
+3. API field exposed as nullable.
+4. Frontend panel handles null safely.
+5. Deterministic fixtures enabled first.
+6. Internal/staging verification.
+7. Four-market canary.
+8. Broader rollout only after metrics and isolation pass.
+
+No live RSS dependency.
+
+### 17.18 Rollback strategy
+
+Independent rollback layers:
+
+- frontend panel rollback;
+- API-field rollback while preserving nullable compatibility;
+- pipeline write-path disablement;
+- migration downgrade only when data-loss implications are understood;
+- feature-flag disablement;
+- preserve existing opportunity experience;
+- do not remove or corrupt existing Phase 2 opportunity scores;
+- no dependency on PR #34.
+
+Additive persisted intelligence may safely remain unused if UI/API rollback occurs.
+
+### 17.19 Owner decisions resolved and remaining
+
+**Resolved:**
+
+- Batch 4 objective approved.
+- First-class persistence preferred.
+- Human feedback deferred to Phase 3C.
+- PR #34 not required.
+- Attribution may be displayed only from reliable existing provenance.
+
+**Remaining architecture decisions (Batch 4A — non-blocking for documentation, must
+be resolved before migration creation):**
+
+1. Final table/model name.
+2. Current-only vs. immutable version history.
+3. Whether the compact opportunity feed receives a minimal intelligence indicator.
+4. Whether suppressed/rejected intelligence is customer-visible or operator-only.
+5. Whether an internal persistence feature flag is needed.
+6. Exact retention policy for versioned intelligence records.
+
+### 17.20 Readiness classification
+
+**Implementation readiness:** READY TO BEGIN BATCH 4A AFTER THE REMAINING DATA-MODEL
+DECISIONS ARE RECORDED.
+
+- Product scope is approved.
+- Architecture is additive.
+- No live-egress dependency exists.
+- Implementation must begin with **Batch 4A only**.
+- Later sub-batches must not be started automatically.
+- Each sub-batch requires its own verification boundary.
