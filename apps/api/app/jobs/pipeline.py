@@ -30,6 +30,8 @@ from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
 from app.infra.queue import register_job
 from app.infra.vector import cosine, embed_text
+from app.intelligence.analyze import analyze_signal
+from app.intelligence.models import AnalysisInput
 from app.jobs.context import ExecutionContext, JobContextError, scope_matches
 from app.jobs.contracts import unwrap
 from app.llm.base import LLMError
@@ -216,6 +218,12 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
             except LLMError as exc:  # pragma: no cover - mock is deterministic
                 logger.warning("classify_failed", extra={"extra_fields": {"err": str(exc)}})
 
+        # Additive Phase 3B Batch 3 annotation: a deterministic, offline intelligence
+        # read of this signal (facts vs inference, versioned score, structured
+        # accept/reject). Purely advisory metadata — it does not alter the existing
+        # normalization, scoring, clustering or decision outputs below.
+        intelligence_annotation = _intelligence_annotation(fx, ctx)
+
         norm = NormalizedSignal(
             organization_id=request.organization_id,
             workspace_id=request.workspace_id,
@@ -241,6 +249,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
                 "audience_label": audience_label,
                 "market": fx.market,
                 "engagement": fx.engagement,
+                "intelligence": intelligence_annotation,
             },
         )
         db.add(norm)
@@ -439,6 +448,38 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
         opportunities.append(opp)
 
     return opportunities
+
+
+def _intelligence_annotation(fx, ctx) -> dict:
+    """Deterministic, offline intelligence read of a connector signal.
+
+    Advisory only: the result is stored under ``ingest_metadata["intelligence"]`` and
+    never feeds back into the pipeline's own scoring/decision path, so it cannot
+    change existing outputs. Any failure is swallowed to a neutral marker — an
+    annotation must never break ingestion.
+    """
+    try:
+        candidate = analyze_signal(
+            AnalysisInput(
+                content=fx.content,
+                source_type=fx.source_type,
+                market=fx.market,
+                author=fx.author,
+                language=fx.language,
+                published_days_ago=float(fx.published_days_ago),
+                engagement=int(fx.engagement),
+                distinct_source_types=int(fx.distinct_source_types),
+                duplicate_count=int(fx.duplicate_count),
+                has_active_ads=fx.has_active_ads,
+                news_coverage=fx.news_coverage,
+                search_trend_up=fx.search_trend_up,
+            ),
+            ctx,
+        )
+        return candidate.as_dict()
+    except Exception as exc:  # pragma: no cover - annotation must never break ingest
+        logger.warning("intelligence_annotation_failed", extra={"extra_fields": {"err": str(exc)}})
+        return {"error": "annotation_unavailable"}
 
 
 def _mean_embedding(members) -> list[float]:

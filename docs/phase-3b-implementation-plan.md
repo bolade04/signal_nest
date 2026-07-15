@@ -175,9 +175,13 @@ fixture path) or revert the branch — no schema or data changes to undo.
 - **Batch 2:** live HTTP feed provider behind config; hardened untrusted-feed
   parsing; per-host allowlist + cost/rate ceilings; integration smoke against a
   local sandbox feed server; run/attribution persistence.
-- **Batch 3:** frontend surface for connector source + attribution on opportunities.
+- **Batch 3 (signal intelligence — this section 16):** additive, fully deterministic,
+  offline signal-intelligence core (extraction → business relevance → versioned
+  opportunity scoring → structured accept/reject) reusing the existing scoring
+  engines. Orthogonal to the connector-attribution *frontend* work, which remains a
+  later, separately-gated UI batch.
 - **Later:** additional connectors (one at a time), each with its own policy/legal
-  review.
+  review; frontend surface for connector source + attribution on opportunities.
 
 ## 14. Acceptance criteria (Batch 1)
 
@@ -201,3 +205,133 @@ fixture path) or revert the branch — no schema or data changes to undo.
 | B-5 | Fabricated commercial signal from a public source | Low | Med | Neutral defaults for unobservable fields; `is_simulated` honoured | Mitigated |
 | B-6 | Regression to the existing fixture pipeline | Low | High | Additive; default path unchanged; full suite + smoke green | Mitigated |
 | B-7 | Legal/ToS feasibility of RSS not formally confirmed | — | Med | Recommendation documented; formal confirmation is a Phase 3 entry criterion owned by the product owner | Open — needs legal sign-off |
+
+## 16. Batch 3 — Signal intelligence and opportunity scoring
+
+**Status: Batch 3 (signal-intelligence core) — DRAFT.** Additive to the Phase 2
+pipeline; no schema change, no contract change, no live egress, no dependency on
+the Batch 2 live-connector branch (PR #34).
+
+_Independent-review status: NO INDEPENDENT THIRD-PARTY REVIEW COMPLETED._
+
+### 16.1 Classification: PARTIALLY DEFINED
+
+A rich Phase 2 pipeline already scores opportunities (`app/jobs/pipeline.py` +
+`app/scoring/*`). What is **not** yet defined is a deterministic, offline
+*intelligence layer* that (a) separates observed **facts** from **inference**
+with evidence spans, (b) versions its scoring, (c) emits **structured** accept/
+reject reason codes, and (d) runs with **no** model call. Per the plan-of-record
+rule "implement only the supported foundation; do not invent an unrelated Batch 3",
+this section adds exactly that foundation and reuses — never replaces — the
+existing relevance/validation/decision engines.
+
+### 16.2 Objective
+
+Transform a normalized, market-scoped signal into an explainable, evidence-backed
+`OpportunityCandidate` through a deterministic chain:
+`enrich → extract facts + intelligence → business relevance → versioned scoring →
+structured accept/reject → deterministic clustering`. Identical input always
+produces identical output; no untrusted content is ever executed or trusted.
+
+### 16.3 What exists / is missing
+
+| Concern | Phase 2 today | Batch 3 addition |
+|---------|---------------|------------------|
+| Signal typing | LLM-only (`classify_signal`) | Deterministic, offline extractor (no model call) |
+| Facts vs inference | Mixed on `Opportunity` | Typed `SignalFacts` (literal) vs `ExtractedIntelligence` (inference + evidence spans + method + confidence) |
+| Scoring version | none | `SCORING_VERSION` stamp on every breakdown |
+| Rejections | silent `continue` | `RejectionReason` enum + structured, explainable reasons |
+| Enrichment provider | n/a | Provider-neutral boundary: deterministic default, AI adapter **disabled**, offline in tests |
+| Clustering | empty `app/clustering/` | Deterministic key-based clustering with stable ids |
+| Evaluation | none | Labeled dataset with expected outcomes, asserted in tests |
+
+### 16.4 Domain models (`app/intelligence/models.py`)
+
+- `SignalFacts` — only what is literally present (source_type, market, author,
+  language, published_days_ago, char/word counts, raw excerpt). No inference.
+- `EvidenceSpan` — `(start, end, quote)` into the *sanitized* excerpt, plus the
+  extraction `method`. Every inferred attribute references ≥1 span.
+- `ExtractedIntelligence` — inferred signal_type, pain-point DNA, sentiment,
+  buying-intent / competitor-dissatisfaction flags, each with `evidence` spans,
+  `method`, and a 0..1 `confidence`. Never conflated with facts.
+- `BusinessRelevance` — relevance score (reuses `score_relevance`), matched
+  keyword/pain/audience/competitor hits, exclusion hits, `below_action_floor`.
+- `OpportunityCandidate` — the batch's output: facts, intelligence, relevance,
+  the versioned `IntelligenceScore`, the `decision` (accept) or `RejectionReason`
+  (reject), a human rationale, and the cluster key. Carries `is_simulated`.
+
+### 16.5 Provider-neutral enrichment boundary (`app/intelligence/enrichment.py`)
+
+An `Enricher` protocol with two implementations: `DeterministicEnricher`
+(default; pure functions, offline) and a disabled `ModelEnricher` stub that
+**raises** unless an explicit, non-default, non-test opt-in is set — so no
+customer/source text can reach an external model in normal operation or CI.
+Selection mirrors the LLM-service pattern (config-driven, safe default).
+
+### 16.6 Deterministic extraction (`app/intelligence/extraction.py`)
+
+Keyword/lexicon and regex matchers over the **sanitized** excerpt. Untrusted-
+content safety: prompt-injection markers are defanged (quoted, never obeyed) and
+control characters stripped before any span is recorded — identical to the Batch 2
+neutralization discipline but applied to extracted quotes. No `eval`, no network,
+no model.
+
+### 16.7 Versioned scoring (`app/intelligence/scoring.py`)
+
+`SCORING_VERSION = "3b.1"`. Composite 0..100 from eight clamped factors, each
+carried with `{weight, value, points}`:
+
+| Factor | Weight |
+|--------|-------:|
+| source_quality | 15 |
+| recency | 10 |
+| evidence_strength | 20 |
+| urgency | 10 |
+| business_fit | 20 |
+| market_fit | 10 |
+| commercial_usefulness | 10 |
+| confidence | 5 |
+
+Inputs reuse `_SOURCE_CREDIBILITY`, the relevance action-floor (40), cross-source
+`score_validation`, and geo in-area. The breakdown embeds `version` so a stored
+score is always interpretable against the formula that produced it.
+
+### 16.8 Rejection / suppression (`app/intelligence/rejection.py`)
+
+`RejectionReason` (new enum, additive): `NOISE`, `OUT_OF_CONTEXT`, `OUT_OF_MARKET`,
+`DUPLICATE`, `INSUFFICIENT_EVIDENCE`, `POLICY_BLOCKED`, `WEAK_SIGNAL`. Rules are
+ordered and short-circuit; each returns a structured reason + rationale so a
+suppressed signal is as explainable as an accepted one.
+
+### 16.9 Deterministic clustering (`app/intelligence/clustering.py`)
+
+Stable cluster key = pain-point DNA → else signal type → else `"general"`, with a
+deterministic content-hash tiebreak. No embeddings, no randomness; the same set
+of candidates always clusters identically.
+
+### 16.10 Migration / API / frontend / pipeline
+
+- **Migration: NONE.** Pure/in-memory; results ride existing `ingest_metadata`
+  JSON. A dedicated `signal_intelligence` table is a documented deferred decision.
+- **API: no contract change.** No route/schema edits; `openapi.json` untouched.
+- **Frontend: none.** Deferred.
+- **Pipeline: additive only.** `analyze_signal` is attached to
+  `NormalizedSignal.ingest_metadata["intelligence"]` behind a default-safe call;
+  existing outputs, scores and decisions are byte-identical. If any existing test
+  would change, the wiring is withheld and the core ships standalone.
+
+### 16.11 Testing + evaluation
+
+`app/tests/test_signal_intelligence.py` (unit: facts/inference separation,
+extraction determinism, injection defanging, versioned scoring bounds + factor
+math, every rejection reason, clustering stability) and
+`app/tests/test_intelligence_evaluation.py` (asserts the labeled dataset in
+`app/intelligence/evaluation/` reproduces expected accept/reject + band exactly).
+All prior suites, ruff, migration check, contract drift, npm audit, frontend gates
+and the four-market smoke stay green.
+
+### 16.12 Rollback
+
+`main` @ `fe78b39`. Every commit additive; no migration, no contract change —
+reverting the branch (or simply not merging the draft PR) fully restores current
+behavior.
