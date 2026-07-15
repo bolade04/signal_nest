@@ -340,11 +340,16 @@ behavior.
 
 ### 17.1 Status
 
-**Status:** OWNER SCOPE CONFIRMED — READY FOR IMPLEMENTATION PLANNING
+**Status:** BATCH 4A MERGED AND POST-MERGE VERIFIED — BATCH 4B NOT STARTED
 
-- The product scope is **approved** by the product owner.
-- Code implementation **has not started**; this section is the implementation
-  contract for Batch 4, not a record of completed work.
+- The owner-approved Batch 4 **scope remains active**; this section is the
+  implementation contract for the whole Batch 4 program.
+- **Batch 4A (persistence foundation) is complete**: implemented, reviewed by the
+  genuine reviewer, merged through normal branch protection, and post-merge verified
+  (see §17.14 Batch 4A completion record). Merge commit
+  `3795f54a6664a424d3678f100cb92f7d28b5cf89` (PR #37).
+- **Batch 4B, 4C, and 4D remain pending / not started.** Overall Batch 4 is **not
+  complete**.
 - Batch 4 is **independent of PR #34 and live egress** — neither the live-connector
   branch nor any network transport is a dependency. Batch 4 reads intelligence that
   the existing (simulated) deterministic pipeline already produces.
@@ -763,6 +768,7 @@ Use bounded outcome, decision, version, and failure-category labels only.
 ### 17.14 Internal implementation split
 
 **Batch 4A — Persistence foundation**
+**Status:** MERGED AND POST-MERGE VERIFIED
 - finalize data-model naming;
 - decide current-only vs. immutable version history;
 - migration;
@@ -774,17 +780,70 @@ Use bounded outcome, decision, version, and failure-category labels only.
 - rollback.
 
 *Acceptance gate:* persistence and migration tests green; no API or frontend change
-required yet; existing outputs remain backward compatible.
+required yet; existing outputs remain backward compatible. **Met.** Delivered in
+PR #37, merge commit `3795f54a6664a424d3678f100cb92f7d28b5cf89`, migration head
+`0155a5c468e3`, post-merge CI run `29439431696` (green). See the completion record
+below.
 
-**Batch 4A status: IMPLEMENTED IN DRAFT PR — PENDING REVIEW.** Immutable, version-aware
-records chosen (no destructive overwrite, no mutable `is_current`). Delivered:
-additive migration `0155a5c468e3` (down_revision `a1b2c3d4e5f6`, single head); ORM
-`SignalIntelligenceRecord`; idempotent SAVEPOINT-based repository with the unique
-identity constraint as the concurrency guard; fail-open pipeline write + scoped
-opportunity linkage; persistence/migration/idempotency/isolation/rollback tests.
-No API/OpenAPI/frontend change. Batch 4B not started.
+#### 17.14.1 Batch 4A completion record
+
+**Delivery**
+- Batch 4A persistence foundation implemented.
+- ORM class: `SignalIntelligenceRecord`.
+- Table: `signal_intelligence_records`.
+- Persistence repository/service added.
+- Pipeline persistence write path added.
+- Existing `ingest_metadata["intelligence"]` compatibility retained.
+- Immutable, version-aware records; **no** mutable `is_current` strategy.
+- Database uniqueness is the final idempotency guard.
+- Facts and inference persist separately.
+- No fabricated historical backfill.
+
+**Migration**
+- Previous head: `a1b2c3d4e5f6`.
+- New head: `0155a5c468e3`.
+- Additive migration only; single migration head.
+- Upgrade / downgrade / re-upgrade all passed.
+- `alembic check` reported no new upgrade operations.
+- Existing business and opportunity data remained compatible.
+
+**Merge**
+- PR: #37 — https://github.com/bolade04/signal_nest/pull/37
+- Pre-merge head: `9fffa8a38474eb38e25aa01c5d7ea018ca696c08`.
+- Approved by: `adesenden` at 2026-07-15T18:02:25Z (approval matched the exact head).
+- Merge method: normal protected-branch squash merge.
+- Merge actor: `bolade04`.
+- Merge timestamp: 2026-07-15T18:09:58Z.
+- Merge commit: `3795f54a6664a424d3678f100cb92f7d28b5cf89`.
+- No admin bypass; no ruleset bypass.
+
+**Post-merge verification**
+- CI run: `29439431696` — https://github.com/bolade04/signal_nest/actions/runs/29439431696
+- All five jobs succeeded.
+- Backend: 447 passed, 7 warnings.
+- Ruff: pass.
+- PostgreSQL-gated persistence/idempotency tests: pass.
+- Frontend: 20/20 across 8 files (unchanged).
+- npm audit: 0 vulnerabilities.
+- API contract drift: none.
+- API and worker: non-root UID 10001.
+- Integration smoke: 13/13.
+- Four-market isolation: Dallas, Lagos, London, Nairobi.
+- No cross-market contamination across 12 opportunities.
+
+**Scope boundary (held)**
+- No API intelligence exposure.
+- No OpenAPI change.
+- No frontend intelligence panel.
+- No human feedback.
+- No live RSS.
+- No new connector.
+- No external model.
+- No Batch 4B implementation.
+- PR #34 remained unnecessary and untouched.
 
 **Batch 4B — Read-only API exposure**
+**Status:** NOT STARTED
 - extend opportunity-detail schema;
 - enforce authorization;
 - add absent-data compatibility;
@@ -796,6 +855,7 @@ No API/OpenAPI/frontend change. Batch 4B not started.
 expansion unless explicitly approved; API and authorization tests green.
 
 **Batch 4C — Frontend intelligence panel**
+**Status:** NOT STARTED
 - add intelligence panel to existing opportunity detail;
 - facts/inference presentation;
 - evidence and attribution;
@@ -808,6 +868,7 @@ expansion unless explicitly approved; API and authorization tests green.
 flow.
 
 **Batch 4D — Integration and closeout**
+**Status:** NOT STARTED
 - deterministic end-to-end read path;
 - four-market isolation;
 - security review;
@@ -925,24 +986,36 @@ Additive persisted intelligence may safely remain unused if UI/API rollback occu
 - PR #34 not required.
 - Attribution may be displayed only from reliable existing provenance.
 
-**Remaining architecture decisions (Batch 4A — non-blocking for documentation, must
-be resolved before migration creation):**
+**Resolved by the landed Batch 4A implementation (PR #37):**
 
-1. Final table/model name.
-2. Current-only vs. immutable version history.
-3. Whether the compact opportunity feed receives a minimal intelligence indicator.
-4. Whether suppressed/rejected intelligence is customer-visible or operator-only.
-5. Whether an internal persistence feature flag is needed.
-6. Exact retention policy for versioned intelligence records.
+1. Final table/model name — `signal_intelligence_records` / `SignalIntelligenceRecord`.
+2. Current-only vs. immutable version history — **immutable, version-aware** records
+   (no destructive overwrite, no mutable `is_current`).
+3. Whether an internal persistence feature flag is needed — **no** flag; persistence
+   is default-on and fail-open so it cannot corrupt opportunity creation.
+4. Retention behavior for now — versioned records are **retained**; no deletion or
+   cleanup job in this batch.
+
+**Still pending (product decisions for Batch 4B/4C — not resolved by Batch 4A):**
+
+1. Whether the compact opportunity feed receives a minimal intelligence indicator.
+2. Whether suppressed/rejected intelligence is customer-visible or operator-only.
+3. Longer-term retention policy for versioned intelligence records.
 
 ### 17.20 Readiness classification
 
-**Implementation readiness:** READY TO BEGIN BATCH 4A AFTER THE REMAINING DATA-MODEL
-DECISIONS ARE RECORDED.
+**Implementation status:** BATCH 4A COMPLETE — READY TO PLAN BATCH 4B, BUT BATCH 4B
+HAS NOT STARTED.
 
-- Product scope is approved.
-- Architecture is additive.
-- No live-egress dependency exists.
-- Implementation must begin with **Batch 4A only**.
-- Later sub-batches must not be started automatically.
-- Each sub-batch requires its own verification boundary.
+- Batch 4A is merged and post-merge verified (PR #37, merge commit
+  `3795f54a6664a424d3678f100cb92f7d28b5cf89`, CI run `29439431696`).
+- The remaining Batch 4A data-model decisions are resolved by the landed
+  implementation (see §17.19).
+- The next eligible stage is **Batch 4B — read-only API exposure**.
+- Batch 4B requires a separate branch, implementation boundary, tests, PR, approval,
+  and merge.
+- No later stage begins automatically; each sub-batch requires its own verification
+  boundary.
+- Overall Batch 4 remains **incomplete**.
+- Product scope is approved; architecture is additive; no live-egress dependency
+  exists.
