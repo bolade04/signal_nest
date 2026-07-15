@@ -227,6 +227,25 @@ class Settings(BaseSettings):
     #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
     connector_rss_max_attempts: int = 3
 
+    # --- Live RSS egress (Phase 3B Batch 2) — all fail-closed, default off ----
+    #: Master switch for *live network egress* on the RSS connector. Off by
+    #: default and gated behind an approved-source registry that ships empty, so
+    #: turning this on alone still cannot reach any source. Enabling live egress
+    #: requires the unmet Phase 3 entry criteria (owner + legal sign-off).
+    connector_rss_live_enabled: bool = False
+    #: Emergency kill switch: when true, overrides *all* activation regardless of
+    #: any other flag or source state → instant revert to the fixture path.
+    connector_rss_kill_switch: bool = False
+    #: Tenant/workspace allowlists and canary IDs for a controlled live rollout.
+    #: Empty ⇒ nobody is eligible (fail closed), never "everybody".
+    connector_rss_live_tenants: list[str] = Field(default_factory=list)
+    connector_rss_live_workspaces: list[str] = Field(default_factory=list)
+    connector_rss_live_jurisdictions: list[str] = Field(default_factory=list)
+    connector_rss_live_canary_ids: list[str] = Field(default_factory=list)
+    #: Blast-radius bounds for live fetching.
+    connector_rss_live_max_active_sources: int = 1
+    connector_rss_live_max_concurrency: int = 2
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None
@@ -503,6 +522,14 @@ class Settings(BaseSettings):
             errors.append("connector_rss_rate_refill_per_second must be greater than 0")
         if self.connector_rss_max_attempts < 1:
             errors.append("connector_rss_max_attempts must be >= 1")
+
+        # Live-egress blast-radius bounds. These only take effect once live egress
+        # is approved and enabled, but an out-of-range bound is a config bug we
+        # surface now rather than at enablement time.
+        if self.connector_rss_live_max_active_sources < 1:
+            errors.append("connector_rss_live_max_active_sources must be >= 1")
+        if self.connector_rss_live_max_concurrency < 1:
+            errors.append("connector_rss_live_max_concurrency must be >= 1")
 
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))

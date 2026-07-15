@@ -78,6 +78,13 @@ SERVICE_STARTUPS_TOTAL = "service_startups_total"
 SERVICE_SHUTDOWNS_TOTAL = "service_shutdowns_total"
 MIGRATION_RUNS_TOTAL = "migration_runs_total"
 
+# Scouting connectors (Phase 3B). Labels stay within ALLOWED_LABELS
+# (operation / outcome / error_class) — never a URL, host or tenant id.
+CONNECTOR_FETCH_TOTAL = "connector_fetch_total"
+CONNECTOR_FETCH_REJECTED_TOTAL = "connector_fetch_rejected_total"
+CONNECTOR_SIGNALS_TOTAL = "connector_signals_total"
+CONNECTOR_SOURCE_HEALTH = "connector_source_health"
+
 # Telemetry self-observation
 TELEMETRY_FAILURES_TOTAL = "telemetry_failures_total"
 
@@ -103,6 +110,10 @@ METRIC_NAMES: frozenset[str] = frozenset(
         SERVICE_STARTUPS_TOTAL,
         SERVICE_SHUTDOWNS_TOTAL,
         MIGRATION_RUNS_TOTAL,
+        CONNECTOR_FETCH_TOTAL,
+        CONNECTOR_FETCH_REJECTED_TOTAL,
+        CONNECTOR_SIGNALS_TOTAL,
+        CONNECTOR_SOURCE_HEALTH,
         TELEMETRY_FAILURES_TOTAL,
     }
 )
@@ -322,5 +333,9 @@ __all__ = [
     "SERVICE_STARTUPS_TOTAL",
     "SERVICE_SHUTDOWNS_TOTAL",
     "MIGRATION_RUNS_TOTAL",
+    "CONNECTOR_FETCH_TOTAL",
+    "CONNECTOR_FETCH_REJECTED_TOTAL",
+    "CONNECTOR_SIGNALS_TOTAL",
+    "CONNECTOR_SOURCE_HEALTH",
     "TELEMETRY_FAILURES_TOTAL",
 ]
