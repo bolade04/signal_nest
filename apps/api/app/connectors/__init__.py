@@ -25,6 +25,14 @@ from app.connectors.base import (
     FetchScope,
     SourceConnector,
 )
+from app.connectors.live import LiveEgressDecision, decide_live_egress, live_egress_available
+from app.connectors.sources import (
+    ApprovalState,
+    ApprovedSource,
+    ApprovedSourceRegistry,
+    Retention,
+    get_registry,
+)
 
 __all__ = [
     "ConnectorResult",
@@ -33,4 +41,13 @@ __all__ = [
     "FetchFailure",
     "FetchScope",
     "SourceConnector",
+    # Batch 2 safety foundation (no live egress by default)
+    "ApprovalState",
+    "ApprovedSource",
+    "ApprovedSourceRegistry",
+    "Retention",
+    "get_registry",
+    "LiveEgressDecision",
+    "decide_live_egress",
+    "live_egress_available",
 ]
