@@ -1,9 +1,14 @@
 """Signal connectors.
 
-A single ``Connector`` interface is what future live connectors (Reddit, reviews,
-Google Trends, Meta Ad Library, ...) will implement. The default ``FixtureConnector``
-reads from the simulated fixture library, filtered by the request's market + keywords +
-enabled source types, so results stay isolated per location.
+A single ``Connector`` interface is what live connectors (Phase 3B onward)
+implement. The default ``FixtureConnector`` reads from the simulated fixture
+library, filtered by the request's market + keywords + enabled source types, so
+results stay isolated per location.
+
+Since Phase 3B, :func:`get_connector` consults the connector registry
+(``app.connectors``): when a live connector is enabled *and* its policy permits
+the request scope, that connector is used; otherwise this falls back to the
+sandbox ``FixtureConnector``, so default behaviour is unchanged.
 """
 
 from __future__ import annotations
@@ -47,5 +52,21 @@ class FixtureConnector:
         return results
 
 
-def get_connector() -> Connector:
-    return FixtureConnector()
+def get_connector(
+    *,
+    source_types: list[str] | None = None,
+    market: str | None = None,
+) -> Connector:
+    """Resolve the connector for a request scope.
+
+    Returns a live connector when one is enabled and its policy permits the
+    scope; otherwise the sandbox :class:`FixtureConnector`. Called with no
+    arguments (the legacy signature) it always returns the fixture connector.
+    """
+    from app.connectors.registry import resolve_connector
+
+    live = resolve_connector(
+        source_types=tuple(source_types or ()),
+        market=market,
+    )
+    return live or FixtureConnector()
