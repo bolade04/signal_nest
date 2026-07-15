@@ -90,7 +90,39 @@ metrics policy is unchanged. **Residual risk:** low.
 - The deterministic enricher is the only one enabled until a model provider is
   separately approved.
 
-## 5. Out of scope
+## 5. Batch 4A persistence addendum
+
+Batch 4A turns the previously advisory-only annotation into durable, scoped rows
+(`signal_intelligence_records`). The threat posture is unchanged; the new surface is
+considered against the same boundaries:
+
+- **What is stored:** only the already-sanitized excerpt and the derived
+  facts/inference/relevance/score components. No credentials, tokens, raw untrusted
+  text beyond the sanitized excerpt, or job payloads are persisted. Payloads are
+  additionally length/quantity-bounded (`serialize_candidate`) so a JSON column
+  cannot grow without limit (reinforces **T3**).
+- **No new egress:** persistence is a local DB write inside the caller-owned
+  transaction. No `eval`/`exec`/`subprocess`/network is introduced (**T2**, **T6**
+  unchanged).
+- **Tenant isolation (T4):** every row carries `organization_id`/`workspace_id`/
+  `scout_request_id` and the identity unique constraint is scoped
+  `(workspace_id, normalized_signal_id, analysis_version, scoring_version,
+  fingerprint)`, so it can never blend rows across workspaces. `attach_opportunity`
+  updates only rows already matching the target `workspace_id`.
+- **Fact/inference separation (T5):** preserved at rest — `facts`, `inference`,
+  `relevance` and `score_components` are stored in distinct columns; nothing
+  inferred is recorded as observed fact.
+- **Failure containment (T8):** the persist call runs in a SAVEPOINT and is wrapped
+  fail-open, so a persistence fault (including a unique-constraint collision from a
+  retry/concurrent worker) rolls back only the savepoint and never corrupts
+  opportunity creation or ingestion.
+- **Not customer-exposed:** no API/OpenAPI/frontend surface reads this table in
+  Batch 4A. Rollback is additive-safe (drops only the new table).
+
+_Independent-review status for Batch 4A: NO INDEPENDENT THIRD-PARTY REVIEW COMPLETED._
+
+## 6. Out of scope
 
 Live transport hardening (Batch 2), connector legal/ToS review, model-provider
-security (deferred), and the frontend surface.
+security (deferred), the frontend surface, and Batch 4B API exposure of persisted
+intelligence.

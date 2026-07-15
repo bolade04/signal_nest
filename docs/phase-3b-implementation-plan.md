@@ -776,6 +776,14 @@ Use bounded outcome, decision, version, and failure-category labels only.
 *Acceptance gate:* persistence and migration tests green; no API or frontend change
 required yet; existing outputs remain backward compatible.
 
+**Batch 4A status: IMPLEMENTED IN DRAFT PR — PENDING REVIEW.** Immutable, version-aware
+records chosen (no destructive overwrite, no mutable `is_current`). Delivered:
+additive migration `0155a5c468e3` (down_revision `a1b2c3d4e5f6`, single head); ORM
+`SignalIntelligenceRecord`; idempotent SAVEPOINT-based repository with the unique
+identity constraint as the concurrency guard; fail-open pipeline write + scoped
+opportunity linkage; persistence/migration/idempotency/isolation/rollback tests.
+No API/OpenAPI/frontend change. Batch 4B not started.
+
 **Batch 4B — Read-only API exposure**
 - extend opportunity-detail schema;
 - enforce authorization;
