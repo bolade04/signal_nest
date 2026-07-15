@@ -169,15 +169,23 @@ def test_postgres_unique_constraint_enforces_idempotency() -> None:  # pragma: n
     from app.scouting_requests.models import ScoutRequest
     from app.signals.models import NormalizedSignal, RawSignal
 
+    # PostgreSQL enforces every foreign key on insert, so each parent must be
+    # committed (visible) before its children — seed the chain in dependency order.
     with factory() as s:
         s.add(Organization(id="org-1", name="Org One", slug="org-one"))
         s.add(Workspace(id="ws-1", organization_id="org-1", name="WS", slug="ws"))
+        s.commit()
+    with factory() as s:
         s.add(Brand(id="br-1", organization_id="org-1", workspace_id="ws-1",
                     name="B", industry="coffee", business_type="cafe"))
         s.add(ScoutRequest(id="sr-1", organization_id="org-1", workspace_id="ws-1",
                            brand_id="br-1", name="scout"))
+        s.commit()
+    with factory() as s:
         s.add(RawSignal(id="raw-1", organization_id="org-1", workspace_id="ws-1",
                         scout_request_id="sr-1", source_type="rss_news", content="coffee"))
+        s.commit()
+    with factory() as s:
         s.add(NormalizedSignal(id="ns-1", organization_id="org-1", workspace_id="ws-1",
                                scout_request_id="sr-1", raw_signal_id="raw-1",
                                source_type="rss_news", excerpt="coffee delivery is slow",
