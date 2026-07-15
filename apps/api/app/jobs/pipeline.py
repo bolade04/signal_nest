@@ -144,7 +144,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
-    connector = get_connector()
+    connector = get_connector(source_types=request.source_types or [], market=market)
     fixtures = connector.fetch(
         market=market,
         keywords=request.keywords or ctx.keywords,

@@ -213,6 +213,20 @@ class Settings(BaseSettings):
     application_version: str = "0.0.0"
     build_revision: str | None = None
 
+    # --- Scouting connectors (Phase 3B) --------------------------------------
+    #: Master switch for the live RSS/news connector. Off by default: the sandbox
+    #: fixture path stays authoritative until a product owner turns a specific
+    #: connector on (Phase 3 entry criterion: connector policy/legal confirmed).
+    connector_rss_enabled: bool = False
+    #: Markets the RSS connector is cleared to serve. Empty ⇒ no jurisdiction
+    #: restriction beyond the request's own market scoping.
+    connector_rss_markets: list[str] = Field(default_factory=list)
+    #: Token-bucket rate-limit for RSS fetches: burst capacity and steady refill.
+    connector_rss_rate_capacity: int = 5
+    connector_rss_rate_refill_per_second: float = 1.0
+    #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
+    connector_rss_max_attempts: int = 3
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None
@@ -479,6 +493,16 @@ class Settings(BaseSettings):
             )
         if not self.worker_type.strip():
             errors.append("worker_type must not be empty")
+
+        # Scouting connector bounds. A rate limiter that cannot pass a single
+        # token, or a retry policy with no attempts, would silently starve the
+        # connector, so reject those at construction.
+        if self.connector_rss_rate_capacity < 1:
+            errors.append("connector_rss_rate_capacity must be >= 1")
+        if self.connector_rss_rate_refill_per_second <= 0:
+            errors.append("connector_rss_rate_refill_per_second must be greater than 0")
+        if self.connector_rss_max_attempts < 1:
+            errors.append("connector_rss_max_attempts must be >= 1")
 
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
