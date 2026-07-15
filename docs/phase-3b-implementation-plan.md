@@ -201,3 +201,146 @@ fixture path) or revert the branch — no schema or data changes to undo.
 | B-5 | Fabricated commercial signal from a public source | Low | Med | Neutral defaults for unobservable fields; `is_simulated` honoured | Mitigated |
 | B-6 | Regression to the existing fixture pipeline | Low | High | Additive; default path unchanged; full suite + smoke green | Mitigated |
 | B-7 | Legal/ToS feasibility of RSS not formally confirmed | — | Med | Recommendation documented; formal confirmation is a Phase 3 entry criterion owned by the product owner | Open — needs legal sign-off |
+
+## Batch 2 — Controlled live RSS/news ingestion
+
+**Status: BLOCKED — OWNER OR LEGAL DECISION REQUIRED.**
+
+_Independent-review status: NO INDEPENDENT THIRD-PARTY REVIEW COMPLETED._
+
+### Objective
+
+Deliver the **safety machinery** required to make a *controlled, allowlist-only*
+live RSS/news fetch possible — a hardened outbound HTTP boundary (SSRF/DNS/redirect
+defenses, size/timeout/media-type limits), a typed approved-source registry, feed
+state + deduplication, untrusted-content isolation, fail-closed feature flags, a
+kill switch and bounded observability — **without turning on any live network
+egress**. Real egress remains gated on the two unmet Phase 3 entry criteria
+(`docs/phase-3-plan.md` lines 222–223). The exact outcome of this batch: everything
+needed to enable live RSS *except the act of enabling it* is built, tested offline,
+and documented, so enabling later is a small, auditable, reversible config change
+made only after owner + legal sign-off.
+
+### Entry criteria
+
+| # | Prerequisite (`docs/phase-3-plan.md` §"Phase 3 entry criteria") | State |
+|---|------------------------------------------------------------------|-------|
+| 1 | Product owner approves the first Phase 3 vertical slice (RSS live) | **UNSATISFIED — BLOCKING** (checkbox unchecked; no approval record) |
+| 2 | Connector policy **and legal feasibility** confirmed | **UNSATISFIED — BLOCKING** (no legal/ToS review or documented risk acceptance) |
+| 3 | Approved initial source(s) with usage rights | **UNSATISFIED — BLOCKING** (registry ships empty / all-disabled) |
+| 4 | Approved initial jurisdiction(s) | **UNSATISFIED — BLOCKING** (none approved) |
+| 5 | Approved rollout population (tenant/workspace/canary) | **UNSATISFIED — BLOCKING** (none approved) |
+| 6 | Rollback plan defined | **SATISFIED** (default-off flag + kill switch + branch revert; documented below) |
+| 7 | Cost limits defined | **DEFERRED WITH ACCEPTANCE** (per-source burst/daily caps modeled in registry; concrete values set at enablement) |
+| 8 | Data-isolation tests defined | **SATISFIED** (tenant/workspace/location/market/jurisdiction isolation tests added, offline) |
+
+Because prerequisites 1–5 are **BLOCKING and unsatisfied**, this batch implements
+only the safety foundation and **does not send live traffic**. See §"Owner
+decisions still required".
+
+### In scope (this batch — no egress)
+
+- **Approved-source registry** (`app/connectors/sources.py`): typed, immutable
+  source records with enablement, environment/tenant/workspace/market eligibility,
+  jurisdiction allowlist, rate/size/retention limits, attribution requirements and
+  **legal-review + owner-approval state**. Ships **empty / all-disabled**.
+- **Safe fetch boundary** (`app/connectors/safefetch.py`): URL validation
+  (https-only, host/port allowlist, no credentials, no raw-IP, reject
+  loopback/private/link-local/multicast/reserved/metadata), IP-address safety
+  classification (IPv4 + IPv6), DNS-resolution guard (every resolved address must
+  be public; re-validate after redirects → DNS-rebinding defense), redirect guard
+  (bounded hops, per-hop re-validation, no scheme downgrade, no cross-host to an
+  unapproved host, no private-IP target), and network limits (connect/read/total
+  timeout, response-size cap, bounded decompression, media-type check). A
+  `SafeFeedClient` drives these through an **injectable transport**; the only
+  transport available under default config is a **fail-closed** one that refuses
+  because live egress is disabled. **No real-egress transport is implemented.**
+- **Feed state + deduplication** (`app/connectors/feedstate.py`): minimal
+  in-memory state (last fetch, ETag, Last-Modified, fingerprint, failure count,
+  backoff-until) and a correctly-scoped dedup key
+  (source + tenant/workspace + location + market + item id + normalized URL/
+  fingerprint) so a duplicate in one market never suppresses another market's item.
+- **Untrusted-content isolation** (`app/connectors/content.py`): treat all feed
+  text as untrusted — length cap, HTML→text stripping, prompt-injection
+  neutralization (no instruction execution, quoted-content separation, provenance
+  labeling), URL safety screening.
+- **Fail-closed feature flags** (config): global live flag, per-source flag,
+  tenant/workspace allowlist, jurisdiction allowlist, canary list, max active
+  sources, max concurrency, **kill switch** — all default off/empty; malformed or
+  missing config **fails closed** to the fixture path.
+- **Bounded observability**: connector metric names + coarse, secret-free error
+  categories routed through the existing bounded-cardinality metrics seam.
+- **Offline security tests** (`app/tests/test_live_connector_safety.py`): SSRF/URL,
+  DNS, redirect, HTTP-limit, feed, isolation, content and config-fail-closed
+  coverage using fake DNS + fake transports. **No real network in CI.**
+
+### Out of scope (explicit)
+
+General crawling · HTML article scraping · paywall/auth/CAPTCHA/robots
+circumvention · authenticated platform scraping · social-network connectors
+(Reddit/Meta/TikTok/LinkedIn/X/YouTube/podcasts) · automated posting · ad/creative
+generation · billing/metering · customer-facing connector-setup UI · **Batch 3
+(frontend attribution surface)** · **the act of enabling real egress** · any second
+connector · arbitrary customer-defined URLs · a DB migration (persistence deferred
+until the authoritative design requires it and approval lands).
+
+### Source policy
+
+Allowlist-only: a fetch is permitted **only** for an explicitly approved source
+whose canonical scheme+host and exact feed URL/paths match, whose enablement flag
+is on, and whose jurisdiction allowlist admits the request's market. Sources are
+**disabled by default** and carry explicit `legal_review` and `owner_approval`
+state; a source missing either **cannot activate** regardless of flags. Attribution
+(source title, URL, license, retrieved-at) is mandatory; content retention is capped
+to metadata/excerpt (no full-article persistence). Revocation = flip the source's
+enabled flag / remove it → immediate stop. Full schema in
+`docs/phase-3b/rss-source-policy.md`.
+
+### Threat model (summary)
+
+SSRF, DNS rebinding, open redirects, redirect-to-private-network, oversized
+responses, decompression bombs, XML entity/DOCTYPE attacks, slow-loris/connection
+exhaustion, malicious feed content, **prompt injection inside feed text**, unsafe
+URLs in entries, duplicate/replayed content, cross-market contamination, source
+impersonation, poisoned feeds, log injection, secret leakage, retry storms,
+high-cardinality telemetry. Controls and residual risks in
+`docs/security/live-connector-threat-model.md`.
+
+### Rollout and rollback
+
+- **Default-off** global flag (`connector_rss_live_enabled=false`) + **kill switch**
+  (`connector_rss_kill_switch`) that overrides all activation.
+- **Source-level** enablement + **tenant/workspace** and **jurisdiction** allowlists
+  + **canary** list; `connector_rss_live_max_active_sources` and
+  `connector_rss_live_max_concurrency` bound blast radius.
+- Fetch frequency / daily fetches bounded **per source** in the registry.
+- **Rollback:** set `connector_rss_live_enabled=false` (or trip the kill switch) for
+  an instant revert to the fixture path; or revert the branch. No schema/data to
+  undo (no migration).
+- Metrics/alerts: validation-rejection rate, DNS/redirect rejections, timeout rate,
+  source health, breaker state — thresholds in
+  `docs/operations/rss-connector-operations.md`.
+
+### Owner decisions still required (before any live egress)
+
+1. **Product-owner approval** that RSS/news is the approved first live connector.
+2. **Legal/ToS feasibility** confirmed, or a documented internal risk acceptance.
+3. **Specific approved source(s)** with recorded usage rights/attribution/retention.
+4. **Approved jurisdiction(s)** for initial live traffic.
+5. **Approved rollout population** (which tenants/workspaces, canary size).
+6. **Concrete cost ceilings** (per-source burst/daily fetch caps).
+
+Until all six are documented, the registry stays empty/all-disabled and
+`connector_rss_live_enabled` stays false; the connector cannot open a socket.
+
+### Acceptance criteria (Batch 2, safety-foundation scope)
+
+1. Safe fetch boundary rejects every unsafe URL/DNS/redirect class (tested offline). ✅
+2. Approved-source registry is typed, empty/all-disabled, and cannot activate a
+   source lacking legal + owner approval. ✅
+3. Live egress is impossible under default config — no real-egress transport exists;
+   default path is byte-identical to the fixture pipeline. ✅
+4. Untrusted feed text is isolated from downstream AI (no instruction execution). ✅
+5. Feature flags fail closed; kill switch overrides all activation. ✅
+6. No migration, no contract drift, no new API surface. ✅
+7. All existing gates + new safety tests green; four-market smoke unchanged. ✅
