@@ -1,11 +1,13 @@
 # Phase 3A.4b — Acceptance Report
 
-**Classification: ACCEPTABLE TO REQUEST FINAL REVIEW — Batches 1–5 complete; all local
-gates green; PR #31 stays in draft pending the final CI run on the Batch 5 head and a
-human final review.**
+**Classification: MERGED AND POST-MERGE VALIDATED — Phase 3A.4b complete.**
 
-Branch: `feat/phase-3a-observability-deployment` · Draft PR: #31 (kept in **draft**;
-not marked ready, not merged) · Base: `main` @ `3fefb36`.
+_Pre-merge classification: ACCEPTABLE TO REQUEST FINAL REVIEW_ (preserved for history;
+the state at which the PR was requested for final review — see the "Merge outcome and
+post-merge validation" section below for the merge and post-merge evidence).
+
+Branch: `feat/phase-3a-observability-deployment` (merged, then deleted) · PR #31
+(**MERGED** via normal squash) · Base: `main` @ `3fefb36`.
 
 Phase 3A.4b is delivered as reviewable batches. With Batch 5 (operator runbooks,
 resilience suite, security review) landed, the phase content is complete. This report
@@ -408,3 +410,84 @@ the new `app/tests/test_resilience.py`); the subsequent content is documentation
 Consistent with the Batch 4 documentation-synchronization policy, this is the **single**
 Batch 5 CI stamp. Any later documentation-only commit re-runs CI without being separately
 re-stamped here, so evidence recording does not recurse.
+
+## Merge outcome and post-merge validation
+
+This section records the actual merge of PR #31 and its post-merge validation. It updates
+the top-level classification to **MERGED AND POST-MERGE VALIDATED — Phase 3A.4b complete**
+while preserving the pre-merge classification (_ACCEPTABLE TO REQUEST FINAL REVIEW_) above
+for history. The residual-risk register (R-1 … R-8) is unchanged; deferred items remain
+deferred and are **not** marked resolved by this merge.
+
+### Merge result
+
+- **PR:** #31 — <https://github.com/bolade04/signal_nest/pull/31>
+- **State:** `MERGED`.
+- **Merge method:** normal **squash** merge through the protected-branch workflow.
+- **Merge actor:** `bolade04` (repository owner).
+- **Merge timestamp:** `2026-07-14T20:37:43Z`.
+- **Squash commit on `main`:** `c1ee3ef3c894083beb07cd7d3e442bbf471e0ddb`.
+- **No admin bypass:** the merge did **not** use `--admin` or any ruleset bypass; all
+  branch-protection requirements were satisfied before merge.
+
+### Governance disclosure
+
+- The single approving review on PR #31 was submitted by `abolade4-viewer`, an
+  **owner-controlled testing account**. It mechanically satisfied GitHub's one-approval
+  branch-protection rule but is **not** an independent third-party review and is not
+  represented as one.
+- The owner merged transparently as the repository owner, on the basis of the documented
+  technical evidence, green CI, accepted residual risks, and this acceptance
+  classification — with the non-independence of the approval explicitly disclosed in the
+  PR body, the governance note, and the owner merge note.
+- **Independent-review status: NO INDEPENDENT THIRD-PARTY REVIEW COMPLETED.** An external
+  security review / pentest before or shortly after production exposure remains a
+  recommended follow-up (residual risk R-7, still **Deferred**).
+
+### Pre-merge gate state
+
+At merge time the protected-branch requirements were all satisfied:
+
+- Merge state: `CLEAN`; mergeability: `MERGEABLE`; review decision: `APPROVED`.
+- Unresolved review threads: **0**.
+- All required status checks: **passing** on the merged head.
+- Ruleset `18820692` unchanged (`bypass_actors=0`, `can_bypass=never`); no rule was
+  relaxed to permit the merge.
+
+### Post-merge CI
+
+The post-merge CI run on `main` was verified directly (not from a console summary):
+
+- **Run ID:** `29366438246` —
+  <https://github.com/bolade04/signal_nest/actions/runs/29366438246>
+- **Head SHA:** `c1ee3ef3c894083beb07cd7d3e442bbf471e0ddb`.
+- **Conclusion:** `success` — all five jobs green.
+
+| Job | Conclusion |
+| --- | --- |
+| Frontend quality | success |
+| Backend quality | success |
+| Migrations and API contract | success |
+| Container build and security | success |
+| Integration smoke | success |
+
+- Backend CI: **371 passed, 0 skipped** — the PostgreSQL-gated tests executed against the
+  `postgres:16` service container (0 skips confirms the gated cross-worker claim/recovery
+  test ran and passed).
+- Frontend: **20/20**. Smoke: **13/13**, four-market isolation, no cross-market
+  contamination.
+- Migration head `a1b2c3d4e5f6`; container runtime UID `10001` (non-root); `npm audit`
+  **0 vulnerabilities**.
+- No new commit was created solely to stamp this run (no CI-stamp recursion).
+
+### Repository closeout
+
+- **Feature branch** `feat/phase-3a-observability-deployment` deleted on the remote and
+  locally after the merge.
+- **Safety branch** `backup/signalnest-phase-1-2-pre-history-stitch` **preserved**
+  (untouched).
+- **PR #6 untouched** — no force-push, no history rewrite, no state change.
+- **Phase 3B not started** — no customer features, no external connectors, no
+  infrastructure work opened by this closeout.
+- Local `main` = `origin/main` = `c1ee3ef3c894083beb07cd7d3e442bbf471e0ddb`; working tree
+  clean.
