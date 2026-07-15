@@ -31,7 +31,9 @@ from app.geography.engine import CoverageRule, resolve_geo
 from app.infra.queue import register_job
 from app.infra.vector import cosine, embed_text
 from app.intelligence.analyze import analyze_signal
-from app.intelligence.models import AnalysisInput
+from app.intelligence.enrichment import get_enricher
+from app.intelligence.models import AnalysisInput, OpportunityCandidate
+from app.intelligence.persistence import attach_opportunity, persist_intelligence
 from app.jobs.context import ExecutionContext, JobContextError, scope_matches
 from app.jobs.contracts import unwrap
 from app.llm.base import LLMError
@@ -220,9 +222,14 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
 
         # Additive Phase 3B Batch 3 annotation: a deterministic, offline intelligence
         # read of this signal (facts vs inference, versioned score, structured
-        # accept/reject). Purely advisory metadata — it does not alter the existing
+        # accept/reject). Computed once here so the advisory annotation below and the
+        # Batch 4A persisted record are derived from the *same* candidate and can
+        # never diverge. Purely advisory metadata — it does not alter the existing
         # normalization, scoring, clustering or decision outputs below.
-        intelligence_annotation = _intelligence_annotation(fx, ctx)
+        candidate = _analyze_candidate(fx, ctx)
+        intelligence_annotation = (
+            candidate.as_dict() if candidate is not None else {"error": "annotation_unavailable"}
+        )
 
         norm = NormalizedSignal(
             organization_id=request.organization_id,
@@ -254,6 +261,12 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         )
         db.add(norm)
         db.flush()
+
+        # Batch 4A: persist the same candidate as a first-class, scoped, immutable
+        # record now that ``norm.id`` exists. Fail-open (savepoint-isolated) so a
+        # persistence fault can never corrupt ingestion or the advisory annotation.
+        if candidate is not None:
+            _persist_intelligence_record(db, request, norm, candidate)
 
         # Geo evidence.
         geo = resolve_geo(coverage, fx.geo_evidence, target_market=fx.market)
@@ -416,6 +429,21 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
         db.add(opp)
         db.flush()
 
+        # Batch 4A: link this cluster's persisted intelligence rows to the
+        # opportunity, scoped to the workspace so linkage can never cross tenants.
+        try:
+            attach_opportunity(
+                db,
+                workspace_id=request.workspace_id,
+                opportunity_id=opp.id,
+                normalized_signal_ids=[m.id for m in members],
+            )
+        except Exception as exc:  # pragma: no cover - link failure must not break run
+            logger.warning(
+                "intelligence_record_link_failed",
+                extra={"extra_fields": {"err": str(exc), "opportunity": opp.id}},
+            )
+
         db.add(
             OpportunityScore(
                 workspace_id=request.workspace_id,
@@ -450,16 +478,16 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
     return opportunities
 
 
-def _intelligence_annotation(fx, ctx) -> dict:
+def _analyze_candidate(fx, ctx) -> OpportunityCandidate | None:
     """Deterministic, offline intelligence read of a connector signal.
 
-    Advisory only: the result is stored under ``ingest_metadata["intelligence"]`` and
-    never feeds back into the pipeline's own scoring/decision path, so it cannot
-    change existing outputs. Any failure is swallowed to a neutral marker — an
-    annotation must never break ingestion.
+    Returns the candidate so a single analysis feeds both the advisory
+    ``ingest_metadata["intelligence"]`` annotation and the Batch 4A persisted
+    record. Any failure is swallowed to ``None`` — an annotation (and its
+    persistence) must never break ingestion.
     """
     try:
-        candidate = analyze_signal(
+        return analyze_signal(
             AnalysisInput(
                 content=fx.content,
                 source_type=fx.source_type,
@@ -476,10 +504,35 @@ def _intelligence_annotation(fx, ctx) -> dict:
             ),
             ctx,
         )
-        return candidate.as_dict()
     except Exception as exc:  # pragma: no cover - annotation must never break ingest
         logger.warning("intelligence_annotation_failed", extra={"extra_fields": {"err": str(exc)}})
-        return {"error": "annotation_unavailable"}
+        return None
+
+
+def _persist_intelligence_record(db, request, norm, candidate: OpportunityCandidate) -> None:
+    """Persist one candidate as a scoped, immutable record (fail-open).
+
+    The concurrency-safe idempotent insert is savepoint-isolated inside
+    ``persist_intelligence``; this wrapper additionally swallows any unexpected
+    fault to a log line so persistence can never corrupt ingestion or opportunity
+    creation.
+    """
+    try:
+        persist_intelligence(
+            db,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+            scout_request_id=request.id,
+            normalized_signal_id=norm.id,
+            candidate=candidate,
+            location_id=request.location_id,
+            enricher_name=get_enricher().name,
+        )
+    except Exception as exc:  # pragma: no cover - persistence must never break ingest
+        logger.warning(
+            "intelligence_record_persist_failed",
+            extra={"extra_fields": {"err": str(exc), "signal": norm.id}},
+        )
 
 
 def _mean_embedding(members) -> list[float]:

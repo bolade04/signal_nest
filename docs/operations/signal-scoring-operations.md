@@ -78,7 +78,33 @@ print(cand.as_dict())
 The labeled dataset in `app/intelligence/evaluation/` pins expected outcomes;
 `test_intelligence_evaluation.py` is the regression guard.
 
-## 7. Rollback
+## 7. Batch 4A persistence
 
-Additive and inert. No migration, no contract change. **Rollback:** revert the
-branch (or don't merge the draft PR) — nothing to un-migrate, no data to clean up.
+Batch 4A additionally **persists** the same deterministic candidate as a durable,
+scoped, immutable row in `signal_intelligence_records` (one row per scored
+normalized signal per `analysis_version`/`scoring_version`/`fingerprint`). The
+advisory `ingest_metadata["intelligence"]` annotation is unchanged and stays the
+source of the record, so the two never diverge.
+
+- **Migration:** one additive Alembic revision `0155a5c468e3` (down_revision
+  `a1b2c3d4e5f6`); single head. Apply with `python -m app.db.migrate upgrade`. The
+  app's startup schema guard refuses to boot if the DB is behind this head, so
+  migrate before deploying the code.
+- **Idempotency:** the insert runs inside a SAVEPOINT and relies on the unique
+  identity constraint as the final concurrency guard — retries and concurrent
+  workers converge on one row (no app-level check-then-insert).
+- **Failure mode:** persistence is fail-open — a persist error is logged
+  (`intelligence_record_persist_failed`) and never blocks ingestion or opportunity
+  creation. Opportunity linkage failures log `intelligence_record_link_failed`.
+- **Not customer-exposed:** no API/OpenAPI/frontend reads this table in Batch 4A.
+- **Retention:** records are retained and versioned; there is no cleanup/deletion
+  job. Pre-existing signals get no fabricated backfill — absence of a row is valid
+  until a signal is (re)scored after the migration.
+
+## 8. Rollback
+
+Additive and surgical. **Code rollback:** revert the branch (or don't merge the
+draft PR). **Schema rollback:** `alembic downgrade a1b2c3d4e5f6` drops only the new
+`signal_intelligence_records` table and its indexes; all business, signal,
+opportunity and durable-job data are preserved and ingestion continues unchanged
+(the Batch 3 advisory annotation still rides `ingest_metadata`).

@@ -152,3 +152,103 @@ annotation can never break ingestion. All existing outputs are byte-identical
 
 `main` @ `fe78b39`. Every commit additive; no migration, no contract change.
 Reverting the branch (or not merging the draft PR) fully restores current behavior.
+
+---
+
+# Batch 4A — persistence foundation (architecture decision record)
+
+**Status: BATCH 4A IN DRAFT PR — PENDING REVIEW.** Additive to Batch 3. One
+additive migration, no API contract change, no OpenAPI regen, no frontend change,
+no live egress. Baseline `main` @ `f022a233edded293ab626c16e45e9b40ce601d02`,
+single alembic head `a1b2c3d4e5f6`.
+
+_Independent-review status: NO INDEPENDENT THIRD-PARTY REVIEW COMPLETED._
+
+## 14. Purpose (Batch 4A)
+
+Batch 3 (§11) deferred persistence: the deterministic `OpportunityCandidate`
+today rides existing JSON at `NormalizedSignal.ingest_metadata["intelligence"]`,
+which is advisory-only, unqueryable, unversioned as a row, and lost to any
+consumer that does not read that one blob. Batch 4A makes the Batch 3 intelligence
+a **first-class, scoped, immutable, version-aware record**
+(`signal_intelligence_records`) associated with its normalized signal and — when
+one exists — its opportunity, without changing any Batch 3 scoring, any API
+contract, or any frontend behavior. It **stops before** Batch 4B (API exposure).
+
+## 15. What is persisted
+
+One row per `(NormalizedSignal, analysis_version, scoring_version, fingerprint)`.
+The row is derived from the **same** `OpportunityCandidate` that produces the
+advisory annotation — computed once, so the stored record and the annotation can
+never diverge (preserves the Batch 3 fact/inference separation on disk):
+
+- **Scope (typed FK columns, isolation-preserving):** `organization_id`,
+  `workspace_id`, `scout_request_id`, `normalized_signal_id`; `opportunity_id`
+  (nullable — attached later when the cluster's opportunity exists);
+  `location_id` (nullable, `SET NULL`).
+- **Identity / versions (typed columns):** `analysis_version`, `scoring_version`
+  (`candidate.score.version` = `"3b.1"`, never re-derived), `fingerprint`
+  (deterministic content fingerprint of the sanitized excerpt).
+- **Outcome (typed columns):** `accepted`, `classification`, `decision`
+  (nullable), `rejection_reason` (nullable), `cluster_key`, `is_simulated`,
+  `evidence_count`, `score_total`.
+- **Payloads (bounded JSON, facts vs inference kept separate):** `facts`,
+  `inference`, `relevance`, `score_components`, `rationale`, `provenance`
+  (enricher name + versions). Serialization is bounded (capped list lengths and
+  string lengths) reusing the already-sanitized Batch 3 excerpt.
+
+## 16. Key architecture decisions
+
+1. **Immutable, version-aware rows.** No destructive overwrite; no mutable global
+   `is_current` flag (avoids a read-modify-write race). A re-score under a new
+   version writes a *new* row; historical rows stay interpretable against the
+   version they carry. Nothing is deleted; no cleanup job.
+2. **DB unique constraint is the final concurrency guard.**
+   `UniqueConstraint(workspace_id, normalized_signal_id, analysis_version,
+   scoring_version, fingerprint)`. Persistence is a concurrency-safe idempotent
+   insert (insert inside a SAVEPOINT; on `IntegrityError` roll back the savepoint
+   and treat the existing row as authoritative), **not** an app-level
+   check-then-insert.
+3. **Fail-open on persistence, never corrupt ingestion.** The insert runs in a
+   nested transaction (savepoint); a persistence failure rolls back only that
+   savepoint and is logged (`intelligence_record_persist_failed`, coarse error
+   only), leaving the advisory `ingest_metadata` annotation and the opportunity
+   creation path untouched. Persistence is default-on (deterministic fixtures +
+   migration present); there is no new feature flag.
+4. **Correct pipeline boundary.** Persist per normalized signal *after*
+   normalization + analysis + sanitization (`db.flush()` gives `norm.id`); attach
+   `opportunity_id` in `_build_opportunities` *after* the opportunity is flushed,
+   via a scoped repository update keyed by `(workspace_id, normalized_signal_id)`
+   — so an intelligence row is never linked across workspaces.
+5. **Rejected candidates are persisted** (with `accepted=False` + reason) but are
+   **not** exposed to customers; customer exposure is Batch 4B/4C.
+6. **Pure domain stays pure.** The ORM model lives in a new module
+   (`app/intelligence/records.py`); `app/intelligence/models.py` remains framework-
+   free dataclasses. Serialization lives in `app/intelligence/persistence.py`.
+
+## 17. Migration
+
+One additive migration from `a1b2c3d4e5f6` (single head): `CREATE TABLE
+signal_intelligence_records` + its indexes + the unique constraint. No existing
+table is altered or dropped; no backfill is fabricated (pre-existing signals
+simply have no intelligence row until re-scored). `upgrade` / `downgrade`
+(drops only the new table) / re-`upgrade` are exercised by a migration-lifecycle
+test against a throwaway SQLite DB via the real Alembic CLI, matching
+`test_worker_migration.py`.
+
+## 18. Testing (Batch 4A)
+
+Domain/serialization (bounded payloads, facts/inference kept separate),
+repository (idempotent re-insert returns the same row; savepoint isolation on
+conflict), pipeline integration (record persisted per signal; `opportunity_id`
+attached; advisory annotation still byte-identical; persistence failure does not
+break ingestion), four-market isolation (no cross-market/workspace row linkage),
+security (no raw untrusted text beyond the sanitized excerpt; no secrets), and
+the migration lifecycle. A PostgreSQL-gated test (`TEST_POSTGRES_URL`) asserts the
+unique constraint rejects a concurrent duplicate.
+
+## 19. Rollback (Batch 4A)
+
+Additive. Revert the branch (or don't merge the draft PR): `downgrade` drops only
+`signal_intelligence_records`; no other schema or data is touched and the Batch 3
+advisory annotation continues to work unchanged.
