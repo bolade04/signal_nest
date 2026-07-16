@@ -340,7 +340,7 @@ behavior.
 
 ### 17.1 Status
 
-**Status:** BATCH 4A MERGED AND POST-MERGE VERIFIED — BATCH 4B NOT STARTED
+**Status:** BATCH 4A AND 4B MERGED AND POST-MERGE VERIFIED — BATCH 4C NOT STARTED
 
 - The owner-approved Batch 4 **scope remains active**; this section is the
   implementation contract for the whole Batch 4 program.
@@ -348,7 +348,11 @@ behavior.
   genuine reviewer, merged through normal branch protection, and post-merge verified
   (see §17.14 Batch 4A completion record). Merge commit
   `3795f54a6664a424d3678f100cb92f7d28b5cf89` (PR #37).
-- **Batch 4B, 4C, and 4D remain pending / not started.** Overall Batch 4 is **not
+- **Batch 4B (read-only API exposure) is complete**: implemented, approved by the
+  genuine reviewer, merged through normal branch protection, and post-merge verified
+  (see §17.14 Batch 4B completion record). Squash merge commit
+  `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778` (PR #40).
+- **Batch 4C and 4D remain pending / not started.** Overall Batch 4 is **not
   complete**.
 - Batch 4 is **independent of PR #34 and live egress** — neither the live-connector
   branch nor any network transport is a dependency. Batch 4 reads intelligence that
@@ -842,8 +846,76 @@ below.
 - No Batch 4B implementation.
 - PR #34 remained unnecessary and untouched.
 
+#### 17.14.2 Batch 4B completion record
+
+**Implementation**
+- Endpoint: `GET /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence`.
+- Authenticated; workspace- and opportunity-scoped (reuses `get_tenant_context` +
+  `_get_scoped`); a foreign/missing opportunity returns an indistinguishable `404`.
+- Returns the single deterministic *latest accepted* record only; deterministic
+  ordering `score_total DESC, created_at DESC, id ASC` (total, byte-stable tiebreak).
+- Valid absence returns `200 {"intelligence": null}`; legacy
+  `ingest_metadata["intelligence"]` is **never** fabricated into a response.
+- Observed **facts** stay separate from **inference**; internal fields (record `id`,
+  `fingerprint`, `normalized_signal_id`, `cluster_key`, `organization_id`, `author`,
+  `exclusion_hits`, `rejection_reason`, `updated_at`) are excluded from the schema.
+- Read-only: no mutation routes; no network egress; no external-model call.
+
+**Files and architecture (as merged on main)**
+- Route: `apps/api/app/opportunities/routes.py` (`get_opportunity_intelligence_route`).
+- Repository method: `apps/api/app/intelligence/persistence.py`
+  (`get_latest_for_opportunity`).
+- Read service: `apps/api/app/intelligence/read_service.py`
+  (`get_opportunity_intelligence`, column-by-column typed/bounded mapping, fail-safe
+  on malformed rows).
+- Public schemas: `apps/api/app/intelligence/schemas.py`
+  (`OpportunityIntelligenceResponse` + typed payload/facts/inference/evidence/
+  relevance/score/provenance/version components).
+- Tests: `apps/api/app/tests/test_intelligence_read_repository.py` and
+  `apps/api/app/tests/test_intelligence_api.py`.
+- Contract: `apps/api/openapi.json` and `apps/web/src/api/schema.d.ts`.
+
+**Contract**
+- One additive `GET` path; new typed intelligence schema components (additive only).
+- No unrelated OpenAPI drift; generated TypeScript types synchronized.
+- No frontend UI — rendering remains Batch 4C.
+
+**Migration**
+- No migration added; single migration head remains `0155a5c468e3`.
+
+**Review and merge**
+- PR: #40 — https://github.com/bolade04/signal_nest/pull/40
+- Pre-merge head: `cb170a9cec6fffab133d695e9cc625a04e19e17e`.
+- Approved by: `adesenden` at 2026-07-16T03:53:50Z (approval matched the exact head).
+- Merge method: normal protected-branch squash merge.
+- Merge actor: `bolade04`.
+- Merge timestamp: 2026-07-16T04:14:04Z.
+- Merge commit: `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778`.
+- No admin bypass; no ruleset bypass.
+
+**Post-merge verification**
+- CI run: `29470880422` — https://github.com/bolade04/signal_nest/actions/runs/29470880422
+- All five jobs succeeded.
+- Backend: 491 passed, 7 warnings.
+- Ruff: pass.
+- PostgreSQL-gated tests: pass.
+- Migration: single head at `0155a5c468e3`; `alembic check` reported no new upgrade
+  operations.
+- Frontend: 20/20 across 8 files.
+- API contract drift: none.
+- API and worker: non-root UID 10001.
+- Integration smoke: 13/13.
+- Four-market isolation: Dallas, Lagos, London, Nairobi.
+- No cross-market contamination across 12 opportunities.
+
+**Scope boundary (held)**
+- No frontend intelligence panel (Batch 4C not started).
+- No rejected/suppressed visibility; no history endpoint; no human feedback.
+- No live RSS; no new connector; no external model.
+- PR #34 remained independent, draft, and untouched.
+
 **Batch 4B — Read-only API exposure**
-**Status:** PLANNED — IMPLEMENTATION NOT STARTED
+**Status:** MERGED AND POST-MERGE VERIFIED (PR #40) — see §17.14.2 completion record
 - add a nested read-only intelligence endpoint (do **not** extend the compact
   opportunity-detail schema);
 - enforce authorization and workspace/opportunity tenancy;
@@ -1006,16 +1078,20 @@ Additive persisted intelligence may safely remain unused if UI/API rollback occu
 
 ### 17.20 Readiness classification
 
-**Implementation status:** BATCH 4A COMPLETE — READY TO PLAN BATCH 4B, BUT BATCH 4B
-HAS NOT STARTED.
+**Implementation status:** BATCH 4A AND 4B COMPLETE — READY TO PLAN BATCH 4C, BUT
+BATCH 4C HAS NOT STARTED.
 
 - Batch 4A is merged and post-merge verified (PR #37, merge commit
   `3795f54a6664a424d3678f100cb92f7d28b5cf89`, CI run `29439431696`).
+- Batch 4B is merged and post-merge verified (PR #40, squash merge commit
+  `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778`, CI run `29470880422`); the Batch 4B
+  acceptance gate is **met** (see §17.14.2 completion record).
 - The remaining Batch 4A data-model decisions are resolved by the landed
   implementation (see §17.19).
-- The next eligible stage is **Batch 4B — read-only API exposure**.
-- Batch 4B requires a separate branch, implementation boundary, tests, PR, approval,
-  and merge.
+- The next eligible stage is **Batch 4C — frontend intelligence panel**, and it has
+  **not started**.
+- Batch 4C requires its own separate branch, implementation boundary, tests, PR,
+  approval, merge, and post-merge verification.
 - No later stage begins automatically; each sub-batch requires its own verification
   boundary.
 - Overall Batch 4 remains **incomplete**.
@@ -1024,7 +1100,7 @@ HAS NOT STARTED.
 
 ## 17.21 Batch 4B implementation plan — read-only API exposure
 
-**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED.
+**Status:** MERGED AND POST-MERGE VERIFIED (PR #40) — see §17.14.2 completion record.
 
 This section is the implementation-ready plan for **Batch 4B only**: an authorized,
 read-only API that returns the already-persisted `SignalIntelligenceRecord`
@@ -1536,8 +1612,9 @@ bulk export; external-model rescoring; exposure of `author`/`exclusion_hits`.
 
 ### 17.21.24 Readiness classification
 
-**Implementation status:** BATCH 4B PLANNED — IMPLEMENTATION NOT STARTED.
+**Implementation status:** BATCH 4B MERGED AND POST-MERGE VERIFIED (PR #40, squash
+merge commit `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778`, CI run `29470880422`).
 Batch 4A remains merged and post-merge verified; Batch 4C and 4D remain **not
-started**; overall Batch 4 remains **incomplete**. This plan authorizes only a
-separate Batch 4B implementation branch (its own tests, PR, genuine approval and
-protected merge); no later stage begins automatically.
+started**; overall Batch 4 remains **incomplete**. Any Batch 4C work requires its own
+separate implementation branch (its own tests, PR, genuine approval and protected
+merge); no later stage begins automatically.
