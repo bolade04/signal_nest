@@ -161,6 +161,76 @@ function detailFor(o: Opp) {
   };
 }
 
+// One opportunity deliberately has no persisted intelligence so tests can prove
+// the neutral empty state (HTTP 200 with intelligence: null).
+export const noIntelOpportunityId = 'opp-loc-london-1';
+
+// A per-opportunity intelligence payload. The excerpt/quote text is intentionally
+// IDENTICAL across every market so isolation tests must rely on scoped fetches,
+// not on distinct free text, to tell markets apart.
+const SHARED_EXCERPT = 'Customers keep asking for faster delivery windows.';
+
+function intelligenceFor(o: Opp) {
+  return {
+    classification: o.classification,
+    decision: o.decision,
+    is_simulated: true,
+    rationale: `Localized demand detected for ${o.resolved_market}.`,
+    created_at: o.created_at,
+    facts: {
+      source_type: 'rss_news',
+      market: o.resolved_market,
+      language: 'en',
+      published_days_ago: 3,
+      char_count: 480,
+      word_count: 82,
+      excerpt: SHARED_EXCERPT,
+      distinct_source_types: 2,
+      duplicate_count: 1,
+      engagement: 12,
+    },
+    inference: {
+      signal_type: { value: 'demand_signal', confidence: 0.82, method: 'lexical_match' },
+      pain_point_dna: { value: 'slow_delivery', confidence: 0.71, method: 'phrase_cluster' },
+      sentiment: { value: 'frustrated', confidence: 0.64, method: 'lexicon' },
+      has_buying_intent: true,
+      has_competitor_dissatisfaction: false,
+    },
+    relevance: {
+      score: o.relevance_score,
+      below_action_floor: false,
+      keyword_hits: ['delivery', 'fast'],
+      pain_point_hits: ['slow delivery'],
+      audience_hits: ['urban households'],
+      competitor_hits: [],
+    },
+    score: {
+      total: o.opportunity_score,
+      classification: o.classification,
+      version: '3b.1',
+      factors: {
+        relevance: { weight: 0.4, value: 0.8, points: 32 },
+        recency: { weight: 0.2, value: 0.6, points: 12 },
+      },
+    },
+    evidence: [
+      { quote: SHARED_EXCERPT, method: 'span_match', start: 0, end: 48 },
+      { quote: 'Second corroborating mention.', method: 'span_match', start: 60, end: 89 },
+      { quote: 'Third corroborating mention.', method: 'span_match', start: 100, end: 128 },
+      { quote: 'Fourth corroborating mention.', method: 'span_match', start: 140, end: 169 },
+    ],
+    provenance: {
+      enricher: 'deterministic',
+      analysis_version: '3b',
+      scoring_version: '3b.1',
+    },
+    version: {
+      analysis_version: '3b',
+      scoring_version: '3b.1',
+    },
+  };
+}
+
 const emptyProfile = {
   company_name: 'Demo Brand',
   industry: 'Retail',
@@ -314,6 +384,18 @@ export const handlers = [
     const body = (await request.json()) as { status: string };
     const o = opportunities.find((x) => x.id === params.id)!;
     return HttpResponse.json({ ...o, status: body.status });
+  }),
+
+  // ---- Opportunity intelligence (Batch 4B read-only) ----
+  // Returns a per-opportunity payload so four-market isolation is provable, and
+  // ``{ intelligence: null }`` for opportunities without a persisted record.
+  http.get(P('/workspaces/:ws/opportunities/:id/intelligence'), ({ params }) => {
+    const o = opportunities.find((x) => x.id === params.id);
+    if (!o) return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+    return HttpResponse.json({
+      opportunity_id: o.id,
+      intelligence: o.id === noIntelOpportunityId ? null : intelligenceFor(o),
+    });
   }),
 
   // ---- Campaign context (all kinds return an empty list by default) ----
