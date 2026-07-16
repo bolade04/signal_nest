@@ -914,6 +914,63 @@ below.
 - No live RSS; no new connector; no external model.
 - PR #34 remained independent, draft, and untouched.
 
+#### 17.14.3 Batch 4C draft-implementation record
+
+**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED. Frontend-only; consumes the merged
+Batch 4B contract unchanged. Backend, migrations, CI, and dependencies untouched.
+
+**Implementation**
+- New read-only panel `OpportunityIntelligencePanel` rendered on the existing
+  opportunity-detail page (left column, after the warnings card); no feed redesign.
+- Data via a dedicated React Query hook `useOpportunityIntelligence`, keyed on both
+  `workspace_id` and `opportunity_id` so switching either yields a distinct cache entry
+  (no cross-tenant / cross-opportunity leakage); disabled until both IDs are present.
+- One request per opportunity detail view — no per-row fan-out from the feed (no N+1).
+- Observed **facts** and model **interpretation** are presented as visually and
+  semantically distinct sections (separate headings, labelled regions, and explicit
+  "nothing here is interpreted" / "not verified truth" framing).
+- Inferred attributes show value + method + a bounded whole-percent confidence
+  (`0..1 → %`, clamped); relevance and score-breakdown render as `0..100`-clamped meters
+  with accessible names; score factors show points/weight/value.
+- Evidence excerpts render as plain text (no `dangerouslySetInnerHTML`), previewing the
+  first three with an accessible "show more/fewer" disclosure; empty evidence is omitted.
+- Provenance and version metadata sit behind an opt-in disclosure.
+- States: loading (busy-announced skeleton), neutral empty (`intelligence: null` is a
+  successful empty result, never an error), non-retryable-error with retry, and a
+  bounded retry policy (no retry on 4xx).
+- Internal identifiers (record `id`, `fingerprint`, raw opportunity id) are never
+  surfaced; the panel exposes no write / approve / reject / feedback / regenerate /
+  rescore controls (strictly read-only).
+- Compact-feed card indicator: **omitted** — not required by this plan's acceptance gate
+  and it would force either an N+1 or a compact-payload/backend change, both out of scope.
+
+**Files (frontend only)**
+- Panel: `apps/web/src/pages/opportunities/IntelligencePanel.tsx`.
+- Hook: `apps/web/src/pages/opportunities/useOpportunityIntelligence.ts`.
+- Wiring: `apps/web/src/pages/OpportunityDetail.tsx` (import + placement).
+- Contract consumption: `apps/web/src/api/endpoints.ts` (`getOpportunityIntelligence`),
+  `apps/web/src/api/queryKeys.ts` (`opportunityIntelligence`),
+  `apps/web/src/api/types.ts` (re-exports of the generated intelligence types).
+- Tests: `apps/web/src/api/__tests__/opportunity-intelligence.test.ts` and
+  `apps/web/src/pages/opportunities/__tests__/intelligence-panel.test.tsx`; MSW fixtures
+  in `apps/web/src/test/handlers.ts` (per-market payloads with an intentionally identical
+  excerpt so isolation must rely on scoped fetches, plus one null-intelligence opportunity).
+
+**Frontend gates (local)**
+- Lint: pass (`eslint . --max-warnings 0`). Type-check: pass (`tsc -b --noEmit`).
+- Tests: 44/44 across 10 files (up from the 20/8 Batch 4B baseline). Build: pass.
+- Contract: no OpenAPI or generated-type drift (`apps/api/openapi.json` and
+  `apps/web/src/api/schema.d.ts` unchanged). `npm audit --omit=dev`: 0 vulnerabilities.
+
+**Backend (unaffected, confirmed)**
+- No backend files changed; Ruff: pass; single migration head remains `0155a5c468e3`.
+
+**Scope boundary (held)**
+- No intelligence creation / editing / deletion; no approve/reject; no feedback/thumbs;
+  no rescoring/regeneration; no external-model or live-RSS calls; no history/export/share.
+- No backend schema change; no migration; no CI or dependency change.
+- Batch 4D not started; PR #34 remains independent, draft, and untouched.
+
 **Batch 4B — Read-only API exposure**
 **Status:** MERGED AND POST-MERGE VERIFIED (PR #40) — see §17.14.2 completion record
 - add a nested read-only intelligence endpoint (do **not** extend the compact
@@ -929,7 +986,7 @@ expansion unless explicitly approved; API and authorization tests green. **The f
 implementation-ready plan is §17.21 below.**
 
 **Batch 4C — Frontend intelligence panel**
-**Status:** NOT STARTED
+**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED — see §17.14.3 draft-implementation record
 - add intelligence panel to existing opportunity detail;
 - facts/inference presentation;
 - evidence and attribution;

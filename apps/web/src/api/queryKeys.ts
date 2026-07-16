@@ -33,6 +33,8 @@ export const queryKeys = {
     ['workspaces', workspaceId, 'opportunities', filters] as const,
   opportunity: (workspaceId: string, opportunityId: string) =>
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId] as const,
+  opportunityIntelligence: (workspaceId: string, opportunityId: string) =>
+    ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId, 'intelligence'] as const,
 
   auditLogs: (workspaceId: string) => ['workspaces', workspaceId, 'audit-logs'] as const,
 } as const;

@@ -26,6 +26,7 @@ import type {
   OpportunityCard,
   OpportunityDetail,
   OpportunityFilters,
+  OpportunityIntelligenceResponse,
   OrganizationOut,
   ProductIn,
   RegisterRequest,
@@ -227,6 +228,18 @@ export const getOpportunity = (workspaceId: string, opportunityId: string, signa
   apiRequest<OpportunityDetail>(`/workspaces/${workspaceId}/opportunities/${opportunityId}`, {
     signal,
   });
+
+// Read-only persisted intelligence for one opportunity (Batch 4B). A 200 with
+// ``{ intelligence: null }`` is a valid empty result, not an error.
+export const getOpportunityIntelligence = (
+  workspaceId: string,
+  opportunityId: string,
+  signal?: AbortSignal,
+) =>
+  apiRequest<OpportunityIntelligenceResponse>(
+    `/workspaces/${workspaceId}/opportunities/${opportunityId}/intelligence`,
+    { signal },
+  );
 
 export const updateOpportunityStatus = (
   workspaceId: string,

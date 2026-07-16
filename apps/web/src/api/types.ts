@@ -41,6 +41,19 @@ export type OpportunityStatusUpdate = S['OpportunityStatusUpdate'];
 export type ScoreBreakdown = S['ScoreBreakdown'];
 export type ValidationEvidenceOut = S['ValidationEvidenceOut'];
 
+// Batch 4B read-only opportunity intelligence (consumed by the Batch 4C panel).
+export type OpportunityIntelligenceResponse = S['OpportunityIntelligenceResponse'];
+export type IntelligencePayload = S['IntelligencePayload'];
+export type IntelligenceFacts = S['IntelligenceFacts'];
+export type IntelligenceInference = S['IntelligenceInference'];
+export type InferredAttribute = S['InferredAttribute'];
+export type IntelligenceRelevance = S['IntelligenceRelevance'];
+export type IntelligenceScoreBreakdown = S['IntelligenceScoreBreakdown'];
+export type IntelligenceEvidenceItem = S['IntelligenceEvidenceItem'];
+export type IntelligenceProvenance = S['IntelligenceProvenance'];
+export type IntelligenceVersionInfo = S['IntelligenceVersionInfo'];
+export type ScoreFactor = S['ScoreFactor'];
+
 export type ProductIn = S['ProductIn'];
 export type AudienceIn = S['AudienceIn'];
 export type CompetitorIn = S['CompetitorIn'];
