@@ -1196,6 +1196,374 @@
         "title": "HealthOut",
         "type": "object"
       },
+      "InferredAttribute": {
+        "description": "A single inferred value with the deterministic method behind it.\n\nEvidence spans are surfaced once, at the payload level (:class:`IntelligencePayload.evidence`),\nnot repeated inside every attribute.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "confidence",
+          "method"
+        ],
+        "title": "InferredAttribute",
+        "type": "object"
+      },
+      "IntelligenceEvidenceItem": {
+        "description": "A sanitized excerpt slice supporting an inference (for later highlighting).",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "integer"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quote",
+          "method",
+          "start",
+          "end"
+        ],
+        "title": "IntelligenceEvidenceItem",
+        "type": "object"
+      },
+      "IntelligenceFacts": {
+        "description": "Observed-only fields. Nothing here is inferred. ``author`` is excluded (PII).",
+        "properties": {
+          "char_count": {
+            "title": "Char Count",
+            "type": "integer"
+          },
+          "distinct_source_types": {
+            "title": "Distinct Source Types",
+            "type": "integer"
+          },
+          "duplicate_count": {
+            "title": "Duplicate Count",
+            "type": "integer"
+          },
+          "engagement": {
+            "title": "Engagement",
+            "type": "integer"
+          },
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "published_days_ago": {
+            "title": "Published Days Ago",
+            "type": "number"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          },
+          "word_count": {
+            "title": "Word Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_type",
+          "language",
+          "published_days_ago",
+          "char_count",
+          "word_count",
+          "excerpt",
+          "distinct_source_types",
+          "duplicate_count",
+          "engagement"
+        ],
+        "title": "IntelligenceFacts",
+        "type": "object"
+      },
+      "IntelligenceInference": {
+        "description": "Interpretation only. Each attribute is evidence-backed, never treated as fact.",
+        "properties": {
+          "has_buying_intent": {
+            "default": false,
+            "title": "Has Buying Intent",
+            "type": "boolean"
+          },
+          "has_competitor_dissatisfaction": {
+            "default": false,
+            "title": "Has Competitor Dissatisfaction",
+            "type": "boolean"
+          },
+          "pain_point_dna": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InferredAttribute"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InferredAttribute"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signal_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InferredAttribute"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "IntelligenceInference",
+        "type": "object"
+      },
+      "IntelligencePayload": {
+        "description": "The typed, bounded public view of one persisted intelligence record.",
+        "properties": {
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/IntelligenceEvidenceItem"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "facts": {
+            "$ref": "#/components/schemas/IntelligenceFacts"
+          },
+          "inference": {
+            "$ref": "#/components/schemas/IntelligenceInference"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/IntelligenceProvenance"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "relevance": {
+            "$ref": "#/components/schemas/IntelligenceRelevance"
+          },
+          "score": {
+            "$ref": "#/components/schemas/IntelligenceScoreBreakdown"
+          },
+          "version": {
+            "$ref": "#/components/schemas/IntelligenceVersionInfo"
+          }
+        },
+        "required": [
+          "classification",
+          "is_simulated",
+          "created_at",
+          "facts",
+          "inference",
+          "relevance",
+          "score",
+          "provenance",
+          "version"
+        ],
+        "title": "IntelligencePayload",
+        "type": "object"
+      },
+      "IntelligenceProvenance": {
+        "description": "Public-safe provenance. The raw ``fingerprint`` is intentionally dropped.",
+        "properties": {
+          "analysis_version": {
+            "title": "Analysis Version",
+            "type": "string"
+          },
+          "enricher": {
+            "title": "Enricher",
+            "type": "string"
+          },
+          "scoring_version": {
+            "title": "Scoring Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enricher",
+          "analysis_version",
+          "scoring_version"
+        ],
+        "title": "IntelligenceProvenance",
+        "type": "object"
+      },
+      "IntelligenceRelevance": {
+        "description": "Business-relevance breakdown. ``exclusion_hits`` is excluded (operator-only).",
+        "properties": {
+          "audience_hits": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Audience Hits",
+            "type": "array"
+          },
+          "below_action_floor": {
+            "title": "Below Action Floor",
+            "type": "boolean"
+          },
+          "competitor_hits": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Competitor Hits",
+            "type": "array"
+          },
+          "keyword_hits": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Keyword Hits",
+            "type": "array"
+          },
+          "pain_point_hits": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Pain Point Hits",
+            "type": "array"
+          },
+          "score": {
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "score",
+          "below_action_floor"
+        ],
+        "title": "IntelligenceRelevance",
+        "type": "object"
+      },
+      "IntelligenceScoreBreakdown": {
+        "properties": {
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "factors": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ScoreFactor"
+            },
+            "default": {},
+            "title": "Factors",
+            "type": "object"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "total",
+          "classification",
+          "version"
+        ],
+        "title": "IntelligenceScoreBreakdown",
+        "type": "object"
+      },
+      "IntelligenceVersionInfo": {
+        "properties": {
+          "analysis_version": {
+            "title": "Analysis Version",
+            "type": "string"
+          },
+          "scoring_version": {
+            "title": "Scoring Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "analysis_version",
+          "scoring_version"
+        ],
+        "title": "IntelligenceVersionInfo",
+        "type": "object"
+      },
       "JobDiagnosticsOut": {
         "description": "Operator queue snapshot: status counts + a page of recent jobs.",
         "properties": {
@@ -2890,6 +3258,30 @@
         "title": "OpportunityDetail",
         "type": "object"
       },
+      "OpportunityIntelligenceResponse": {
+        "description": "Top-level response. ``intelligence`` is ``null`` when no eligible record exists.",
+        "properties": {
+          "intelligence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IntelligencePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "opportunity_id": {
+            "title": "Opportunity Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "opportunity_id"
+        ],
+        "title": "OpportunityIntelligenceResponse",
+        "type": "object"
+      },
       "OpportunityStatusUpdate": {
         "properties": {
           "status": {
@@ -3237,6 +3629,29 @@
           "breakdown"
         ],
         "title": "ScoreBreakdown",
+        "type": "object"
+      },
+      "ScoreFactor": {
+        "properties": {
+          "points": {
+            "title": "Points",
+            "type": "number"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "weight",
+          "value",
+          "points"
+        ],
+        "title": "ScoreFactor",
         "type": "object"
       },
       "ScoutRequestCreate": {
@@ -7436,6 +7851,74 @@
           }
         },
         "summary": "Get Opportunity",
+        "tags": [
+          "opportunities"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence": {
+      "get": {
+        "description": "Return the deterministic latest eligible persisted intelligence for one opportunity.\n\nRead-only (Batch 4B). ``_get_scoped`` authorizes the opportunity within the\nworkspace first (a foreign/missing opportunity yields the same ``404``), then the\nintelligence read-service returns the single latest eligible record \u2014 or ``None``\n(``intelligence: null``) when no first-class record exists. Legacy\n``ingest_metadata[\"intelligence\"]`` is never fabricated into a response.",
+        "operationId": "get_opportunity_intelligence_route_api_v1_workspaces__workspace_id__opportunities__opportunity_id__intelligence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpportunityIntelligenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Opportunity Intelligence Route",
         "tags": [
           "opportunities"
         ]
