@@ -352,8 +352,13 @@ behavior.
   genuine reviewer, merged through normal branch protection, and post-merge verified
   (see §17.14 Batch 4B completion record). Squash merge commit
   `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778` (PR #40).
-- **Batch 4C and 4D remain pending / not started.** Overall Batch 4 is **not
-  complete**.
+- **Batch 4C (frontend intelligence panel) is complete**: implemented, approved by the
+  genuine reviewer, merged through normal branch protection, and post-merge verified
+  (see §17.14.3 completion record). Squash merge commit
+  `1c579f17143de6e4aaf7fa8e36f42a4d3293c895` (PR #42).
+- **Batch 4D (integration and closeout) has not started.** Its implementation-ready
+  plan is §17.22 below (status `PLANNED — IMPLEMENTATION NOT STARTED`). Overall Batch 4
+  is **not complete**.
 - Batch 4 is **independent of PR #34 and live egress** — neither the live-connector
   branch nor any network transport is a dependency. Batch 4 reads intelligence that
   the existing (simulated) deterministic pipeline already produces.
@@ -914,10 +919,28 @@ below.
 - No live RSS; no new connector; no external model.
 - PR #34 remained independent, draft, and untouched.
 
-#### 17.14.3 Batch 4C draft-implementation record
+#### 17.14.3 Batch 4C completion record
 
-**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED. Frontend-only; consumes the merged
+**Status:** MERGED AND POST-MERGE VERIFIED (PR #42). Frontend-only; consumes the merged
 Batch 4B contract unchanged. Backend, migrations, CI, and dependencies untouched.
+
+**Merge and post-merge verification**
+- Implemented, approved by the genuine reviewer `adesenden` on the exact reviewed head
+  (`193148ef044164d7bf1aca8c58ca678f543e63de`), and merged through normal branch
+  protection (no bypass, no `--admin`).
+- Squash merge commit `1c579f17143de6e4aaf7fa8e36f42a4d3293c895`, merged at
+  `2026-07-16T06:28:40Z`.
+- Post-merge CI run `29476819317` (event `push`, head `1c579f1`): conclusion
+  **success**, all five jobs passed (Frontend quality, Backend quality, Migrations and
+  API contract, Container build and security, Integration smoke).
+- Frontend: 44/44 tests across 10 files. Backend: 491 passed, 7 warnings. Single
+  migration head `0155a5c468e3`; no OpenAPI or generated-TypeScript drift. API and
+  worker containers run as non-root UID `10001`. Integration smoke 13/13. Dallas,
+  Lagos, London, and Nairobi isolation passed with no cross-market contamination
+  across 12 opportunities (3 per market).
+- Both Batch 4C implementation branches (remote and local
+  `feat/phase-3b-batch-4c-intelligence-panel`) have been deleted after post-merge CI
+  succeeded.
 
 **Implementation**
 - New read-only panel `OpportunityIntelligencePanel` rendered on the existing
@@ -986,7 +1009,7 @@ expansion unless explicitly approved; API and authorization tests green. **The f
 implementation-ready plan is §17.21 below.**
 
 **Batch 4C — Frontend intelligence panel**
-**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED — see §17.14.3 draft-implementation record
+**Status:** MERGED AND POST-MERGE VERIFIED (PR #42) — see §17.14.3 completion record
 - add intelligence panel to existing opportunity detail;
 - facts/inference presentation;
 - evidence and attribution;
@@ -999,7 +1022,7 @@ implementation-ready plan is §17.21 below.**
 flow.
 
 **Batch 4D — Integration and closeout**
-**Status:** NOT STARTED
+**Status:** NOT STARTED — implementation-ready plan is §17.22 (`PLANNED — IMPLEMENTATION NOT STARTED`)
 - deterministic end-to-end read path;
 - four-market isolation;
 - security review;
@@ -1135,19 +1158,22 @@ Additive persisted intelligence may safely remain unused if UI/API rollback occu
 
 ### 17.20 Readiness classification
 
-**Implementation status:** BATCH 4A AND 4B COMPLETE — READY TO PLAN BATCH 4C, BUT
-BATCH 4C HAS NOT STARTED.
+**Implementation status:** BATCH 4A, 4B, AND 4C COMPLETE — READY TO PLAN BATCH 4D, BUT
+BATCH 4D HAS NOT STARTED.
 
 - Batch 4A is merged and post-merge verified (PR #37, merge commit
   `3795f54a6664a424d3678f100cb92f7d28b5cf89`, CI run `29439431696`).
 - Batch 4B is merged and post-merge verified (PR #40, squash merge commit
   `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778`, CI run `29470880422`); the Batch 4B
   acceptance gate is **met** (see §17.14.2 completion record).
+- Batch 4C is merged and post-merge verified (PR #42, squash merge commit
+  `1c579f17143de6e4aaf7fa8e36f42a4d3293c895`, CI run `29476819317`); the Batch 4C
+  acceptance gate is **met** (see §17.14.3 completion record).
 - The remaining Batch 4A data-model decisions are resolved by the landed
   implementation (see §17.19).
-- The next eligible stage is **Batch 4C — frontend intelligence panel**, and it has
-  **not started**.
-- Batch 4C requires its own separate branch, implementation boundary, tests, PR,
+- The next eligible stage is **Batch 4D — integration and closeout**, and it has
+  **not started**. Its implementation-ready plan is **§17.22** below.
+- Batch 4D requires its own separate branch, implementation boundary, tests, PR,
   approval, merge, and post-merge verification.
 - No later stage begins automatically; each sub-batch requires its own verification
   boundary.
@@ -1671,7 +1697,232 @@ bulk export; external-model rescoring; exposure of `author`/`exclusion_hits`.
 
 **Implementation status:** BATCH 4B MERGED AND POST-MERGE VERIFIED (PR #40, squash
 merge commit `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778`, CI run `29470880422`).
-Batch 4A remains merged and post-merge verified; Batch 4C and 4D remain **not
-started**; overall Batch 4 remains **incomplete**. Any Batch 4C work requires its own
-separate implementation branch (its own tests, PR, genuine approval and protected
-merge); no later stage begins automatically.
+Batch 4A remains merged and post-merge verified; Batch 4C is now merged and post-merge
+verified (PR #42, see §17.14.3); Batch 4D remains **not started** (see §17.22 for its
+implementation-ready plan); overall Batch 4 remains **incomplete**. Any Batch 4D work
+requires its own separate implementation branch (its own tests, PR, genuine approval
+and protected merge); no later stage begins automatically.
+
+## 17.22 Batch 4D implementation plan — integration and closeout
+
+**Status:** PLANNED — IMPLEMENTATION NOT STARTED.
+
+This section is the implementation-ready plan for **Batch 4D only**: the integration
+and closeout stage that verifies the already-merged Batch 4A→4B→4C read path
+end-to-end, records the security review, and produces the operational and acceptance
+documentation that closes out Batch 4. It defines *what to do*; it does **not**
+implement anything. It is grounded in the merged state of Batch 4A
+(`app/intelligence/` persistence, migration head `0155a5c468e3`), Batch 4B
+(`GET …/opportunities/{opportunity_id}/intelligence`), and Batch 4C
+(`apps/web/src/pages/opportunities/IntelligencePanel.tsx` +
+`useOpportunityIntelligence`). No new customer-facing feature is introduced.
+
+### 17.22.1 Purpose
+
+Prove — deterministically and reproducibly — that the persisted-→exposed-→rendered
+signal-intelligence read path is correct, isolated, secure, and operable, then record
+that proof so the Batch 4 program can be declared complete. Batch 4D is a
+**verification-and-documentation** batch, not a feature batch: its "implementation" is
+end-to-end/isolation test coverage plus the operational-runbook, threat-model, and
+acceptance-report documents named in §17.15, not new production behavior.
+
+### 17.22.2 Intended system outcome
+
+- The full deterministic read path (Batch 3 analysis → `SignalIntelligenceRecord`
+  persistence → read-only API → frontend panel) is demonstrably correct end-to-end for
+  a seeded, simulated opportunity.
+- Four-market isolation (Dallas, Lagos, London, Nairobi) is proven at the closeout
+  boundary, not only within a single layer.
+- The Batch 4 security checklist (§17.12) is reviewed with each item marked
+  resolved/not-applicable and **no unresolved Critical/High finding**.
+- Operators have a runbook to observe, diagnose, and roll back the intelligence read
+  path.
+- A single acceptance report maps every §17.11 acceptance criterion (1–74) to concrete
+  merged evidence.
+
+### 17.22.3 Scope
+
+In scope:
+- **Verification code only where a gap exists:** end-to-end and cross-layer
+  four-market isolation tests that exercise persistence → API → (mocked) frontend
+  together, and any rollback/feature-gating verification test that closes an untested
+  §17.11 criterion. Prefer extending existing test suites over new architecture.
+- **Documentation deliverables** (the primary output of this batch):
+  - `docs/operations/signal-scoring-operations.md` — operational runbook (create or
+    extend): telemetry/outcome labels from §17.13, empty/error/authorization-denial
+    signatures, rollback layers from §17.18, and "no live-RSS dependency" note.
+  - `docs/security/signal-intelligence-threat-model.md` — record the Batch 4D security
+    review against the §17.12 checklist (create or extend).
+  - Batch 4 acceptance report (new doc, e.g.
+    `docs/phase-3b-batch-4-acceptance.md`) — the §17.11 criteria-to-evidence matrix.
+  - `docs/phase-3b-implementation-plan.md` — this §17.22 plan and the eventual Batch 4D
+    completion record.
+- Re-running and recording the existing CI gates (frontend, backend, migration,
+  contract, container, smoke) as closeout evidence.
+
+Out of scope (see §17.22.14): any new customer-facing feature; any mutation
+(create/edit/delete/approve/reject/rescore/regenerate/history); human feedback (Phase
+3C); compact-feed intelligence indicator; a new migration; any OpenAPI/contract change;
+external-model invocation; live-RSS activation; PR #34 or PR #6 changes; Batch 5.
+
+### 17.22.4 Non-goals
+
+Batch 4D adds **no** endpoint, schema field, UI surface, database column, dependency,
+or connector. It must not alter Batch 4A–4C runtime behavior except for narrowly
+required compatibility fixes, and it introduces no feature flag beyond those already
+landed. It is not a redesign, not a performance-tuning batch, and not a backfill.
+
+### 17.22.5 Architecture and surfaces affected
+
+- **No production runtime surfaces are modified.** The read path already exists:
+  `SignalIntelligenceRecord` (Batch 4A) → `GET
+  /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence`
+  (Batch 4B) → `OpportunityIntelligencePanel` + `useOpportunityIntelligence`
+  (Batch 4C).
+- **Test surfaces:** backend integration/isolation tests under `apps/api/tests/`;
+  frontend integration tests under `apps/web/src/**/__tests__/`; the deterministic
+  four-market seed fixtures and MSW handlers already used by Batches 4B/4C.
+- **Documentation surfaces:** the three docs named in §17.22.3.
+
+### 17.22.6 Data source and state transitions
+
+- Data source: the already-persisted, deterministic, simulated intelligence records
+  produced by `DeterministicEnricher`. No new data is generated; no records are
+  created, mutated, or deleted by Batch 4D verification.
+- State transitions: **none.** Batch 4D is read-only end-to-end. Rollback verification
+  exercises disablement/revert paths in ephemeral test environments only and must not
+  mutate shared state.
+
+### 17.22.7 Authorization, tenant, and market isolation
+
+- Reuse the existing `get_tenant_context` authorization path; add no new auth code.
+- Closeout isolation tests must assert §17.11 criteria 38–45 across the four markets
+  and across workspaces: Dallas↛Lagos, Lagos↛London, London↛Nairobi, cross-workspace
+  denial, and that same-topic signals yield independent per-market records.
+- Frontend closeout must preserve Batch 4C guarantees (§17.22.12).
+
+### 17.22.8 Failure, empty, retry, and cancellation behavior
+
+- No new failure modes are introduced. Verification confirms the existing behavior:
+  `intelligence: null` → neutral empty state (never an error); 4xx → non-retryable
+  error with retry affordance; 5xx → bounded retry; user-driven requests are
+  cancellable; no N+1 fan-out from the feed. These are asserted, not changed.
+
+### 17.22.9 Security requirements
+
+- Complete the §17.12 threat checklist as a written review: object-level authorization,
+  workspace/market leakage, ID enumeration, mass assignment, stored XSS / source HTML
+  injection, unsafe links, oversized payloads, Unicode/control abuse, prompt/log
+  injection, score/evidence tampering, migration rollback failure, idempotency race,
+  stale/partial exposure, and raw error exposure.
+- Each item is marked resolved or not-applicable with the merged evidence that closes
+  it. **No unresolved Critical/High finding may remain** (acceptance criterion 52).
+- No internal identifiers, evidence text, or raw exception messages may appear in any
+  new doc, log, or test fixture output.
+
+### 17.22.10 Observability requirements
+
+- Document (do not add new emitters unless a §17.11 criterion is otherwise untestable)
+  the bounded telemetry from §17.13: persistence attempt/success/failure, idempotent
+  update, API present/absent, authorization denial, evidence-rendering failure, version
+  mismatch, migration failure, panel load success/error.
+- Confirm and record that labels contain **no** tenant/workspace/opportunity/signal
+  IDs, source or evidence text, raw URLs, arbitrary market names, or exception
+  messages — only bounded outcome/decision/version/failure-category labels.
+
+### 17.22.11 Tests
+
+Every §17.11 acceptance criterion must map to at least one test or an explicit
+deterministic verification recorded in the acceptance report. Batch 4D specifically
+adds/asserts:
+- an end-to-end deterministic read-path test (persistence → API → rendered panel via
+  mocked transport) for a seeded opportunity;
+- cross-layer four-market isolation tests (criteria 38–45);
+- security tests for object-level authz, stored XSS, mass assignment, oversized
+  payloads, and cross-tenant access (criterion 53) — assert existing coverage or add
+  the missing case;
+- a rollback/feature-gating verification (criterion 74) exercised in an ephemeral
+  environment;
+- an N+1/request-count assertion at the closeout boundary (criterion 26).
+Final frontend and backend test counts must not decrease without a documented reason.
+
+### 17.22.12 Batch 4C regression guarantees (must remain green)
+
+- The panel still loads only for the selected opportunity; the query key stays scoped
+  by workspace and opportunity; no feed-level N+1; `intelligence: null` stays a neutral
+  empty state; facts and inference stay distinct; evidence renders as plain text; no
+  mutation/feedback controls appear; Dallas/Lagos/London/Nairobi stay independent.
+
+### 17.22.13 Migration and contract decisions
+
+- **Migration:** none. Batch 4D must add no Alembic revision; the single head remains
+  `0155a5c468e3`. `alembic check` must report no drift.
+- **API contract:** none. `apps/api/openapi.json` and `apps/web/src/api/schema.d.ts`
+  must be byte-for-byte unchanged; the contract-drift gate must be clean.
+
+### 17.22.14 Explicit exclusions
+
+No mutation of any kind; no history/enumeration endpoint; no compact-feed indicator; no
+human feedback / thumbs / approval / rejection / rescoring / regeneration; no
+external-model or live-RSS calls; no new connector; no publishing/advertising/campaign
+generation; no new migration; no contract change; no dependency change; no PR #34 / PR
+#6 / ruleset changes; no Phase 3C; no Batch 5.
+
+### 17.22.15 Rollout
+
+Batch 4D ships no runtime change, so "rollout" is documentation activation only: merge
+the runbook, threat-model review, and acceptance report; confirm all CI gates green;
+declare Batch 4 complete only when every §17.11 criterion is evidenced. No live-RSS
+dependency; deterministic fixtures only.
+
+### 17.22.16 Rollback
+
+Because Batch 4D is documentation plus tests, rollback is a plain revert of the Batch
+4D PR with no data or schema implications. Separately, Batch 4D **verifies** the
+already-documented §17.18 runtime rollback layers (frontend panel, API field, pipeline
+write-path, migration downgrade, feature-flag disablement) in ephemeral test
+environments and records the result.
+
+### 17.22.17 Acceptance criteria (Batch 4D closeout gate)
+
+Batch 4D is complete only when:
+1. Every §17.11 criterion (1–74) is mapped to merged evidence in the acceptance report.
+2. The §17.12 security review shows no unresolved Critical/High finding.
+3. All five CI jobs are green on the Batch 4D branch head (Frontend quality, Backend
+   quality, Migrations and API contract, Container build and security, Integration
+   smoke).
+4. Frontend and backend test counts do not regress; smoke stays ≥13/13; four-market
+   isolation passes with no cross-market contamination across 12 opportunities.
+5. No migration was added; migration head remains `0155a5c468e3`; no OpenAPI or
+   generated-type drift.
+6. Containers run as non-root UID `10001` with no secrets, VCS metadata, or local DB
+   files.
+7. The operational runbook and threat-model review are merged.
+8. PR #34, PR #6, ruleset `18820692`, live-RSS branch, and safety branch are untouched;
+   Phase 3C and Batch 5 remain not started.
+
+### 17.22.18 Decisions resolved by this Batch 4D plan
+
+1. Batch 4D is a verification-and-documentation batch — no new production feature.
+2. No migration and no contract change are permitted in Batch 4D.
+3. Deliverables are: end-to-end + isolation tests (only to close gaps), the operational
+   runbook, the recorded security review, and the Batch 4 acceptance report.
+4. The acceptance report is the single source of the §17.11 criteria-to-evidence
+   matrix; the acceptance-report path is `docs/phase-3b-batch-4-acceptance.md`.
+5. Rollback verification runs in ephemeral environments and mutates no shared state.
+
+### 17.22.19 Decisions intentionally deferred
+
+Compact-feed intelligence indicator; intelligence **history** endpoint; customer
+visibility of rejected/suppressed intelligence; long-term retention policy; human
+feedback actions (Phase 3C); external-model rescoring; any Batch 5 scope. These remain
+out of Batch 4 entirely.
+
+### 17.22.20 Readiness classification
+
+**Implementation status:** BATCH 4D PLANNED — IMPLEMENTATION NOT STARTED. Batch 4A, 4B,
+and 4C are merged and post-merge verified; this §17.22 plan makes Batch 4D
+implementation-ready. Batch 4D requires its own separate implementation branch (its own
+tests, docs, PR, genuine approval, and protected merge); no later stage begins
+automatically; overall Batch 4 remains **incomplete** until the §17.22.17 closeout gate
+is met.
