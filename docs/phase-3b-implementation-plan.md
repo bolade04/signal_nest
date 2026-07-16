@@ -1024,7 +1024,7 @@ HAS NOT STARTED.
 
 ## 17.21 Batch 4B implementation plan — read-only API exposure
 
-**Status:** PLANNED — IMPLEMENTATION NOT STARTED.
+**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED.
 
 This section is the implementation-ready plan for **Batch 4B only**: an authorized,
 read-only API that returns the already-persisted `SignalIntelligenceRecord`
