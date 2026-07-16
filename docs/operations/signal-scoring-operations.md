@@ -108,3 +108,82 @@ draft PR). **Schema rollback:** `alembic downgrade a1b2c3d4e5f6` drops only the 
 `signal_intelligence_records` table and its indexes; all business, signal,
 opportunity and durable-job data are preserved and ingestion continues unchanged
 (the Batch 3 advisory annotation still rides `ingest_metadata`).
+
+## 9. Read path — API and frontend (Batch 4B / 4C)
+
+Batches 4B and 4C expose the persisted records read-only. There is **no** new
+service, worker, migration, or contract change; the read path is a query over the
+existing `signal_intelligence_records` table plus one endpoint and one panel.
+
+- **Endpoint:** `GET
+  /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence`
+  (`app/intelligence/read_service.py`, router in `app/intelligence/`). It authorizes
+  the opportunity within the workspace via the existing `get_tenant_context` path,
+  loads the latest eligible record, maps it into a **bounded** public payload, and
+  returns `{opportunity_id, intelligence}`.
+- **Frontend:** `apps/web/src/pages/opportunities/IntelligencePanel.tsx` renders the
+  payload through the `useOpportunityIntelligence` hook. The query key is scoped by
+  `(workspace, opportunity)`, so the compact feed issues **no** per-row intelligence
+  calls (no N+1).
+- **Read-only:** no mutation verb is served (`POST/PUT/PATCH/DELETE` → 405); the read
+  never writes and never mutates the record count.
+
+### 9.1 Response signatures operators will see
+
+| Situation | HTTP | Body | Panel state |
+|-----------|------|------|-------------|
+| Record present | 200 | `intelligence` object | Full panel |
+| No record for the opportunity | 200 | `{opportunity_id, intelligence: null}` | Neutral "no analysis yet" — **not** an error |
+| Malformed/partial stored row | 200 | `intelligence: null` | Neutral empty (fails safe; never a 500 or partial object) |
+| Unauthenticated | 401 | error | Error state with retry |
+| Cross-workspace / non-member | 403 | error | Error state with retry |
+| Unknown/guessed opportunity id | 404 | error | Error state with retry |
+
+An **absent** record (`null`) is the normal state for opportunities scored before the
+migration or never analysed — it is not an incident. A rising 403/404 rate points at
+an authorization or client-routing problem, not the read path itself.
+
+### 9.2 Observability of the read path
+
+`read_service` emits one bounded structured event per read:
+
+| Event | `outcome` | Emitted when |
+|-------|-----------|--------------|
+| `intelligence_read_absent` | `absent` | No eligible record (valid empty result) |
+| `intelligence_read_malformed` | `malformed` | A stored row failed mapping and was failed-safe to `null` |
+| `intelligence_read_success` | `success` | A record was mapped and returned |
+
+Each event also carries `duration_ms`, `analysis_version`, and `scoring_version`
+(bounded, ID-free label values). For request correlation the events **additionally**
+carry `workspace_id` and `opportunity_id` as structured-log fields — the same
+correlation role as `request_id`/`trace_id`, run through the central redactor
+(`app/core/redaction.py`). These are internal operator logs, **not** metric label
+dimensions and **not** customer-facing; no source text, evidence text, raw URLs,
+arbitrary market names, or exception messages are emitted. If you export these events
+into a metrics backend, key metrics on `outcome`/version only — never on the ID
+fields — to keep cardinality bounded (see the threat-model observability note).
+
+### 9.3 Read-path rollback layers
+
+The read path is additive over Batch 4A, so it has independent, ordered rollback
+layers (verified in ephemeral tests; see `test_intelligence_closeout.py`):
+
+1. **Frontend panel** — remove/hide `IntelligencePanel` from the opportunity detail.
+   The API and data are untouched; the rest of the opportunity experience is intact.
+2. **API field** — the endpoint can return `intelligence: null` (or be withdrawn)
+   while preserving the nullable, backward-compatible contract. Clients already treat
+   `null` as the neutral empty state.
+3. **Write-path disablement** — stop persisting new records; existing rows remain
+   readable, new opportunities simply read `null`.
+4. **Schema** — `alembic downgrade a1b2c3d4e5f6` (§8) as the last resort.
+
+Because the read path is purely additive, dropping the records or withdrawing the
+field degrades every opportunity to the neutral empty state **without error** and
+without touching Phase 2 opportunity title/score/status/decision.
+
+### 9.4 No live-RSS dependency
+
+The read path and all its tests run entirely against the deterministic four-market
+demo seed (Dallas, London, Lagos, Nairobi). It performs **no** live RSS/connector
+fetch, no external-model call, and no outbound network I/O; normal CI needs no
+network access. Live ingestion remains disabled and out of scope for this batch.
