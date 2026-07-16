@@ -154,6 +154,40 @@ def persist_intelligence(
         return existing
 
 
+def get_latest_for_opportunity(
+    db: Session,
+    *,
+    workspace_id: str,
+    opportunity_id: str,
+) -> SignalIntelligenceRecord | None:
+    """Return the single deterministic *latest eligible* record for one opportunity.
+
+    Read-only (Batch 4B). Both scope args are **mandatory** and applied together so a
+    record is never reachable by ``id`` or ``normalized_signal_id`` alone: the query
+    is scoped by ``workspace_id`` **and** ``opportunity_id`` and only accepted,
+    opportunity-linked rows are eligible (rejected/suppressed rows carry
+    ``accepted == False`` and are excluded). A single indexed query orders by
+    ``score_total DESC, created_at DESC, id ASC`` and takes the first row; the final
+    ``id ASC`` is a total tiebreak so the result is byte-stable even for
+    duplicate-equivalent rows. Returns ``None`` when no eligible record exists
+    (a valid absence). Performs no mutation, flush or commit.
+    """
+    return db.scalar(
+        select(SignalIntelligenceRecord)
+        .where(
+            SignalIntelligenceRecord.workspace_id == workspace_id,
+            SignalIntelligenceRecord.opportunity_id == opportunity_id,
+            SignalIntelligenceRecord.accepted.is_(True),
+        )
+        .order_by(
+            SignalIntelligenceRecord.score_total.desc(),
+            SignalIntelligenceRecord.created_at.desc(),
+            SignalIntelligenceRecord.id.asc(),
+        )
+        .limit(1)
+    )
+
+
 def attach_opportunity(
     db: Session,
     *,

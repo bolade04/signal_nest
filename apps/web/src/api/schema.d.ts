@@ -761,6 +761,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Opportunity Intelligence Route
+         * @description Return the deterministic latest eligible persisted intelligence for one opportunity.
+         *
+         *     Read-only (Batch 4B). ``_get_scoped`` authorizes the opportunity within the
+         *     workspace first (a foreign/missing opportunity yields the same ``404``), then the
+         *     intelligence read-service returns the single latest eligible record — or ``None``
+         *     (``intelligence: null``) when no first-class record exists. Legacy
+         *     ``ingest_metadata["intelligence"]`` is never fabricated into a response.
+         */
+        get: operations["get_opportunity_intelligence_route_api_v1_workspaces__workspace_id__opportunities__opportunity_id__intelligence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/status": {
         parameters: {
             query?: never;
@@ -1310,6 +1336,175 @@ export interface components {
             status: string;
         };
         /**
+         * InferredAttribute
+         * @description A single inferred value with the deterministic method behind it.
+         *
+         *     Evidence spans are surfaced once, at the payload level (:class:`IntelligencePayload.evidence`),
+         *     not repeated inside every attribute.
+         */
+        InferredAttribute: {
+            /** Confidence */
+            confidence: number;
+            /** Method */
+            method: string;
+            /** Value */
+            value: string;
+        };
+        /**
+         * IntelligenceEvidenceItem
+         * @description A sanitized excerpt slice supporting an inference (for later highlighting).
+         */
+        IntelligenceEvidenceItem: {
+            /** End */
+            end: number;
+            /** Method */
+            method: string;
+            /** Quote */
+            quote: string;
+            /** Start */
+            start: number;
+        };
+        /**
+         * IntelligenceFacts
+         * @description Observed-only fields. Nothing here is inferred. ``author`` is excluded (PII).
+         */
+        IntelligenceFacts: {
+            /** Char Count */
+            char_count: number;
+            /** Distinct Source Types */
+            distinct_source_types: number;
+            /** Duplicate Count */
+            duplicate_count: number;
+            /** Engagement */
+            engagement: number;
+            /** Excerpt */
+            excerpt: string;
+            /** Language */
+            language: string;
+            /** Market */
+            market?: string | null;
+            /** Published Days Ago */
+            published_days_ago: number;
+            /** Source Type */
+            source_type: string;
+            /** Word Count */
+            word_count: number;
+        };
+        /**
+         * IntelligenceInference
+         * @description Interpretation only. Each attribute is evidence-backed, never treated as fact.
+         */
+        IntelligenceInference: {
+            /**
+             * Has Buying Intent
+             * @default false
+             */
+            has_buying_intent: boolean;
+            /**
+             * Has Competitor Dissatisfaction
+             * @default false
+             */
+            has_competitor_dissatisfaction: boolean;
+            pain_point_dna?: components["schemas"]["InferredAttribute"] | null;
+            sentiment?: components["schemas"]["InferredAttribute"] | null;
+            signal_type?: components["schemas"]["InferredAttribute"] | null;
+        };
+        /**
+         * IntelligencePayload
+         * @description The typed, bounded public view of one persisted intelligence record.
+         */
+        IntelligencePayload: {
+            /** Classification */
+            classification: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decision */
+            decision?: string | null;
+            /**
+             * Evidence
+             * @default []
+             */
+            evidence: components["schemas"]["IntelligenceEvidenceItem"][];
+            facts: components["schemas"]["IntelligenceFacts"];
+            inference: components["schemas"]["IntelligenceInference"];
+            /** Is Simulated */
+            is_simulated: boolean;
+            provenance: components["schemas"]["IntelligenceProvenance"];
+            /** Rationale */
+            rationale?: string | null;
+            relevance: components["schemas"]["IntelligenceRelevance"];
+            score: components["schemas"]["IntelligenceScoreBreakdown"];
+            version: components["schemas"]["IntelligenceVersionInfo"];
+        };
+        /**
+         * IntelligenceProvenance
+         * @description Public-safe provenance. The raw ``fingerprint`` is intentionally dropped.
+         */
+        IntelligenceProvenance: {
+            /** Analysis Version */
+            analysis_version: string;
+            /** Enricher */
+            enricher: string;
+            /** Scoring Version */
+            scoring_version: string;
+        };
+        /**
+         * IntelligenceRelevance
+         * @description Business-relevance breakdown. ``exclusion_hits`` is excluded (operator-only).
+         */
+        IntelligenceRelevance: {
+            /**
+             * Audience Hits
+             * @default []
+             */
+            audience_hits: string[];
+            /** Below Action Floor */
+            below_action_floor: boolean;
+            /**
+             * Competitor Hits
+             * @default []
+             */
+            competitor_hits: string[];
+            /**
+             * Keyword Hits
+             * @default []
+             */
+            keyword_hits: string[];
+            /**
+             * Pain Point Hits
+             * @default []
+             */
+            pain_point_hits: string[];
+            /** Score */
+            score: number;
+        };
+        /** IntelligenceScoreBreakdown */
+        IntelligenceScoreBreakdown: {
+            /** Classification */
+            classification: string;
+            /**
+             * Factors
+             * @default {}
+             */
+            factors: {
+                [key: string]: components["schemas"]["ScoreFactor"];
+            };
+            /** Total */
+            total: number;
+            /** Version */
+            version: string;
+        };
+        /** IntelligenceVersionInfo */
+        IntelligenceVersionInfo: {
+            /** Analysis Version */
+            analysis_version: string;
+            /** Scoring Version */
+            scoring_version: string;
+        };
+        /**
          * JobDiagnosticsOut
          * @description Operator queue snapshot: status counts + a page of recent jobs.
          */
@@ -1794,6 +1989,15 @@ export interface components {
             /** Why It Matters */
             why_it_matters: string | null;
         };
+        /**
+         * OpportunityIntelligenceResponse
+         * @description Top-level response. ``intelligence`` is ``null`` when no eligible record exists.
+         */
+        OpportunityIntelligenceResponse: {
+            intelligence?: components["schemas"]["IntelligencePayload"] | null;
+            /** Opportunity Id */
+            opportunity_id: string;
+        };
         /** OpportunityStatusUpdate */
         OpportunityStatusUpdate: {
             /** Status */
@@ -1921,6 +2125,15 @@ export interface components {
             kind: string;
             /** Total */
             total: number;
+        };
+        /** ScoreFactor */
+        ScoreFactor: {
+            /** Points */
+            points: number;
+            /** Value */
+            value: number;
+            /** Weight */
+            weight: number;
         };
         /** ScoutRequestCreate */
         ScoutRequestCreate: {
@@ -3984,6 +4197,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_opportunity_intelligence_route_api_v1_workspaces__workspace_id__opportunities__opportunity_id__intelligence_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpportunityIntelligenceResponse"];
                 };
             };
             /** @description Validation Error */

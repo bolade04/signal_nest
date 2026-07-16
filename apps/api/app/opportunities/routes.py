@@ -17,6 +17,8 @@ from app.auth.dependencies import TenantContext, get_tenant_context, require_rol
 from app.core.enums import OpportunityStatus, Role
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.db.session import get_db
+from app.intelligence.read_service import get_opportunity_intelligence
+from app.intelligence.schemas import OpportunityIntelligenceResponse
 from app.opportunities.models import Opportunity, OpportunityScore, ValidationEvidence
 from app.opportunities.schemas import (
     OpportunityCard,
@@ -127,6 +129,31 @@ def get_opportunity(
         ValidationEvidenceOut.model_validate(e) for e in evidence
     ]
     return detail
+
+
+@router.get(
+    "/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence",
+    response_model=OpportunityIntelligenceResponse,
+)
+def get_opportunity_intelligence_route(
+    workspace_id: str,
+    opportunity_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> OpportunityIntelligenceResponse:
+    """Return the deterministic latest eligible persisted intelligence for one opportunity.
+
+    Read-only (Batch 4B). ``_get_scoped`` authorizes the opportunity within the
+    workspace first (a foreign/missing opportunity yields the same ``404``), then the
+    intelligence read-service returns the single latest eligible record — or ``None``
+    (``intelligence: null``) when no first-class record exists. Legacy
+    ``ingest_metadata["intelligence"]`` is never fabricated into a response.
+    """
+    opp = _get_scoped(db, workspace_id, opportunity_id)
+    payload = get_opportunity_intelligence(
+        db, workspace_id=workspace_id, opportunity_id=opp.id
+    )
+    return OpportunityIntelligenceResponse(opportunity_id=opp.id, intelligence=payload)
 
 
 @router.put(
