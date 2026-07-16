@@ -1705,7 +1705,10 @@ and protected merge); no later stage begins automatically.
 
 ## 17.22 Batch 4D implementation plan — integration and closeout
 
-**Status:** PLANNED — IMPLEMENTATION NOT STARTED.
+**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED. See the §17.22.21 completion
+record for the delivered closeout test, documentation, and gate evidence. The plan
+below is retained as the specification; nothing here is auto-merged and no later
+stage (Phase 3C, Batch 5) has started.
 
 This section is the implementation-ready plan for **Batch 4D only**: the integration
 and closeout stage that verifies the already-merged Batch 4A→4B→4C read path
@@ -1920,9 +1923,45 @@ out of Batch 4 entirely.
 
 ### 17.22.20 Readiness classification
 
-**Implementation status:** BATCH 4D PLANNED — IMPLEMENTATION NOT STARTED. Batch 4A, 4B,
-and 4C are merged and post-merge verified; this §17.22 plan makes Batch 4D
-implementation-ready. Batch 4D requires its own separate implementation branch (its own
-tests, docs, PR, genuine approval, and protected merge); no later stage begins
-automatically; overall Batch 4 remains **incomplete** until the §17.22.17 closeout gate
-is met.
+**Implementation status:** BATCH 4D IMPLEMENTED IN DRAFT PR — NOT MERGED. Batch 4A,
+4B, and 4C are merged and post-merge verified; Batch 4D's closeout tests and
+documentation are delivered on branch `feat/phase-3b-batch-4d-closeout-verification`
+(see §17.22.21) but remain unmerged and unapproved. No later stage begins
+automatically; overall Batch 4 remains **incomplete** until the §17.22.17 closeout
+gate is met and the Batch 4D PR is approved and merged under branch protection.
+
+### 17.22.21 Batch 4D completion record (draft)
+
+Delivered on branch `feat/phase-3b-batch-4d-closeout-verification` (draft PR, not
+merged, no reviewer requested):
+
+- **Cross-layer closeout test** — `apps/api/app/tests/test_intelligence_closeout.py`
+  (5 tests): seeded end-to-end read path (persistence → API → frontend-consumed
+  contract) across all four markets; closeout-boundary four-market isolation
+  (criteria 38–45); write-path/UI-field rollback degradation to a neutral `null`
+  with Phase 2 opportunity data preserved (criterion 74; §17.18); feed/detail
+  no-intelligence-fan-out (criterion 26). Read-only except a self-restoring rollback
+  test that re-seeds its own throwaway DB.
+- **Operations runbook** — `docs/operations/signal-scoring-operations.md` §9: read
+  path endpoint/panel, response signatures, bounded telemetry (with the honest
+  correlation-ID note), read-path rollback layers, and the no-live-RSS statement.
+- **Security review** — `docs/security/signal-intelligence-threat-model.md` §6:
+  the §17.12 checklist reviewed item-by-item with merged evidence; no unresolved
+  Critical/High; one Low, deferred observation (O-1: read-path correlation IDs in
+  structured logs — internal operator logs, not metric labels).
+- **Acceptance report** — `docs/phase-3b-batch-4-acceptance.md`: the §17.11
+  criteria-to-evidence matrix (1–74) with an explicit evidence-type legend
+  (AUTO/CI/STATIC/DOC/GOV) so no verification is overclaimed.
+
+**Gate evidence (this session, local):** Ruff clean; backend intelligence subset
+99 passed / 1 postgres-skip (incl. +5 new closeout tests); single migration head
+`0155a5c468e3`; OpenAPI/`schema.d.ts` regenerated with no drift; frontend lint +
+`tsc -b` clean, vitest 10 files / 44 passed, `npm audit` 0 vulnerabilities, build
+succeeds. **CI-gated (branch head, authoritative):** full backend suite with DB,
+PostgreSQL-gated tests, container non-root UID `10001`, and integration smoke ≥13/13
+run in CI — the local readiness/DB stack was unavailable this session, so those are
+verified by the branch-head CI run, not hand-verified locally.
+
+No migration, no OpenAPI/contract change, no dependency change, no production runtime
+change was made. PR #34, PR #6, ruleset `18820692`, live-RSS branch, and the safety
+branch are untouched; Phase 3C and Batch 5 remain not started.
