@@ -35,6 +35,7 @@ import { useToast } from '@/components/ui/toast';
 import { scoreHelp } from '@/lib/labels';
 import { formatDateTime, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { OpportunityIntelligencePanel } from './opportunities/IntelligencePanel';
 
 function str(value: unknown): string | null {
   if (value == null) return null;
@@ -297,6 +298,9 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               </CardContent>
             </Card>
           ) : null}
+
+          {/* Persisted signal intelligence (Batch 4B read-only) */}
+          <OpportunityIntelligencePanel workspaceId={workspaceId} opportunityId={opportunityId} />
         </div>
 
         {/* Sidebar: scores, sources, validation */}
