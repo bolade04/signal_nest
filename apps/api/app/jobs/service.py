@@ -213,9 +213,18 @@ def enqueue_scout_request(
     request_id: str | None = None,
     trace_id: str | None = None,
     idempotency_key: str | None = None,
+    trigger: str | None = None,
     now: datetime | None = None,
 ) -> Job:
-    """Enqueue a durable ``scout_request.execute`` job for one scout request."""
+    """Enqueue a durable ``scout_request.execute`` job for one scout request.
+
+    ``trigger`` is an optional, server-written provenance marker recorded on the
+    payload (e.g. ``"scheduled"`` for a recurrence-driven run). The manual-run path
+    passes nothing, so its payload — and therefore its payload hash and every
+    existing behaviour — is unchanged. The marker is read only by the customer-safe
+    run-history projection to label how a run was enqueued; it never alters
+    execution, idempotency or isolation.
+    """
     context = ExecutionContext.for_scout_request(
         organization_id=organization_id,
         workspace_id=workspace_id,
@@ -224,11 +233,14 @@ def enqueue_scout_request(
         request_id=request_id,
         trace_id=trace_id,
     )
+    payload: dict = {"scout_request_id": scout_request_id}
+    if trigger is not None:
+        payload["trigger"] = trigger
     return enqueue_job(
         db,
         job_type=JobType.SCOUT_REQUEST_EXECUTE,
         context=context,
-        payload={"scout_request_id": scout_request_id},
+        payload=payload,
         location_id=location_id,
         scout_request_id=scout_request_id,
         idempotency_key=idempotency_key,

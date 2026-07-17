@@ -149,6 +149,10 @@ def get_run_history(
         Job.organization_id == organization_id,
         Job.workspace_id == workspace_id,
         Job.scout_request_id == scout_request_id,
+        # Only actual scouting runs are history. A schedule's ``scout_schedule.tick``
+        # bookkeeping job also carries this request's id but is not a run, so it must
+        # never surface in the customer-facing run list.
+        Job.job_type == JobType.SCOUT_REQUEST_EXECUTE.value,
     )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = list(

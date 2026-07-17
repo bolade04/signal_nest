@@ -227,6 +227,13 @@ class Settings(BaseSettings):
     #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
     connector_rss_max_attempts: int = 3
 
+    # --- Scouting schedules (Phase 3B, SB-B) ---------------------------------
+    #: Master switch for recurring scouting schedules (dark by default). While
+    #: off, schedule ticks are inert no-ops that self-terminate the chain: no
+    #: scheduled scouting run is ever enqueued. Turning this on is the only path
+    #: that lets a schedule tick fan out into a scout-request execution.
+    scout_scheduling_enabled: bool = False
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None

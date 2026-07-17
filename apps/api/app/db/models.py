@@ -35,7 +35,7 @@ from app.organizations.models import (  # noqa: F401
     User,
     Workspace,
 )
-from app.scouting_requests.models import ScoutRequest  # noqa: F401
+from app.scouting_requests.models import ScoutRequest, ScoutSchedule  # noqa: F401
 from app.signals.models import (  # noqa: F401
     NormalizedSignal,
     RawSignal,
