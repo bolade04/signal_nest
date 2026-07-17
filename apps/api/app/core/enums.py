@@ -46,6 +46,19 @@ class ScoutRequestStatus(StrEnum):
     FAILED = "failed"
 
 
+class ScheduleInterval(StrEnum):
+    """Bounded recurrence cadence for a scouting schedule (SB-B).
+
+    Only two cadences exist and the minimum interval is 24h, so a schedule can
+    never enqueue more than once per day. ``daily`` recurs every 24 hours and
+    ``weekly`` every 7 days — pure fixed intervals with no clock-of-day, timezone
+    or DST semantics.
+    """
+
+    DAILY = "daily"
+    WEEKLY = "weekly"
+
+
 class SourceType(StrEnum):
     MANUAL = "manual"
     WEBSITE_SCAN = "website_scan"

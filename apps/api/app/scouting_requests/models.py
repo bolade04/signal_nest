@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
-from app.core.enums import ScoutRequestStatus
+from app.core.enums import ScheduleInterval, ScoutRequestStatus
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -42,3 +42,52 @@ class ScoutRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stats: Mapped[dict] = mapped_column(JSON, default=dict)  # scanned/filtered/opportunities
+
+
+class ScoutSchedule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Recurring cadence attached to exactly one scout request + market (SB-B).
+
+    Additive and dark-deployed: rows only ever drive work while the
+    ``scout_scheduling_enabled`` flag is on. A schedule owns one recurring cadence
+    for one scout request; the uniqueness constraint enforces the product rule of
+    at most one schedule per request. Recurrence is a pure fixed interval measured
+    in UTC from the enable/resume moment — no clock-of-day, timezone or DST.
+    """
+
+    __tablename__ = "scout_schedules"
+    __table_args__ = (
+        # At most one schedule per scout request within a workspace. Delete is a
+        # hard delete, so a request never accumulates stale schedule rows.
+        UniqueConstraint(
+            "workspace_id", "scout_request_id", name="uq_scout_schedule_request"
+        ),
+    )
+
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    # Market scoping — mirrors ScoutRequest so a schedule inherits its request's
+    # isolation. SET NULL on location removal, matching the request's own rule.
+    location_id: Mapped[str | None] = mapped_column(
+        ForeignKey("business_locations.id", ondelete="SET NULL"), index=True
+    )
+    # The scheduled request. CASCADE: deleting the request removes its schedule.
+    scout_request_id: Mapped[str] = mapped_column(
+        ForeignKey("scout_requests.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+
+    interval: Mapped[str] = mapped_column(String(20), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: Next UTC instant a tick should fan out a scouting run; NULL when inert
+    #: (paused/never enabled). Recomputed as enable/resume time + interval.
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Last UTC instant a tick actually fired (advanced the cadence). NULL until
+    #: the first fan-out. Never guessed from scheduling columns.
+    last_tick_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def interval_enum(self) -> ScheduleInterval:
+        """The validated recurrence cadence for this row."""
+        return ScheduleInterval(self.interval)

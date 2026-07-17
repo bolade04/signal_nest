@@ -151,6 +151,10 @@ class JobType(StrEnum):
     """
 
     SCOUT_REQUEST_EXECUTE = "scout_request.execute"
+    #: Recurring schedule tick (SB-B). Self-chaining: each tick may enqueue one
+    #: scout-request execution and always enqueues its own successor tick while the
+    #: schedule stays enabled. Never runs the scouting pipeline itself.
+    SCOUT_SCHEDULE_TICK = "scout_schedule.tick"
 
 
 class JobErrorCode(StrEnum):
