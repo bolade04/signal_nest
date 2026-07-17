@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -50,3 +51,59 @@ class ScoutRunResult(BaseModel):
     scout_request_id: str
     status: str
     stats: dict
+
+
+class TriggerType(StrEnum):
+    """How a scouting run came to be enqueued.
+
+    ``manual`` — a user pressed run (the only path that exists today).
+    ``scheduled`` — enqueued by a future recurrence tick (SB-B+); surfaced only when
+    the source job carries an explicit, server-side trigger marker.
+    ``unknown`` — the run predates trigger recording, or the marker is absent; we
+    never *guess* a trigger from scheduling columns. Honest-unknown over mislabelling.
+    """
+
+    MANUAL = "manual"
+    SCHEDULED = "scheduled"
+    UNKNOWN = "unknown"
+
+
+class RunStats(BaseModel):
+    """Aggregate per-run counts, sourced verbatim from the durable job's
+    ``result_summary``. Present only once a run has produced a summary; a run that
+    has not completed carries ``stats: null`` rather than fabricated zeros."""
+
+    scanned: int
+    noise_filtered: int
+    signals_analyzed: int
+    opportunities: int
+
+
+class RunItem(BaseModel):
+    """One scouting run in the request's history — a bounded, customer-safe
+    projection of a durable ``Job``. It exposes only fields already published by the
+    customer-safe ``JobOut`` boundary (never payloads, hashes, idempotency/lease
+    tokens, worker/host/trace identifiers, or raw error text)."""
+
+    id: str
+    status: str
+    trigger: TriggerType
+    is_simulated: bool | None
+    attempt_count: int
+    max_attempts: int
+    last_error_code: str | None
+    scheduled_for: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    cancel_requested_at: datetime | None
+    cancelled_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    stats: RunStats | None
+
+
+class RunHistoryOut(BaseModel):
+    items: list[RunItem]
+    total: int
+    limit: int
+    offset: int

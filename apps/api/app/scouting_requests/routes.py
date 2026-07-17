@@ -8,7 +8,7 @@ default; Redis worker in full mode).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,13 @@ from app.db.session import get_db
 from app.jobs.service import enqueue_scout_request
 from app.locations.models import BusinessLocation
 from app.scouting_requests.models import ScoutRequest
+from app.scouting_requests.run_history import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    get_run_history,
+)
 from app.scouting_requests.schemas import (
+    RunHistoryOut,
     ScoutRequestCreate,
     ScoutRequestOut,
     ScoutRequestUpdate,
@@ -255,4 +261,35 @@ def run_scout_request_endpoint(
         scout_request_id=request.id,
         status=ScoutRequestStatus.QUEUED.value,
         stats={"job_id": job.id, "job_status": job.status},
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/scout-requests/{request_id}/runs",
+    response_model=RunHistoryOut,
+)
+def list_scout_request_runs(
+    workspace_id: str,
+    request_id: str,
+    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> RunHistoryOut:
+    """Read-only, reverse-chronological history of this request's scouting runs.
+
+    Any workspace member may read it (``get_tenant_context``). The request is first
+    authorized within the workspace (``_get_scoped`` → 404 for an unknown/cross-
+    workspace id), then the durable jobs for that request are projected into a
+    bounded, customer-safe page. This endpoint only reads: it never enqueues,
+    cancels, retries or otherwise touches job-execution behaviour.
+    """
+    _get_scoped(db, workspace_id, request_id)
+    return get_run_history(
+        db,
+        organization_id=ctx.organization.id,
+        workspace_id=workspace_id,
+        scout_request_id=request_id,
+        limit=limit,
+        offset=offset,
     )

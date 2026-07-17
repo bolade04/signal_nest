@@ -3579,6 +3579,211 @@
         "title": "RegisterRequest",
         "type": "object"
       },
+      "RunHistoryOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "RunHistoryOut",
+        "type": "object"
+      },
+      "RunItem": {
+        "description": "One scouting run in the request's history \u2014 a bounded, customer-safe\nprojection of a durable ``Job``. It exposes only fields already published by the\ncustomer-safe ``JobOut`` boundary (never payloads, hashes, idempotency/lease\ntokens, worker/host/trace identifiers, or raw error text).",
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Simulated"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "scheduled_for": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled For"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "stats": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/TriggerType"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "trigger",
+          "is_simulated",
+          "attempt_count",
+          "max_attempts",
+          "last_error_code",
+          "scheduled_for",
+          "started_at",
+          "completed_at",
+          "cancel_requested_at",
+          "cancelled_at",
+          "created_at",
+          "updated_at",
+          "stats"
+        ],
+        "title": "RunItem",
+        "type": "object"
+      },
+      "RunStats": {
+        "description": "Aggregate per-run counts, sourced verbatim from the durable job's\n``result_summary``. Present only once a run has produced a summary; a run that\nhas not completed carries ``stats: null`` rather than fabricated zeros.",
+        "properties": {
+          "noise_filtered": {
+            "title": "Noise Filtered",
+            "type": "integer"
+          },
+          "opportunities": {
+            "title": "Opportunities",
+            "type": "integer"
+          },
+          "scanned": {
+            "title": "Scanned",
+            "type": "integer"
+          },
+          "signals_analyzed": {
+            "title": "Signals Analyzed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scanned",
+          "noise_filtered",
+          "signals_analyzed",
+          "opportunities"
+        ],
+        "title": "RunStats",
+        "type": "object"
+      },
       "RuntimeSummaryOut": {
         "properties": {
           "all_configured": {
@@ -4091,6 +4296,16 @@
         ],
         "title": "TelemetryStatusOut",
         "type": "object"
+      },
+      "TriggerType": {
+        "description": "How a scouting run came to be enqueued.\n\n``manual`` \u2014 a user pressed run (the only path that exists today).\n``scheduled`` \u2014 enqueued by a future recurrence tick (SB-B+); surfaced only when\nthe source job carries an explicit, server-side trigger marker.\n``unknown`` \u2014 the run predates trigger recording, or the marker is absent; we\nnever *guess* a trigger from scheduling columns. Honest-unknown over mislabelling.",
+        "enum": [
+          "manual",
+          "scheduled",
+          "unknown"
+        ],
+        "title": "TriggerType",
+        "type": "string"
       },
       "UserOut": {
         "properties": {
@@ -8678,6 +8893,97 @@
           }
         },
         "summary": "Run Scout Request Endpoint",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/runs": {
+      "get": {
+        "description": "Read-only, reverse-chronological history of this request's scouting runs.\n\nAny workspace member may read it (``get_tenant_context``). The request is first\nauthorized within the workspace (``_get_scoped`` \u2192 404 for an unknown/cross-\nworkspace id), then the durable jobs for that request are projected into a\nbounded, customer-safe page. This endpoint only reads: it never enqueues,\ncancels, retries or otherwise touches job-execution behaviour.",
+        "operationId": "list_scout_request_runs_api_v1_workspaces__workspace_id__scout_requests__request_id__runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scout Request Runs",
         "tags": [
           "scout-requests"
         ]
