@@ -340,7 +340,7 @@ behavior.
 
 ### 17.1 Status
 
-**Status:** BATCH 4A AND 4B MERGED AND POST-MERGE VERIFIED — BATCH 4C NOT STARTED
+**Status:** BATCH 4 COMPLETE — BATCHES 4A–4D MERGED AND POST-MERGE VERIFIED
 
 - The owner-approved Batch 4 **scope remains active**; this section is the
   implementation contract for the whole Batch 4 program.
@@ -356,9 +356,10 @@ behavior.
   genuine reviewer, merged through normal branch protection, and post-merge verified
   (see §17.14.3 completion record). Squash merge commit
   `1c579f17143de6e4aaf7fa8e36f42a4d3293c895` (PR #42).
-- **Batch 4D (integration and closeout) has not started.** Its implementation-ready
-  plan is §17.22 below (status `PLANNED — IMPLEMENTATION NOT STARTED`). Overall Batch 4
-  is **not complete**.
+- **Batch 4D (integration and closeout) is complete**: implemented, approved by the
+  genuine reviewer `adesenden`, merged through normal branch protection, and post-merge
+  verified (see §17.22.21 Batch 4D completion record). Squash merge commit
+  `718485fc821b8865f513dae2ba36310cfb271c98` (PR #44). Overall Batch 4 is **complete**.
 - Batch 4 is **independent of PR #34 and live egress** — neither the live-connector
   branch nor any network transport is a dependency. Batch 4 reads intelligence that
   the existing (simulated) deterministic pipeline already produces.
@@ -992,7 +993,9 @@ Batch 4B contract unchanged. Backend, migrations, CI, and dependencies untouched
 - No intelligence creation / editing / deletion; no approve/reject; no feedback/thumbs;
   no rescoring/regeneration; no external-model or live-RSS calls; no history/export/share.
 - No backend schema change; no migration; no CI or dependency change.
-- Batch 4D not started; PR #34 remains independent, draft, and untouched.
+- Batch 4D not started *(historical: state when Batch 4C landed; Batch 4D has since
+  merged and been post-merge verified — see §17.22.21)*; PR #34 remains independent,
+  draft, and untouched.
 
 **Batch 4B — Read-only API exposure**
 **Status:** MERGED AND POST-MERGE VERIFIED (PR #40) — see §17.14.2 completion record
@@ -1022,7 +1025,7 @@ implementation-ready plan is §17.21 below.**
 flow.
 
 **Batch 4D — Integration and closeout**
-**Status:** NOT STARTED — implementation-ready plan is §17.22 (`PLANNED — IMPLEMENTATION NOT STARTED`)
+**Status:** MERGED AND POST-MERGE VERIFIED (PR #44) — see §17.22.21 completion record
 - deterministic end-to-end read path;
 - four-market isolation;
 - security review;
@@ -1158,8 +1161,8 @@ Additive persisted intelligence may safely remain unused if UI/API rollback occu
 
 ### 17.20 Readiness classification
 
-**Implementation status:** BATCH 4A, 4B, AND 4C COMPLETE — READY TO PLAN BATCH 4D, BUT
-BATCH 4D HAS NOT STARTED.
+**Implementation status:** BATCH 4 COMPLETE — BATCHES 4A, 4B, 4C, AND 4D MERGED AND
+POST-MERGE VERIFIED.
 
 - Batch 4A is merged and post-merge verified (PR #37, merge commit
   `3795f54a6664a424d3678f100cb92f7d28b5cf89`, CI run `29439431696`).
@@ -1171,13 +1174,13 @@ BATCH 4D HAS NOT STARTED.
   acceptance gate is **met** (see §17.14.3 completion record).
 - The remaining Batch 4A data-model decisions are resolved by the landed
   implementation (see §17.19).
-- The next eligible stage is **Batch 4D — integration and closeout**, and it has
-  **not started**. Its implementation-ready plan is **§17.22** below.
-- Batch 4D requires its own separate branch, implementation boundary, tests, PR,
-  approval, merge, and post-merge verification.
-- No later stage begins automatically; each sub-batch requires its own verification
+- Batch 4D is merged and post-merge verified (PR #44, squash merge commit
+  `718485fc821b8865f513dae2ba36310cfb271c98`, CI run `29539477988`); the Batch 4D
+  closeout gate is **met** (see §17.22.21 completion record).
+- No later stage begins automatically; each sub-batch required its own verification
   boundary.
-- Overall Batch 4 remains **incomplete**.
+- Overall Batch 4 is **complete**. Phase 3C remains deferred/not started and Batch 5
+  remains not started.
 - Product scope is approved; architecture is additive; no live-egress dependency
   exists.
 
@@ -1698,17 +1701,17 @@ bulk export; external-model rescoring; exposure of `author`/`exclusion_hits`.
 **Implementation status:** BATCH 4B MERGED AND POST-MERGE VERIFIED (PR #40, squash
 merge commit `6aeb0c2177ef0f3a25a42bd46fd23cd71db09778`, CI run `29470880422`).
 Batch 4A remains merged and post-merge verified; Batch 4C is now merged and post-merge
-verified (PR #42, see §17.14.3); Batch 4D remains **not started** (see §17.22 for its
-implementation-ready plan); overall Batch 4 remains **incomplete**. Any Batch 4D work
-requires its own separate implementation branch (its own tests, PR, genuine approval
-and protected merge); no later stage begins automatically.
+verified (PR #42, see §17.14.3); Batch 4D is now merged and post-merge verified (PR #44,
+squash merge commit `718485fc821b8865f513dae2ba36310cfb271c98`, CI run `29539477988`,
+see §17.22.21); overall Batch 4 is **complete**. No later stage (Phase 3C, Batch 5)
+begins automatically.
 
 ## 17.22 Batch 4D implementation plan — integration and closeout
 
-**Status:** IMPLEMENTED IN DRAFT PR — NOT MERGED. See the §17.22.21 completion
-record for the delivered closeout test, documentation, and gate evidence. The plan
-below is retained as the specification; nothing here is auto-merged and no later
-stage (Phase 3C, Batch 5) has started.
+**Status:** MERGED AND POST-MERGE VERIFIED — PR #44. See the §17.22.21 completion
+record for the delivered closeout test, documentation, and merge/post-merge gate
+evidence. The plan below is retained as the specification; no later stage (Phase 3C,
+Batch 5) has started.
 
 This section is the implementation-ready plan for **Batch 4D only**: the integration
 and closeout stage that verifies the already-merged Batch 4A→4B→4C read path
@@ -1923,17 +1926,23 @@ out of Batch 4 entirely.
 
 ### 17.22.20 Readiness classification
 
-**Implementation status:** BATCH 4D IMPLEMENTED IN DRAFT PR — NOT MERGED. Batch 4A,
+**Implementation status:** BATCH 4D MERGED AND POST-MERGE VERIFIED — PR #44. Batch 4A,
 4B, and 4C are merged and post-merge verified; Batch 4D's closeout tests and
-documentation are delivered on branch `feat/phase-3b-batch-4d-closeout-verification`
-(see §17.22.21) but remain unmerged and unapproved. No later stage begins
-automatically; overall Batch 4 remains **incomplete** until the §17.22.17 closeout
-gate is met and the Batch 4D PR is approved and merged under branch protection.
+documentation were approved by the genuine reviewer `adesenden`, merged under normal
+branch protection (squash merge commit `718485fc821b8865f513dae2ba36310cfb271c98`), and
+post-merge verified (CI run `29539477988`, see §17.22.21). The §17.22.17 closeout gate
+is **met**; overall Batch 4 is **complete**. No later stage (Phase 3C, Batch 5) begins
+automatically.
 
-### 17.22.21 Batch 4D completion record (draft)
+### 17.22.21 Batch 4D completion record
 
-Delivered on branch `feat/phase-3b-batch-4d-closeout-verification` (draft PR, not
-merged, no reviewer requested):
+Delivered on branch `feat/phase-3b-batch-4d-closeout-verification`, approved by the
+genuine reviewer `adesenden` on the exact reviewed head
+`1c507551ea63cc2f90d1949f912b9c8d28bc90b5`, and merged through normal branch protection
+(no bypass, no `--admin`) as PR #44 — squash merge commit
+`718485fc821b8865f513dae2ba36310cfb271c98`, merged by `bolade04` at
+`2026-07-16T22:25:01Z`. The implementation branch was deleted locally and remotely
+after post-merge CI succeeded. Delivered:
 
 - **Cross-layer closeout test** — `apps/api/app/tests/test_intelligence_closeout.py`
   (5 tests): seeded end-to-end read path (persistence → API → frontend-consumed
@@ -1961,6 +1970,17 @@ succeeds. **CI-gated (branch head, authoritative):** full backend suite with DB,
 PostgreSQL-gated tests, container non-root UID `10001`, and integration smoke ≥13/13
 run in CI — the local readiness/DB stack was unavailable this session, so those are
 verified by the branch-head CI run, not hand-verified locally.
+
+**Post-merge verification (PR #44):** the exact post-merge run `29539477988` (event
+`push`, head `718485fc821b8865f513dae2ba36310cfb271c98`) completed **success** on the
+squash commit; all five required jobs passed (Backend quality, Frontend quality,
+Migrations and API contract, Container build and security, Integration smoke). The
+single migration head remains `0155a5c468e3` with no OpenAPI or generated-TypeScript
+drift; API and worker containers run as non-root UID `10001`; four-market isolation
+(Dallas, Lagos, London, Nairobi) stayed green with no cross-market contamination.
+Detailed per-line job counts remained consistent with the byte-identical pre-merge
+tree, but the Actions log API was intermittently unavailable during final verification,
+so those counts were not freshly re-read post-merge.
 
 No migration, no OpenAPI/contract change, no dependency change, no production runtime
 change was made. PR #34, PR #6, ruleset `18820692`, live-RSS branch, and the safety
