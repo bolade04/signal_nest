@@ -22,6 +22,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.brands.models import Brand
 from app.core.config import get_settings
 from app.core.enums import ScheduleInterval
 from app.core.errors import ConflictError
@@ -37,6 +38,7 @@ pytestmark = pytest.mark.skipif(
 
 _ORG = "org-cap"
 _WS = "ws-cap"
+_BRAND = "brand-cap"
 _CAP = sched.MAX_ACTIVE_SCHEDULES_PER_WORKSPACE
 
 
@@ -54,11 +56,18 @@ def _seed_requests(factory, n: int) -> list[str]:  # pragma: no cover - gated on
         s.add(Organization(id=_ORG, name="Cap Org", slug="cap-org"))
         s.add(Workspace(id=_WS, organization_id=_ORG, name="Cap WS", slug="cap-ws"))
         s.flush()
+        # PostgreSQL enforces the real scout_requests -> brands foreign key
+        # (scout_requests_brand_id_fkey), so the parent brand must exist before any
+        # ScoutRequest references it. The local SQLite skip path never exercised this.
+        # These models use bare FK columns (no ORM relationships), so the brand is
+        # flushed after its org/workspace parents to guarantee insert order.
+        s.add(Brand(id=_BRAND, organization_id=_ORG, workspace_id=_WS, name="Cap Brand"))
+        s.flush()
         for i in range(n):
             req = ScoutRequest(
                 organization_id=_ORG,
                 workspace_id=_WS,
-                brand_id=_ORG,  # FK-free in this minimal schema slice; brand not asserted
+                brand_id=_BRAND,
                 name=f"req-{i}",
                 status="draft",
                 source_types=[],
