@@ -1,7 +1,11 @@
 # Next safe implementation batch — Sandbox Scouting Orchestration & Run History
 
-**Status:** PROPOSAL FOR OWNER REVIEW. No code, tests, migrations, contracts, dependencies,
-or CI have been changed by this document. It invents no owner approval and no legal approval.
+**Status:** OWNER DECISIONS RECORDED (see §24) — PENDING INDEPENDENT REVIEW & PROTECTED MERGE.
+No code, tests, migrations, contracts, dependencies, or CI have been changed by this document.
+It records the product owner's decisions only; it invents no legal approval and authorizes no
+implementation. Implementation may begin only after this document passes exact-head CI,
+receives an eligible independent approval, merges through the protected-branch workflow, and
+the exact merge commit passes post-merge CI.
 
 _Independent-review status: NO INDEPENDENT THIRD-PARTY REVIEW COMPLETED._
 
@@ -34,7 +38,7 @@ access** and are safe on by default only in local/dev.
 The batch is decomposed into **four controlled sub-batches**, each leaving `main`
 deployable, with the no-migration read-history slice first.
 
-**Classification:** `NEXT SAFE IMPLEMENTATION BATCH DEFINED — OWNER REVIEW REQUIRED`.
+**Classification:** `NEXT SAFE IMPLEMENTATION BATCH DEFINED — OWNER DECISIONS RECORDED (§24)`.
 
 ## 2. Current verified baseline
 
@@ -168,8 +172,8 @@ All surfaces live on the existing **Scout Request Detail** page
 - *Last-run display:* header shows `last_run_at` relative time.
 
 **B. Schedule panel (sub-batches B–C, behind `scout_scheduling_enabled`)**
-- *Primary action:* "Schedule runs" → dialog to choose an interval from a **bounded enum**
-  (e.g. hourly / every 6h / daily / weekly — final set is an owner decision, §24) and enable.
+- *Primary action:* "Schedule runs" → dialog to choose an interval from the **bounded enum**
+  (owner-approved v1 set: **daily / weekly**, 24h minimum — §24.3) and enable.
 - *Confirmation:* explicit enable; shows the computed **next-run** time.
 - *Running/queued/completed/failed/cancelled states:* continue to surface through the
   existing `JobsPanel` for the concrete execution jobs; the schedule row shows enabled/paused
@@ -210,6 +214,13 @@ Reuse-first. **No parallel queue.**
   (`scout_schedule.created/paused/resumed/deleted`).
 - *State transitions:* schedule is a simple `enabled|paused` flag plus `next_run_at`; the
   actual execution lifecycle stays entirely inside the existing durable-job state machine.
+- *Timing & occurrence semantics (owner-approved, §24.4–24.5):* all schedule timestamps are
+  stored in **UTC**; next occurrence is **pure interval-from-enable** (`next_run_at =
+  last_tick_at + interval`), not clock-of-day — so there is **no timezone or DST handling** in
+  v1. **Missed occurrences are skipped** (no catch-up/backfill): a late tick simply computes the
+  next *future* occurrence. **Overlapping runs coalesce:** the tick skips the execute-enqueue
+  when the same scout request already has an active run, and the `schedule_id +
+  occurrence_timestamp` idempotency key remains the final durable guard.
 - *Feature flag:* every schedule route and the tick handler are inert unless
   `scout_scheduling_enabled=True`.
 - *Metrics:* reuse existing job counters; add low-cardinality
@@ -223,9 +234,9 @@ Reuse-first. **No parallel queue.**
 
 | Method | Path | Auth/role | Request | Response | Errors | Status |
 |--------|------|-----------|---------|----------|--------|--------|
-| GET | `/workspaces/{ws}/scout-requests/{id}/runs` | any member (TenantContext) | `?limit&offset` (bounded) | `RunHistoryOut { items: RunItem[], total, limit, offset }` | 401/403/404 | **new** |
+| GET | `/workspaces/{ws}/scout-requests/{id}/runs` | any member (TenantContext) | `?limit&offset` (bounded: default 20, max 100) | `RunHistoryOut { items: RunItem[], total, limit, offset }`; each `RunItem` carries outcome, timestamps, attempt count, aggregate stats, `trigger` (`manual`\|`scheduled`), `is_simulated` | 401/403/404 | **new** |
 | GET | `/workspaces/{ws}/scout-requests/{id}/schedule` | any member | — | `ScheduleOut \| null` | 401/403/404 | **new** (flagged) |
-| POST | `/workspaces/{ws}/scout-requests/{id}/schedule` | EDITORS (owner/admin/marketer) | `{ interval: enum, enabled: bool }` | `ScheduleOut` | 400/401/403/404/409 | **new** (flagged) |
+| POST | `/workspaces/{ws}/scout-requests/{id}/schedule` | EDITORS (owner/admin/marketer) | `{ interval: enum(daily\|weekly), enabled: bool }` | `ScheduleOut` | 400/401/403/404/409 | **new** (flagged) |
 | POST | `/workspaces/{ws}/scout-requests/{id}/schedule/pause` | EDITORS | — | `ScheduleOut` | 401/403/404 | **new** (flagged) |
 | POST | `/workspaces/{ws}/scout-requests/{id}/schedule/resume` | EDITORS | — | `ScheduleOut` | 401/403/404 | **new** (flagged) |
 | DELETE | `/workspaces/{ws}/scout-requests/{id}/schedule` | EDITORS | — | 204 | 401/403/404 | **new** (flagged) |
@@ -252,10 +263,10 @@ Proposed `scout_schedules` (all NOT NULL unless noted):
 | `workspace_id` | FK workspaces | tenant scope |
 | `location_id` | FK business_locations, nullable | market scope |
 | `scout_request_id` | FK scout_requests | subject |
-| `interval` | str (bounded enum) | e.g. `daily` |
+| `interval` | str (bounded enum) | v1 set `daily`\|`weekly` (§24.3) |
 | `enabled` | bool, default `False` | pause flag |
-| `next_run_at` | datetime, nullable | computed |
-| `last_tick_at` | datetime, nullable | audit |
+| `next_run_at` | datetime (UTC), nullable | computed (interval-from-enable, §24.4) |
+| `last_tick_at` | datetime (UTC), nullable | audit |
 | `created_at` / `updated_at` | datetime | standard |
 
 - **Indexes:** `(workspace_id)`, `(scout_request_id)`, `(location_id)`.
@@ -450,27 +461,86 @@ without error and without touching Phase 2 opportunity or Batch 3/4 intelligence
 - No external service, vendor, or network dependency. No dependency on B-1, B-7, PR #34,
   PR #6, Phase 3C, or Batch 5.
 
-## 23. Open questions
+## 23. Open questions — RESOLVED by §24
 
-1. Exact bounded interval set (hourly / 6h / daily / weekly?) and minimum interval floor.
-2. Per-workspace cap on active schedules (abuse/runaway guard) — default value?
-3. Dedicated run-history endpoint vs. composing existing `/jobs` queries client-side.
-4. Retention/pruning policy for historical jobs surfaced as run history.
-5. Roadmap number/placement for this capability relative to deferred live-RSS/Phase-3C.
+All questions previously open here have been resolved by the recorded owner decisions in §24:
 
-## 24. Owner decisions required (none assumed here)
+1. Interval set & floor → `{daily, weekly}`, 24h minimum (§24.3).
+2. Per-workspace active-schedule cap → 4 (§24.3).
+3. Dedicated run-history endpoint vs. client composition → dedicated endpoint (§24.1).
+4. Run-history retention/pruning policy → deferred; use existing job retention for now (§24.10).
+5. Roadmap number/placement → deferred (§24.10).
 
-These are **refinements**, not blockers — the batch can start on SB-A immediately. Recommended
-defaults are offered **without** claiming approval:
+## 24. Owner decisions — RECORDED (owner-approved)
 
-1. **Interval enum & floor** — *recommend:* `{daily, weekly}` for v1, min 1/day, to keep
-   sandbox load trivial. (Owner may add hourly/6h.)
-2. **Active-schedule cap** — *recommend:* 4 per workspace (one per market) for v1.
-3. **Endpoint shape** — *recommend:* dedicated bounded run-history endpoint (mirrors the
-   intelligence read pattern; avoids client N+1).
-4. **Default schedule scope** — *recommend:* per-request (per-market); no shared/global
-   schedule in v1.
-5. **Roadmap placement/number** — owner to confirm.
+The product owner has reviewed this plan and recorded the decisions below. They are binding
+inputs for the implementation sub-batches; no decision here assumes or requires any B-1/B-7
+legal approval. This section records decisions only — it authorizes no implementation (see the
+closing note and §26 for the required CI → independent approval → protected merge → post-merge
+CI gate).
+
+**24.1 Run history (D3, D7, D8, D9) — approved**
+- Dedicated, read-only, request-scoped run-history endpoint.
+- Returns outcome, timestamps, attempt count, aggregate statistics, `trigger` type, and
+  simulated-data status.
+- Reverse-chronological offset pagination; default 20, maximum 100.
+- Includes queued, running, succeeded, failed, dead-lettered, and cancelled runs.
+- Never exposes raw payloads, payload hashes, idempotency keys, lease tokens, trace context,
+  worker IDs, host details, or raw exception messages.
+
+**24.2 Scheduling feature flag (D6) — approved**
+- Flag `scout_scheduling_enabled`, default `False`.
+- Run history remains available independently of this flag.
+- Scheduling deploys dark first, then is enabled in development before any production opt-in.
+- Live RSS remains separately disabled.
+
+**24.3 Recurrence (D1, D4) — approved**
+- Daily and weekly recurrence only in v1.
+- Minimum interval 24 hours.
+- One active schedule per scouting request; no more than four active schedules per workspace.
+- Every schedule scoped to one request and one market.
+
+**24.4 Time behavior (D17) — approved**
+- All schedule timestamps stored in UTC.
+- Pure interval-from-enable timing (not clock-of-day).
+- No timezone or daylight-saving behavior in v1.
+
+**24.5 Missed and overlapping runs (D18, D19) — approved**
+- Skip missed occurrences; no catch-up or backfill.
+- Continue by computing the next future occurrence.
+- Coalesce overlapping runs: skip a scheduled enqueue when the same scouting request already
+  has an active run.
+- Preserve the durable idempotency guard keyed on `schedule_id + occurrence_timestamp`.
+
+**24.6 Schedule lifecycle (D11) — approved**
+- Pausing keeps the record but makes it inert; resuming recalculates the next future occurrence.
+- Deleting permanently removes the schedule record; no soft-delete behavior in v1.
+
+**24.7 Permissions (D10) — approved**
+- Owners, admins, and marketers may manually run and create/edit/pause/resume/delete schedules.
+- All existing workspace members may view run history and schedule status.
+- Reviewers, compliance users, and viewers remain read-only.
+- No new roles; no force-retry endpoint.
+
+**24.8 Database scope (D12) — approved**
+- SB-A requires no migration; SB-B may add one additive `scout_schedules` table.
+- No existing job table is altered merely to support scheduling.
+- No timezone or soft-delete columns in v1.
+- Single Alembic head and a valid downgrade preserved.
+
+**24.9 Implementation sequence (D-seq) — approved**
+- Order SB-A → SB-B → SB-C → SB-D; begin with SB-A (run-history foundation).
+- Backend API contracts frozen before parallel frontend integration.
+- No more than two writing agents and one read-only verifier.
+- Each sub-batch independently deployable and separately reviewable.
+
+**24.10 Deferred (D5, D16)**
+- Final roadmap phase/batch number deferred.
+- Dedicated run-history pruning/retention policy deferred; use existing job retention for now.
+
+**24.11 Explicit exclusions (owner)**
+- No live-RSS enablement; no modifications to PR #34; no Phase 3C; no undefined Batch 5.
+- No external network egress, arbitrary connector URLs, autonomous posting, or ad publishing.
 
 No legal decision is required: the batch is sandbox-only with zero external egress, so B-7 and
 B-1 remain untouched and irrelevant to it.
@@ -502,5 +572,8 @@ B-1 remain untouched and irrelevant to it.
 
 ---
 
-_This document is planning only. It authorizes no implementation; the owner must review and
-approve (and answer §24) before any code is written._
+_This document is planning only. The owner's §24 decisions are recorded, but this document
+still authorizes no implementation: work may begin only after it passes exact-head CI, receives
+an eligible independent approval, merges through the protected-branch workflow (ruleset
+`18820692` unchanged, no bypass, no force-push), and the exact merge commit passes post-merge
+CI._
