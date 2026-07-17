@@ -5,6 +5,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from app.core.enums import ScheduleInterval, ScheduleState
+
 
 class ScoutRequestCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -107,3 +109,37 @@ class RunHistoryOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class ScoutScheduleCreate(BaseModel):
+    """Request body to attach the single recurring schedule to a scout request.
+
+    Only the cadence is customer-supplied; everything else (market scope, next run,
+    audit) is derived server-side. ``interval`` is a bounded enum, so an unsupported
+    value (hourly, monthly, cron, …) is rejected at the request boundary as 422.
+    """
+
+    interval: ScheduleInterval
+
+
+class ScoutScheduleOut(BaseModel):
+    """Customer-safe projection of a :class:`ScoutSchedule`.
+
+    Exposes only what a customer needs to reason about the cadence — never the
+    organization id, idempotency/lease tokens, tick job ids, payloads, contract
+    version or any audit/worker internal. ``state`` is derived from the live job
+    state (see :func:`app.scouting_requests.schedules.derive_schedule_state`) so the
+    UI can distinguish a genuinely running schedule from an enabled-but-inert one
+    that still needs activation.
+    """
+
+    id: str
+    scout_request_id: str
+    location_id: str | None
+    interval: ScheduleInterval
+    state: ScheduleState
+    enabled: bool
+    next_run_at: datetime | None
+    last_tick_at: datetime | None
+    created_at: datetime
+    updated_at: datetime

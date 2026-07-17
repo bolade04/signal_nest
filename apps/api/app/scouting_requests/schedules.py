@@ -32,14 +32,15 @@ from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
 from app.core.config import get_settings
-from app.core.enums import ScheduleInterval
-from app.core.errors import ValidationDomainError
+from app.core.enums import ScheduleInterval, ScheduleState
+from app.core.errors import ConflictError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.db.base import utcnow
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.service import enqueue_job, enqueue_scout_request
 from app.jobs.status import ACTIVE_STATUSES, ENQUEUED_STATUSES, JobType
+from app.organizations.models import Workspace
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 
 logger = get_logger("signalnest.scouting.schedules")
@@ -95,18 +96,93 @@ def _coerce_interval(interval: ScheduleInterval | str) -> ScheduleInterval:
         ) from exc
 
 
-def _count_enabled(db: Session, workspace_id: str) -> int:
-    return int(
-        db.scalar(
-            select(func.count())
-            .select_from(ScoutSchedule)
-            .where(
-                ScoutSchedule.workspace_id == workspace_id,
-                ScoutSchedule.enabled.is_(True),
-            )
+def _count_enabled(
+    db: Session, workspace_id: str, *, exclude_schedule_id: str | None = None
+) -> int:
+    """Count the workspace's *enabled* schedules, optionally excluding one row.
+
+    ``exclude_schedule_id`` lets :func:`resume_schedule` avoid counting the row it is
+    about to (re)enable against itself — an already-enabled-but-inert schedule must
+    never consume a slot twice when it is activated.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(ScoutSchedule)
+        .where(
+            ScoutSchedule.workspace_id == workspace_id,
+            ScoutSchedule.enabled.is_(True),
         )
-        or 0
     )
+    if exclude_schedule_id is not None:
+        stmt = stmt.where(ScoutSchedule.id != exclude_schedule_id)
+    return int(db.scalar(stmt) or 0)
+
+
+def _workspace_lock_select(workspace_id: str):
+    """The ``SELECT ... FOR UPDATE`` used to lock a workspace row for the cap check.
+
+    Factored out so a test can compile it against the PostgreSQL dialect and prove it
+    emits ``FOR UPDATE`` without a live database.
+    """
+    return select(Workspace.id).where(Workspace.id == workspace_id).with_for_update()
+
+
+def _lock_workspace_for_cap(db: Session, workspace_id: str) -> None:
+    """Serialize the four-active-schedule cap check for one workspace.
+
+    The cap is a check-then-act invariant: two concurrent create/resume calls could
+    each read "three enabled" and both proceed, leaving five. We take a row lock on
+    the *stable* workspace row before counting, so the count + enable is one atomic
+    critical section held until the surrounding request transaction commits. On
+    PostgreSQL this is ``SELECT ... FOR UPDATE``: a second enable for the same
+    workspace blocks until the first commits, then re-reads the true count. On SQLite
+    ``FOR UPDATE`` is a no-op, but the engine already serializes writers on the single
+    database file (``busy_timeout``), so the invariant still holds. The lock is scoped
+    to one workspace row, so it never contends across tenants.
+    """
+    db.execute(_workspace_lock_select(workspace_id))
+
+
+def _has_pending_tick(db: Session, *, schedule: ScoutSchedule) -> bool:
+    """True when a live ``scout_schedule.tick`` job already exists for this schedule.
+
+    A schedule owns exactly one request, so a tick in an enqueued/active status for
+    that request is *this* schedule's chain. Used to (a) tell an actually-running
+    schedule apart from an enabled-but-inert one (:func:`derive_schedule_state`), and
+    (b) keep activation idempotent — never seed a second tick when the chain is
+    already live.
+    """
+    found = db.scalar(
+        select(Job.id)
+        .where(
+            Job.organization_id == schedule.organization_id,
+            Job.workspace_id == schedule.workspace_id,
+            Job.scout_request_id == schedule.scout_request_id,
+            Job.job_type == JobType.SCOUT_SCHEDULE_TICK.value,
+            Job.status.in_(_INFLIGHT_STATUSES),
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
+def derive_schedule_state(db: Session, schedule: ScoutSchedule) -> ScheduleState:
+    """Classify a schedule's lifecycle state honestly from observed evidence.
+
+    * ``paused`` — the row is disabled and drives no work.
+    * ``active`` — enabled *and* a live tick chain exists, so runs are really being
+      fanned out.
+    * ``activation_required`` — enabled but no live tick exists yet. This is the
+      dark-deploy / restart-safe state: a schedule created while the feature flag was
+      off (or before it was turned on) is intentionally *not* auto-seeded; it stays
+      inert until an explicit resume/activate action starts the chain. The state is
+      derived, never persisted, so it can never disagree with the actual job state.
+    """
+    if not schedule.enabled:
+        return ScheduleState.PAUSED
+    if _has_pending_tick(db, schedule=schedule):
+        return ScheduleState.ACTIVE
+    return ScheduleState.ACTIVATION_REQUIRED
 
 
 def has_active_execution(
@@ -288,12 +364,17 @@ def create_schedule(
         )
     )
     if existing is not None:
-        raise ValidationDomainError("This request already has a schedule.")
+        raise ConflictError("This request already has a schedule.")
 
-    if enabled and _count_enabled(db, request.workspace_id) >= MAX_ACTIVE_SCHEDULES_PER_WORKSPACE:
-        raise ValidationDomainError(
-            "This workspace already has the maximum number of active schedules."
-        )
+    if enabled:
+        # Lock the workspace row *before* counting so the cap check + insert is one
+        # atomic critical section — two concurrent enabled creates can never both
+        # squeeze past a stale "three enabled" read.
+        _lock_workspace_for_cap(db, request.workspace_id)
+        if _count_enabled(db, request.workspace_id) >= MAX_ACTIVE_SCHEDULES_PER_WORKSPACE:
+            raise ConflictError(
+                "This workspace already has the maximum number of active schedules."
+            )
 
     next_run_at = now + interval_delta(interval_enum) if enabled else None
     schedule = ScoutSchedule(
@@ -341,8 +422,12 @@ def pause_schedule(
     """Pause a schedule: the row is retained but inert.
 
     ``enabled`` flips to False and ``next_run_at`` is cleared, so any tick already
-    in flight becomes a self-terminating no-op. No new work is enqueued.
+    in flight becomes a self-terminating no-op. No new work is enqueued. Pausing an
+    already-paused schedule is an idempotent no-op — it neither mutates the row again
+    nor writes a duplicate audit record.
     """
+    if not schedule.enabled:
+        return schedule
     schedule.enabled = False
     schedule.next_run_at = None
     db.add(schedule)
@@ -373,15 +458,37 @@ def resume_schedule(
     actor_user_id: str | None = None,
     now: datetime | None = None,
 ) -> ScoutSchedule:
-    """Resume a paused schedule, recomputing the next occurrence from *now*.
+    """Resume (or activate) a schedule, recomputing the next occurrence from *now*.
 
-    Recurrence restarts from the resume moment (``now + interval``) — the pause gap
-    is never back-filled. Re-enabling is subject to the per-workspace active limit.
-    Seeds a fresh tick only while the feature flag is live.
+    This is also the explicit *activation* path for a schedule that was created while
+    the feature was dark: such a row is ``enabled`` yet has no live tick chain, and is
+    never auto-started when the flag flips on — the customer must resume/activate it.
+
+    Behaviour by state:
+
+    * **already active** (enabled *and* a live tick exists) → an idempotent no-op: the
+      row is returned unchanged, so resume never counts the schedule against itself,
+      never resets ``next_run_at`` and never seeds a duplicate tick.
+    * **paused or activation-required** → (re)enable it. Recurrence restarts from the
+      resume moment (``now + interval``); the pause gap is never back-filled. The
+      per-workspace active cap is re-checked under a workspace row lock, excluding this
+      schedule from the count so it can never self-count. A fresh tick is seeded only
+      while the feature flag is live *and* no tick chain already exists.
     """
     now = now or utcnow()
-    if _count_enabled(db, schedule.workspace_id) >= MAX_ACTIVE_SCHEDULES_PER_WORKSPACE:
-        raise ValidationDomainError(
+
+    # Already-active guard: leave a running schedule exactly as it is.
+    if schedule.enabled and _has_pending_tick(db, schedule=schedule):
+        return schedule
+
+    # Lock the workspace and re-check the cap atomically, excluding this row so an
+    # already-enabled-but-inert schedule never counts itself toward the limit.
+    _lock_workspace_for_cap(db, schedule.workspace_id)
+    if (
+        _count_enabled(db, schedule.workspace_id, exclude_schedule_id=schedule.id)
+        >= MAX_ACTIVE_SCHEDULES_PER_WORKSPACE
+    ):
+        raise ConflictError(
             "This workspace already has the maximum number of active schedules."
         )
     schedule.enabled = True
@@ -389,7 +496,7 @@ def resume_schedule(
     db.add(schedule)
     db.flush()
 
-    if get_settings().scout_scheduling_enabled:
+    if get_settings().scout_scheduling_enabled and not _has_pending_tick(db, schedule=schedule):
         enqueue_schedule_tick(
             db, schedule=schedule, occurrence_at=schedule.next_run_at, now=now
         )
@@ -451,6 +558,7 @@ __all__ = [
     "SCHEDULED_TRIGGER",
     "create_schedule",
     "delete_schedule",
+    "derive_schedule_state",
     "enqueue_schedule_tick",
     "has_active_execution",
     "interval_delta",

@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core.enums import ScheduleInterval
-from app.core.errors import ValidationDomainError
+from app.core.errors import ConflictError, ValidationDomainError
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.jobs.models import Job
@@ -205,7 +205,7 @@ class TestServiceLifecycle:
     def test_one_schedule_per_request(self, s):
         req = _request(s, "london")
         sched.create_schedule(s, request=req, interval=ScheduleInterval.DAILY, now=_NOW)
-        with pytest.raises(ValidationDomainError):
+        with pytest.raises(ConflictError):
             sched.create_schedule(s, request=req, interval=ScheduleInterval.WEEKLY, now=_NOW)
 
     def test_invalid_interval_rejected(self, s):
@@ -217,7 +217,7 @@ class TestServiceLifecycle:
         for key in _MARKETS:  # four enabled schedules — at the cap
             _mk(s, key)
         fifth = _extra_request(s, "fifth scout")
-        with pytest.raises(ValidationDomainError):
+        with pytest.raises(ConflictError):
             sched.create_schedule(s, request=fifth, interval=ScheduleInterval.DAILY, now=_NOW)
 
     def test_disabled_create_does_not_count_toward_limit(self, s):

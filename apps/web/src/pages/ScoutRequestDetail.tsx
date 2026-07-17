@@ -16,6 +16,7 @@ import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { JobsPanel } from './scouts/JobsPanel';
+import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
 
 function num(stats: Record<string, unknown>, key: string): number {
@@ -155,6 +156,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             </div>
           </CardContent>
         </Card>
+
+          <SchedulePanel workspaceId={workspaceId} requestId={requestId} />
 
           <JobsPanel workspaceId={workspaceId} scoutRequestId={requestId} />
         </div>

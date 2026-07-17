@@ -3812,6 +3812,25 @@
         "title": "RuntimeSummaryOut",
         "type": "object"
       },
+      "ScheduleInterval": {
+        "description": "Bounded recurrence cadence for a scouting schedule (SB-B).\n\nOnly two cadences exist and the minimum interval is 24h, so a schedule can\nnever enqueue more than once per day. ``daily`` recurs every 24 hours and\n``weekly`` every 7 days \u2014 pure fixed intervals with no clock-of-day, timezone\nor DST semantics.",
+        "enum": [
+          "daily",
+          "weekly"
+        ],
+        "title": "ScheduleInterval",
+        "type": "string"
+      },
+      "ScheduleState": {
+        "description": "Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).\n\nNever persisted \u2014 always computed from the row plus the live job state so it can\nnever drift from reality:\n\n* ``paused`` \u2014 disabled; drives no work.\n* ``active`` \u2014 enabled and a live tick chain is actually fanning out runs.\n* ``activation_required`` \u2014 enabled but not yet started. A schedule created while\n  the feature was dark (or before the flag was turned on) is intentionally *not*\n  auto-seeded; it stays here until an explicit resume/activate action starts it.",
+        "enum": [
+          "paused",
+          "active",
+          "activation_required"
+        ],
+        "title": "ScheduleState",
+        "type": "string"
+      },
       "ScoreBreakdown": {
         "properties": {
           "breakdown": {
@@ -4178,6 +4197,101 @@
           "stats"
         ],
         "title": "ScoutRunResult",
+        "type": "object"
+      },
+      "ScoutScheduleCreate": {
+        "description": "Request body to attach the single recurring schedule to a scout request.\n\nOnly the cadence is customer-supplied; everything else (market scope, next run,\naudit) is derived server-side. ``interval`` is a bounded enum, so an unsupported\nvalue (hourly, monthly, cron, \u2026) is rejected at the request boundary as 422.",
+        "properties": {
+          "interval": {
+            "$ref": "#/components/schemas/ScheduleInterval"
+          }
+        },
+        "required": [
+          "interval"
+        ],
+        "title": "ScoutScheduleCreate",
+        "type": "object"
+      },
+      "ScoutScheduleOut": {
+        "description": "Customer-safe projection of a :class:`ScoutSchedule`.\n\nExposes only what a customer needs to reason about the cadence \u2014 never the\norganization id, idempotency/lease tokens, tick job ids, payloads, contract\nversion or any audit/worker internal. ``state`` is derived from the live job\nstate (see :func:`app.scouting_requests.schedules.derive_schedule_state`) so the\nUI can distinguish a genuinely running schedule from an enabled-but-inert one\nthat still needs activation.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/ScheduleInterval"
+          },
+          "last_tick_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick At"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "scout_request_id": {
+            "title": "Scout Request Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScheduleState"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scout_request_id",
+          "location_id",
+          "interval",
+          "state",
+          "enabled",
+          "next_run_at",
+          "last_tick_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScoutScheduleOut",
         "type": "object"
       },
       "SessionOut": {
@@ -8984,6 +9098,345 @@
           }
         },
         "summary": "List Scout Request Runs",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule": {
+      "delete": {
+        "description": "Hard-delete the schedule. Any in-flight tick self-terminates on next fire.",
+        "operationId": "delete_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Scout Schedule",
+        "tags": [
+          "scout-requests"
+        ]
+      },
+      "get": {
+        "description": "Read the request's schedule. Any workspace member may read it.\n\nAvailable even while the feature is dark, so the UI can surface an existing\nrecord and its derived ``state`` (including ``activation_required``). Returns 404\nwhen the request has no schedule.",
+        "operationId": "get_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutScheduleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scout Schedule",
+        "tags": [
+          "scout-requests"
+        ]
+      },
+      "post": {
+        "description": "Attach the single recurring schedule to a request (editor + feature-gated).\n\nThe service enforces one schedule per request and the four-active-per-workspace\ncap under a workspace row lock, so a conflict surfaces as 409. An unsupported\ncadence is rejected as 422 at the request boundary.",
+        "operationId": "create_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoutScheduleCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutScheduleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Scout Schedule",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/pause": {
+      "post": {
+        "description": "Pause the schedule (idempotent). No further runs are fanned out until resume.",
+        "operationId": "pause_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutScheduleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause Scout Schedule",
+        "tags": [
+          "scout-requests"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/resume": {
+      "post": {
+        "description": "Resume or activate the schedule, recomputing the next run from now.\n\nAlso the explicit activation for a schedule left in ``activation_required``.\nRe-enabling is subject to the four-active cap (409 when full); an already-running\nschedule is returned unchanged.",
+        "operationId": "resume_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoutScheduleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Scout Schedule",
         "tags": [
           "scout-requests"
         ]

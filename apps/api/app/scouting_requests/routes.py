@@ -8,20 +8,22 @@ default; Redis worker in full mode).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands.service import get_primary_brand
+from app.core.config import get_settings
 from app.core.enums import Role, ScoutRequestStatus
-from app.core.errors import NotFoundError, ValidationDomainError
+from app.core.errors import CapabilityUnavailableError, NotFoundError, ValidationDomainError
 from app.core.logging import trace_id_ctx
 from app.db.session import get_db
 from app.jobs.service import enqueue_scout_request
 from app.locations.models import BusinessLocation
-from app.scouting_requests.models import ScoutRequest
+from app.scouting_requests import schedules as schedule_service
+from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.scouting_requests.run_history import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -33,6 +35,8 @@ from app.scouting_requests.schemas import (
     ScoutRequestOut,
     ScoutRequestUpdate,
     ScoutRunResult,
+    ScoutScheduleCreate,
+    ScoutScheduleOut,
 )
 
 router = APIRouter(tags=["scout-requests"])
@@ -45,6 +49,47 @@ def _get_scoped(db: Session, workspace_id: str, request_id: str) -> ScoutRequest
     if not request or request.workspace_id != workspace_id:
         raise NotFoundError("Scout request not found in this workspace.")
     return request
+
+
+def _get_schedule(db: Session, request: ScoutRequest) -> ScoutSchedule:
+    """Load the request's single schedule, or 404 when it has none."""
+    schedule = db.scalar(
+        select(ScoutSchedule).where(
+            ScoutSchedule.workspace_id == request.workspace_id,
+            ScoutSchedule.scout_request_id == request.id,
+        )
+    )
+    if schedule is None:
+        raise NotFoundError("This request has no schedule.")
+    return schedule
+
+
+def _require_scheduling_feature() -> None:
+    """Gate every schedule *mutation* behind the dark-deploy flag.
+
+    While ``scout_scheduling_enabled`` is off (the default), reads still expose any
+    existing records but mutating endpoints answer with an explicit, safe
+    feature-disabled response (503 ``capability_unavailable``) rather than silently
+    creating inert state or implying the feature works.
+    """
+    if not get_settings().scout_scheduling_enabled:
+        raise CapabilityUnavailableError("Scout scheduling is not available yet.")
+
+
+def _schedule_out(db: Session, schedule: ScoutSchedule) -> ScoutScheduleOut:
+    """Project a schedule into its customer-safe view, deriving live state."""
+    return ScoutScheduleOut(
+        id=schedule.id,
+        scout_request_id=schedule.scout_request_id,
+        location_id=schedule.location_id,
+        interval=schedule.interval_enum(),
+        state=schedule_service.derive_schedule_state(db, schedule),
+        enabled=schedule.enabled,
+        next_run_at=schedule.next_run_at,
+        last_tick_at=schedule.last_tick_at,
+        created_at=schedule.created_at,
+        updated_at=schedule.updated_at,
+    )
 
 
 @router.get("/workspaces/{workspace_id}/scout-requests", response_model=list[ScoutRequestOut])
@@ -293,3 +338,122 @@ def list_scout_request_runs(
         limit=limit,
         offset=offset,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Scouting schedule (SB-C) — customer-facing recurrence controls
+#
+# Reads are open to any workspace member; mutations require an editor role AND the
+# dark-deploy feature flag. The service owns every product limit (one schedule per
+# request, four active per workspace), the transactional cap enforcement and the
+# activation/resume semantics — the routes only authorize, gate and project.
+# --------------------------------------------------------------------------- #
+@router.get(
+    "/workspaces/{workspace_id}/scout-requests/{request_id}/schedule",
+    response_model=ScoutScheduleOut,
+)
+def get_scout_schedule(
+    workspace_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> ScoutScheduleOut:
+    """Read the request's schedule. Any workspace member may read it.
+
+    Available even while the feature is dark, so the UI can surface an existing
+    record and its derived ``state`` (including ``activation_required``). Returns 404
+    when the request has no schedule.
+    """
+    request = _get_scoped(db, workspace_id, request_id)
+    return _schedule_out(db, _get_schedule(db, request))
+
+
+@router.post(
+    "/workspaces/{workspace_id}/scout-requests/{request_id}/schedule",
+    response_model=ScoutScheduleOut,
+    status_code=201,
+)
+def create_scout_schedule(
+    workspace_id: str,
+    request_id: str,
+    body: ScoutScheduleCreate,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> ScoutScheduleOut:
+    """Attach the single recurring schedule to a request (editor + feature-gated).
+
+    The service enforces one schedule per request and the four-active-per-workspace
+    cap under a workspace row lock, so a conflict surfaces as 409. An unsupported
+    cadence is rejected as 422 at the request boundary.
+    """
+    _require_scheduling_feature()
+    request = _get_scoped(db, workspace_id, request_id)
+    schedule = schedule_service.create_schedule(
+        db,
+        request=request,
+        interval=body.interval,
+        actor_user_id=ctx.user.id,
+    )
+    return _schedule_out(db, schedule)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/pause",
+    response_model=ScoutScheduleOut,
+)
+def pause_scout_schedule(
+    workspace_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> ScoutScheduleOut:
+    """Pause the schedule (idempotent). No further runs are fanned out until resume."""
+    _require_scheduling_feature()
+    request = _get_scoped(db, workspace_id, request_id)
+    schedule = schedule_service.pause_schedule(
+        db, schedule=_get_schedule(db, request), actor_user_id=ctx.user.id
+    )
+    return _schedule_out(db, schedule)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/resume",
+    response_model=ScoutScheduleOut,
+)
+def resume_scout_schedule(
+    workspace_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> ScoutScheduleOut:
+    """Resume or activate the schedule, recomputing the next run from now.
+
+    Also the explicit activation for a schedule left in ``activation_required``.
+    Re-enabling is subject to the four-active cap (409 when full); an already-running
+    schedule is returned unchanged.
+    """
+    _require_scheduling_feature()
+    request = _get_scoped(db, workspace_id, request_id)
+    schedule = schedule_service.resume_schedule(
+        db, schedule=_get_schedule(db, request), actor_user_id=ctx.user.id
+    )
+    return _schedule_out(db, schedule)
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/scout-requests/{request_id}/schedule",
+    status_code=204,
+)
+def delete_scout_schedule(
+    workspace_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> Response:
+    """Hard-delete the schedule. Any in-flight tick self-terminates on next fire."""
+    _require_scheduling_feature()
+    request = _get_scoped(db, workspace_id, request_id)
+    schedule_service.delete_schedule(
+        db, schedule=_get_schedule(db, request), actor_user_id=ctx.user.id
+    )
+    return Response(status_code=204)
