@@ -935,6 +935,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Scout Request Runs
+         * @description Read-only, reverse-chronological history of this request's scouting runs.
+         *
+         *     Any workspace member may read it (``get_tenant_context``). The request is first
+         *     authorized within the workspace (``_get_scoped`` → 404 for an unknown/cross-
+         *     workspace id), then the durable jobs for that request are projected into a
+         *     bounded, customer-safe page. This endpoint only reads: it never enqueues,
+         *     cancels, retries or otherwise touches job-execution behaviour.
+         */
+        get: operations["list_scout_request_runs_api_v1_workspaces__workspace_id__scout_requests__request_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/source-preferences": {
         parameters: {
             query?: never;
@@ -2104,6 +2130,76 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** RunHistoryOut */
+        RunHistoryOut: {
+            /** Items */
+            items: components["schemas"]["RunItem"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * RunItem
+         * @description One scouting run in the request's history — a bounded, customer-safe
+         *     projection of a durable ``Job``. It exposes only fields already published by the
+         *     customer-safe ``JobOut`` boundary (never payloads, hashes, idempotency/lease
+         *     tokens, worker/host/trace identifiers, or raw error text).
+         */
+        RunItem: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Cancel Requested At */
+            cancel_requested_at: string | null;
+            /** Cancelled At */
+            cancelled_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean | null;
+            /** Last Error Code */
+            last_error_code: string | null;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Scheduled For */
+            scheduled_for: string | null;
+            /** Started At */
+            started_at: string | null;
+            stats: components["schemas"]["RunStats"] | null;
+            /** Status */
+            status: string;
+            trigger: components["schemas"]["TriggerType"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * RunStats
+         * @description Aggregate per-run counts, sourced verbatim from the durable job's
+         *     ``result_summary``. Present only once a run has produced a summary; a run that
+         *     has not completed carries ``stats: null`` rather than fabricated zeros.
+         */
+        RunStats: {
+            /** Noise Filtered */
+            noise_filtered: number;
+            /** Opportunities */
+            opportunities: number;
+            /** Scanned */
+            scanned: number;
+            /** Signals Analyzed */
+            signals_analyzed: number;
+        };
         /** RuntimeSummaryOut */
         RuntimeSummaryOut: {
             /** All Configured */
@@ -2280,6 +2376,18 @@ export interface components {
             /** Tracing Status */
             tracing_status: string;
         };
+        /**
+         * TriggerType
+         * @description How a scouting run came to be enqueued.
+         *
+         *     ``manual`` — a user pressed run (the only path that exists today).
+         *     ``scheduled`` — enqueued by a future recurrence tick (SB-B+); surfaced only when
+         *     the source job carries an explicit, server-side trigger marker.
+         *     ``unknown`` — the run predates trigger recording, or the marker is absent; we
+         *     never *guess* a trigger from scheduling columns. Honest-unknown over mislabelling.
+         * @enum {string}
+         */
+        TriggerType: "manual" | "scheduled" | "unknown";
         /** UserOut */
         UserOut: {
             /**
@@ -4621,6 +4729,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScoutRunResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_scout_request_runs_api_v1_workspaces__workspace_id__scout_requests__request_id__runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunHistoryOut"];
                 };
             };
             /** @description Validation Error */
