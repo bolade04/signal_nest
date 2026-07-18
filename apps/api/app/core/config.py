@@ -234,6 +234,13 @@ class Settings(BaseSettings):
     #: that lets a schedule tick fan out into a scout-request execution.
     scout_scheduling_enabled: bool = False
 
+    # --- Opportunity feedback (Phase 3C, 3C-B) -------------------------------
+    #: Master switch for opportunity feedback capture (dark by default). While
+    #: off, no feedback write path is exposed to customers: the 3C-B persistence
+    #: foundation ships fully inert behind this flag. Capture-only by design —
+    #: enabling this never influences scoring, ranking, or model training.
+    opportunity_feedback_enabled: bool = False
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None

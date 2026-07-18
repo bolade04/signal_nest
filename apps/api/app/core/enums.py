@@ -193,3 +193,55 @@ class RejectionReason(StrEnum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     POLICY_BLOCKED = "policy_blocked"
     WEAK_SIGNAL = "weak_signal"
+
+
+class FeedbackReason(StrEnum):
+    """Structured, closed-vocabulary reason a customer attaches to opportunity feedback (3C-B).
+
+    The reason is always *optional* — feedback is a required binary
+    useful/not-useful judgement plus, at most, one of these codes. There is no
+    free-text alternative by design. Each code carries a fixed **polarity**:
+    positive codes may only accompany useful feedback and negative codes only
+    not-useful feedback (see ``POSITIVE_FEEDBACK_REASONS`` /
+    ``NEGATIVE_FEEDBACK_REASONS``). ``other`` is negative — it exists to let a
+    customer flag an unmodelled problem without opening free text.
+    """
+
+    # Positive — may accompany is_useful=True only.
+    USEFUL_INSIGHT = "useful_insight"
+    STRONG_EVIDENCE = "strong_evidence"
+    COMMERCIALLY_RELEVANT = "commercially_relevant"
+    CORRECT_MARKET = "correct_market"
+
+    # Negative — may accompany is_useful=False only.
+    IRRELEVANT = "irrelevant"
+    WRONG_MARKET = "wrong_market"
+    WEAK_EVIDENCE = "weak_evidence"
+    DUPLICATE = "duplicate"
+    OUTDATED = "outdated"
+    NOT_COMMERCIALLY_USEFUL = "not_commercially_useful"
+    OTHER = "other"
+
+
+#: Reason codes that are only valid when the feedback is useful (``is_useful=True``).
+POSITIVE_FEEDBACK_REASONS: frozenset[FeedbackReason] = frozenset(
+    {
+        FeedbackReason.USEFUL_INSIGHT,
+        FeedbackReason.STRONG_EVIDENCE,
+        FeedbackReason.COMMERCIALLY_RELEVANT,
+        FeedbackReason.CORRECT_MARKET,
+    }
+)
+
+#: Reason codes that are only valid when the feedback is not useful (``is_useful=False``).
+NEGATIVE_FEEDBACK_REASONS: frozenset[FeedbackReason] = frozenset(
+    {
+        FeedbackReason.IRRELEVANT,
+        FeedbackReason.WRONG_MARKET,
+        FeedbackReason.WEAK_EVIDENCE,
+        FeedbackReason.DUPLICATE,
+        FeedbackReason.OUTDATED,
+        FeedbackReason.NOT_COMMERCIALLY_USEFUL,
+        FeedbackReason.OTHER,
+    }
+)
