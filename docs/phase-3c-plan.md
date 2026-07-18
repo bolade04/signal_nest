@@ -105,8 +105,12 @@ Feedback is a **recorded observation** for later human/offline analysis only.
 
 ## 6. Product-decision register
 
-Every row is a product decision. Recommended defaults are **proposals**, not
-settled choices; none is finalized here. See the decision gate (§19).
+Every row is a product decision. **All eleven decisions below were APPROVED by the
+product owner on 2026-07-18 — the recommended defaults were accepted in full** (see
+the decision gate, §19, now fully checked). The "Recommended default" column is the
+**approved policy** for the first version. This approval authorizes 3C-B planning to
+proceed; it does **not** enable any feature (`opportunity_feedback_enabled` stays
+`False`) or change any runtime behavior.
 
 | Decision | Options | Recommended default (first version) | Owner decision required? | Implementation impact |
 | --- | --- | --- | --- | --- |
@@ -116,7 +120,7 @@ settled choices; none is finalized here. See the decision gate (§19).
 | **Who may submit** | all workspace members; owner/admin/marketer; narrower editor role | Owner/admin/marketer (mirrors existing schedule-mutation editor gate) | Yes | Authorization guard in 3C-C |
 | **Visibility** | submitter only; all workspace members; authorized editors only | Authorized editors (owner/admin/marketer) | Yes | Read authorization + response filtering in 3C-C |
 | **Retention** | indefinite; fixed retention window; tied to workspace deletion lifecycle | Tied to workspace deletion lifecycle (cascade with workspace); no separate purge job initially | Yes | FK `ondelete` + retention docs |
-| **Reason taxonomy** | fixed enum | Draft enum: `irrelevant`, `wrong_market`, `weak_evidence`, `duplicate`, `outdated`, `not_commercially_useful`, `useful_insight`, `other` — **not final** | Yes | Enum/validation in 3C-B/3C-C |
+| **Reason taxonomy** | fixed enum | **APPROVED enum** — positive: `useful_insight`, `strong_evidence`, `commercially_relevant`, `correct_market`; negative: `irrelevant`, `wrong_market`, `weak_evidence`, `duplicate`, `outdated`, `not_commercially_useful`, `other` | Yes | Enum/validation in 3C-B/3C-C |
 | **Free-text notes** | included; deferred | **Deferred** (sensitive-data, prompt-injection, moderation, retention, export/deletion burden) | Yes | Avoids untrusted free text in first slice |
 | **Scoring influence** | capture only; manual analyst review; offline aggregate analysis; real-time score change | **Capture only** | Yes | Keeps scoring deterministic; no worker in first slices |
 | **Cross-market behavior** | isolated; aggregated | Strictly isolated — Dallas feedback never affects London/Lagos/Nairobi | Yes (confirm) | Isolation tests in 3C-B/3C-D |
@@ -358,26 +362,30 @@ here from the concrete future log events above.
   dependency. This plan changes nothing about it.
 - **Scheduling.** Phase 3B is complete; scheduling remains **dark**. The feedback
   loop does **not** depend on production schedule enablement.
-- **Batch 5.** Undefined in every repository document; **not** included here and
-  **must not** be inferred from Phase 3C.
+- **Batch 5 (the Phase 3B-track successor) remains undefined.** It is **not**
+  included here and **must not** be inferred from Phase 3C.
 
 ## 19. Decision gate before 3C-B
 
 **3C-B MUST NOT BEGIN UNTIL THIS DECISION GATE IS APPROVED.**
 
-Explicit owner approval is required for each of:
+**Gate status: APPROVED by the product owner on 2026-07-18** (all recommended
+defaults accepted). Each decision below is approved as documented in §6. This gate
+approval authorizes 3C-B *scoping/implementation planning* only; it does **not**
+enable the feature or permit production rollout (§15), which remain separate
+decisions.
 
-- [ ] Feedback shape
-- [ ] Feedback target / version linkage
-- [ ] Allowed submitter roles
-- [ ] Visibility
-- [ ] Mutability
-- [ ] Retention
-- [ ] Reason taxonomy
-- [ ] Free-text policy
-- [ ] Scoring influence
-- [ ] Feature-flag naming
-- [ ] Rollout boundary
+- [x] Feedback shape — binary useful/not-useful **plus** optional structured reason; no free text (§6)
+- [x] Feedback target / version linkage — versioned intelligence-record reference (`analysis_version` + `scoring_version` + `fingerprint`) **and** parent opportunity (§6)
+- [x] Allowed submitter roles — owner/admin/marketer (editor gate) (§6)
+- [x] Visibility — authorized editors only (owner/admin/marketer) (§6)
+- [x] Mutability — immutable audit history; derived "current" projection only if the UI requires it (§6)
+- [x] Retention — tied to workspace deletion lifecycle (cascade); no separate purge job initially (§6)
+- [x] Reason taxonomy — approved enum (§6)
+- [x] Free-text policy — deferred; no unrestricted free text in the first slice (§6)
+- [x] Scoring influence — capture only; no scoring impact (§6)
+- [x] Feature-flag naming — `opportunity_feedback_enabled` (default `False`) (§6)
+- [x] Rollout boundary — first enablement in a single non-production internal workspace (§15)
 
 ## 20. Phase 3C success definition
 
