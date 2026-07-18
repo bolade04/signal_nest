@@ -13,6 +13,7 @@ from app.audit.routes import router as audit_router
 from app.auth.routes import router as auth_router
 from app.brands.routes import router as brands_router
 from app.campaign_context.routes import router as campaign_context_router
+from app.feedback.routes import router as feedback_router
 from app.jobs.routes import router as jobs_router
 from app.locations.routes import router as locations_router
 from app.opportunities.routes import router as opportunities_router
@@ -33,6 +34,7 @@ for _r in (
     locations_router,
     scout_requests_router,
     opportunities_router,
+    feedback_router,
     jobs_router,
     audit_router,
 ):
