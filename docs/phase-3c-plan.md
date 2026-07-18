@@ -254,6 +254,7 @@ Expected responses:
 - **Entry:** Phase 3B merged; Phase 3C discovery complete.
 - **Exit:** product decisions recorded (register + gate); plan reviewed and merged.
 - **Non-goals:** any runtime behavior, schema, API, or UI.
+- **Status:** **COMPLETE.**
 
 ### 3C-B — Feedback persistence foundation (dark)
 
@@ -264,6 +265,7 @@ Expected responses:
 - **Entry:** §19 decision gate approved; 3C-A merged.
 - **Exit:** migration green; **single Alembic head**; dark persistence tested;
   tenant/market isolation proven (incl. PostgreSQL concurrency).
+- **Status:** **COMPLETE — dark feedback persistence merged and verified.**
 
 ### 3C-C — Feedback API (feature-gated)
 
@@ -274,9 +276,16 @@ Expected responses:
 - **Entry:** 3C-B merged.
 - **Exit:** exact-head CI green; contract clean (no drift); role and IDOR tests
   green; 503-when-disabled verified.
-- **Status:** delivered as a **DRAFT** PR (no new migration; single Alembic head
-  unchanged). See `docs/verification/3c-c-feedback-api.md`. Feature remains dark
-  (`opportunity_feedback_enabled = False`).
+- **Status:** **COMPLETE — feature-gated feedback API merged and verified.**
+  Merged via PR #54 through the protected workflow (squash; no admin bypass).
+  Reviewed head `5fc7ba9feed873c6969e2d3794bf12a4eec51f5c`; squash-merge SHA
+  `0544fa1ebfcfde5a4d671e00032a7519f8375f66`; post-merge push CI `29663244389`
+  green on all five jobs (backend **639 passed, 0 skipped**; frontend **53
+  passed**), including the PostgreSQL feedback and dedicated feedback-concurrency
+  tests. No new migration (single Alembic head `4945b98229e6` unchanged); generated
+  contracts clean. The API stays **feature-gated and dark**
+  (`opportunity_feedback_enabled = False` — every operation answers 503). See
+  `docs/verification/3c-c-feedback-api.md`.
 
 ### 3C-D — Feedback UI and closeout
 
@@ -287,6 +296,10 @@ Expected responses:
 - **Entry:** 3C-C merged.
 - **Exit:** Phase 3C implementation complete **but dark**; production rollout
   remains a separate decision (§15).
+- **Status:** **NOT STARTED.** Residual scope: UI; client integration; cache
+  isolation; multi-market UI isolation; runbook; controlled internal rollout
+  preparation; final Phase 3C closeout. This docs update does **not** authorize
+  3C-D to begin.
 
 ## 13. Testing strategy
 
@@ -391,6 +404,11 @@ decisions.
 - [x] Rollout boundary — first enablement in a single non-production internal workspace (§15)
 
 ## 20. Phase 3C success definition
+
+**Overall status: PHASE 3C IN PROGRESS — 3C-A, 3C-B, AND 3C-C COMPLETE; 3C-D NOT
+STARTED.** The feedback API is merged but remains dark
+(`opportunity_feedback_enabled = False`); no production rollout has begun. Phase 3C
+is **not** complete because 3C-D (feedback UI + closeout) has not started.
 
 Phase 3C is complete when:
 

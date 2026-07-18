@@ -145,3 +145,35 @@ Deliverable is a **DRAFT** 3C-C PR targeting `main`. Do not mark ready, request 
 or merge as part of this batch. Feedback remains dark
 (`opportunity_feedback_enabled = False`). 3C-D (feedback UI + closeout) is a separate,
 later batch and is not started here.
+
+## Post-merge closeout
+
+The draft above was subsequently reviewed and merged through the protected workflow.
+Recorded post-merge evidence:
+
+- **PR #54 final state:** MERGED.
+- **Reviewer:** `adesenden` (write access; not the author; independent of the pusher).
+- **Reviewed head:** `5fc7ba9feed873c6969e2d3794bf12a4eec51f5c`.
+- **Merge timestamp:** `2026-07-18T22:19:45Z`.
+- **Squash-merge SHA:** `0544fa1ebfcfde5a4d671e00032a7519f8375f66`.
+- **Merge method:** squash. **Admin bypass:** not used (branch protection satisfied
+  normally — 1 approval, latest-push approval, resolved threads).
+- **Post-merge CI run:** `29663244389` (event `push`, head
+  `0544fa1ebfcfde5a4d671e00032a7519f8375f66` — exact merge-SHA match), status
+  completed, conclusion success — **all five jobs green** (Frontend quality, Backend
+  quality, Migrations and API contract, Container build and security, Integration
+  smoke).
+- **Backend total:** 639 passed, 0 skipped.
+- **Frontend total:** 53 passed.
+- **Feedback API tests executed:** yes. **PostgreSQL feedback tests executed:** yes.
+  **Dedicated feedback-concurrency test executed:** yes. **Four-market isolation tests
+  executed:** yes. No required tests skipped.
+- **Alembic head unchanged:** `4945b98229e6`. **Contract drift:** none.
+- **Feature flag still false:** `opportunity_feedback_enabled = False`. Scheduling and
+  live RSS also still false (`scout_scheduling_enabled = False`,
+  `connector_rss_enabled = False`).
+- **Branch cleanup:** local and remote `feat/3c-c-feedback-api` branches deleted;
+  worktree clean; local and origin `main` synchronized at the merge SHA.
+- **3C-D not started.**
+
+**PHASE 3C-C COMPLETE — FEEDBACK API DARK AND VERIFIED**
