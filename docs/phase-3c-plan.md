@@ -287,13 +287,37 @@ Expected responses:
   (`opportunity_feedback_enabled = False` — every operation answers 503). See
   `docs/verification/3c-c-feedback-api.md`.
 
+### 3C-C.1 — Intelligence-record-id contract addendum (unblocks 3C-D)
+
+- **Scope:** expose a customer-safe `intelligence_record_id` on the existing
+  opportunity-intelligence read response so the 3C-D feedback UI can submit against
+  the exact immutable record. Additive response-schema field + read-service mapping
+  from the record already selected by the scoped read service; OpenAPI + TypeScript
+  contract regeneration; focused backend/isolation/bootstrap tests.
+- **Why:** the feedback POST requires `intelligence_record_id`, but the customer
+  intelligence read previously exposed no record id — so the UI could not construct
+  the first feedback submission. Discovered while planning 3C-D; option 1 (additive
+  read-response id) approved by the owner (2026-07-18).
+- **Non-goals:** no feedback UI; no feedback API behavior change; no optional/"latest
+  record" inference on the POST; no new column; no migration; no flag change.
+- **Entry:** 3C-C merged.
+- **Exit:** exact-head CI green; contract purely additive (one field, no drift);
+  four-market isolation + GET→feedback-POST bootstrap green; single Alembic head
+  `4945b98229e6` unchanged; all flags remain false.
+- **Status:** **IMPLEMENTED — AWAITING INDEPENDENT REVIEW AND MERGE.** Additive
+  `intelligence_record_id` on `IntelligencePayload`, mapped from the exact record the
+  scoped read service selects; opaque primary key only (no fingerprint, no scope
+  columns). No migration; contracts regenerated additively; feedback remains dark
+  (`opportunity_feedback_enabled = False`). See
+  `docs/verification/3c-c-1-intelligence-record-id-contract.md`.
+
 ### 3C-D — Feedback UI and closeout
 
 - **Scope:** customer feedback controls; query/cache isolation; four-market
   frontend isolation tests; operations documentation; closeout verification.
 - **Non-goals:** automated score learning; production flag enablement; model
   retraining; campaign generation.
-- **Entry:** 3C-C merged.
+- **Entry:** 3C-C merged **and** 3C-C.1 (record-id contract) merged.
 - **Exit:** Phase 3C implementation complete **but dark**; production rollout
   remains a separate decision (§15).
 - **Status:** **NOT STARTED.** Residual scope: UI; client integration; cache

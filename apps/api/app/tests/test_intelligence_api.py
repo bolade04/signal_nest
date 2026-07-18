@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
@@ -28,6 +29,7 @@ from app.db.session import get_db
 from app.intelligence.persistence import get_latest_for_opportunity
 from app.intelligence.read_service import _map_record, get_opportunity_intelligence
 from app.intelligence.records import SignalIntelligenceRecord
+from app.intelligence.schemas import IntelligencePayload
 from app.main import app
 from app.opportunities.models import Opportunity
 from app.organizations.models import Workspace
@@ -424,3 +426,146 @@ class TestSecurity:
         # No source URLs are stored in 4A, so none may appear in the public payload.
         for token in ("http://", "https://", "source_url"):
             assert token not in blob
+
+
+# --------------------------------------------------------------------------- #
+# 3C-C.1: customer-safe intelligence_record_id contract addendum
+#
+# The feedback POST requires ``intelligence_record_id``; before 3C-C.1 the customer
+# intelligence read exposed no record id, so a UI could not construct the first
+# feedback submission. 3C-C.1 surfaces the *exact* record already chosen by the scoped
+# read service — an opaque primary key only, never fingerprint or scope columns.
+# --------------------------------------------------------------------------- #
+class TestRecordIdContract:
+    # ---- Schema: present, string, required ---------------------------------- #
+    def test_field_is_required_on_payload_schema(self):
+        # Building the payload without the id must fail — it is a required field.
+        with pytest.raises(ValidationError):
+            IntelligencePayload(
+                classification="emerging", is_simulated=False,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                facts={"source_type": "rss_news", "language": "en",
+                       "published_days_ago": 1.0, "char_count": 1, "word_count": 1,
+                       "excerpt": "", "distinct_source_types": 1, "duplicate_count": 1,
+                       "engagement": 0},
+                inference={"has_buying_intent": False,
+                           "has_competitor_dissatisfaction": False},
+                relevance={"score": 0, "below_action_floor": False},
+                score={"total": 0, "classification": "emerging", "factors": {}},
+                provenance={"enricher": "deterministic", "analysis_version": "3b",
+                            "scoring_version": "3b.1"},
+                version={"analysis_version": "3b", "scoring_version": "3b.1"},
+            )  # type: ignore[call-arg]
+
+    def test_field_serializes_as_a_non_empty_string(self, h):
+        opp_id = h.with_intel[0]
+        intel = h.get(h.ws, opp_id).json()["intelligence"]
+        rid = intel["intelligence_record_id"]
+        assert isinstance(rid, str) and rid
+
+    # ---- Mapper: id comes from the exact selected record -------------------- #
+    def test_mapped_id_equals_selected_record_id(self, h):
+        opp_id = h.with_intel[0]
+        with h.factory() as s:
+            rec = get_latest_for_opportunity(s, workspace_id=h.ws, opportunity_id=opp_id)
+            payload = get_opportunity_intelligence(
+                s, workspace_id=h.ws, opportunity_id=opp_id
+            )
+        assert payload.intelligence_record_id == rec.id
+        # The id and the version provenance are read from the *same* record.
+        assert payload.version.analysis_version == rec.analysis_version
+        assert payload.version.scoring_version == rec.scoring_version
+
+    def test_mapper_reads_id_without_extra_lookup(self):
+        # ``_map_record`` maps a caller-provided ORM object directly; it must copy that
+        # object's own id verbatim (no second query, no opportunity-id inference).
+        rec = SignalIntelligenceRecord(
+            id="rec-fixed-0001", organization_id="org", workspace_id="ws",
+            scout_request_id="sr", normalized_signal_id="ns", opportunity_id="opp",
+            analysis_version="3b", scoring_version="3b.1", fingerprint="fp",
+            enricher="deterministic", accepted=True, classification="emerging",
+            cluster_key="general", score_total=10, evidence_count=0, is_simulated=True,
+            facts={"source_type": "rss_news", "market": "London", "language": "en",
+                   "published_days_ago": 1.0, "char_count": 1, "word_count": 1,
+                   "excerpt": "", "distinct_source_types": 1, "duplicate_count": 1,
+                   "engagement": 0},
+            inference={"has_buying_intent": False,
+                       "has_competitor_dissatisfaction": False},
+            relevance={"score": 0, "below_action_floor": False},
+            score_components={"total": 10, "classification": "emerging", "factors": {}},
+            provenance={}, created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        assert _map_record(rec).intelligence_record_id == "rec-fixed-0001"
+
+    # ---- Route: id present, internals still absent -------------------------- #
+    def test_route_exposes_id_but_no_internals(self, h):
+        opp_id = h.with_intel[0]
+        with h.factory() as s:
+            rec = get_latest_for_opportunity(s, workspace_id=h.ws, opportunity_id=opp_id)
+        body = h.get(h.ws, opp_id).json()
+        assert body["intelligence"]["intelligence_record_id"] == rec.id
+        blob = h.get(h.ws, opp_id).text
+        # Adding the id must not leak the fingerprint or any scope column.
+        assert rec.fingerprint not in blob
+        assert rec.normalized_signal_id not in blob
+        for key in _FORBIDDEN_KEYS:
+            assert key not in blob
+
+    def test_absent_intelligence_has_no_record_id(self, h):
+        # A null payload exposes no id (nothing to reference).
+        opp_id = h.without_intel[0]
+        assert h.get(h.ws, opp_id).json() == {"opportunity_id": opp_id, "intelligence": None}
+
+    def test_existing_payload_fields_unchanged(self, h):
+        # The addition is purely additive: all pre-existing keys remain present.
+        opp_id = h.with_intel[0]
+        intel = h.get(h.ws, opp_id).json()["intelligence"]
+        for key in ("classification", "is_simulated", "created_at", "facts",
+                    "inference", "relevance", "score", "evidence", "provenance",
+                    "version"):
+            assert key in intel
+
+    # ---- Four-market isolation: each response carries only its own id ------- #
+    def test_each_market_returns_only_its_own_record_id(self, h):
+        by_market: dict[str, str] = {}
+        with h.factory() as s:
+            for opp_id in h.with_intel:
+                opp = s.get(Opportunity, opp_id)
+                by_market.setdefault(opp.resolved_market, opp_id)
+        assert len(by_market) == 4  # Dallas, London, Lagos, Nairobi
+
+        exposed: dict[str, str] = {}
+        for market, opp_id in by_market.items():
+            body = h.get(h.ws, opp_id).json()
+            with h.factory() as s:
+                rec = get_latest_for_opportunity(
+                    s, workspace_id=h.ws, opportunity_id=opp_id
+                )
+            # The response's id is exactly this opportunity's own selected record.
+            assert body["intelligence"]["intelligence_record_id"] == rec.id
+            exposed[market] = rec.id
+
+        # Directed cross-market mismatch: no market's id is any other market's id.
+        ids = list(exposed.values())
+        assert len(set(ids)) == 4
+        for a in by_market:
+            for b in by_market:
+                if a != b:
+                    assert exposed[a] != exposed[b]
+
+    def test_separate_opportunities_never_share_a_record_id(self, h):
+        # Distinct opportunities (same or different market/request) never resolve to
+        # the same exposed record id — proving per-opportunity/per-request isolation.
+        seen: set[str] = set()
+        for opp_id in h.with_intel:
+            rid = h.get(h.ws, opp_id).json()["intelligence"]["intelligence_record_id"]
+            assert rid not in seen
+            seen.add(rid)
+
+    def test_cross_workspace_opportunity_exposes_no_id(self, h):
+        # A foreign-workspace path is a 404 (no body id can leak from another scope).
+        with h.factory() as s:
+            s.add(Workspace(id="ws-foreign-rid", organization_id=h.org,
+                            name="ForeignRID", slug="foreign-rid"))
+            s.commit()
+        assert h.get("ws-foreign-rid", h.with_intel[0]).status_code == 404
