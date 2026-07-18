@@ -274,6 +274,9 @@ Expected responses:
 - **Entry:** 3C-B merged.
 - **Exit:** exact-head CI green; contract clean (no drift); role and IDOR tests
   green; 503-when-disabled verified.
+- **Status:** delivered as a **DRAFT** PR (no new migration; single Alembic head
+  unchanged). See `docs/verification/3c-c-feedback-api.md`. Feature remains dark
+  (`opportunity_feedback_enabled = False`).
 
 ### 3C-D — Feedback UI and closeout
 

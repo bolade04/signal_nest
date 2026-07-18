@@ -893,6 +893,154 @@
         "title": "CompetitorIn",
         "type": "object"
       },
+      "FeedbackCreate": {
+        "additionalProperties": false,
+        "description": "Strict request body for capturing one opportunity-feedback judgement.\n\nThe client supplies only ``intelligence_record_id`` (which immutable record the\njudgement is about), the binary ``is_useful`` verdict, and an optional\n``reason_code``. Tenant scope, actor attribution and version provenance are all\nderived server-side. Unknown fields are rejected (``extra=\"forbid\"``), so a caller\ncan never inject scope, provenance or attribution.",
+        "properties": {
+          "intelligence_record_id": {
+            "title": "Intelligence Record Id",
+            "type": "string"
+          },
+          "is_useful": {
+            "title": "Is Useful",
+            "type": "boolean"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "intelligence_record_id",
+          "is_useful"
+        ],
+        "title": "FeedbackCreate",
+        "type": "object"
+      },
+      "FeedbackHistoryOut": {
+        "description": "Bounded, reverse-chronological page of an opportunity's feedback history.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "FeedbackHistoryOut",
+        "type": "object"
+      },
+      "FeedbackOut": {
+        "description": "Customer-safe projection of a stored :class:`OpportunityFeedback` row.\n\nExposes the judgement, its optional reason, the actor (if still known) and the\n*public-safe* version provenance \u2014 never the raw ``fingerprint`` or the internal\n``organization_id`` / ``workspace_id`` scope columns.",
+        "properties": {
+          "analysis_version": {
+            "title": "Analysis Version",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "intelligence_record_id": {
+            "title": "Intelligence Record Id",
+            "type": "string"
+          },
+          "is_useful": {
+            "title": "Is Useful",
+            "type": "boolean"
+          },
+          "opportunity_id": {
+            "title": "Opportunity Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scoring_version": {
+            "title": "Scoring Version",
+            "type": "string"
+          },
+          "submitted_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted By User Id"
+          }
+        },
+        "required": [
+          "id",
+          "opportunity_id",
+          "intelligence_record_id",
+          "is_useful",
+          "reason_code",
+          "submitted_by_user_id",
+          "analysis_version",
+          "scoring_version",
+          "created_at"
+        ],
+        "title": "FeedbackOut",
+        "type": "object"
+      },
+      "FeedbackReason": {
+        "description": "Structured, closed-vocabulary reason a customer attaches to opportunity feedback (3C-B).\n\nThe reason is always *optional* \u2014 feedback is a required binary\nuseful/not-useful judgement plus, at most, one of these codes. There is no\nfree-text alternative by design. Each code carries a fixed **polarity**:\npositive codes may only accompany useful feedback and negative codes only\nnot-useful feedback (see ``POSITIVE_FEEDBACK_REASONS`` /\n``NEGATIVE_FEEDBACK_REASONS``). ``other`` is negative \u2014 it exists to let a\ncustomer flag an unmodelled problem without opening free text.",
+        "enum": [
+          "useful_insight",
+          "strong_evidence",
+          "commercially_relevant",
+          "correct_market",
+          "irrelevant",
+          "wrong_market",
+          "weak_evidence",
+          "duplicate",
+          "outdated",
+          "not_commercially_useful",
+          "other"
+        ],
+        "title": "FeedbackReason",
+        "type": "string"
+      },
       "GeoCoverageBase": {
         "properties": {
           "business_address": {
@@ -8182,6 +8330,173 @@
         "summary": "Get Opportunity",
         "tags": [
           "opportunities"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/feedback": {
+      "get": {
+        "description": "Read the opportunity's append-only feedback history (editor + gated).\n\nReverse-chronological, bounded page. Read-only: it never enqueues, scores or\nmutates anything. Scoped to this opportunity within the path workspace (404 for an\nunknown/cross-workspace opportunity).",
+        "operationId": "list_opportunity_feedback_api_v1_workspaces__workspace_id__opportunities__opportunity_id__feedback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Opportunity Feedback",
+        "tags": [
+          "opportunity-feedback"
+        ]
+      },
+      "post": {
+        "description": "Append one immutable feedback judgement for an opportunity (editor + gated).\n\nThe record must live in this workspace and belong to this opportunity; the service\ncopies version provenance from that record, polarity-checks the optional reason and\ninserts a new append-only row. Returns the stored judgement's customer-safe view.",
+        "operationId": "submit_opportunity_feedback_api_v1_workspaces__workspace_id__opportunities__opportunity_id__feedback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Opportunity Feedback",
+        "tags": [
+          "opportunity-feedback"
         ]
       }
     },

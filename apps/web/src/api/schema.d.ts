@@ -761,6 +761,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Opportunity Feedback
+         * @description Read the opportunity's append-only feedback history (editor + gated).
+         *
+         *     Reverse-chronological, bounded page. Read-only: it never enqueues, scores or
+         *     mutates anything. Scoped to this opportunity within the path workspace (404 for an
+         *     unknown/cross-workspace opportunity).
+         */
+        get: operations["list_opportunity_feedback_api_v1_workspaces__workspace_id__opportunities__opportunity_id__feedback_get"];
+        put?: never;
+        /**
+         * Submit Opportunity Feedback
+         * @description Append one immutable feedback judgement for an opportunity (editor + gated).
+         *
+         *     The record must live in this workspace and belong to this opportunity; the service
+         *     copies version provenance from that record, polarity-checks the optional reason and
+         *     inserts a new append-only row. Returns the stored judgement's customer-safe view.
+         */
+        post: operations["submit_opportunity_feedback_api_v1_workspaces__workspace_id__opportunities__opportunity_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/intelligence": {
         parameters: {
             query?: never;
@@ -1345,6 +1377,81 @@ export interface components {
             /** Website */
             website?: string | null;
         };
+        /**
+         * FeedbackCreate
+         * @description Strict request body for capturing one opportunity-feedback judgement.
+         *
+         *     The client supplies only ``intelligence_record_id`` (which immutable record the
+         *     judgement is about), the binary ``is_useful`` verdict, and an optional
+         *     ``reason_code``. Tenant scope, actor attribution and version provenance are all
+         *     derived server-side. Unknown fields are rejected (``extra="forbid"``), so a caller
+         *     can never inject scope, provenance or attribution.
+         */
+        FeedbackCreate: {
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+            /** Is Useful */
+            is_useful: boolean;
+            reason_code?: components["schemas"]["FeedbackReason"] | null;
+        };
+        /**
+         * FeedbackHistoryOut
+         * @description Bounded, reverse-chronological page of an opportunity's feedback history.
+         */
+        FeedbackHistoryOut: {
+            /** Items */
+            items: components["schemas"]["FeedbackOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * FeedbackOut
+         * @description Customer-safe projection of a stored :class:`OpportunityFeedback` row.
+         *
+         *     Exposes the judgement, its optional reason, the actor (if still known) and the
+         *     *public-safe* version provenance — never the raw ``fingerprint`` or the internal
+         *     ``organization_id`` / ``workspace_id`` scope columns.
+         */
+        FeedbackOut: {
+            /** Analysis Version */
+            analysis_version: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+            /** Is Useful */
+            is_useful: boolean;
+            /** Opportunity Id */
+            opportunity_id: string;
+            reason_code: components["schemas"]["FeedbackReason"] | null;
+            /** Scoring Version */
+            scoring_version: string;
+            /** Submitted By User Id */
+            submitted_by_user_id: string | null;
+        };
+        /**
+         * FeedbackReason
+         * @description Structured, closed-vocabulary reason a customer attaches to opportunity feedback (3C-B).
+         *
+         *     The reason is always *optional* — feedback is a required binary
+         *     useful/not-useful judgement plus, at most, one of these codes. There is no
+         *     free-text alternative by design. Each code carries a fixed **polarity**:
+         *     positive codes may only accompany useful feedback and negative codes only
+         *     not-useful feedback (see ``POSITIVE_FEEDBACK_REASONS`` /
+         *     ``NEGATIVE_FEEDBACK_REASONS``). ``other`` is negative — it exists to let a
+         *     customer flag an unmodelled problem without opening free text.
+         * @enum {string}
+         */
+        FeedbackReason: "useful_insight" | "strong_evidence" | "commercially_relevant" | "correct_market" | "irrelevant" | "wrong_market" | "weak_evidence" | "duplicate" | "outdated" | "not_commercially_useful" | "other";
         /** GeoCoverageBase */
         GeoCoverageBase: {
             /** Business Address */
@@ -4459,6 +4566,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_opportunity_feedback_api_v1_workspaces__workspace_id__opportunities__opportunity_id__feedback_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_opportunity_feedback_api_v1_workspaces__workspace_id__opportunities__opportunity_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackOut"];
                 };
             };
             /** @description Validation Error */
