@@ -961,6 +961,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Scout Schedule
+         * @description Read the request's schedule. Any workspace member may read it.
+         *
+         *     Available even while the feature is dark, so the UI can surface an existing
+         *     record and its derived ``state`` (including ``activation_required``). Returns 404
+         *     when the request has no schedule.
+         */
+        get: operations["get_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_get"];
+        put?: never;
+        /**
+         * Create Scout Schedule
+         * @description Attach the single recurring schedule to a request (editor + feature-gated).
+         *
+         *     The service enforces one schedule per request and the four-active-per-workspace
+         *     cap under a workspace row lock, so a conflict surfaces as 409. An unsupported
+         *     cadence is rejected as 422 at the request boundary.
+         */
+        post: operations["create_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_post"];
+        /**
+         * Delete Scout Schedule
+         * @description Hard-delete the schedule. Any in-flight tick self-terminates on next fire.
+         */
+        delete: operations["delete_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Scout Schedule
+         * @description Pause the schedule (idempotent). No further runs are fanned out until resume.
+         */
+        post: operations["pause_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Scout Schedule
+         * @description Resume or activate the schedule, recomputing the next run from now.
+         *
+         *     Also the explicit activation for a schedule left in ``activation_required``.
+         *     Re-enabling is subject to the four-active cap (409 when full); an already-running
+         *     schedule is returned unchanged.
+         */
+        post: operations["resume_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/source-preferences": {
         parameters: {
             query?: never;
@@ -2211,6 +2291,32 @@ export interface components {
             /** Is Local Mode */
             is_local_mode: boolean;
         };
+        /**
+         * ScheduleInterval
+         * @description Bounded recurrence cadence for a scouting schedule (SB-B).
+         *
+         *     Only two cadences exist and the minimum interval is 24h, so a schedule can
+         *     never enqueue more than once per day. ``daily`` recurs every 24 hours and
+         *     ``weekly`` every 7 days — pure fixed intervals with no clock-of-day, timezone
+         *     or DST semantics.
+         * @enum {string}
+         */
+        ScheduleInterval: "daily" | "weekly";
+        /**
+         * ScheduleState
+         * @description Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).
+         *
+         *     Never persisted — always computed from the row plus the live job state so it can
+         *     never drift from reality:
+         *
+         *     * ``paused`` — disabled; drives no work.
+         *     * ``active`` — enabled and a live tick chain is actually fanning out runs.
+         *     * ``activation_required`` — enabled but not yet started. A schedule created while
+         *       the feature was dark (or before the flag was turned on) is intentionally *not*
+         *       auto-seeded; it stays here until an explicit resume/activate action starts it.
+         * @enum {string}
+         */
+        ScheduleState: "paused" | "active" | "activation_required";
         /** ScoreBreakdown */
         ScoreBreakdown: {
             /** Breakdown */
@@ -2318,6 +2424,54 @@ export interface components {
             };
             /** Status */
             status: string;
+        };
+        /**
+         * ScoutScheduleCreate
+         * @description Request body to attach the single recurring schedule to a scout request.
+         *
+         *     Only the cadence is customer-supplied; everything else (market scope, next run,
+         *     audit) is derived server-side. ``interval`` is a bounded enum, so an unsupported
+         *     value (hourly, monthly, cron, …) is rejected at the request boundary as 422.
+         */
+        ScoutScheduleCreate: {
+            interval: components["schemas"]["ScheduleInterval"];
+        };
+        /**
+         * ScoutScheduleOut
+         * @description Customer-safe projection of a :class:`ScoutSchedule`.
+         *
+         *     Exposes only what a customer needs to reason about the cadence — never the
+         *     organization id, idempotency/lease tokens, tick job ids, payloads, contract
+         *     version or any audit/worker internal. ``state`` is derived from the live job
+         *     state (see :func:`app.scouting_requests.schedules.derive_schedule_state`) so the
+         *     UI can distinguish a genuinely running schedule from an enabled-but-inert one
+         *     that still needs activation.
+         */
+        ScoutScheduleOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            interval: components["schemas"]["ScheduleInterval"];
+            /** Last Tick At */
+            last_tick_at: string | null;
+            /** Location Id */
+            location_id: string | null;
+            /** Next Run At */
+            next_run_at: string | null;
+            /** Scout Request Id */
+            scout_request_id: string;
+            state: components["schemas"]["ScheduleState"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** SessionOut */
         SessionOut: {
@@ -4766,6 +4920,178 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoutScheduleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScoutScheduleCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoutScheduleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_pause_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoutScheduleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_resume_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoutScheduleOut"];
                 };
             };
             /** @description Validation Error */

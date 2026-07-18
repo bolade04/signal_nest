@@ -25,6 +25,8 @@ export const queryKeys = {
   scoutRequests: (workspaceId: string) => ['workspaces', workspaceId, 'scout-requests'] as const,
   scoutRequest: (workspaceId: string, requestId: string) =>
     ['workspaces', workspaceId, 'scout-requests', requestId] as const,
+  scoutSchedule: (workspaceId: string, requestId: string) =>
+    ['workspaces', workspaceId, 'scout-requests', requestId, 'schedule'] as const,
 
   jobs: (workspaceId: string, filters: Record<string, unknown>) =>
     ['workspaces', workspaceId, 'jobs', filters] as const,

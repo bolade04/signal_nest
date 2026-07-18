@@ -36,6 +36,8 @@ import type {
   ScoutRequestOut,
   ScoutRequestUpdate,
   ScoutRunResult,
+  ScoutScheduleCreate,
+  ScoutScheduleOut,
   SessionOut,
   SourcePrefIn,
   WorkspaceCreate,
@@ -191,6 +193,33 @@ export const runScoutRequest = (workspaceId: string, requestId: string) =>
   apiRequest<ScoutRunResult>(`/workspaces/${workspaceId}/scout-requests/${requestId}/run`, {
     method: 'POST',
   });
+
+// ---- Scout schedules (SB-C; dark-deployed recurrence) ----
+// The read is available to any member even while the feature is dark; mutations
+// require an editor role and answer 503 (capability_unavailable) while disabled.
+const schedulePath = (workspaceId: string, requestId: string) =>
+  `/workspaces/${workspaceId}/scout-requests/${requestId}/schedule`;
+
+export const getScoutSchedule = (workspaceId: string, requestId: string, signal?: AbortSignal) =>
+  apiRequest<ScoutScheduleOut>(schedulePath(workspaceId, requestId), { signal });
+
+export const createScoutSchedule = (
+  workspaceId: string,
+  requestId: string,
+  body: ScoutScheduleCreate,
+) =>
+  apiRequest<ScoutScheduleOut>(schedulePath(workspaceId, requestId), { method: 'POST', body });
+
+export const pauseScoutSchedule = (workspaceId: string, requestId: string) =>
+  apiRequest<ScoutScheduleOut>(`${schedulePath(workspaceId, requestId)}/pause`, { method: 'POST' });
+
+export const resumeScoutSchedule = (workspaceId: string, requestId: string) =>
+  apiRequest<ScoutScheduleOut>(`${schedulePath(workspaceId, requestId)}/resume`, {
+    method: 'POST',
+  });
+
+export const deleteScoutSchedule = (workspaceId: string, requestId: string) =>
+  apiRequest<void>(schedulePath(workspaceId, requestId), { method: 'DELETE' });
 
 // ---- Durable jobs (customer-safe views: lifecycle + outcome, no infra) ----
 export interface JobFilters {

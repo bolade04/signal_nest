@@ -59,6 +59,24 @@ class ScheduleInterval(StrEnum):
     WEEKLY = "weekly"
 
 
+class ScheduleState(StrEnum):
+    """Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).
+
+    Never persisted — always computed from the row plus the live job state so it can
+    never drift from reality:
+
+    * ``paused`` — disabled; drives no work.
+    * ``active`` — enabled and a live tick chain is actually fanning out runs.
+    * ``activation_required`` — enabled but not yet started. A schedule created while
+      the feature was dark (or before the flag was turned on) is intentionally *not*
+      auto-seeded; it stays here until an explicit resume/activate action starts it.
+    """
+
+    PAUSED = "paused"
+    ACTIVE = "active"
+    ACTIVATION_REQUIRED = "activation_required"
+
+
 class SourceType(StrEnum):
     MANUAL = "manual"
     WEBSITE_SCAN = "website_scan"

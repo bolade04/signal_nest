@@ -31,6 +31,12 @@ export type ScoutRequestUpdate = S['ScoutRequestUpdate'];
 export type ScoutRequestOut = S['ScoutRequestOut'];
 export type ScoutRunResult = S['ScoutRunResult'];
 
+// SB-C scouting schedule (dark-deployed recurrence controls).
+export type ScoutScheduleOut = S['ScoutScheduleOut'];
+export type ScoutScheduleCreate = S['ScoutScheduleCreate'];
+export type ScheduleInterval = S['ScheduleInterval'];
+export type ScheduleState = S['ScheduleState'];
+
 export type JobOut = S['JobOut'];
 export type JobListOut = S['JobListOut'];
 export type JobEventOut = S['JobEventOut'];
