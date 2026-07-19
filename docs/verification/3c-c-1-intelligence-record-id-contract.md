@@ -128,3 +128,31 @@ remains in progress**. 3C-D must not resume until 3C-C.1 is independently review
 merged, and exact-merge-SHA verified.
 
 **PHASE 3C-C.1 IMPLEMENTED — INTELLIGENCE RECORD ID CONTRACT, DARK AND VERIFIED (AWAITING REVIEW)**
+
+_(The "Closeout status" block above records the draft-PR / pre-merge state and is
+retained as historical. The post-merge closeout below supersedes it.)_
+
+## Post-merge closeout
+
+3C-C.1 is now merged and exact-merge-SHA verified:
+
+- **Reviewer:** `adesenden` — **APPROVED** on the exact reviewed head.
+- **Reviewed head:** `b9d5a073275b71e056e10b044c48b2161a84146b`.
+- **Merge method:** squash-merge through the protected workflow — **no admin bypass**.
+- **Merge SHA:** `f81c4aaffee3b1b27e2eb9ccffbcd6d782a0459c`.
+- **Merge timestamp:** `2026-07-19T00:38:51Z`.
+- **Post-merge CI:** run `29667288963` (event `push`), head
+  `f81c4aaffee3b1b27e2eb9ccffbcd6d782a0459c` (exact-SHA match), completed/**success**,
+  all five jobs green.
+- **Tests:** backend **651 passed, 0 skipped**; frontend **53 passed**. The
+  intelligence contract, mapper/route, four-market isolation,
+  GET-intelligence→POST-feedback bootstrap, and PostgreSQL tests all executed; no
+  required test skipped.
+- **Alembic:** single head `4945b98229e6` — unchanged; no migration.
+- **Contracts:** OpenAPI + generated TypeScript regenerated clean — no drift.
+- **Branches:** local and remote `feat/3c-c-1-intelligence-record-id-contract` deleted.
+- **Flags:** `opportunity_feedback_enabled`, `scout_scheduling_enabled`, and
+  `connector_rss_enabled` all remain `False`.
+- **3C-D:** not started (now unblocked; begins only via a separate branch/review).
+
+**PHASE 3C-C.1 COMPLETE — INTELLIGENCE RECORD ID CONTRACT MERGED AND VERIFIED**

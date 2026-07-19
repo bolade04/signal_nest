@@ -304,12 +304,25 @@ Expected responses:
 - **Exit:** exact-head CI green; contract purely additive (one field, no drift);
   four-market isolation + GET→feedback-POST bootstrap green; single Alembic head
   `4945b98229e6` unchanged; all flags remain false.
-- **Status:** **IMPLEMENTED — AWAITING INDEPENDENT REVIEW AND MERGE.** Additive
-  `intelligence_record_id` on `IntelligencePayload`, mapped from the exact record the
-  scoped read service selects; opaque primary key only (no fingerprint, no scope
-  columns). No migration; contracts regenerated additively; feedback remains dark
-  (`opportunity_feedback_enabled = False`). See
+- **Status:** **COMPLETE — intelligence-record ID contract addendum merged and
+  verified.** Additive `intelligence_record_id` on `IntelligencePayload`, mapped from
+  the exact record the scoped read service selects; opaque primary key only (no
+  fingerprint, no scope columns). Merged via PR #56 through the protected workflow
+  (squash; no admin bypass). Reviewed head
+  `b9d5a073275b71e056e10b044c48b2161a84146b` (approved by `adesenden` on the exact
+  head); squash-merge SHA `f81c4aaffee3b1b27e2eb9ccffbcd6d782a0459c`; post-merge push
+  CI `29667288963` green on all five jobs (backend **651 passed, 0 skipped**; frontend
+  **53 passed**), including the intelligence contract, mapper/route, four-market
+  isolation, GET-intelligence→POST-feedback bootstrap, and PostgreSQL tests. No
+  migration (single Alembic head `4945b98229e6` unchanged); generated contracts clean
+  (no drift). Feedback remains dark (`opportunity_feedback_enabled = False`). See
   `docs/verification/3c-c-1-intelligence-record-id-contract.md`.
+
+  **Blocker resolution:** the customer opportunity-intelligence read response now
+  exposes the exact scoped `intelligence_record_id`, and the existing feedback POST
+  can consume that ID; the GET-intelligence→POST-feedback bootstrap is verified. The
+  original 3C-D feedback-UI blocker (no customer-facing record id to submit against) is
+  **resolved**.
 
 ### 3C-D — Feedback UI and closeout
 
@@ -317,13 +330,16 @@ Expected responses:
   frontend isolation tests; operations documentation; closeout verification.
 - **Non-goals:** automated score learning; production flag enablement; model
   retraining; campaign generation.
-- **Entry:** 3C-C merged **and** 3C-C.1 (record-id contract) merged.
+- **Entry:** 3C-C merged **and** 3C-C.1 (record-id contract) merged — **both now
+  satisfied**, so 3C-D is **unblocked**.
 - **Exit:** Phase 3C implementation complete **but dark**; production rollout
   remains a separate decision (§15).
-- **Status:** **NOT STARTED.** Residual scope: UI; client integration; cache
-  isolation; multi-market UI isolation; runbook; controlled internal rollout
-  preparation; final Phase 3C closeout. This docs update does **not** authorize
-  3C-D to begin.
+- **Status:** **NOT STARTED (now unblocked).** Both entry conditions are met (3C-C
+  and 3C-C.1 merged), so 3C-D may begin — but only through a **separate
+  implementation branch and review workflow**. Residual scope: UI; client
+  integration; cache isolation; multi-market UI isolation; runbook; controlled
+  internal rollout preparation; final Phase 3C closeout. This docs update does **not**
+  authorize 3C-D to begin.
 
 ## 13. Testing strategy
 
@@ -429,10 +445,12 @@ decisions.
 
 ## 20. Phase 3C success definition
 
-**Overall status: PHASE 3C IN PROGRESS — 3C-A, 3C-B, AND 3C-C COMPLETE; 3C-D NOT
-STARTED.** The feedback API is merged but remains dark
-(`opportunity_feedback_enabled = False`); no production rollout has begun. Phase 3C
-is **not** complete because 3C-D (feedback UI + closeout) has not started.
+**Overall status: PHASE 3C IN PROGRESS — 3C-A, 3C-B, 3C-C, AND 3C-C.1 COMPLETE; 3C-D
+NOT STARTED.** The feedback API is merged but remains dark
+(`opportunity_feedback_enabled = False`); the intelligence-record ID contract (3C-C.1)
+is merged and exact-merge-SHA verified, resolving the 3C-D feedback-UI blocker; no
+production rollout has begun. Phase 3C is **not** complete because 3C-D (feedback UI +
+closeout) has not started.
 
 Phase 3C is complete when:
 
