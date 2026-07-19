@@ -209,6 +209,44 @@ def test_tick_fans_out_chains_and_runs_through_worker(factory, flag_on, market):
 
 
 # --------------------------------------------------------------------------- #
+# Regression (issue #59): fan-out timestamps derive from the injected clock
+# --------------------------------------------------------------------------- #
+def test_fan_out_timestamps_derive_from_injected_clock(factory, flag_on):
+    """The tick must stamp its fan-out from the *worker's* clock, not the wall clock.
+
+    With the worker pinned decades away from real wall time, the run it fans out — and
+    the schedule's ``last_tick_at`` bookkeeping — must both derive from that injected
+    clock, and the run must be immediately claimable at the very same clock. Before the
+    fix the tick fell back to real ``utcnow()``: the run was stamped with wall-clock
+    time and, once real time crossed the pinned claim boundary, was never due and stayed
+    ``pending``. This asserts pinned-clock equality (tz-normalised for the SQLite
+    round-trip), which the old wall-clock path fails regardless of when it runs.
+    """
+    schedule_id = _create_live(factory, "dallas")
+    # A clock decades from real wall time: no real ``utcnow()`` can coincide with it,
+    # so an equality check cleanly separates injected-clock from wall-clock behaviour.
+    pinned = datetime(2099, 1, 2, 9, 0, 0, tzinfo=UTC)
+
+    _drain(factory, clock=pinned)
+
+    execs = _execs(factory, "dallas")
+    assert len(execs) == 1
+    # The fanned-out run's readiness (``available_at``, the field the claim predicate
+    # ``available_at <= now`` tests) is stamped on the injected clock, not the wall
+    # clock. Before the fix this was real ``utcnow()``; once real time ran ahead of the
+    # pinned claim clock the run was never due and stayed pending.
+    assert execs[0].available_at.replace(tzinfo=None) == pinned.replace(tzinfo=None)
+    # Being due at exactly that clock, it was claimed and run to success by the same
+    # pinned-clock worker — no wall-clock drift could leave it pending.
+    assert execs[0].status == JobStatus.SUCCEEDED.value
+
+    # The schedule's tick bookkeeping is stamped on the injected clock too.
+    with factory() as s:
+        schedule = s.get(ScoutSchedule, schedule_id)
+        assert schedule.last_tick_at.replace(tzinfo=None) == pinned.replace(tzinfo=None)
+
+
+# --------------------------------------------------------------------------- #
 # Four markets advance independently through the worker
 # --------------------------------------------------------------------------- #
 def test_four_markets_advance_independently(factory, flag_on):
@@ -361,6 +399,9 @@ def test_manual_and_scheduled_runs_coexist(factory, flag_on):
     _drain(factory, clock=clock)
 
     # Then a customer triggers a manual run for the same request (no trigger marker).
+    # Pin the manual enqueue to the same injected clock as the worker so the harness
+    # never depends on real wall time (a manual run is enqueued "now"; here "now" is
+    # the pinned clock, exactly as the scheduled chain above was driven).
     with factory() as s:
         req = _req(s, "dallas")
         enqueue_scout_request(
@@ -369,6 +410,7 @@ def test_manual_and_scheduled_runs_coexist(factory, flag_on):
             workspace_id=req.workspace_id,
             scout_request_id=req.id,
             location_id=req.location_id,
+            now=clock,
         )
         s.commit()
     _drain(factory, clock=clock + timedelta(minutes=1))

@@ -25,10 +25,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.db.base import utcnow
 from app.jobs.context import ExecutionContext
 from app.jobs.status import JobErrorCode, JobExecutionError, JobType
 
@@ -47,6 +49,11 @@ class HandlerContext:
     #: requested cancellation; a long-running handler should poll it and raise
     #: :class:`~app.jobs.status.JobExecutionError` with ``JobErrorCode.CANCELLED``.
     is_cancelled: Callable[[], bool] = field(default=lambda: False)
+    #: The single execution-boundary timestamp for this attempt, captured from the
+    #: worker's clock. A handler that schedules follow-on work must derive every
+    #: timestamp from this immutable value rather than reading the wall clock, so a
+    #: pinned-clock worker (and the fan-out it produces) stay on one consistent clock.
+    now: datetime = field(default_factory=utcnow)
 
 
 #: A handler returns a *safe* result summary (counts/status only — never secrets,
