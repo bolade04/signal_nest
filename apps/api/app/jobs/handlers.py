@@ -91,6 +91,7 @@ def execute_schedule_tick(ctx: HandlerContext) -> dict[str, Any]:
         ctx.db,
         schedule_id=schedule_id,
         occurrence_at=occurrence_at,
+        now=ctx.now,
         is_cancelled=ctx.is_cancelled,
     )
 

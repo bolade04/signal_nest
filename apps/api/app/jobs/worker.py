@@ -240,6 +240,11 @@ class JobRunner:
         started = time.perf_counter()
         try:
             handler = resolve_handler(job.job_type)
+            # Capture one execution-boundary timestamp from the worker's clock and
+            # thread it to the handler, so any follow-on work a handler schedules is
+            # stamped on the same clock the worker claims and completes with (rather
+            # than falling back to the wall clock).
+            now = self._clock()
             ctx = HandlerContext(
                 db=db,
                 context=_context_from_job(job),
@@ -248,6 +253,7 @@ class JobRunner:
                 attempt=job.attempt_count,
                 worker_id=worker_id,
                 is_cancelled=self._cancel_checker(job_id),
+                now=now,
             )
             result = handler(ctx)
             # A child span over just the terminal transition (not the handler, which
