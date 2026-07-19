@@ -186,6 +186,18 @@ additive capability reflection.
 - **Flags remain dark:** `opportunity_feedback_enabled`, `scout_scheduling_enabled`,
   and `connector_rss_enabled` all stay `False`.
 
+## Exact-head CI status
+
+The feedback/capability implementation is validated locally as above, but the
+exact-head CI on the draft PR (`#58`) is **currently red — not green**. The single
+failing job (Backend quality) is caused by a **pre-existing, unrelated
+scheduling-worker wall-clock defect** in files this batch does not touch
+(`apps/api/app/jobs/handlers.py`, `apps/api/app/scouting_requests/schedules.py`,
+`apps/api/app/tests/test_scout_schedule_worker_integration.py`). It is tracked
+separately in issue **#59** and is not a blocker of the feedback work itself. 3C-D
+remains **awaiting independent review and merge**; Phase 3C remains **in progress**
+until the external scheduling blocker is resolved and exact-head CI can be green.
+
 ## Rollout readiness
 
 The feature is implementation-complete and **dark**. Production rollout remains a

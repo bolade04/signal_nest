@@ -355,6 +355,11 @@ Expected responses:
   (`opportunity_feedback_enabled = False`); no rollout executed. See
   `docs/operations/opportunity-feedback-rollout.md` and
   `docs/verification/3c-d-feedback-ui-rollout-readiness.md`.
+  **Exact-head CI is currently red — not green:** the sole failing job (Backend
+  quality) is caused by a pre-existing, unrelated scheduling-worker wall-clock
+  defect in files this batch does not modify, tracked separately in issue **#59**.
+  The feedback implementation itself is validated locally; 3C-D stays awaiting
+  independent review and merge until that external blocker is resolved.
 
 ## 13. Testing strategy
 
