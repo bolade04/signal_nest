@@ -1546,6 +1546,10 @@
           "inference": {
             "$ref": "#/components/schemas/IntelligenceInference"
           },
+          "intelligence_record_id": {
+            "title": "Intelligence Record Id",
+            "type": "string"
+          },
           "is_simulated": {
             "title": "Is Simulated",
             "type": "boolean"
@@ -1575,6 +1579,7 @@
           }
         },
         "required": [
+          "intelligence_record_id",
           "classification",
           "is_simulated",
           "created_at",

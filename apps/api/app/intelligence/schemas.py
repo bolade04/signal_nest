@@ -113,6 +113,12 @@ class IntelligenceVersionInfo(BaseModel):
 class IntelligencePayload(BaseModel):
     """The typed, bounded public view of one persisted intelligence record."""
 
+    # Customer-safe opaque identifier of the exact persisted record this payload was
+    # mapped from (3C-C.1). It is the stable handle a client passes to the feedback
+    # POST so a judgement is bound to this precise immutable record. It is *only* the
+    # record's primary key — never the fingerprint, tenant scope columns or any other
+    # internal metadata.
+    intelligence_record_id: str
     classification: str
     decision: str | None = None
     is_simulated: bool

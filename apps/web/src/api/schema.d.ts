@@ -1643,6 +1643,8 @@ export interface components {
             evidence: components["schemas"]["IntelligenceEvidenceItem"][];
             facts: components["schemas"]["IntelligenceFacts"];
             inference: components["schemas"]["IntelligenceInference"];
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
             /** Is Simulated */
             is_simulated: boolean;
             provenance: components["schemas"]["IntelligenceProvenance"];

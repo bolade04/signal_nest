@@ -177,6 +177,9 @@ def _map_record(record: SignalIntelligenceRecord) -> IntelligencePayload:
     score_components = record.score_components if isinstance(record.score_components, dict) else {}
 
     return IntelligencePayload(
+        # The identifier is the exact record already selected by the scoped read
+        # service — never a second lookup, never inferred from the opportunity id.
+        intelligence_record_id=record.id,
         classification=_clip_str(record.classification, _MAX_STR),
         decision=(_clip_str(record.decision, _MAX_STR) if record.decision is not None else None),
         is_simulated=bool(record.is_simulated),
