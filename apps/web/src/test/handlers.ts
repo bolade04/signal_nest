@@ -261,6 +261,8 @@ export const handlers = [
       environment: 'development',
       is_local_mode: true,
       all_configured: true,
+      // Opportunity feedback ships dark by default, mirroring the server flag.
+      features: { opportunity_feedback_enabled: false },
     }),
   ),
   // Detailed backend topology — operator-only in the real API.

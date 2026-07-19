@@ -16,6 +16,27 @@ export function isFeatureDark(error: unknown): boolean {
 }
 
 /**
+ * Authoritative, *pre-request* capability gate. The coarse runtime summary
+ * (`GET /system/capabilities`, already fetched app-wide and cached) reflects the
+ * server ``opportunity_feedback_enabled`` flag. Reading it lets the UI decide
+ * whether the feedback capability is live **before** issuing any feedback
+ * request, so while the feature is dark no feedback GET/POST is ever sent — the
+ * backend 503 remains only as defence-in-depth for a stale client. The query is
+ * shared (same key + queryFn as Settings) so this adds no extra network cost.
+ */
+export function useFeedbackCapability() {
+  const query = useQuery({
+    queryKey: queryKeys.runtimeSummary,
+    queryFn: ({ signal }) => api.getRuntimeSummary(signal),
+    staleTime: 60_000,
+  });
+  return {
+    isEnabled: query.data?.features?.opportunity_feedback_enabled ?? false,
+    isLoading: query.isLoading,
+  };
+}
+
+/**
  * Read one record's append-only feedback history. The query key embeds the
  * intelligence record id, so switching the bound record (or opportunity, or
  * workspace) yields a fresh cache entry with no cross-record leakage. Client

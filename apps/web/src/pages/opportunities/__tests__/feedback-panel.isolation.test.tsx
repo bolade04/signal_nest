@@ -1,5 +1,6 @@
-import { within as domWithin } from '@testing-library/react';
+import { fireEvent, within as domWithin, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
+import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
 import { OpportunityFeedbackPanel } from '@/pages/opportunities/FeedbackPanel';
@@ -13,6 +14,23 @@ import { renderApp } from '@/test/utils';
 const WS = 'ws-1';
 const P = (path: string) => `*${API_PREFIX}${path}`;
 const feedbackPath = (opp: string) => P(`/workspaces/${WS}/opportunities/${opp}/feedback`);
+const CAPABILITIES = P('/system/capabilities');
+
+// The panel only mounts its data hooks once the runtime-capability reflection
+// reports the feature enabled — mirror that precondition in every test here.
+function enableCapability(enabled = true) {
+  server.use(
+    http.get(CAPABILITIES, () =>
+      HttpResponse.json({
+        app_mode: 'local',
+        environment: 'development',
+        is_local_mode: true,
+        all_configured: true,
+        features: { opportunity_feedback_enabled: enabled },
+      }),
+    ),
+  );
+}
 
 // Four independent markets, mirroring the backend worker-integration coverage.
 const MARKETS = {
@@ -61,10 +79,34 @@ function within(screen: ReturnType<typeof renderApp>, testId: string) {
   return domWithin(screen.getByTestId(testId));
 }
 
+// Mirrors the production parent (IntelligencePanel), which mounts a single panel
+// keyed by ``intelligence_record_id``. Switching the bound record therefore fully
+// remounts the panel — the strongest stale-context guarantee. A button lets a
+// test flip the active market mid-interaction while keeping one QueryClient.
+function MarketSwitcher() {
+  const [market, setMarket] = useState<(typeof MARKETS)[keyof typeof MARKETS]>(MARKETS.dallas);
+  return (
+    <div>
+      <button type="button" onClick={() => setMarket(MARKETS.london)}>
+        switch-to-london
+      </button>
+      <div data-testid="active-panel">
+        <OpportunityFeedbackPanel
+          key={market.rec}
+          workspaceId={WS}
+          opportunityId={market.opp}
+          intelligenceRecordId={market.rec}
+        />
+      </div>
+    </div>
+  );
+}
+
 describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
   it('renders each market with only its own feedback history', async () => {
     // Each market carries a uniquely identifiable reason so any cross-market
     // leak would be visible.
+    enableCapability(true);
     server.use(
       http.get(feedbackPath(MARKETS.dallas.opp), () =>
         page([feedbackRow(MARKETS.dallas, { is_useful: true, reason_code: 'useful_insight' })]),
@@ -100,6 +142,7 @@ describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
   });
 
   it('keeps a submission scoped to the acting market', async () => {
+    enableCapability(true);
     let dallasCreated = false;
     server.use(
       http.get(feedbackPath(MARKETS.dallas.opp), () =>
@@ -155,5 +198,148 @@ describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
     expect(await dallas.findByText('Useful insight')).toBeInTheDocument();
     expect(london.getByText(/no feedback recorded yet/i)).toBeInTheDocument();
     expect(london.queryByText('Useful insight')).not.toBeInTheDocument();
+  });
+
+  it('discards a pending verdict and posts nothing when the bound record switches while the dialog is open', async () => {
+    enableCapability(true);
+    let dallasPost = 0;
+    let londonPost = 0;
+    server.use(
+      http.get(feedbackPath(MARKETS.dallas.opp), () => page([])),
+      http.get(feedbackPath(MARKETS.london.opp), () => page([])),
+      http.post(feedbackPath(MARKETS.dallas.opp), () => {
+        dallasPost += 1;
+        return HttpResponse.json(feedbackRow(MARKETS.dallas), { status: 201 });
+      }),
+      http.post(feedbackPath(MARKETS.london.opp), () => {
+        londonPost += 1;
+        return HttpResponse.json(feedbackRow(MARKETS.london), { status: 201 });
+      }),
+    );
+
+    const screen = renderApp(<MarketSwitcher />, { route: '/opportunities' });
+
+    // Open the verdict dialog on Dallas, then switch the bound record to London.
+    await screen.user.click(await screen.findByRole('button', { name: /^useful$/i }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    // A modal dialog locks the background (pointer-events: none), so the record
+    // switch here models a *programmatic* rebind — e.g. a background intelligence
+    // refresh changing the parent's record id — not a user background click.
+    fireEvent.click(screen.getByRole('button', { name: /switch-to-london/i, hidden: true }));
+
+    // The record change remounts the panel: the pending verdict is discarded, so
+    // the stale dialog cannot submit against the newly-bound record.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByRole('button', { name: /^useful$/i })).toBeInTheDocument();
+    expect(dallasPost).toBe(0);
+    expect(londonPost).toBe(0);
+  });
+
+  it('resolves a submission pending across a record switch into only its own scope', async () => {
+    enableCapability(true);
+    let dallasCreated = false;
+    let resolvePost!: () => void;
+    const gate = new Promise<void>((r) => {
+      resolvePost = r;
+    });
+    server.use(
+      http.get(feedbackPath(MARKETS.dallas.opp), () =>
+        page(dallasCreated ? [feedbackRow(MARKETS.dallas, { reason_code: 'useful_insight' })] : []),
+      ),
+      http.post(feedbackPath(MARKETS.dallas.opp), async () => {
+        await gate;
+        dallasCreated = true;
+        return HttpResponse.json(feedbackRow(MARKETS.dallas), { status: 201 });
+      }),
+      http.get(feedbackPath(MARKETS.london.opp), () => page([])),
+      http.post(feedbackPath(MARKETS.london.opp), () => {
+        throw new Error('London feedback POST should never be called');
+      }),
+    );
+
+    const screen = renderApp(<MarketSwitcher />, { route: '/opportunities' });
+
+    await screen.user.click(await screen.findByRole('button', { name: /^useful$/i }));
+    await screen.user.click(await screen.findByRole('button', { name: /submit feedback/i }));
+    // Submission is in flight against Dallas (the modal dialog stays open and
+    // locks the background); the record is rebound programmatically to London.
+    fireEvent.click(screen.getByRole('button', { name: /switch-to-london/i, hidden: true }));
+    expect(await screen.findByText(/no feedback recorded yet/i)).toBeInTheDocument();
+
+    // Let the in-flight Dallas write complete: its onSuccess invalidates only the
+    // Dallas-scoped query key, so London's now-visible history is never touched.
+    resolvePost();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText(/no feedback recorded yet/i)).toBeInTheDocument();
+    expect(screen.queryByText('Useful insight')).not.toBeInTheDocument();
+  });
+
+  it('never lands a slow feedback response into the newly-bound record view', async () => {
+    enableCapability(true);
+    let resolveDallas!: () => void;
+    const gate = new Promise<void>((r) => {
+      resolveDallas = r;
+    });
+    server.use(
+      http.get(feedbackPath(MARKETS.dallas.opp), async () => {
+        await gate;
+        return page([feedbackRow(MARKETS.dallas, { reason_code: 'useful_insight' })]);
+      }),
+      http.get(feedbackPath(MARKETS.london.opp), () =>
+        page([feedbackRow(MARKETS.london, { is_useful: false, reason_code: 'wrong_market' })]),
+      ),
+    );
+
+    const screen = renderApp(<MarketSwitcher />, { route: '/opportunities' });
+
+    // Dallas's history GET is still pending; switch to London before it resolves.
+    await screen.user.click(await screen.findByRole('button', { name: /switch-to-london/i }));
+    expect(await screen.findByText('Wrong market')).toBeInTheDocument();
+
+    // The stale Dallas response resolves into its own record-keyed cache entry,
+    // which nothing renders — it can never appear in the London view.
+    resolveDallas();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText('Useful insight')).not.toBeInTheDocument();
+    expect(screen.getByText('Wrong market')).toBeInTheDocument();
+  });
+
+  it('unmounting while a submission is pending issues exactly one POST and does not throw', async () => {
+    enableCapability(true);
+    let postCount = 0;
+    let resolvePost!: () => void;
+    const gate = new Promise<void>((r) => {
+      resolvePost = r;
+    });
+    server.use(
+      http.get(feedbackPath(MARKETS.dallas.opp), () => page([])),
+      http.post(feedbackPath(MARKETS.dallas.opp), async () => {
+        postCount += 1;
+        await gate;
+        return HttpResponse.json(feedbackRow(MARKETS.dallas), { status: 201 });
+      }),
+    );
+
+    const screen = renderApp(
+      <div data-testid="panel-dallas">
+        <OpportunityFeedbackPanel
+          workspaceId={WS}
+          opportunityId={MARKETS.dallas.opp}
+          intelligenceRecordId={MARKETS.dallas.rec}
+        />
+      </div>,
+      { route: '/opportunities' },
+    );
+
+    const dallas = within(screen, 'panel-dallas');
+    await screen.user.click(await dallas.findByRole('button', { name: /^useful$/i }));
+    await screen.user.click(await screen.findByRole('button', { name: /submit feedback/i }));
+
+    // Tear the whole tree down mid-flight, then let the write complete.
+    screen.unmount();
+    resolvePost();
+    await new Promise((r) => setTimeout(r, 0));
+    // Exactly one append-only write was issued; unmounting mid-flight is inert.
+    expect(postCount).toBe(1);
   });
 });

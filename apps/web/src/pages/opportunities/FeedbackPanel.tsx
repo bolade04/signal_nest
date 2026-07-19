@@ -19,7 +19,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { reasonLabel, reasonsForVerdict } from './feedbackReasons';
-import { isFeatureDark, useFeedbackHistory, useSubmitFeedback } from './useFeedback';
+import {
+  isFeatureDark,
+  useFeedbackCapability,
+  useFeedbackHistory,
+  useSubmitFeedback,
+} from './useFeedback';
 
 // Mirrors the server-side EDITORS gate (owner / admin / marketer). View-only
 // members never see the control — the API would 403 them anyway; this only
@@ -68,7 +73,17 @@ function FeedbackInner({
   opportunityId: string;
   intelligenceRecordId: string;
 }) {
-  const history = useFeedbackHistory({ workspaceId, opportunityId, intelligenceRecordId });
+  // Authoritative pre-request gate: consult the runtime-capability reflection
+  // first. While feedback is dark this is ``false``, so the history query below
+  // is disabled and *no feedback request is ever issued* — the panel renders
+  // nothing without probing a 503.
+  const capability = useFeedbackCapability();
+  const history = useFeedbackHistory({
+    workspaceId,
+    opportunityId,
+    intelligenceRecordId,
+    enabled: capability.isEnabled,
+  });
   const submit = useSubmitFeedback({ workspaceId, opportunityId, intelligenceRecordId });
 
   const [pendingVerdict, setPendingVerdict] = useState<boolean | null>(null);
@@ -79,6 +94,12 @@ function FeedbackInner({
   // this component, discarding any pending verdict. Combined with the
   // record-scoped query key and the scope captured in the submit mutation, a
   // verdict can never be applied to a record other than the one on screen.
+
+  // Capability dark (or still resolving) → render nothing and issue no feedback
+  // request at all. This is the primary gate; the server 503 below is only a
+  // defence-in-depth fallback for a stale client whose cached capability is
+  // ahead of a mid-session rollback.
+  if (!capability.isEnabled) return null;
 
   // Feature-dark (503) or unauthorized (403) → render nothing. No partial UI is
   // ever shown for a capability the user cannot use.

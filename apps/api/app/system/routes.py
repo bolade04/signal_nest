@@ -37,11 +37,29 @@ class HealthOut(BaseModel):
     mode: str
 
 
+class FeatureFlagsOut(BaseModel):
+    """Coarse, read-only product-capability booleans.
+
+    These are *reflections* of server feature flags — never a customer-settable
+    toggle. They let an authenticated client know, before it issues any
+    feature-specific request, whether a dark-deployed capability is live, so it
+    can avoid probing an endpoint that would only answer ``503``. Secret-free:
+    only booleans, never backend topology or configuration values.
+    """
+
+    #: Whether the opportunity-feedback capability is enabled server-side. While
+    #: false the feedback endpoints answer 503; the UI uses this to render
+    #: nothing and skip the feedback request entirely.
+    opportunity_feedback_enabled: bool
+
+
 class RuntimeSummaryOut(BaseModel):
     app_mode: str
     environment: str
     is_local_mode: bool
     all_configured: bool
+    #: Read-only product-capability reflections (see FeatureFlagsOut).
+    features: FeatureFlagsOut
 
 
 class ReadinessCheckOut(BaseModel):
@@ -70,8 +88,14 @@ def system_health() -> HealthOut:
 def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSummaryOut:
     # Coarse summary for any authenticated customer. Detailed backend topology is
     # operator-only and lives at /internal/system/capabilities.
-    report = build_runtime_report()
-    return RuntimeSummaryOut(**report.to_summary_dict())
+    settings = get_settings()
+    report = build_runtime_report(settings)
+    return RuntimeSummaryOut(
+        **report.to_summary_dict(),
+        features=FeatureFlagsOut(
+            opportunity_feedback_enabled=settings.opportunity_feedback_enabled,
+        ),
+    )
 
 
 @router.get("/readiness", response_model=ReadinessOut)

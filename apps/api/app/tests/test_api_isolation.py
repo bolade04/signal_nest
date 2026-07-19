@@ -135,9 +135,24 @@ def test_system_capabilities_is_coarse_summary_only(
     body = resp.json()
     assert body["is_local_mode"] is True
     assert "capabilities" not in body
+    # Read-only product-capability reflections are exposed (never backend
+    # topology). Opportunity feedback ships dark, so it reflects False.
+    assert body["features"] == {"opportunity_feedback_enabled": False}
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
         assert forbidden not in blob
+
+
+def test_system_capabilities_reflects_feedback_flag_when_enabled(
+    client: TestClient, auth: dict[str, str], monkeypatch
+):
+    # The features block is a live reflection of the server flag, not a constant.
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "opportunity_feedback_enabled", True)
+    resp = client.get(f"{API}/system/capabilities", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["features"]["opportunity_feedback_enabled"] is True
 
 
 def test_internal_capabilities_requires_operator(client: TestClient):
