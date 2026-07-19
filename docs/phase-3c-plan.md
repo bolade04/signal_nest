@@ -334,12 +334,18 @@ Expected responses:
   satisfied**, so 3C-D is **unblocked**.
 - **Exit:** Phase 3C implementation complete **but dark**; production rollout
   remains a separate decision (§15).
-- **Status:** **NOT STARTED (now unblocked).** Both entry conditions are met (3C-C
-  and 3C-C.1 merged), so 3C-D may begin — but only through a **separate
-  implementation branch and review workflow**. Residual scope: UI; client
-  integration; cache isolation; multi-market UI isolation; runbook; controlled
-  internal rollout preparation; final Phase 3C closeout. This docs update does **not**
-  authorize 3C-D to begin.
+- **Status:** **IMPLEMENTED — AWAITING INDEPENDENT REVIEW AND MERGE.** Delivered on
+  branch `feat/3c-d-feedback-ui-rollout-readiness` as a **draft** PR (no reviewer,
+  ready-for-review, merge, or flag enablement). Delivered scope: typed client
+  integration over the existing (unchanged) feedback API; feature-gated + role-aware
+  rendering (server-gated via 503 probe — no backend/OpenAPI change); append-only
+  immutable history; loading/success/error/retry UX; record-scoped query keys and
+  scoped mutation invalidation; stale-context protection; four-market UI isolation
+  tests (Dallas/London/Lagos/Nairobi); rollout runbook + closeout verification. The
+  feature **remains dark** (`opportunity_feedback_enabled = False`); no migration, no
+  contract drift, no rollout executed. See
+  `docs/operations/opportunity-feedback-rollout.md` and
+  `docs/verification/3c-d-feedback-ui-rollout-readiness.md`.
 
 ## 13. Testing strategy
 
@@ -446,11 +452,12 @@ decisions.
 ## 20. Phase 3C success definition
 
 **Overall status: PHASE 3C IN PROGRESS — 3C-A, 3C-B, 3C-C, AND 3C-C.1 COMPLETE; 3C-D
-NOT STARTED.** The feedback API is merged but remains dark
-(`opportunity_feedback_enabled = False`); the intelligence-record ID contract (3C-C.1)
-is merged and exact-merge-SHA verified, resolving the 3C-D feedback-UI blocker; no
-production rollout has begun. Phase 3C is **not** complete because 3C-D (feedback UI +
-closeout) has not started.
+IMPLEMENTED AND AWAITING INDEPENDENT REVIEW AND MERGE.** The feedback API is merged but
+remains dark (`opportunity_feedback_enabled = False`); the intelligence-record ID
+contract (3C-C.1) is merged and exact-merge-SHA verified, resolving the 3C-D
+feedback-UI blocker; the 3C-D feedback UI + closeout is implemented on a **draft** PR
+(not merged); no production rollout has begun. Phase 3C is **not** complete because
+3C-D has not yet been reviewed and merged.
 
 Phase 3C is complete when:
 

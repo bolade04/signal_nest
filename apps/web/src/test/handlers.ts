@@ -172,6 +172,9 @@ const SHARED_EXCERPT = 'Customers keep asking for faster delivery windows.';
 
 function intelligenceFor(o: Opp) {
   return {
+    // Customer-safe opaque record id (3C-C.1). Distinct per opportunity so
+    // four-market feedback isolation can be proven against the real id.
+    intelligence_record_id: `rec-${o.id}`,
     classification: o.classification,
     decision: o.decision,
     is_simulated: true,
@@ -397,6 +400,23 @@ export const handlers = [
       intelligence: o.id === noIntelOpportunityId ? null : intelligenceFor(o),
     });
   }),
+
+  // ---- Opportunity feedback (3C-C; dark by default) ----
+  // The feature ships dark, so both the read and the write answer 503
+  // (capability_unavailable) unless a test explicitly enables them via
+  // server.use(...). This keeps the feedback UI hidden by default.
+  http.get(P('/workspaces/:ws/opportunities/:id/feedback'), () =>
+    HttpResponse.json(
+      { error: { code: 'capability_unavailable', message: 'Opportunity feedback is not available yet.' } },
+      { status: 503 },
+    ),
+  ),
+  http.post(P('/workspaces/:ws/opportunities/:id/feedback'), () =>
+    HttpResponse.json(
+      { error: { code: 'capability_unavailable', message: 'Opportunity feedback is not available yet.' } },
+      { status: 503 },
+    ),
+  ),
 
   // ---- Campaign context (all kinds return an empty list by default) ----
   // Registered LAST so the specific single-segment routes above (locations,

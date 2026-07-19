@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDateTime, titleCase } from '@/lib/utils';
+import { OpportunityFeedbackPanel } from './FeedbackPanel';
 import { useOpportunityIntelligence } from './useOpportunityIntelligence';
 
 // Number of evidence excerpts shown before the "Show more" disclosure.
@@ -268,7 +269,15 @@ function IntelligenceSkeleton() {
   );
 }
 
-function IntelligenceBody({ payload }: { payload: IntelligencePayload }) {
+function IntelligenceBody({
+  payload,
+  workspaceId,
+  opportunityId,
+}: {
+  payload: IntelligencePayload;
+  workspaceId: string;
+  opportunityId: string;
+}) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -290,6 +299,12 @@ function IntelligenceBody({ payload }: { payload: IntelligencePayload }) {
       <ScoreSection score={payload.score} />
       <Separator />
       <ProvenanceDetails payload={payload} />
+      <OpportunityFeedbackPanel
+        key={payload.intelligence_record_id}
+        workspaceId={workspaceId}
+        opportunityId={opportunityId}
+        intelligenceRecordId={payload.intelligence_record_id}
+      />
     </div>
   );
 }
@@ -319,7 +334,11 @@ export function OpportunityIntelligencePanel({
         ) : query.isError ? (
           <ErrorState error={query.error} onRetry={() => query.refetch()} />
         ) : query.data?.intelligence ? (
-          <IntelligenceBody payload={query.data.intelligence} />
+          <IntelligenceBody
+            payload={query.data.intelligence}
+            workspaceId={workspaceId}
+            opportunityId={opportunityId}
+          />
         ) : (
           <p className="text-sm text-muted-foreground">
             No intelligence analysis is available for this opportunity yet.

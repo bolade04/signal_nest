@@ -37,6 +37,23 @@ export const queryKeys = {
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId] as const,
   opportunityIntelligence: (workspaceId: string, opportunityId: string) =>
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId, 'intelligence'] as const,
+  // The feedback key embeds the intelligence record id (not just workspace +
+  // opportunity) so that feedback bound to one immutable record can never share
+  // a cache entry with — or be invalidated by — another record or opportunity.
+  opportunityFeedback: (
+    workspaceId: string,
+    opportunityId: string,
+    intelligenceRecordId: string,
+  ) =>
+    [
+      'workspaces',
+      workspaceId,
+      'opportunities',
+      'detail',
+      opportunityId,
+      'feedback',
+      intelligenceRecordId,
+    ] as const,
 
   auditLogs: (workspaceId: string) => ['workspaces', workspaceId, 'audit-logs'] as const,
 } as const;
