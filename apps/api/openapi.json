@@ -893,6 +893,38 @@
         "title": "CompetitorIn",
         "type": "object"
       },
+      "DeadLetterJobsOut": {
+        "description": "Operator dead-letter summary: total count plus a bounded recent page.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobOperatorOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "DeadLetterJobsOut",
+        "type": "object"
+      },
       "FeatureFlagsOut": {
         "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of server feature flags \u2014 never a customer-settable\ntoggle. They let an authenticated client know, before it issues any\nfeature-specific request, whether a dark-deployed capability is live, so it\ncan avoid probing an endpoint that would only answer ``503``. Secret-free:\nonly booleans, never backend topology or configuration values.",
         "properties": {
@@ -2293,6 +2325,95 @@
         "title": "JobOut",
         "type": "object"
       },
+      "JobPageOut": {
+        "description": "A bounded, cross-tenant operator page of jobs (filterable listing).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobOperatorOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "JobPageOut",
+        "type": "object"
+      },
+      "JobStatus": {
+        "description": "Lifecycle states for a durable job.\n\n``scheduled`` is the initial state of a future-dated job; ``pending`` is a\njob that is due and eligible to be claimed. ``retry_wait`` is a job that\nfailed a retryable attempt and is waiting out its backoff before becoming\neligible again.",
+        "enum": [
+          "pending",
+          "scheduled",
+          "claimed",
+          "running",
+          "retry_wait",
+          "succeeded",
+          "failed",
+          "dead_lettered",
+          "cancel_requested",
+          "cancelled"
+        ],
+        "title": "JobStatus",
+        "type": "string"
+      },
+      "JobType": {
+        "description": "The constrained set of job types the platform can execute.\n\nEnqueueing or executing any other type is rejected (a stable, non-retryable\nerror), so an unknown/renamed type can never silently no-op.",
+        "enum": [
+          "scout_request.execute",
+          "scout_schedule.tick"
+        ],
+        "title": "JobType",
+        "type": "string"
+      },
+      "JobsOverviewOut": {
+        "properties": {
+          "dead_letter_count": {
+            "title": "Dead Letter Count",
+            "type": "integer"
+          },
+          "status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Status Counts",
+            "type": "object"
+          },
+          "stuck_count": {
+            "title": "Stuck Count",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "status_counts",
+          "stuck_count",
+          "dead_letter_count"
+        ],
+        "title": "JobsOverviewOut",
+        "type": "object"
+      },
       "LocationBase": {
         "properties": {
           "address": {
@@ -2966,6 +3087,38 @@
           "onboarding_completed"
         ],
         "title": "OnboardingResult",
+        "type": "object"
+      },
+      "OperationalOverviewOut": {
+        "description": "One coarse operator snapshot of queue, fleet and schedule health.",
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/JobsOverviewOut"
+          },
+          "schedules": {
+            "$ref": "#/components/schemas/SchedulesOverviewOut"
+          },
+          "stale_after_seconds": {
+            "title": "Stale After Seconds",
+            "type": "number"
+          },
+          "workers": {
+            "$ref": "#/components/schemas/WorkersOverviewOut"
+          }
+        },
+        "required": [
+          "stale_after_seconds",
+          "as_of",
+          "jobs",
+          "workers",
+          "schedules"
+        ],
+        "title": "OperationalOverviewOut",
         "type": "object"
       },
       "OpportunityCard": {
@@ -3983,6 +4136,38 @@
         "title": "RuntimeSummaryOut",
         "type": "object"
       },
+      "ScheduleFleetOut": {
+        "description": "A bounded, cross-tenant operator page of schedules.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleOperatorOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "ScheduleFleetOut",
+        "type": "object"
+      },
       "ScheduleInterval": {
         "description": "Bounded recurrence cadence for a scouting schedule (SB-B).\n\nOnly two cadences exist and the minimum interval is 24h, so a schedule can\nnever enqueue more than once per day. ``daily`` recurs every 24 hours and\n``weekly`` every 7 days \u2014 pure fixed intervals with no clock-of-day, timezone\nor DST semantics.",
         "enum": [
@@ -3991,6 +4176,98 @@
         ],
         "title": "ScheduleInterval",
         "type": "string"
+      },
+      "ScheduleOperatorOut": {
+        "description": "Operator view of one scouting schedule with its derived lifecycle state.\n\n``state`` is computed live from the row plus the live tick chain\n(:func:`derive_schedule_state`) so it can never drift from reality. Carries\nonly safe scope ids and lifecycle timestamps \u2014 never any secret.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/ScheduleInterval"
+          },
+          "last_tick_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick At"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "scout_request_id": {
+            "title": "Scout Request Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScheduleState"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "workspace_id",
+          "location_id",
+          "scout_request_id",
+          "interval",
+          "enabled",
+          "state",
+          "next_run_at",
+          "last_tick_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScheduleOperatorOut",
+        "type": "object"
       },
       "ScheduleState": {
         "description": "Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).\n\nNever persisted \u2014 always computed from the row plus the live job state so it can\nnever drift from reality:\n\n* ``paused`` \u2014 disabled; drives no work.\n* ``active`` \u2014 enabled and a live tick chain is actually fanning out runs.\n* ``activation_required`` \u2014 enabled but not yet started. A schedule created while\n  the feature was dark (or before the flag was turned on) is intentionally *not*\n  auto-seeded; it stays here until an explicit resume/activate action starts it.",
@@ -4001,6 +4278,27 @@
         ],
         "title": "ScheduleState",
         "type": "string"
+      },
+      "SchedulesOverviewOut": {
+        "properties": {
+          "state_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "State Counts",
+            "type": "object"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "state_counts"
+        ],
+        "title": "SchedulesOverviewOut",
+        "type": "object"
       },
       "ScoreBreakdown": {
         "properties": {
@@ -4518,6 +4816,49 @@
         "title": "SourcePrefIn",
         "type": "object"
       },
+      "StuckJobsOut": {
+        "description": "Operator stuck-job summary: a live count plus a bounded page.\n\n``stale_after_seconds`` is the heartbeat-staleness threshold used to classify\n(the configured worker stale bound); ``as_of`` is the injected evaluation\nclock the count/page was computed against, so the read is self-describing.",
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobOperatorOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "stale_after_seconds": {
+            "title": "Stale After Seconds",
+            "type": "number"
+          },
+          "stuck_count": {
+            "title": "Stuck Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stuck_count",
+          "stale_after_seconds",
+          "as_of",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "StuckJobsOut",
+        "type": "object"
+      },
       "TelemetryStatusOut": {
         "description": "Operator-safe observability posture. Deliberately free of any endpoint,\ncredential, URL, payload, tenant/request/job identifier or token \u2014 only\nbounded, enumerable status values and a failure *count*.",
         "properties": {
@@ -4804,6 +5145,32 @@
           "stopped_at"
         ],
         "title": "WorkerSummaryOut",
+        "type": "object"
+      },
+      "WorkersOverviewOut": {
+        "properties": {
+          "active_count": {
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "stale_count": {
+            "title": "Stale Count",
+            "type": "integer"
+          },
+          "status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Status Counts",
+            "type": "object"
+          }
+        },
+        "required": [
+          "status_counts",
+          "active_count",
+          "stale_count"
+        ],
+        "title": "WorkersOverviewOut",
         "type": "object"
       },
       "WorkspaceCreate": {
@@ -5179,6 +5546,505 @@
         ]
       }
     },
+    "/api/v1/internal/system/jobs/dead-letter": {
+      "get": {
+        "description": "Dead-letter visibility: total count + a bounded recent page. Read-only.\n\nSurfaces jobs that exhausted their attempts (or expired their lease with no\nattempts left). No requeue/retry action is offered \u2014 that is a later,\nseparately-approved operability action; this is visibility only.",
+        "operationId": "internal_jobs_dead_letter_api_v1_internal_system_jobs_dead_letter_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterJobsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Jobs Dead Letter",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/jobs/list": {
+      "get": {
+        "description": "Bounded, filtered, cross-tenant job listing (operator diagnostics).\n\nUnlike the customer ``/workspaces/{id}/jobs`` listing this is intentionally\ncross-tenant \u2014 hence the operator gate \u2014 but it still returns only the\nsecret-free :class:`JobOperatorOut` view (no raw payload/lease token). Filters\nnarrow by tenant scope, status and job type; results are newest-first.",
+        "operationId": "internal_jobs_list_api_v1_internal_system_jobs_list_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "location_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scout_request_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scout Request Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Jobs List",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/jobs/stuck": {
+      "get": {
+        "description": "Live stuck-job summary per Phase 4A plan \u00a78.10.\n\nA job is stuck when it is still claimed/running yet its lease has expired or\nits heartbeat is older than the configured worker stale threshold. Computed\nagainst the request clock; read-only (no requeue/recovery is triggered here).",
+        "operationId": "internal_jobs_stuck_api_v1_internal_system_jobs_stuck_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckJobsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Jobs Stuck",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/jobs/{job_id}": {
+      "get": {
+        "description": "Single-job operator detail (cross-tenant). 404 when unknown.\n\nReturns the secret-free operator view (safe worker/lease diagnostics, never a\nraw payload). Cross-tenant lookup is deliberate and gated by ``require_operator``.",
+        "operationId": "internal_job_detail_api_v1_internal_system_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOperatorOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Job Detail",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/jobs/{job_id}/events": {
+      "get": {
+        "description": "A single job's sanitized lifecycle-event timeline (oldest-first).\n\nUses the same safe :class:`JobEventOut` projection the customer sees \u2014 event\ntype, status transition, attempt, error code and bounded safe metadata \u2014 never\na raw payload, worker id or secret. 404 when the job id is unknown.",
+        "operationId": "internal_job_events_api_v1_internal_system_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobEventOut"
+                  },
+                  "title": "Response Internal Job Events Api V1 Internal System Jobs  Job Id  Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Job Events",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/overview": {
+      "get": {
+        "description": "A single coarse operator snapshot composed from existing diagnostics.\n\nRead-only and cross-tenant (operator-gated). Stuck is derived live against the\nrequest clock and the configured worker stale threshold, so the number is\naccurate regardless of the recovery-sweep cadence.",
+        "operationId": "internal_overview_api_v1_internal_system_overview_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationalOverviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Overview",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
     "/api/v1/internal/system/readiness": {
       "get": {
         "operationId": "internal_readiness_api_v1_internal_system_readiness_get",
@@ -5223,6 +6089,95 @@
           }
         },
         "summary": "Internal Readiness",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/schedules": {
+      "get": {
+        "description": "Schedule visibility with live-derived lifecycle state (cross-tenant).\n\nOperator-gated and read-only. Each row's ``state`` is derived from the live\ntick chain via :func:`derive_schedule_state`, so it reflects the real\npaused / active / activation-required lifecycle rather than a persisted guess.",
+        "operationId": "internal_schedules_api_v1_internal_system_schedules_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleFleetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Schedules",
         "tags": [
           "internal"
         ]
