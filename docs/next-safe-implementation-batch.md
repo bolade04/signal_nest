@@ -1,5 +1,15 @@
 # Next safe implementation batch — Sandbox Scouting Orchestration & Run History
 
+> **SUPERSEDED (2026-07-20).** This document is retained unchanged for audit history.
+> The "next safe batch" it recommends — sandbox scouting orchestration & run history —
+> was subsequently implemented and closed out as **Phase 3B** (SB-A/B/C/D, PRs #48–#51)
+> and the human-feedback loop as **Phase 3C**, all merged dark and verified through the
+> Phase 3 closeout (PR #62). Its baseline SHA and Alembic-head references below are
+> historical and no longer current (current single head: `4945b98229e6`). For the
+> current forward-looking plan see **`docs/phase-4a-plan.md`** (Phase 4A — Operator
+> Observability and Controlled Activation Foundation). Nothing below is re-authorized by
+> that supersession; it records prior owner decisions only.
+
 **Status:** OWNER DECISIONS RECORDED (see §24) — PENDING INDEPENDENT REVIEW & PROTECTED MERGE.
 No code, tests, migrations, contracts, dependencies, or CI have been changed by this document.
 It records the product owner's decisions only; it invents no legal approval and authorizes no
