@@ -334,11 +334,14 @@ Expected responses:
   satisfied**, so 3C-D is **unblocked**.
 - **Exit:** Phase 3C implementation complete **but dark**; production rollout
   remains a separate decision (§15).
-- **Status:** **IMPLEMENTED — ACCEPTANCE HARDENING COMPLETE — AWAITING INDEPENDENT
-  REVIEW AND MERGE.** Delivered on branch `feat/3c-d-feedback-ui-rollout-readiness`
-  as a **draft** PR (no reviewer, ready-for-review, merge, or flag enablement).
-  Delivered scope: typed client integration over the existing feedback API;
-  feature-gated + role-aware rendering; append-only immutable history;
+- **Status:** **COMPLETE — feedback UI merged through the protected workflow and
+  exact-merge-SHA verified; feature remains dark.** Merged via **PR #58** (squash,
+  no admin bypass, no auto-merge); reviewed head
+  `c8de2094d133201c86a72fba6d6e2a6abbab1ae4` approved by `adesenden`; merge SHA
+  `0b9ac1a8faf9c1c15fe565a6799ccd6389cdb743`; exact-head CI `29719708175` and
+  exact-merge-SHA post-merge push CI `29736845250` both green across all five
+  required jobs. Delivered scope: typed client integration over the existing
+  feedback API; feature-gated + role-aware rendering; append-only immutable history;
   loading/success/error/retry UX; record-scoped query keys and scoped mutation
   invalidation; stale-context protection; four-market UI isolation tests
   (Dallas/London/Lagos/Nairobi); rollout runbook + closeout verification.
@@ -353,13 +356,14 @@ Expected responses:
   endpoint, no authorization change, no customer-settable toggle); `openapi.json` /
   `schema.d.ts` regenerated additively. The feature **remains dark**
   (`opportunity_feedback_enabled = False`); no rollout executed. See
-  `docs/operations/opportunity-feedback-rollout.md` and
-  `docs/verification/3c-d-feedback-ui-rollout-readiness.md`.
-  **Exact-head CI is currently red — not green:** the sole failing job (Backend
-  quality) is caused by a pre-existing, unrelated scheduling-worker wall-clock
-  defect in files this batch does not modify, tracked separately in issue **#59**.
-  The feedback implementation itself is validated locally; 3C-D stays awaiting
-  independent review and merge until that external blocker is resolved.
+  `docs/operations/opportunity-feedback-rollout.md`,
+  `docs/verification/3c-d-feedback-ui-rollout-readiness.md`, and the overall
+  `docs/verification/phase-3-closeout.md`.
+  **Naming note:** the earlier issue **#59** / PR #60 scheduling clock-fix closeout
+  (`docs/verification/3c-d-issue-59-closeout.md`) shares the "3C-D" label but is a
+  separate scheduling corrective workstream — not this roadmap's 3C-D. The prior
+  exact-head-CI blocker attributed to that #59 defect was resolved once #59 merged
+  to `main` and was incorporated into this branch before PR #58's green CI.
 
 ## 13. Testing strategy
 
@@ -465,24 +469,29 @@ decisions.
 
 ## 20. Phase 3C success definition
 
-**Overall status: PHASE 3C IN PROGRESS — 3C-A, 3C-B, 3C-C, AND 3C-C.1 COMPLETE; 3C-D
-IMPLEMENTED, ACCEPTANCE HARDENING COMPLETE, AND AWAITING INDEPENDENT REVIEW AND
-MERGE.** The feedback API is merged but remains dark
-(`opportunity_feedback_enabled = False`); the intelligence-record ID contract
-(3C-C.1) is merged and exact-merge-SHA verified, resolving the 3C-D feedback-UI
-blocker; the 3C-D feedback UI + closeout is implemented on a **draft** PR (not
-merged) and has since been **acceptance-hardened** (zero feedback requests while
-dark via an additive read-only capability reflection; directly-tested stale-context
-isolation); no production rollout has begun. Phase 3C is **not** complete because
-3C-D has not yet been reviewed and merged.
+**Overall status: PHASE 3C COMPLETE — 3C-A, 3C-B, 3C-C, 3C-C.1, AND 3C-D ALL
+MERGED AND VERIFIED; CAPABILITIES REMAIN DARK.** All feedback-loop batches are
+merged through the protected workflow; the feature remains dark
+(`opportunity_feedback_enabled = False`). 3C-D (feedback UI + closeout) merged via
+**PR #58** (squash; reviewed head `c8de2094d133201c86a72fba6d6e2a6abbab1ae4`
+approved by `adesenden`; merge SHA `0b9ac1a8faf9c1c15fe565a6799ccd6389cdb743`;
+exact-head CI `29719708175` and exact-merge-SHA CI `29736845250` both green across
+all five required jobs). Four-market and stale-context isolation are verified
+end-to-end; no production rollout has begun. The formal overall closeout is
+`docs/verification/phase-3-closeout.md`, which also documents that Phase 3B (SB-A
+through SB-D) is complete and clarifies the historical "3C-D" naming collision with
+the issue #59 scheduling clock-fix closeout. Phase 3C — and Phase 3 overall — is
+**complete**, dark, and verified.
 
-Phase 3C is complete when:
+Phase 3C is complete when (**all criteria met as of 2026-07-20**):
 
-- Feedback persistence (3C-B) is merged.
-- Feedback API (3C-C) is merged.
-- Feedback UI (3C-D) is merged.
-- Four-market isolation is verified end to end.
-- Audit and operations documentation are merged.
-- Exact-merge-SHA CI is green.
-- The feature **remains dark** unless separately approved for rollout.
-- There is **no scoring influence** in the initial release.
+- [x] Feedback persistence (3C-B) is merged. — PR #53.
+- [x] Feedback API (3C-C) is merged. — PR #54.
+- [x] Feedback UI (3C-D) is merged. — PR #58.
+- [x] Four-market isolation is verified end to end.
+- [x] Audit and operations documentation are merged. —
+  `docs/operations/opportunity-feedback-rollout.md`.
+- [x] Exact-merge-SHA CI is green. — run `29736845250`.
+- [x] The feature **remains dark** unless separately approved for rollout. —
+  `opportunity_feedback_enabled = False`.
+- [x] There is **no scoring influence** in the initial release.
