@@ -334,12 +334,32 @@ Expected responses:
   satisfied**, so 3C-D is **unblocked**.
 - **Exit:** Phase 3C implementation complete **but dark**; production rollout
   remains a separate decision (§15).
-- **Status:** **NOT STARTED (now unblocked).** Both entry conditions are met (3C-C
-  and 3C-C.1 merged), so 3C-D may begin — but only through a **separate
-  implementation branch and review workflow**. Residual scope: UI; client
-  integration; cache isolation; multi-market UI isolation; runbook; controlled
-  internal rollout preparation; final Phase 3C closeout. This docs update does **not**
-  authorize 3C-D to begin.
+- **Status:** **IMPLEMENTED — ACCEPTANCE HARDENING COMPLETE — AWAITING INDEPENDENT
+  REVIEW AND MERGE.** Delivered on branch `feat/3c-d-feedback-ui-rollout-readiness`
+  as a **draft** PR (no reviewer, ready-for-review, merge, or flag enablement).
+  Delivered scope: typed client integration over the existing feedback API;
+  feature-gated + role-aware rendering; append-only immutable history;
+  loading/success/error/retry UX; record-scoped query keys and scoped mutation
+  invalidation; stale-context protection; four-market UI isolation tests
+  (Dallas/London/Lagos/Nairobi); rollout runbook + closeout verification.
+  **Acceptance hardening** closed two gaps: (a) a disabled deployment now issues
+  **zero** feedback requests — the UI gates on an **additive, read-only**
+  `features.opportunity_feedback_enabled` reflection on `GET /system/capabilities`
+  (sourced from the existing setting) instead of probing the feedback `503`, which
+  is retained as defence-in-depth; and (b) the stale-context guarantees are now
+  **directly tested** (record rebind while the dialog is open, submission pending
+  across a switch, slow response after a switch, unmount while pending). The only
+  backend/contract change is that additive capability boolean (no migration, no new
+  endpoint, no authorization change, no customer-settable toggle); `openapi.json` /
+  `schema.d.ts` regenerated additively. The feature **remains dark**
+  (`opportunity_feedback_enabled = False`); no rollout executed. See
+  `docs/operations/opportunity-feedback-rollout.md` and
+  `docs/verification/3c-d-feedback-ui-rollout-readiness.md`.
+  **Exact-head CI is currently red — not green:** the sole failing job (Backend
+  quality) is caused by a pre-existing, unrelated scheduling-worker wall-clock
+  defect in files this batch does not modify, tracked separately in issue **#59**.
+  The feedback implementation itself is validated locally; 3C-D stays awaiting
+  independent review and merge until that external blocker is resolved.
 
 ## 13. Testing strategy
 
@@ -446,11 +466,15 @@ decisions.
 ## 20. Phase 3C success definition
 
 **Overall status: PHASE 3C IN PROGRESS — 3C-A, 3C-B, 3C-C, AND 3C-C.1 COMPLETE; 3C-D
-NOT STARTED.** The feedback API is merged but remains dark
-(`opportunity_feedback_enabled = False`); the intelligence-record ID contract (3C-C.1)
-is merged and exact-merge-SHA verified, resolving the 3C-D feedback-UI blocker; no
-production rollout has begun. Phase 3C is **not** complete because 3C-D (feedback UI +
-closeout) has not started.
+IMPLEMENTED, ACCEPTANCE HARDENING COMPLETE, AND AWAITING INDEPENDENT REVIEW AND
+MERGE.** The feedback API is merged but remains dark
+(`opportunity_feedback_enabled = False`); the intelligence-record ID contract
+(3C-C.1) is merged and exact-merge-SHA verified, resolving the 3C-D feedback-UI
+blocker; the 3C-D feedback UI + closeout is implemented on a **draft** PR (not
+merged) and has since been **acceptance-hardened** (zero feedback requests while
+dark via an additive read-only capability reflection; directly-tested stale-context
+isolation); no production rollout has begun. Phase 3C is **not** complete because
+3C-D has not yet been reviewed and merged.
 
 Phase 3C is complete when:
 

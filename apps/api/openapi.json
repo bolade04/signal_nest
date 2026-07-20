@@ -893,6 +893,20 @@
         "title": "CompetitorIn",
         "type": "object"
       },
+      "FeatureFlagsOut": {
+        "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of server feature flags \u2014 never a customer-settable\ntoggle. They let an authenticated client know, before it issues any\nfeature-specific request, whether a dark-deployed capability is live, so it\ncan avoid probing an endpoint that would only answer ``503``. Secret-free:\nonly booleans, never backend topology or configuration values.",
+        "properties": {
+          "opportunity_feedback_enabled": {
+            "title": "Opportunity Feedback Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "opportunity_feedback_enabled"
+        ],
+        "title": "FeatureFlagsOut",
+        "type": "object"
+      },
       "FeedbackCreate": {
         "additionalProperties": false,
         "description": "Strict request body for capturing one opportunity-feedback judgement.\n\nThe client supplies only ``intelligence_record_id`` (which immutable record the\njudgement is about), the binary ``is_useful`` verdict, and an optional\n``reason_code``. Tenant scope, actor attribution and version provenance are all\nderived server-side. Unknown fields are rejected (``extra=\"forbid\"``), so a caller\ncan never inject scope, provenance or attribution.",
@@ -3951,6 +3965,9 @@
             "title": "Environment",
             "type": "string"
           },
+          "features": {
+            "$ref": "#/components/schemas/FeatureFlagsOut"
+          },
           "is_local_mode": {
             "title": "Is Local Mode",
             "type": "boolean"
@@ -3960,7 +3977,8 @@
           "app_mode",
           "environment",
           "is_local_mode",
-          "all_configured"
+          "all_configured",
+          "features"
         ],
         "title": "RuntimeSummaryOut",
         "type": "object"

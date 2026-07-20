@@ -10,6 +10,9 @@ import type {
   ClaimIn,
   CompetitorIn,
   ContextRow,
+  FeedbackCreate,
+  FeedbackHistoryOut,
+  FeedbackOut,
   GeoCoverageBase,
   GeoCoverageOut,
   GeocodeRequest,
@@ -279,3 +282,27 @@ export const updateOpportunityStatus = (
     `/workspaces/${workspaceId}/opportunities/${opportunityId}/status`,
     { method: 'PUT', body: { status } },
   );
+
+// ---- Opportunity feedback (3C-C; dark-deployed human feedback loop) ----
+// Both the read and the write are feature-gated *and* editor-gated: while the
+// feature is dark every call answers 503 (capability_unavailable), and a
+// view-only member is 403. The append-only history is a bounded page.
+const feedbackPath = (workspaceId: string, opportunityId: string) =>
+  `/workspaces/${workspaceId}/opportunities/${opportunityId}/feedback`;
+
+export const listOpportunityFeedback = (
+  workspaceId: string,
+  opportunityId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<FeedbackHistoryOut>(feedbackPath(workspaceId, opportunityId), {
+    query: { ...params },
+    signal,
+  });
+
+export const submitOpportunityFeedback = (
+  workspaceId: string,
+  opportunityId: string,
+  body: FeedbackCreate,
+) => apiRequest<FeedbackOut>(feedbackPath(workspaceId, opportunityId), { method: 'POST', body });

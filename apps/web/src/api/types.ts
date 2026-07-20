@@ -60,6 +60,12 @@ export type IntelligenceProvenance = S['IntelligenceProvenance'];
 export type IntelligenceVersionInfo = S['IntelligenceVersionInfo'];
 export type ScoreFactor = S['ScoreFactor'];
 
+// 3C-C opportunity feedback (dark-deployed human feedback loop).
+export type FeedbackCreate = S['FeedbackCreate'];
+export type FeedbackOut = S['FeedbackOut'];
+export type FeedbackHistoryOut = S['FeedbackHistoryOut'];
+export type FeedbackReason = S['FeedbackReason'];
+
 export type ProductIn = S['ProductIn'];
 export type AudienceIn = S['AudienceIn'];
 export type CompetitorIn = S['CompetitorIn'];

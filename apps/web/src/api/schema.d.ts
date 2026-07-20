@@ -1378,6 +1378,20 @@ export interface components {
             website?: string | null;
         };
         /**
+         * FeatureFlagsOut
+         * @description Coarse, read-only product-capability booleans.
+         *
+         *     These are *reflections* of server feature flags — never a customer-settable
+         *     toggle. They let an authenticated client know, before it issues any
+         *     feature-specific request, whether a dark-deployed capability is live, so it
+         *     can avoid probing an endpoint that would only answer ``503``. Secret-free:
+         *     only booleans, never backend topology or configuration values.
+         */
+        FeatureFlagsOut: {
+            /** Opportunity Feedback Enabled */
+            opportunity_feedback_enabled: boolean;
+        };
+        /**
          * FeedbackCreate
          * @description Strict request body for capturing one opportunity-feedback judgement.
          *
@@ -2397,6 +2411,7 @@ export interface components {
             app_mode: string;
             /** Environment */
             environment: string;
+            features: components["schemas"]["FeatureFlagsOut"];
             /** Is Local Mode */
             is_local_mode: boolean;
         };
