@@ -405,6 +405,17 @@ within the bounded-cardinality policy (`core/metrics.py`). Default backend remai
 Each batch is its own branch and PR through the protected workflow, reviewed and
 exact-merge-SHA verified, shipping dark. 4A-B..E begin only after 4A-A merges.
 
+> **Status alignment (executed decomposition).** As delivered, the batch labels were
+> consolidated: **4A-B** shipped as *backend read-only operator observability*
+> (queue/worker/schedule visibility + centralized stuck-job classifier; merged PR #68,
+> `docs/verification/4a-b-operator-observability.md`). The capability-state **resolver +
+> precedence**, the **override model + service + migration**, and the **operator
+> override management API** are consolidated into a single **4A-C — Governed
+> Per-Workspace Capability Override Foundation** batch (planned in
+> `docs/phase-4a-c-plan.md`), which ships the resolver *unconsumed* by any live gate.
+> The operator **frontend** view is deferred to a later **4A-D** batch, and the first
+> activation remains **Phase 4B**.
+
 ## 8.20 Rollout plan
 
 Phase 4A rolls out **nothing** to customers. Its "rollout" is purely making operator
