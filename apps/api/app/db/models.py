@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from app.audit.models import AuditLog  # noqa: F401
 from app.brands.models import Brand, BusinessProfile  # noqa: F401
-from app.capabilities.models import WorkspaceCapabilityOverride  # noqa: F401
 from app.campaign_context.models import (  # noqa: F401
     AudienceProfile,
     BrandVoiceProfile,
@@ -20,6 +19,7 @@ from app.campaign_context.models import (  # noqa: F401
     ProductProfile,
     SourcePreference,
 )
+from app.capabilities.models import WorkspaceCapabilityOverride  # noqa: F401
 from app.db.base import Base  # noqa: F401
 from app.feedback.models import OpportunityFeedback  # noqa: F401
 from app.intelligence.records import SignalIntelligenceRecord  # noqa: F401
