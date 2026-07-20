@@ -104,3 +104,37 @@ class JobDiagnosticsOut(BaseModel):
 
     status_counts: dict[str, int]
     recent: list[JobOperatorOut]
+
+
+class JobPageOut(BaseModel):
+    """A bounded, cross-tenant operator page of jobs (filterable listing)."""
+
+    items: list[JobOperatorOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class StuckJobsOut(BaseModel):
+    """Operator stuck-job summary: a live count plus a bounded page.
+
+    ``stale_after_seconds`` is the heartbeat-staleness threshold used to classify
+    (the configured worker stale bound); ``as_of`` is the injected evaluation
+    clock the count/page was computed against, so the read is self-describing.
+    """
+
+    stuck_count: int
+    stale_after_seconds: float
+    as_of: datetime
+    limit: int
+    offset: int
+    items: list[JobOperatorOut]
+
+
+class DeadLetterJobsOut(BaseModel):
+    """Operator dead-letter summary: total count plus a bounded recent page."""
+
+    total: int
+    limit: int
+    offset: int
+    items: list[JobOperatorOut]
