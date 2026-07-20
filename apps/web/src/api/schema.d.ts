@@ -116,6 +116,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/jobs/dead-letter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Jobs Dead Letter
+         * @description Dead-letter visibility: total count + a bounded recent page. Read-only.
+         *
+         *     Surfaces jobs that exhausted their attempts (or expired their lease with no
+         *     attempts left). No requeue/retry action is offered — that is a later,
+         *     separately-approved operability action; this is visibility only.
+         */
+        get: operations["internal_jobs_dead_letter_api_v1_internal_system_jobs_dead_letter_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/jobs/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Jobs List
+         * @description Bounded, filtered, cross-tenant job listing (operator diagnostics).
+         *
+         *     Unlike the customer ``/workspaces/{id}/jobs`` listing this is intentionally
+         *     cross-tenant — hence the operator gate — but it still returns only the
+         *     secret-free :class:`JobOperatorOut` view (no raw payload/lease token). Filters
+         *     narrow by tenant scope, status and job type; results are newest-first.
+         */
+        get: operations["internal_jobs_list_api_v1_internal_system_jobs_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/jobs/stuck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Jobs Stuck
+         * @description Live stuck-job summary per Phase 4A plan §8.10.
+         *
+         *     A job is stuck when it is still claimed/running yet its lease has expired or
+         *     its heartbeat is older than the configured worker stale threshold. Computed
+         *     against the request clock; read-only (no requeue/recovery is triggered here).
+         */
+        get: operations["internal_jobs_stuck_api_v1_internal_system_jobs_stuck_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Job Detail
+         * @description Single-job operator detail (cross-tenant). 404 when unknown.
+         *
+         *     Returns the secret-free operator view (safe worker/lease diagnostics, never a
+         *     raw payload). Cross-tenant lookup is deliberate and gated by ``require_operator``.
+         */
+        get: operations["internal_job_detail_api_v1_internal_system_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Job Events
+         * @description A single job's sanitized lifecycle-event timeline (oldest-first).
+         *
+         *     Uses the same safe :class:`JobEventOut` projection the customer sees — event
+         *     type, status transition, attempt, error code and bounded safe metadata — never
+         *     a raw payload, worker id or secret. 404 when the job id is unknown.
+         */
+        get: operations["internal_job_events_api_v1_internal_system_jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Overview
+         * @description A single coarse operator snapshot composed from existing diagnostics.
+         *
+         *     Read-only and cross-tenant (operator-gated). Stuck is derived live against the
+         *     request clock and the configured worker stale threshold, so the number is
+         *     accurate regardless of the recovery-sweep cadence.
+         */
+        get: operations["internal_overview_api_v1_internal_system_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/readiness": {
         parameters: {
             query?: never;
@@ -125,6 +269,30 @@ export interface paths {
         };
         /** Internal Readiness */
         get: operations["internal_readiness_api_v1_internal_system_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Schedules
+         * @description Schedule visibility with live-derived lifecycle state (cross-tenant).
+         *
+         *     Operator-gated and read-only. Each row's ``state`` is derived from the live
+         *     tick chain via :func:`derive_schedule_state`, so it reflects the real
+         *     paused / active / activation-required lifecycle rather than a persisted guess.
+         */
+        get: operations["internal_schedules_api_v1_internal_system_schedules_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1378,6 +1546,20 @@ export interface components {
             website?: string | null;
         };
         /**
+         * DeadLetterJobsOut
+         * @description Operator dead-letter summary: total count plus a bounded recent page.
+         */
+        DeadLetterJobsOut: {
+            /** Items */
+            items: components["schemas"]["JobOperatorOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
          * FeatureFlagsOut
          * @description Coarse, read-only product-capability booleans.
          *
@@ -1902,6 +2084,53 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * JobPageOut
+         * @description A bounded, cross-tenant operator page of jobs (filterable listing).
+         */
+        JobPageOut: {
+            /** Items */
+            items: components["schemas"]["JobOperatorOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * JobStatus
+         * @description Lifecycle states for a durable job.
+         *
+         *     ``scheduled`` is the initial state of a future-dated job; ``pending`` is a
+         *     job that is due and eligible to be claimed. ``retry_wait`` is a job that
+         *     failed a retryable attempt and is waiting out its backoff before becoming
+         *     eligible again.
+         * @enum {string}
+         */
+        JobStatus: "pending" | "scheduled" | "claimed" | "running" | "retry_wait" | "succeeded" | "failed" | "dead_lettered" | "cancel_requested" | "cancelled";
+        /**
+         * JobType
+         * @description The constrained set of job types the platform can execute.
+         *
+         *     Enqueueing or executing any other type is rejected (a stable, non-retryable
+         *     error), so an unknown/renamed type can never silently no-op.
+         * @enum {string}
+         */
+        JobType: "scout_request.execute" | "scout_schedule.tick";
+        /** JobsOverviewOut */
+        JobsOverviewOut: {
+            /** Dead Letter Count */
+            dead_letter_count: number;
+            /** Status Counts */
+            status_counts: {
+                [key: string]: number;
+            };
+            /** Stuck Count */
+            stuck_count: number;
+            /** Total */
+            total: number;
+        };
         /** LocationBase */
         LocationBase: {
             /** Address */
@@ -2086,6 +2315,22 @@ export interface components {
             onboarding_completed: boolean;
             /** Workspace Id */
             workspace_id: string;
+        };
+        /**
+         * OperationalOverviewOut
+         * @description One coarse operator snapshot of queue, fleet and schedule health.
+         */
+        OperationalOverviewOut: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            jobs: components["schemas"]["JobsOverviewOut"];
+            schedules: components["schemas"]["SchedulesOverviewOut"];
+            /** Stale After Seconds */
+            stale_after_seconds: number;
+            workers: components["schemas"]["WorkersOverviewOut"];
         };
         /**
          * OpportunityCard
@@ -2416,6 +2661,20 @@ export interface components {
             is_local_mode: boolean;
         };
         /**
+         * ScheduleFleetOut
+         * @description A bounded, cross-tenant operator page of schedules.
+         */
+        ScheduleFleetOut: {
+            /** Items */
+            items: components["schemas"]["ScheduleOperatorOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
          * ScheduleInterval
          * @description Bounded recurrence cadence for a scouting schedule (SB-B).
          *
@@ -2426,6 +2685,44 @@ export interface components {
          * @enum {string}
          */
         ScheduleInterval: "daily" | "weekly";
+        /**
+         * ScheduleOperatorOut
+         * @description Operator view of one scouting schedule with its derived lifecycle state.
+         *
+         *     ``state`` is computed live from the row plus the live tick chain
+         *     (:func:`derive_schedule_state`) so it can never drift from reality. Carries
+         *     only safe scope ids and lifecycle timestamps — never any secret.
+         */
+        ScheduleOperatorOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            interval: components["schemas"]["ScheduleInterval"];
+            /** Last Tick At */
+            last_tick_at: string | null;
+            /** Location Id */
+            location_id: string | null;
+            /** Next Run At */
+            next_run_at: string | null;
+            /** Organization Id */
+            organization_id: string;
+            /** Scout Request Id */
+            scout_request_id: string;
+            state: components["schemas"]["ScheduleState"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Workspace Id */
+            workspace_id: string;
+        };
         /**
          * ScheduleState
          * @description Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).
@@ -2441,6 +2738,15 @@ export interface components {
          * @enum {string}
          */
         ScheduleState: "paused" | "active" | "activation_required";
+        /** SchedulesOverviewOut */
+        SchedulesOverviewOut: {
+            /** State Counts */
+            state_counts: {
+                [key: string]: number;
+            };
+            /** Total */
+            total: number;
+        };
         /** ScoreBreakdown */
         ScoreBreakdown: {
             /** Breakdown */
@@ -2625,6 +2931,31 @@ export interface components {
             source_type: string;
         };
         /**
+         * StuckJobsOut
+         * @description Operator stuck-job summary: a live count plus a bounded page.
+         *
+         *     ``stale_after_seconds`` is the heartbeat-staleness threshold used to classify
+         *     (the configured worker stale bound); ``as_of`` is the injected evaluation
+         *     clock the count/page was computed against, so the read is self-describing.
+         */
+        StuckJobsOut: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Items */
+            items: components["schemas"]["JobOperatorOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Stale After Seconds */
+            stale_after_seconds: number;
+            /** Stuck Count */
+            stuck_count: number;
+        };
+        /**
          * TelemetryStatusOut
          * @description Operator-safe observability posture. Deliberately free of any endpoint,
          *     credential, URL, payload, tenant/request/job identifier or token — only
@@ -2744,6 +3075,17 @@ export interface components {
             supported_job_types: string[];
             /** Worker Type */
             worker_type: string;
+        };
+        /** WorkersOverviewOut */
+        WorkersOverviewOut: {
+            /** Active Count */
+            active_count: number;
+            /** Stale Count */
+            stale_count: number;
+            /** Status Counts */
+            status_counts: {
+                [key: string]: number;
+            };
         };
         /** WorkspaceCreate */
         WorkspaceCreate: {
@@ -2975,6 +3317,213 @@ export interface operations {
             };
         };
     };
+    internal_jobs_dead_letter_api_v1_internal_system_jobs_dead_letter_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeadLetterJobsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_jobs_list_api_v1_internal_system_jobs_list_get: {
+        parameters: {
+            query?: {
+                organization_id?: string | null;
+                workspace_id?: string | null;
+                location_id?: string | null;
+                scout_request_id?: string | null;
+                status?: components["schemas"]["JobStatus"] | null;
+                job_type?: components["schemas"]["JobType"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_jobs_stuck_api_v1_internal_system_jobs_stuck_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StuckJobsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_job_detail_api_v1_internal_system_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOperatorOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_job_events_api_v1_internal_system_jobs__job_id__events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobEventOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_overview_api_v1_internal_system_overview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationalOverviewOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     internal_readiness_api_v1_internal_system_readiness_get: {
         parameters: {
             query?: never;
@@ -2993,6 +3542,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessDiagnosticsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_schedules_api_v1_internal_system_schedules_get: {
+        parameters: {
+            query?: {
+                workspace_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleFleetOut"];
                 };
             };
             /** @description Validation Error */
