@@ -737,6 +737,24 @@ resolver is **not** consumed by any live feature gate; all three global flags re
 no rollout, no gate wiring, and no flag activation — the first activation is a separate
 Phase 4B decision.
 
+## 8.32 Batch delivery progress (per-batch, evidence-preserving)
+
+This section tracks the delivery of the renumbered 4A-C sub-batches (see §8.30 of
+`docs/phase-4a-c-2-plan.md` for the renumbering rationale). It appends progress only and
+rewrites no historical SHA or closeout evidence.
+
+- **4A-C.1 — capability foundation (registry + model + migration):** merged (PR #70).
+  Verification: `docs/verification/4a-c-1-capability-foundation.md`. All dark.
+- **4A-C.2 — deny-biased capability resolver:** merged (PR #72). The resolver ships
+  **unconsumed** — no live gate imports it. Verification:
+  `docs/verification/4a-c-2-capability-resolver.md`. All dark.
+- **4A-C.3 — governed override service:** **planning underway** — see
+  `docs/phase-4a-c-3-plan.md`. Service-module-only; no route, no schema, no migration, no
+  resolver wiring, no real override record. The resolver stays unconsumed and every
+  capability remains dark.
+- **4A-C.4 — operator/customer management API + contract:** not started; separate, later,
+  explicitly-approved batch.
+
 ---
 
 **Status:** `PLANNING — DOCUMENTATION ONLY — IMPLEMENTATION NOT STARTED — ALL CAPABILITIES REMAIN DARK`
