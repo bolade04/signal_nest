@@ -12,6 +12,19 @@
 > activation of any dark capability is deferred to Phase 4B and is a separate,
 > explicitly-approved decision.
 
+> **Progress note (2026-07-20).** Delivery has since begun under this plan. The
+> **4A-C.1** batch (registry + override model + additive migration, PR #70, merged
+> at `47852c7fbd3861011bf2bcfd79719d8ea9a8c6c7`, Alembic head `98289430a3ec`;
+> evidence in `docs/verification/4a-c-1-capability-foundation.md`) shipped the
+> storage-and-type-safety plane **excluding** the resolver. The next batch, the
+> resolver itself, is planned separately as **4A-C.2** in
+> `docs/phase-4a-c-2-plan.md`; the override service and operator API follow as
+> 4A-C.3/4A-C.4. This renumbering (recorded in the 4A-C.1 verification doc and
+> §8.30 of the 4A-C.2 plan) changes no approved scope: persistence remains
+> unconsumed, no gate is wired, and all three global flags remain `False` — every
+> capability stays dark. The baseline SHAs and revision numbers recorded below are
+> the *historical* baseline of **this** planning document and are left unchanged.
+
 Baseline for this plan: `main` at `e897a91e717509cc022e7cf4f9baf72993ef1980`
 (Phase 4A-B operator-observability closeout, PR #68), single Alembic head
 `4945b98229e6` (11 migration files), and the three product flags all `False`:
