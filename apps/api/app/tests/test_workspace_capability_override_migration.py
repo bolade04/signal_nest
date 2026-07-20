@@ -153,10 +153,24 @@ def test_all_capability_flags_remain_dark() -> None:
         assert getattr(settings, get_policy(capability).global_flag_attr) is False
 
 
-def test_no_resolver_module_shipped_in_this_batch() -> None:
-    # The precedence resolver is an explicitly-deferred, separately-approved batch.
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("app.capabilities.resolver")
+def test_resolver_ships_but_stays_unconsumed_by_live_gates() -> None:
+    # Phase 4A-C.2 shipped the resolver, so it now imports cleanly...
+    resolver = importlib.import_module("app.capabilities.resolver")
+    assert hasattr(resolver, "resolve_capability")
+    assert hasattr(resolver, "decide_capability")
+
+    # ...but it must remain unconsumed: no live gate module imports it. The three
+    # enforcement points keep their direct global-flag checks (the resolver is
+    # wired by a later, separately-approved batch).
+    for module_path in (
+        Path("app/feedback/routes.py"),
+        Path("app/scouting_requests/routes.py"),
+        Path("app/scouting_requests/schedules.py"),
+        Path("app/connectors/registry.py"),
+    ):
+        source = (API_DIR / module_path).read_text(encoding="utf-8")
+        assert "capabilities.resolver" not in source, module_path
+        assert "resolve_capability" not in source, module_path
 
 
 # --------------------------------------------------------------------------- #
