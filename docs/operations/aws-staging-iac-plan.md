@@ -90,8 +90,11 @@ Explicitly **out of scope** for this document (each is a later, separately autho
 
 - The AWS account, its id, the DNS zone, and the ACM certificate exist or will be provisioned
   under a later authorized tranche; none are referenced by literal value in this design.
-- The IaC tool is **not yet selected** — see §16 (this document proposes candidates and a
-  decision procedure but does **not** bind the choice).
+- The IaC tool is **DECIDED: OpenTofu** (project-owner human decision — see §16). Terraform
+  providers and modules may be reused for compatibility, but **OpenTofu is the authoritative
+  project CLI and implementation target**. The specific OpenTofu version is **not** fixed here;
+  the implementation tranche must select and pin a supported version from then-current official
+  compatibility evidence.
 - Real identifiers (account id, ARNs, hostnames, CIDRs, KMS key ids, secret ARNs) are supplied
   only at authorized implementation/apply time via variables/state, never committed.
 
@@ -305,30 +308,47 @@ Mirrors runtime-contract §M and the roadmap's budget requirement:
   `Alias`, `Owner`, `CostCenter`, `Phase=4B-C`, `DataClass`, `ManagedBy=iac` — for cost
   attribution and governance.
 
-## 16. IaC tool selection (proposed, not decided)
+## 16. IaC tool selection — DECIDED: OpenTofu
 
-The roadmap and runtime contract **do not bind** a specific IaC tool. This document therefore
-records **candidates and a decision procedure**, and binds nothing:
+**Decision:** **OpenTofu is DECIDED** as SignalNest's authoritative infrastructure-as-code tool,
+made by the **project owner** as the required INFRA-4 human decision. OpenTofu is the
+authoritative project CLI and implementation target for the future placeholder-only INFRA-4
+skeleton and all subsequent authorized AWS infrastructure tranches. **Terraform** providers and
+modules may be reused for compatibility, but Terraform and OpenTofu are **not** interchangeable
+project authorities — **OpenTofu is the sole authoritative CLI**. AWS remains the planned cloud
+provider (ADR-0001). This decision **resolves** the sole remaining tool-selection item and is
+mirrored in the human decision register (§21).
+
+The OpenTofu **version** is intentionally **not fixed here**: the implementation tranche MUST
+select and pin a supported OpenTofu version (and its provider versions) from then-current
+official compatibility evidence, with explicit, reproducible dependency locks.
+
+**Scope of this decision (what it does NOT authorize):** no IaC skeleton implementation, no
+OpenTofu install, no `init`, no `validate` requiring downloaded providers, no `plan`, no
+`apply`, no `import`/`refresh`/`destroy`, no remote-state creation, no AWS authentication, no
+provisioning, no deployment, no feature activation, and no INFRA-5 work. INFRA-4 remains
+plan-only and unimplemented after this decision.
+
+**Candidates evaluated (history — retained for the record, superseded by the decision above):**
 
 | Candidate | Pros | Cons |
 | --- | --- | --- |
+| **OpenTofu (SELECTED)** | Terraform-compatible providers/modules; open-source governance; exact version pinning; human-readable `plan`; encrypted remote state + locking; GitHub-OIDC compatible | Younger ecosystem/tooling maturity |
 | Terraform | Mature AWS provider, wide review familiarity, `plan` diffing | License considerations; state management overhead |
-| OpenTofu | Terraform-compatible, open-source governance | Younger ecosystem/tooling maturity |
 | AWS CDK | Native AWS, typed, higher-level constructs | Synthesized CloudFormation opacity; drift semantics |
 | CloudFormation | First-party, no extra state backend | Verbose; weaker cross-account/module ergonomics |
 
-**Decision procedure (for a later authorized tranche):** pick the tool that (a) supports exact
-version pinning, (b) provides a reviewable, human-readable `plan`/diff **before** apply, (c)
-supports encrypted remote state + locking, and (d) integrates with GitHub OIDC (INFRA-5). The
-selection is recorded in the human decision register (§21) when made — **PROPOSED, undecided
-here.**
+The decision procedure that produced this choice required a tool that (a) supports exact version
+pinning, (b) provides a reviewable, human-readable `plan`/diff **before** apply, (c) supports
+encrypted remote state + locking, and (d) integrates with GitHub OIDC (INFRA-5); **OpenTofu
+satisfies all four.**
 
 ## 17. Implementation sequence (later, separately authorized)
 
 This is the order the **later** IaC implementation should follow; **none of it is authorized by
 merging this plan**:
 
-1. Select and record the IaC tool (§16) and pin exact provider/tool versions.
+1. Pin exact OpenTofu and provider versions (tool already DECIDED as OpenTofu, §16).
 2. Bootstrap the encrypted remote-state backend + lock table (one-time, authorized).
 3. Author `network/` → `edge/` → `alb/` → `iam/` → `secrets/` (names only) → `data_sql/` →
    `data_cache/` → `storage/` → `registry/` → `ecs/` → `observability/` → `cost/` modules, each
@@ -399,10 +419,13 @@ Decisions **already made** (upstream, binding):
   (runtime contract §N).
 - First-deploy **exact SHA `3aadb8a1da0f26ffd183a4b05161747038d5957c`** and **digest-pinned**
   artifacts (runtime contract §§A/B).
+- **IaC tool: OpenTofu** (§16) — project-owner human decision; authoritative CLI and
+  implementation target; Terraform providers/modules reusable for compatibility only.
 
 Decisions **still required** (recorded here, **not decided in this tranche**):
 
-- **IaC tool selection** (§16) — PROPOSED candidates + procedure; undecided.
+- **OpenTofu and provider versions** (§16) — must be selected and pinned at implementation time
+  from then-current official compatibility evidence (the *tool* is decided; the *version* is not).
 - Remote-state bucket/lock names, KMS key, and bootstrap timing (§7) — implementation-time.
 - Real account id, DNS zone, ACM certificate, CIDR plan, secret ARNs — supplied only at
   authorized implementation/apply time, never committed.
