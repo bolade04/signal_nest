@@ -10,6 +10,18 @@ telemetry in [observability.md](./observability.md); dashboards and alerts in
 [dashboards.md](./dashboards.md) and [alerts.md](./alerts.md); migrations in
 [migrations.md](./migrations.md).
 
+> **Activation model update (Phase 4B).** First enablement is **no longer a global flag
+> flip**. As of Phase 4B-A the feedback route consults the deny-biased capability resolver,
+> and the sanctioned way to enable feedback for the internal canary is a **single
+> per-workspace enable override** created through the **operator API**, while
+> `opportunity_feedback_enabled` stays **`False` globally**. The controlled procedure is
+> defined in [../phase-4b-b-plan.md](../phase-4b-b-plan.md) (with the parent plan
+> [../phase-4b-plan.md](../phase-4b-plan.md)). The "single flag flip" descriptions retained
+> below document the **historical global mechanism and the standing global kill-switch**;
+> for the canary, follow the governed override procedure instead. There is **no org-wide
+> override** — override scope is per-workspace only. `scout_scheduling` and `connector_rss`
+> remain entirely dark and out of scope.
+
 > There is **no separate frontend flag, build-time toggle, or client bundle
 > variant**, and there is **no customer-settable toggle**. The single
 > `opportunity_feedback_enabled` backend flag drives everything. The UI reads that
@@ -72,9 +84,31 @@ Source (backend, already merged): `apps/api/app/feedback/routes.py`,
 
 ## Enabling feedback (rollout)
 
-Enabling is a single flag flip on the API. **Prerequisite:** the intelligence
-read response exposes `intelligence_record_id` (shipped in 3C-C.1) — the UI needs
-it to bind and submit feedback.
+**Current canary path (Phase 4B — governed per-workspace override).** First
+enablement is a **single per-workspace enable override**, created through the
+operator API, with `opportunity_feedback_enabled` left **`False` globally**. Follow
+[../phase-4b-b-plan.md](../phase-4b-b-plan.md) — it requires independent runtime
+identity verification, a preflight, isolation checks, and a rollback exercise, and it
+authorizes activation only under a separate explicit operational approval.
+
+- Use the operator **set** plane
+  `PUT /internal/system/capabilities/overrides` (operator-gated; 401/403 enforced)
+  with `capability: opportunity_feedback`, `enabled: true`, and the verified
+  `organization_id`/`workspace_id`. **Do not mutate override state directly in the
+  database** — the operator API is the only sanctioned mutation path.
+- The resolver honors the enable for that one workspace
+  (`decided_by=workspace_override`) while the global flag stays `False`. There is
+  **no org-wide override**; the row's `organization_id` only tenant-validates the
+  workspace.
+- The `/system/capabilities` frontend reflection still reads the **raw global flag**
+  and will report the feature **disabled** even for the enabled canary (intended
+  backend-first posture); verify the canary via the API directly.
+
+**Prerequisite:** the intelligence read response exposes `intelligence_record_id`
+(shipped in 3C-C.1) — the UI needs it to bind and submit feedback.
+
+**Historical global mechanism (retained for reference; not the canary path).** Global
+enablement was a single flag flip:
 
 1. **Announce** a change window; enabling makes the feedback control appear for
    editors and is tenant-visible.
@@ -86,22 +120,35 @@ it to bind and submit feedback.
    ```
 
    Only the API carries this flag — feedback has **no worker path**, so no worker
-   restart is required.
+   restart is required. **For the Phase 4B canary this flag stays `False`** — do not
+   set it; use the per-workspace override above.
 3. **The shipped client needs no change.** Once the client's cached
    `/system/capabilities` refreshes (≤60 s), the capability reflection reports the
    feature enabled, the history query becomes active and returns `200`, and the
    panel reveals itself for editors. No rebuild, redeploy, or per-tenant client
-   toggle is involved.
-4. **First enablement is a single non-production internal workspace** (§15 of the
-   phase-3C plan). Do **not** enable for a customer cohort without explicit
-   approval.
+   toggle is involved. (Global flag path only; under the canary override the global
+   reflection stays disabled.)
+4. **First enablement is a single internal workspace.** Under Phase 4B this is
+   enforced by the scoped override, not a global flip. Do **not** enable for a
+   customer cohort without explicit approval.
 5. **Verify** (see Monitoring below): an editor sees the Useful / Not useful
    controls and an (initially empty) history; a submission returns `201` and
    appears as a new immutable entry; a viewer sees nothing; markets stay isolated.
 
 ## Rolling back (kill-switch)
 
-Rollback is the reverse flip and is always safe:
+**Primary canary rollback (Phase 4B — scoped).** Clear the one canary workspace
+override through the operator **clear** plane
+`DELETE /internal/system/capabilities/overrides?...&capability=opportunity_feedback`
+(operator-gated; not a direct DB delete). The target immediately returns to the dark
+default (`503`, `decided_by=global_configuration`); no other capability or workspace
+changes; the clear emits a `workspace_capability_override.cleared` audit. Because the
+global flag was never flipped, setting it to `False` is **not** the canary rollback —
+clearing the scoped override is. Full sequence in
+[../phase-4b-b-plan.md](../phase-4b-b-plan.md) §12.
+
+**Global kill-switch (still available; layered safety).** The reverse global flip
+remains a standing control and is always safe:
 
 1. **Set `OPPORTUNITY_FEEDBACK_ENABLED=false`** on the API and restart.
 2. **The UI self-hides.** Once the client's cached capability refreshes (≤60 s) it
@@ -112,8 +159,12 @@ Rollback is the reverse flip and is always safe:
    simply refuse reads and writes with `503`. Re-enabling later restores the panel
    with full history intact.
 
-There is **no per-tenant toggle**; the flag is global. A per-tenant stop is not
-supported in this slice — use the global kill-switch.
+Additional layers: the resolver's deny-biased `safety_ceiling` slot can force the
+capability off regardless of any override; a defective gate integration can be
+reverted at the code level (Phase 4B-A commit).
+
+Under Phase 4B a **per-workspace stop is supported** via the scoped override clear
+above; there is still **no org-wide toggle** — override scope is per-workspace only.
 
 ## Operator / customer controls
 
@@ -175,10 +226,15 @@ in [../verification/3c-d-feedback-ui-rollout-readiness.md](../verification/3c-d-
    open scheduling read. The UI does not rely on that `503` to hide: it reads the
    `features.opportunity_feedback_enabled` capability reflection and issues no
    feedback request while dark. The endpoint `503` is retained as defence-in-depth.
-2. **The flag is global, not per-tenant.** First enablement is scoped operationally
-   (a single internal workspace), not by a per-tenant flag. There is no
-   customer-settable toggle; the frontend capability is a read-only reflection of
-   the one backend flag.
+2. **The global flag is global, not per-tenant — but Phase 4B adds a governed
+   per-workspace override.** First enablement is now a single per-workspace enable
+   override via the operator API while the global flag stays `False` (see the
+   Activation model update note above and [../phase-4b-b-plan.md](../phase-4b-b-plan.md));
+   override scope is per-workspace only, with **no** org-wide override. There is still
+   no customer-settable toggle, and the frontend capability remains a read-only
+   reflection of the one backend global flag — so an override-enabled canary is
+   honored by the backend gate while the UI reflection still reports disabled
+   (intended backend-first posture).
 3. **Feedback is append-only with no "current" projection in the UI.** The history
    list shows every event; there is intentionally no edit/delete affordance.
 4. **Stale-context protection is structural and directly tested**, via
