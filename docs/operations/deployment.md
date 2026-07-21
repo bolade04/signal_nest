@@ -12,6 +12,27 @@ and the **rolling-deployment** model. Migrations are covered in
 > cloud infrastructure remain **out of scope / future** unless separately approved.
 > This document describes the runtime contract those artifacts must honor.
 
+## Cloud staging target (Phase 4B-C — planning only)
+
+The selected cloud hosting for the internal, non-customer **SIGNALNEST_STAGING** (canary)
+environment is **Amazon ECS on AWS Fargate in us-east-1**, under a hard **$200/month** budget
+ceiling. This is a *planning selection*: **no AWS environment exists** merely because the
+architecture was chosen, and **deployment requires the separately reviewed INFRA tranches**.
+
+- Decision record: [adr-0001-aws-ecs-fargate-staging.md](../architecture/adr-0001-aws-ecs-fargate-staging.md)
+- Authoritative runtime/security/cost contract: [aws-staging-runtime-contract.md](./aws-staging-runtime-contract.md)
+- Implementation roadmap (INFRA-1…INFRA-8): [phase-4b-c-infra-plan.md](../phase-4b-c-infra-plan.md)
+
+The full topology, network isolation, IAM, secrets, backups, observability, and cost
+contract live in the runtime-contract document above and are **not** duplicated here. Two
+requirements are load-bearing for any first staging deployment: it must build and deploy
+**exact source SHA `3aadb8a1da0f26ffd183a4b05161747038d5957c`** (not merely an image
+containing an earlier commit), and every artifact must be an **immutable, digest-pinned
+image** deployed through a protected, human-approved workflow.
+
+Note that `infra/docker-compose.yml` (below) remains a **local-development convenience
+only** — it is never SIGNALNEST_STAGING and never a canary runtime.
+
 ## Images
 
 A single multi-stage `apps/api/Dockerfile` produces two runtime targets from one
