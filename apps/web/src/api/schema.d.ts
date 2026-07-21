@@ -92,6 +92,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/capabilities/registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Capability Registry
+         * @description Return the closed, governable capability set with its governance metadata.
+         *
+         *     A pure projection of :func:`iter_capabilities` + :func:`get_policy` in canonical
+         *     declaration order. Read-only and stateless: it queries no database, consumes
+         *     neither the resolver nor the override service, and enables/disables/mutates
+         *     nothing — it only describes which capabilities are governable and how.
+         */
+        get: operations["internal_capability_registry_api_v1_internal_system_capabilities_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/jobs": {
         parameters: {
             query?: never;
@@ -1488,6 +1513,17 @@ export interface components {
             /** Llm Provider */
             llm_provider: string;
         };
+        /**
+         * Capability
+         * @description The closed set of capabilities that may be governed per workspace.
+         *
+         *     The value of each member is the stable string persisted in the
+         *     ``workspace_capability_overrides.capability`` column and (later) resolved by
+         *     the capability resolver. Values are bound to their global flag by the
+         *     registry below.
+         * @enum {string}
+         */
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
         /** CapabilityOut */
         CapabilityOut: {
             /** Backend */
@@ -1502,6 +1538,37 @@ export interface components {
             name: string;
             /** Requires External */
             requires_external: boolean;
+        };
+        /**
+         * CapabilityRegistryItemOut
+         * @description Operator projection of one capability's frozen governance policy.
+         *
+         *     A secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` — the
+         *     typed capability, its human-safe label, the bound global-flag attribute name
+         *     (non-secret, internal; included for operator explainability), whether an override
+         *     may enable/disable it per workspace, and the documentation-only future-activation
+         *     phase. Carries no credential, URL, callable, or mutable registry object.
+         */
+        CapabilityRegistryItemOut: {
+            capability: components["schemas"]["Capability"];
+            /** Future Activation Phase */
+            future_activation_phase: string;
+            /** Global Flag Attr */
+            global_flag_attr: string;
+            /** Label */
+            label: string;
+            /** Workspace Disableable */
+            workspace_disableable: boolean;
+            /** Workspace Enableable */
+            workspace_enableable: boolean;
+        };
+        /**
+         * CapabilityRegistryOut
+         * @description The full closed capability registry in canonical enumeration order.
+         */
+        CapabilityRegistryOut: {
+            /** Items */
+            items: components["schemas"]["CapabilityRegistryItemOut"][];
         };
         /** ChannelPrefIn */
         ChannelPrefIn: {
@@ -3271,6 +3338,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilitiesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_capability_registry_api_v1_internal_system_capabilities_registry_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityRegistryOut"];
                 };
             };
             /** @description Validation Error */

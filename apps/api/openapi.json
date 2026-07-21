@@ -731,6 +731,16 @@
         "title": "CapabilitiesOut",
         "type": "object"
       },
+      "Capability": {
+        "description": "The closed set of capabilities that may be governed per workspace.\n\nThe value of each member is the stable string persisted in the\n``workspace_capability_overrides.capability`` column and (later) resolved by\nthe capability resolver. Values are bound to their global flag by the\nregistry below.",
+        "enum": [
+          "opportunity_feedback",
+          "scout_scheduling",
+          "connector_rss"
+        ],
+        "title": "Capability",
+        "type": "string"
+      },
       "CapabilityOut": {
         "properties": {
           "backend": {
@@ -773,6 +783,61 @@
           "requires_external"
         ],
         "title": "CapabilityOut",
+        "type": "object"
+      },
+      "CapabilityRegistryItemOut": {
+        "description": "Operator projection of one capability's frozen governance policy.\n\nA secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` \u2014 the\ntyped capability, its human-safe label, the bound global-flag attribute name\n(non-secret, internal; included for operator explainability), whether an override\nmay enable/disable it per workspace, and the documentation-only future-activation\nphase. Carries no credential, URL, callable, or mutable registry object.",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "future_activation_phase": {
+            "title": "Future Activation Phase",
+            "type": "string"
+          },
+          "global_flag_attr": {
+            "title": "Global Flag Attr",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "workspace_disableable": {
+            "title": "Workspace Disableable",
+            "type": "boolean"
+          },
+          "workspace_enableable": {
+            "title": "Workspace Enableable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "capability",
+          "label",
+          "global_flag_attr",
+          "workspace_enableable",
+          "workspace_disableable",
+          "future_activation_phase"
+        ],
+        "title": "CapabilityRegistryItemOut",
+        "type": "object"
+      },
+      "CapabilityRegistryOut": {
+        "description": "The full closed capability registry in canonical enumeration order.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilityRegistryItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CapabilityRegistryOut",
         "type": "object"
       },
       "ChannelPrefIn": {
@@ -5479,6 +5544,56 @@
           }
         },
         "summary": "Internal Capabilities",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/capabilities/registry": {
+      "get": {
+        "description": "Return the closed, governable capability set with its governance metadata.\n\nA pure projection of :func:`iter_capabilities` + :func:`get_policy` in canonical\ndeclaration order. Read-only and stateless: it queries no database, consumes\nneither the resolver nor the override service, and enables/disables/mutates\nnothing \u2014 it only describes which capabilities are governable and how.",
+        "operationId": "internal_capability_registry_api_v1_internal_system_capabilities_registry_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityRegistryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Capability Registry",
         "tags": [
           "internal"
         ]
