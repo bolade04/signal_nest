@@ -34,6 +34,7 @@ from app.capabilities.service import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     MAX_REASON_LEN,
+    clear_capability_override,
     get_capability_override,
     list_capability_overrides,
     set_capability_override,
@@ -704,3 +705,246 @@ def test_set_is_visible_to_read_plane_within_the_same_transaction(factory) -> No
         assert row is not None and row.enabled is True
         assert page.total == 1
         s.rollback()
+
+
+# --------------------------------------------------------------------------- #
+# clear_capability_override — delete existing / absent no-op (#11–#12)
+# --------------------------------------------------------------------------- #
+def test_clear_deletes_existing_row_and_audits_cleared(factory) -> None:
+    _seed_override(
+        factory, org=_ORG_A, ws=_WS_A, capability=Capability.OPPORTUNITY_FEEDBACK, enabled=True
+    )
+    with factory() as s:
+        before = get_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+        )
+        prior_id = before.id
+        result = clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+        # No override remains after a clear (§8.10/§8.14).
+        assert isinstance(result, OverrideMutation)
+        assert (result.created, result.changed) == (False, True)
+        assert result.enabled is None and result.override_id is None
+        assert list(s.scalars(select(WorkspaceCapabilityOverride))) == []
+        cleared = _audits(s, "workspace_capability_override.cleared")
+        assert len(cleared) == 1
+        assert cleared[0].entity_id == prior_id
+        assert cleared[0].actor_user_id == _ACTOR
+        assert cleared[0].previous_state == {
+            "capability": "opportunity_feedback",
+            "enabled": True,
+            "override_id": prior_id,
+        }
+        assert cleared[0].new_state is None
+
+
+def test_clear_absent_is_idempotent_noop_without_audit(factory) -> None:
+    with factory() as s:
+        result = clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+        assert (result.created, result.changed) == (False, False)
+        assert result.enabled is None and result.override_id is None
+        assert list(s.scalars(select(WorkspaceCapabilityOverride))) == []
+        assert _audits(s, "workspace_capability_override.cleared") == []
+
+
+def test_clear_repeated_is_idempotent(factory) -> None:
+    with factory() as s:
+        set_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.SCOUT_SCHEDULING,
+            enabled=True,
+            actor_user_id=_ACTOR,
+        )
+        first = clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.SCOUT_SCHEDULING,
+            actor_user_id=_ACTOR,
+        )
+        second = clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.SCOUT_SCHEDULING,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+        assert (first.created, first.changed) == (False, True)
+        assert (second.created, second.changed) == (False, False)
+        # Exactly one .cleared audit — the second clear is a benign no-op.
+        assert len(_audits(s, "workspace_capability_override.cleared")) == 1
+
+
+# --------------------------------------------------------------------------- #
+# clear — actor / no-reason contract, tenant validation
+# --------------------------------------------------------------------------- #
+def test_clear_requires_explicit_keyword_only_actor_and_takes_no_reason() -> None:
+    sig = inspect.signature(clear_capability_override)
+    actor = sig.parameters["actor_user_id"]
+    assert actor.kind is inspect.Parameter.KEYWORD_ONLY
+    assert actor.default is inspect.Parameter.empty  # no default/system actor
+    assert "reason" not in sig.parameters  # clear carries no reason (plan §8.7)
+
+
+def test_clear_unknown_workspace_raises_not_found(factory) -> None:
+    with factory() as s, pytest.raises(NotFoundError):
+        clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id="ws-nope",
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            actor_user_id=_ACTOR,
+        )
+
+
+def test_clear_cross_tenant_raises_tenant_mismatch_without_deleting(factory) -> None:
+    # A real override exists in ws-B/org-B; clearing it under org-A must raise a
+    # tenant mismatch and never delete the other tenant's row.
+    _seed_override(
+        factory, org=_ORG_B, ws=_WS_B, capability=Capability.OPPORTUNITY_FEEDBACK, enabled=True
+    )
+    with factory() as s:
+        with pytest.raises(CapabilityTenantMismatchError):
+            clear_capability_override(
+                s,
+                organization_id=_ORG_A,
+                workspace_id=_WS_B,
+                capability=Capability.OPPORTUNITY_FEEDBACK,
+                actor_user_id=_ACTOR,
+            )
+        s.rollback()
+    with factory() as s:
+        survivor = get_capability_override(
+            s,
+            organization_id=_ORG_B,
+            workspace_id=_WS_B,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+        )
+        assert survivor is not None and survivor.enabled is True
+
+
+# --------------------------------------------------------------------------- #
+# clear — atomicity, no-commit, read-after-clear, set-after-clear
+# --------------------------------------------------------------------------- #
+def test_clear_and_audit_roll_back_together(factory) -> None:
+    _seed_override(
+        factory, org=_ORG_A, ws=_WS_A, capability=Capability.OPPORTUNITY_FEEDBACK, enabled=True
+    )
+    with factory() as s:
+        clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            actor_user_id=_ACTOR,
+        )
+        # Pending in the same tx: the row is gone and the audit is present.
+        assert list(s.scalars(select(WorkspaceCapabilityOverride))) == []
+        assert _audits(s, "workspace_capability_override.cleared") != []
+        s.rollback()
+        # A caller rollback restores the row and discards the audit — never an
+        # audited deletion that didn't persist.
+        assert list(s.scalars(select(WorkspaceCapabilityOverride))) != []
+        assert _audits(s, "workspace_capability_override.cleared") == []
+
+
+def test_clear_never_commits_the_callers_transaction(factory) -> None:
+    _seed_override(
+        factory, org=_ORG_A, ws=_WS_A, capability=Capability.OPPORTUNITY_FEEDBACK, enabled=True
+    )
+    commits: list[int] = []
+    with factory() as s:
+
+        @event.listens_for(s.bind, "commit")
+        def _count(conn):
+            commits.append(1)
+
+        clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            actor_user_id=_ACTOR,
+        )
+        assert commits == []  # caller owns the commit
+        s.rollback()
+
+
+def test_clear_is_visible_to_read_plane_within_the_same_transaction(factory) -> None:
+    with factory() as s:
+        set_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.SCOUT_SCHEDULING,
+            enabled=True,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+        clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.SCOUT_SCHEDULING,
+            actor_user_id=_ACTOR,
+        )
+        # Read-after-clear without committing: the flushed delete is visible.
+        row = get_capability_override(
+            s, organization_id=_ORG_A, workspace_id=_WS_A, capability=Capability.SCOUT_SCHEDULING
+        )
+        page = list_capability_overrides(s, organization_id=_ORG_A, workspace_id=_WS_A)
+        assert row is None
+        assert page.total == 0
+        s.rollback()
+
+
+def test_set_after_clear_recreates_the_override(factory) -> None:
+    with factory() as s:
+        first = set_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            enabled=True,
+            actor_user_id=_ACTOR,
+        )
+        clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            actor_user_id=_ACTOR,
+        )
+        recreated = set_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            enabled=False,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+        # A set after a clear is a fresh create (a new row), not an update.
+        assert (recreated.created, recreated.changed, recreated.enabled) == (True, True, False)
+        assert recreated.override_id != first.override_id
+        rows = list(s.scalars(select(WorkspaceCapabilityOverride)))
+        assert len(rows) == 1 and rows[0].enabled is False
