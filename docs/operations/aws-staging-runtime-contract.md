@@ -26,11 +26,11 @@
 - **Required resource-tagging categories** (logical): `Project=SignalNest`,
   `Environment=staging`, `Alias=SIGNALNEST_STAGING`, `Owner=<internal-team-logical>`,
   `CostCenter=<logical>`, `Phase=4B-C`, `DataClass=internal-no-customer`,
-  `ManagedBy=iac`. (Applied by INFRA-3 IaC; none created now.)
-- **Intended owner:** the internal platform/operations owner named at INFRA-3/INFRA-8
+  `ManagedBy=iac`. (Applied by INFRA-4 IaC; none created now.)
+- **Intended owner:** the internal platform/operations owner named at INFRA-4/INFRA-9
   authorization time (not committed here).
 - **Retention & cleanup:** SIGNALNEST_STAGING is a temporary internal environment; a
-  teardown/cleanup decision is required at INFRA-8 and after the Phase 4B-C canary window.
+  teardown/cleanup decision is required at INFRA-9 and after the Phase 4B-C canary window.
 - **Separation from production:** a distinct account/OU boundary (or at minimum a distinct
   VPC, database, cache, buckets, secrets, and IAM roles) from any future customer-production
   environment. No secret, bucket, database, or role is shared with production.
@@ -49,7 +49,7 @@
 - Build provenance is preserved (build metadata retained with the image/digest).
 - Deployment must **never** originate from an uncommitted worktree.
 - **Protected deployment approval** is required (GitHub environment protection + human
-  approval — INFRA-4).
+  approval — INFRA-5).
 - **Rollback** uses a previously approved **immutable** artifact (a prior digest), never a
   mutable rebuild.
 
@@ -129,7 +129,7 @@ creates no role or policy.**
   secrets, never reused from production.
 - **Injection:** injected at runtime into ECS tasks; **never** embedded in an image or the
   repository.
-- **Rotation/revocation:** documented rotation and revocation procedures (INFRA-5).
+- **Rotation/revocation:** documented rotation and revocation procedures (INFRA-6).
 - **Redaction:** secret values are redacted from logs and evidence (the app already redacts
   sensitive keys — `docs/operations/observability.md`).
 - **Logical secret categories** (exact env names derived from `app/core/config.py`; not
@@ -201,7 +201,7 @@ creates no role or policy.**
   **no client-invented workspace header** is trusted.
 - **Provisioning surfaces (supported application APIs only, never SQL):**
   `POST /auth/register` (user/org bootstrap), `POST /organizations/{organization_id}/workspaces`
-  (workspace creation), and RBAC role assignment via supported admin surfaces. INFRA-7
+  (workspace creation), and RBAC role assignment via supported admin surfaces. INFRA-8
   verifies these end-to-end.
 - **No customer identity, no direct SQL provisioning.** If a required
   organization/workspace/role provisioning surface proves missing or insufficient, it is
@@ -254,7 +254,7 @@ Definitions:
   availability, cost.
 - **Error-monitoring destination:** CloudWatch first; external APM deferred.
 - **Audit retention:** a defined retention window for application audit events and CloudTrail
-  management events (set at INFRA-6, sized within budget — §M).
+  management events (set at INFRA-7, sized within budget — §M).
 - **Evidence redaction:** the app's existing secret redaction applies
   (`app/core/redaction.py`); evidence records use placeholders and correlation ids, never
   raw tenant ids, tokens, or secrets (`docs/verification/4b-b-feedback-canary.md`).
@@ -289,7 +289,7 @@ Definitions:
 - **Hard ceiling:** USD **$200/month** — a guardrail, not a target.
 - **Pricing basis:** dated **planning estimate**, us-east-1, **2026-07-21**, standard
   on-demand pricing (no promotional credits). Amounts are planning estimates pending the
-  **mandatory pre-provisioning pricing recalculation gate** (INFRA-8) using current official
+  **mandatory pre-provisioning pricing recalculation gate** (INFRA-9) using current official
   AWS pricing at provisioning time.
 - **Runtime-size assumptions:** API and worker each ~0.25 vCPU / 0.5 GB Fargate; single
   replica each; RDS `db.t4g.micro` single-AZ ~20 GB gp3; ElastiCache `cache.t4g.micro`
@@ -327,12 +327,12 @@ Definitions:
   documented single small NAT-instance alternative to the managed NAT Gateway; delete unused
   ECR images. **Resources that must stay up during the canary window:** RDS (state),
   ElastiCache (coordination), Secrets Manager, and the ALB while the API is under test.
-- **Planned AWS Budget alert thresholds** (created later, INFRA-3/INFRA-8, **not now**):
+- **Planned AWS Budget alert thresholds** (created later, INFRA-4/INFRA-9, **not now**):
   **50% / 75% / 90% / 100%** of the $200 ceiling, plus cost-anomaly monitoring.
 - **Controls:** log-retention limits, image-retention (ECR lifecycle) limits,
   backup-retention limits, resource tagging (§A), and a documented staging shutdown/cleanup
   policy.
-- **Mandatory pre-provisioning recalculation:** before any spend (INFRA-8), recompute with
+- **Mandatory pre-provisioning recalculation:** before any spend (INFRA-9), recompute with
   current official pricing. **If the minimum safe design is then projected above $200
   without weakening a required control, STOP and re-authorize** — do not remove TLS, auth,
   secret management, tenant isolation, audit, observability, backups, or rollback, and do not

@@ -21,7 +21,7 @@ architecture was chosen, and **deployment requires the separately reviewed INFRA
 
 - Decision record: [adr-0001-aws-ecs-fargate-staging.md](../architecture/adr-0001-aws-ecs-fargate-staging.md)
 - Authoritative runtime/security/cost contract: [aws-staging-runtime-contract.md](./aws-staging-runtime-contract.md)
-- Implementation roadmap (INFRA-1…INFRA-8): [phase-4b-c-infra-plan.md](../phase-4b-c-infra-plan.md)
+- Implementation roadmap (INFRA-1…INFRA-9): [phase-4b-c-infra-plan.md](../phase-4b-c-infra-plan.md)
 
 The full topology, network isolation, IAM, secrets, backups, observability, and cost
 contract live in the runtime-contract document above and are **not** duplicated here. Two

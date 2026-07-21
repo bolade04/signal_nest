@@ -279,7 +279,7 @@ Each item below is a **separate, later, authorized** change. INFRA-2 modifies no
 | API + worker startup | Emit `build_revision`/`application_version` in structured startup log | settings → one log record | log-capture test asserts non-secret fields present, no secrets | no tenant/credential in log | none (additive log) |
 | Migration actor (`app/db/migrate.py`) | Log same revision at start | settings → log | test asserts correlation field | non-secret | none |
 | `.github/workflows/ci.yml` (or a separate deploy workflow) | Pass `--build-arg GIT_REVISION=${{ github.sha }}`; capture digest | CI SHA → build args + recorded digest | workflow lint / dry-run | OIDC only for later push; no long-lived keys | build-only in CI; publish is a later deploy tranche |
-| IaC (INFRA-3) task definitions | Set `BUILD_REVISION`/`APPLICATION_VERSION` env; pin image by digest | authorized SHA/digest → task-def env + `image@sha256:...` | `plan`-only validation | least-privilege; private subnets | rollback = prior task-def revision |
+| IaC (INFRA-4) task definitions | Set `BUILD_REVISION`/`APPLICATION_VERSION` env; pin image by digest | authorized SHA/digest → task-def env + `image@sha256:...` | `plan`-only validation | least-privilege; private subnets | rollback = prior task-def revision |
 | Preflight script (G4) | Fail-closed SHA/digest verification (§F) | expected SHA + observed runtime/registry/task-def evidence → pass/fail | unit tests for every §F clause incl. malformed/mismatch/`None` | read-only; no override path; no state mutation | idempotent; safe to re-run |
 
 ## J. Acceptance criteria for the later implementation
