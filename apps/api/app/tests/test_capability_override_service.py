@@ -1400,7 +1400,13 @@ def test_only_the_operator_router_consumes_the_service_or_resolver() -> None:
 def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None:
     """Self-check: the scan really covers the live-gate set and the allow-listed router,
     the two control-plane modules exclude themselves, and the allow-list is not vacuous —
-    the operator router genuinely imports the resolver (§26, #22, #24)."""
+    the operator router genuinely imports BOTH control-plane modules (§26, #22, #24).
+
+    As of 4A-C.4.3 the operator router consumes the resolver (effective read, 4A-C.4.2)
+    AND the override service's read plane (list read, 4A-C.4.3). Asserting both bindings
+    keeps the allow-list grounded for each module: were either dropped from the allow-list
+    above, ``test_only_the_operator_router_consumes_the_service_or_resolver`` would fail.
+    """
     scanned = {str(p.relative_to(_APP_DIR)) for p in _production_modules()}
     for expected in (
         "feedback/routes.py",
@@ -1413,8 +1419,11 @@ def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None
     # The two control-plane modules exclude themselves (they cannot consume themselves).
     assert "capabilities/service.py" not in scanned
     assert "capabilities/resolver.py" not in scanned
-    # The allow-list is grounded, not vacuous: the operator router really imports the
-    # resolver, so removing it from the allow-list above would make the guard fail.
+    # The allow-list is grounded, not vacuous: the operator router really imports BOTH the
+    # resolver and the service, so removing it from the allow-list above would fail the
+    # single-consumer guard for either module.
     router_path = _APP_DIR / _ALLOWED_CONSUMER_REL
     router_tree = ast.parse(router_path.read_text(encoding="utf-8"), filename=str(router_path))
-    assert _RESOLVER_MODULE in _control_plane_imports(router_path, router_tree)
+    router_imports = _control_plane_imports(router_path, router_tree)
+    assert _RESOLVER_MODULE in router_imports
+    assert _SERVICE_MODULE in router_imports
