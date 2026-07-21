@@ -14,10 +14,12 @@ this test module. Every capability remains dark.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, event, func, select
@@ -30,7 +32,8 @@ from app.capabilities.errors import (
     CapabilityTenantMismatchError,
 )
 from app.capabilities.models import WorkspaceCapabilityOverride
-from app.capabilities.registry import Capability
+from app.capabilities.registry import Capability, iter_capabilities
+from app.capabilities.resolver import DecisionSource, resolve_capability
 from app.capabilities.results import OverrideMutation, OverridePage
 from app.capabilities.service import (
     DEFAULT_LIMIT,
@@ -41,6 +44,7 @@ from app.capabilities.service import (
     list_capability_overrides,
     set_capability_override,
 )
+from app.core.config import Settings
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.db.models import Base
 from app.organizations.models import Organization, User, Workspace
@@ -1162,3 +1166,220 @@ def test_pg_concurrent_set_and_clear_converge_to_terminal_state() -> (
         assert _override_count(make) in (0, 1)
     finally:
         engine.dispose()
+
+
+# --------------------------------------------------------------------------- #
+# Dark-state coupling (#21): service writes persist intent but never *activate*
+# a capability — resolution stays dark in production (shipped defaults).
+# --------------------------------------------------------------------------- #
+def _shipped_settings() -> Settings:
+    """Hermetic Settings (no ``.env``): every global capability flag stays ``False``."""
+    return Settings(_env_file=None)
+
+
+def test_dark_state_shipped_defaults_resolve_every_capability_disabled(factory) -> None:
+    """With shipped defaults and no real override row, every registered capability
+    resolves **disabled** via the global-configuration rule (§8.29 #21, §8.34 #45).
+
+    This is the production baseline: the override table holds no real row, all three
+    global flags are ``False``, so ``resolve_capability`` resolves every capability in
+    a sample workspace to disabled.
+    """
+    settings = _shipped_settings()
+    with factory() as s:
+        for capability in iter_capabilities():
+            res = resolve_capability(
+                session=s,
+                settings=settings,
+                capability=capability,
+                organization_id=_ORG_A,
+                workspace_id=_WS_A,
+            )
+            assert res.effective_enabled is False, capability
+            assert res.decided_by is DecisionSource.GLOBAL_CONFIGURATION, capability
+            assert res.global_flag is False, capability
+
+
+def test_dark_state_service_write_is_inert_without_a_live_consumer(factory) -> None:
+    """The service can *persist* an enable override, but that intent only *would* take
+    effect if a live gate consumed the resolver — none does (§8.29 #21, the
+    persistence-vs-activation split).
+
+    Setting an enable override for a ``workspace_enableable`` capability is honored by
+    the resolver alone (``WORKSPACE_OVERRIDE``) while the bound global flag stays
+    ``False``; because no production module consumes the resolver
+    (``test_no_production_module_imports_the_override_service``) the capability is
+    never globally activated. Clearing the override returns resolution to the dark
+    global default.
+    """
+    settings = _shipped_settings()
+    capability = Capability.OPPORTUNITY_FEEDBACK  # workspace_enableable
+
+    with factory() as s:
+        set_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=capability,
+            enabled=True,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+
+    with factory() as s:
+        after_set = resolve_capability(
+            session=s,
+            settings=settings,
+            capability=capability,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+        )
+    # Persisted intent is honored only by the resolver; the global flag is still False,
+    # so nothing globally activates the capability — persistence is not activation.
+    assert after_set.decided_by is DecisionSource.WORKSPACE_OVERRIDE
+    assert after_set.global_flag is False
+
+    with factory() as s:
+        clear_capability_override(
+            s,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+            capability=capability,
+            actor_user_id=_ACTOR,
+        )
+        s.commit()
+
+    with factory() as s:
+        after_clear = resolve_capability(
+            session=s,
+            settings=settings,
+            capability=capability,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+        )
+    assert after_clear.effective_enabled is False
+    assert after_clear.decided_by is DecisionSource.GLOBAL_CONFIGURATION
+    assert after_clear.global_flag is False
+
+
+def test_dark_state_rss_stays_disabled_across_service_mutations(factory) -> None:
+    """RSS is not ``workspace_enableable``: the service rejects an enable set (no row)
+    and RSS resolves disabled regardless of any set/clear (§8.29 #21).
+
+    Proves the deny-biased split holds even for a capability an override can never
+    raise: an enable attempt is refused with no row written, and resolution stays
+    disabled.
+    """
+    with factory() as s:
+        with pytest.raises(CapabilityOverrideNotPermittedError):
+            set_capability_override(
+                s,
+                organization_id=_ORG_A,
+                workspace_id=_WS_A,
+                capability=Capability.CONNECTOR_RSS,
+                enabled=True,
+                actor_user_id=_ACTOR,
+            )
+        s.rollback()
+
+    with factory() as s:
+        res = resolve_capability(
+            session=s,
+            settings=_shipped_settings(),
+            capability=Capability.CONNECTOR_RSS,
+            organization_id=_ORG_A,
+            workspace_id=_WS_A,
+        )
+    assert res.effective_enabled is False
+
+
+# --------------------------------------------------------------------------- #
+# No-live-consumer guard (#22): no production module imports the override service.
+# Precise AST import-boundary scan (not brittle whole-file string matching):
+# a docstring/comment mention is ignored; only a real ``import`` binds a consumer.
+# --------------------------------------------------------------------------- #
+_APP_DIR = Path(__file__).resolve().parents[1]  # apps/api/app
+_API_DIR = _APP_DIR.parent  # apps/api (the import root that holds the ``app`` package)
+_SERVICE_MODULE = "app.capabilities.service"
+_SERVICE_FILE = _APP_DIR / "capabilities" / "service.py"
+
+
+def _production_modules() -> list[Path]:
+    """Every production module under ``app/`` except the test package and the service
+    module itself (a module trivially imports itself)."""
+    return [
+        path
+        for path in sorted(_APP_DIR.rglob("*.py"))
+        if "tests" not in path.relative_to(_APP_DIR).parts and path != _SERVICE_FILE
+    ]
+
+
+def _absolute_from_base(path: Path, level: int, module: str | None) -> str:
+    """Resolve an ``ast.ImportFrom`` base (handling relative imports) to a dotted
+    absolute module rooted at the ``app`` package."""
+    if level == 0:
+        return module or ""
+    pkg_parts = list(path.relative_to(_API_DIR).with_suffix("").parts)
+    if path.name != "__init__.py":
+        pkg_parts = pkg_parts[:-1]  # the containing package
+    if level - 1 > 0:  # each extra level climbs one more package
+        pkg_parts = pkg_parts[: len(pkg_parts) - (level - 1)]
+    base = ".".join(pkg_parts)
+    if module:
+        base = f"{base}.{module}" if base else module
+    return base
+
+
+def _module_imports_service(path: Path, tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):  # import app.capabilities.service [as x]
+            for alias in node.names:
+                if alias.name == _SERVICE_MODULE or alias.name.startswith(_SERVICE_MODULE + "."):
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            base = _absolute_from_base(path, node.level, node.module)
+            # from app.capabilities.service import x  /  from ..service import x
+            if base == _SERVICE_MODULE or base.startswith(_SERVICE_MODULE + "."):
+                return True
+            # from app.capabilities import service  /  from . import service
+            for alias in node.names:
+                if f"{base}.{alias.name}" == _SERVICE_MODULE:
+                    return True
+    return False
+
+
+def test_no_production_module_imports_the_override_service() -> None:
+    """The override service ships with **no live consumer** (§8.29 #22, §8.31).
+
+    Parses every production module under ``app/`` (excluding the test package and the
+    service module itself) and asserts none imports ``app.capabilities.service`` or a
+    symbol from it — via absolute *or* relative import. Mirrors and strengthens the
+    resolver non-consumption guard; a route/worker/connector/scheduler wiring the
+    service into a live path fails CI here.
+    """
+    offenders = [
+        str(path.relative_to(_APP_DIR))
+        for path in _production_modules()
+        if _module_imports_service(
+            path, ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        )
+    ]
+    assert not offenders, (
+        "override service must have no live production consumer; found imports in: "
+        + ", ".join(offenders)
+    )
+
+
+def test_no_consumer_guard_actually_scans_the_live_gate_modules() -> None:
+    """Self-check: the scan really covers the known live-gate modules, so a future
+    consumer cannot slip through an empty/misrouted file set (§8.29 #22)."""
+    scanned = {str(p.relative_to(_APP_DIR)) for p in _production_modules()}
+    for expected in (
+        "capabilities/resolver.py",
+        "feedback/routes.py",
+        "scouting_requests/routes.py",
+        "scouting_requests/schedules.py",
+        "connectors/registry.py",
+    ):
+        assert expected in scanned, expected
+    assert "capabilities/service.py" not in scanned  # the service excludes itself
