@@ -129,6 +129,19 @@
 
 ## INFRA-4 — Infrastructure-as-code (plan-only, no apply)
 
+- **Delivered (INFRA-4 plan-only tranche):** the implementation-ready AWS staging IaC
+  **design** — target topology, project/module organization, remote state and locking,
+  network/ingress, compute and task definitions, immutable digest + exact-SHA wiring, the
+  secret-injection map bound by reference to the 87-field inventory, least-privilege IAM,
+  database/migration safety, observability, cost/budget guardrails (50/75/90/100%), a
+  validation matrix, risk register, rollback/recovery, a human decision register, and the exact
+  future gates — now lives in
+  [`docs/operations/aws-staging-iac-plan.md`](operations/aws-staging-iac-plan.md).
+  **Documentation design only** — no IaC source, no `init`/`validate`/`plan`/`apply`, no AWS
+  authentication, no provisioning, no secret operation, and no activation. (Upstream INFRA-3
+  secrets scaffolding merged via PR #93.) The IaC tool is **not** selected in this tranche
+  (candidates + a decision procedure are recorded); authoring the `infra/aws/` source is the
+  later, separately authorized INFRA-4 implementation, and `apply` remains INFRA-9.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names
