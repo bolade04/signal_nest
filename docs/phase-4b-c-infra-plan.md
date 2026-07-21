@@ -84,6 +84,14 @@
   - `.env.canary.example` — a root-level, values-free placeholder template (variable names
     only; never a real secret value).
   - minimal roadmap progress/link updates under `docs/`.
+- **Delivered (INFRA-3 scaffolding tranche):** the full field inventory, actor-boundary
+  matrix, ECS injection contract, operational rules, and detailed fail-closed **G5**
+  contract now live in
+  [`docs/operations/aws-staging-secret-inventory.md`](operations/aws-staging-secret-inventory.md);
+  the values-free placeholder template is the root
+  [`.env.canary.example`](../.env.canary.example). Documentation and placeholder only — no
+  secret operation, AWS call, IaC, deployment, or activation. Implementing the inventory
+  checks and executing G5 remains the later, separately authorized INFRA-3 implementation.
 - **G5 — Secret readiness.** A future gate that MUST be **fail-closed**, **read-only**,
   **repeatable**, **non-mutating**, **required before any runtime-canary authorization**,
   **not bypassable by any capability override**, and **incapable of authorizing feature
