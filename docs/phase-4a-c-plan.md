@@ -752,8 +752,14 @@ rewrites no historical SHA or closeout evidence.
   `docs/phase-4a-c-3-plan.md`. Service-module-only; no route, no schema, no migration, no
   resolver wiring, no real override record. The resolver stays unconsumed and every
   capability remains dark.
-- **4A-C.4 — operator/customer management API + contract:** not started; separate, later,
-  explicitly-approved batch.
+- **4A-C.4 — operator management API + contract:** **planning underway** — see
+  `docs/phase-4a-c-4-plan.md`. Implementation not started. The plan is additive
+  operator-only routes that expose the merged resolver + override service under
+  `/internal/system/capabilities/*`; it flips no flag (all three remain `False`), adds no
+  migration (single head `98289430a3ec` preserved), wires the resolver into no live gate,
+  and leaves PR #34 untouched. It records that this batch introduces the first *sanctioned*
+  consumer of the resolver/service — the operator management API, which is **not** a live
+  gate — so the dark-state guards are reframed accordingly. Every capability remains dark.
 
 ---
 
