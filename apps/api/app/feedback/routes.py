@@ -30,20 +30,27 @@ request-scoped ``get_db`` override owns the commit.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import TenantContext, require_role
+from app.capabilities.registry import Capability
+from app.capabilities.resolver import resolve_capability
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.errors import CapabilityUnavailableError, NotFoundError
+from app.core.logging import get_logger, log_event
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
 from app.feedback.schemas import FeedbackCreate, FeedbackHistoryOut, FeedbackOut
 from app.feedback.service import create_feedback
 from app.intelligence.records import SignalIntelligenceRecord
 from app.opportunities.models import Opportunity
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["opportunity-feedback"])
 
@@ -53,14 +60,65 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 
 
-def _require_feedback_feature() -> None:
-    """Gate every feedback operation behind the dark-deploy flag.
+def _require_feedback_feature(db: Session, ctx: TenantContext) -> None:
+    """Gate every feedback operation through the deny-biased capability resolver.
 
-    While ``opportunity_feedback_enabled`` is off (the default), both submit and read
-    answer with an explicit, safe feature-disabled response (503
-    ``capability_unavailable``) rather than exposing or accepting any feedback.
+    Phase 4B-A: the effective state of ``OPPORTUNITY_FEEDBACK`` for this workspace is
+    decided by the central resolver (safety ceiling → honored per-workspace override →
+    global configuration → secure default), using the authenticated tenant context's
+    **server-resolved** organization/workspace identity — never a client-supplied scope.
+    This makes the feedback route a sanctioned resolver consumer; it remains the single
+    source of the capability decision (no raw-flag shortcut).
+
+    Fail-closed (D2): only an explicit ``effective_enabled`` resolution opens the gate.
+    Every other outcome rejects with the standard 503 ``capability_unavailable`` before
+    any feedback row is written. A resolver / database / override-storage failure is
+    never swallowed into an enable — it is logged distinctly from an intentional denial
+    and re-raised (a 5xx) before any write, so the feature can never fail open.
+
+    Under the shipped dark configuration (global flag ``False``, no override) the
+    resolver returns disabled via ``GLOBAL_CONFIGURATION`` for every workspace, so the
+    behavior is identical to the previous raw-flag gate. Wiring the gate flips no flag
+    and creates no override.
     """
-    if not get_settings().opportunity_feedback_enabled:
+    try:
+        resolution = resolve_capability(
+            session=db,
+            settings=get_settings(),
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            organization_id=ctx.organization.id,
+            workspace_id=ctx.workspace.id,
+        )
+    except Exception:
+        # Fail-closed: record the dependency failure distinctly from a denial, then let
+        # it propagate before any write. Never continue as allowed.
+        log_event(
+            logger,
+            "opportunity_feedback_gate_failed",
+            level=logging.ERROR,
+            outcome="error",
+            capability=Capability.OPPORTUNITY_FEEDBACK.value,
+            organization_id=ctx.organization.id,
+            workspace_id=ctx.workspace.id,
+        )
+        raise
+
+    # Structured, secret-free decision log: the capability, scoped ids, the boolean
+    # result, and the deciding precedence rule — enough to detect an unexpected enable
+    # for any workspace. Carries no override reason note or feedback content.
+    log_event(
+        logger,
+        "opportunity_feedback_gate_decided",
+        outcome="allowed" if resolution.effective_enabled else "denied",
+        capability=Capability.OPPORTUNITY_FEEDBACK.value,
+        organization_id=ctx.organization.id,
+        workspace_id=ctx.workspace.id,
+        effective_enabled=resolution.effective_enabled,
+        decided_by=resolution.decided_by.value,
+        global_flag=resolution.global_flag,
+        has_override=resolution.has_override,
+    )
+    if not resolution.effective_enabled:
         raise CapabilityUnavailableError("Opportunity feedback is not available yet.")
 
 
@@ -107,7 +165,7 @@ def submit_opportunity_feedback(
     copies version provenance from that record, polarity-checks the optional reason and
     inserts a new append-only row. Returns the stored judgement's customer-safe view.
     """
-    _require_feedback_feature()
+    _require_feedback_feature(db, ctx)
     opportunity = _get_scoped_opportunity(db, workspace_id, opportunity_id)
     record = _get_scoped_record(db, workspace_id, body.intelligence_record_id)
     feedback = create_feedback(
@@ -139,7 +197,7 @@ def list_opportunity_feedback(
     mutates anything. Scoped to this opportunity within the path workspace (404 for an
     unknown/cross-workspace opportunity).
     """
-    _require_feedback_feature()
+    _require_feedback_feature(db, ctx)
     opportunity = _get_scoped_opportunity(db, workspace_id, opportunity_id)
 
     base = select(OpportunityFeedback).where(

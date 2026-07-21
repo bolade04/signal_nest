@@ -6,7 +6,9 @@ This sub-batch ships only the *types*: the capabilities-local typed errors
 these tests exercise shape/immutability and error status/code mapping in isolation
 (mirroring the resolver's result-shape tests).
 
-They also stand guard that the resolver remains unconsumed by any live gate.
+They also stand guard over the resolver's live-gate import boundary: after Phase 4B-A
+exactly one live gate (the opportunity-feedback route) is a sanctioned resolver consumer,
+while the scheduling and RSS live gates must remain unwired.
 """
 
 from __future__ import annotations
@@ -136,11 +138,20 @@ def test_override_page_empty_defaults_are_coherent() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Dark-state guard: the resolver remains unconsumed by any live gate
+# Import-boundary guard: only the sanctioned feedback gate consumes the resolver
 # --------------------------------------------------------------------------- #
-def test_resolver_remains_unconsumed_by_live_gates() -> None:
+def test_resolver_consumed_only_by_the_sanctioned_feedback_gate() -> None:
+    # Phase 4B-A sanctions exactly ONE live gate — the opportunity-feedback route — as a
+    # resolver consumer, and it MUST route its capability decision through the central
+    # deny-biased resolver (no raw-flag shortcut). Every other live gate must remain
+    # unwired so no capability can silently activate through it: the scheduling
+    # read/write gates and the RSS connector selection still must not import the
+    # resolver. (The sanctioned operator surface consumes the resolver too, but it is
+    # not a live customer gate and is out of scope for this guard.)
+    feedback_gate = (API_DIR / "app/feedback/routes.py").read_text(encoding="utf-8")
+    assert "resolve_capability" in feedback_gate  # sanctioned live consumer (4B-A)
+
     for module_path in (
-        Path("app/feedback/routes.py"),
         Path("app/scouting_requests/routes.py"),
         Path("app/scouting_requests/schedules.py"),
         Path("app/connectors/registry.py"),

@@ -1313,8 +1313,20 @@ _RESOLVER_MODULE = "app.capabilities.resolver"
 _CONTROL_PLANE_MODULES = (_SERVICE_MODULE, _RESOLVER_MODULE)
 _SERVICE_FILE = _APP_DIR / "capabilities" / "service.py"
 _RESOLVER_FILE = _APP_DIR / "capabilities" / "resolver.py"
-#: The single allow-listed production consumer (relative to ``app/``).
+#: The operator router — allowed to consume BOTH control-plane modules (relative to
+#: ``app/``).
 _ALLOWED_CONSUMER_REL = "system/internal_capabilities_routes.py"
+#: The opportunity-feedback live gate — sanctioned by Phase 4B-A to consume ONLY the
+#: resolver (never the service), relative to ``app/``.
+_FEEDBACK_GATE_REL = "feedback/routes.py"
+#: Sanctioned production consumers of the capability control plane, each mapped to the
+#: exact control-plane modules it may import. The operator router (4A-C.4) may consume
+#: both the service and the resolver; the opportunity-feedback gate (4B-A) may consume
+#: only the resolver. Every other production module must consume neither.
+_SANCTIONED_CONSUMERS = {
+    _ALLOWED_CONSUMER_REL: frozenset(_CONTROL_PLANE_MODULES),
+    _FEEDBACK_GATE_REL: frozenset({_RESOLVER_MODULE}),
+}
 
 
 def _production_modules() -> list[Path]:
@@ -1370,60 +1382,76 @@ def _control_plane_imports(path: Path, tree: ast.AST) -> list[str]:
     return [t for t in _CONTROL_PLANE_MODULES if _module_imports_target(path, tree, t)]
 
 
-def test_only_the_operator_router_consumes_the_service_or_resolver() -> None:
-    """The capability control plane has exactly ONE production consumer (§26, #22).
+def test_only_sanctioned_modules_consume_the_service_or_resolver() -> None:
+    """The capability control plane has a closed allow-list of production consumers
+    (§26, #22).
 
-    Reframed from the 4A-C.3.6 absolute prohibition: 4A-C.4 adds the operator router as
-    the first sanctioned consumer of the resolver (4A-C.4.2) — and later the service
-    (4A-C.4.3+). This guard parses every production module under ``app/`` and asserts the
-    **only** one importing ``app.capabilities.service`` or ``app.capabilities.resolver``
-    (via absolute *or* relative import) is ``system/internal_capabilities_routes.py``.
-    Any other production module — every live gate / worker / scheduler / connector — that
-    re-arms an enforcement path by importing either module fails CI here.
+    Reframed across 4A-C.4 → 4B-A from the 4A-C.3.6 absolute prohibition. 4A-C.4 added
+    the operator router as the first sanctioned consumer of the resolver (4A-C.4.2) and
+    the service (4A-C.4.3+); 4B-A adds the opportunity-feedback gate as a second consumer
+    of the **resolver only**. This guard parses every production module under ``app/`` and
+    asserts each module's control-plane imports (``app.capabilities.service`` /
+    ``app.capabilities.resolver``, via absolute *or* relative import) stay within the exact
+    set sanctioned for that module: the operator router may import both; the feedback gate
+    may import only the resolver (importing the service would fail here); every OTHER
+    production module — every remaining live gate / worker / scheduler / connector — must
+    import neither, so no capability can be re-armed off the audited surface.
     """
     offenders = {}
     for path in _production_modules():
         rel = str(path.relative_to(_APP_DIR))
-        if rel == _ALLOWED_CONSUMER_REL:
-            continue  # the single sanctioned consumer (allow-list of one)
+        allowed = _SANCTIONED_CONSUMERS.get(rel, frozenset())
         hits = _control_plane_imports(
             path, ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         )
-        if hits:
-            offenders[rel] = hits
+        unauthorized = [h for h in hits if h not in allowed]
+        if unauthorized:
+            offenders[rel] = unauthorized
     assert not offenders, (
-        "only the operator router may consume the capability control plane; found "
+        "only sanctioned modules may consume the capability control plane; found "
         f"unauthorized imports in: {offenders}"
     )
 
 
 def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None:
-    """Self-check: the scan really covers the live-gate set and the allow-listed router,
-    the two control-plane modules exclude themselves, and the allow-list is not vacuous —
-    the operator router genuinely imports BOTH control-plane modules (§26, #22, #24).
+    """Self-check: the scan really covers the live-gate set and the sanctioned consumers,
+    the two control-plane modules exclude themselves, and each allow-list entry is not
+    vacuous — the operator router genuinely imports BOTH control-plane modules and the
+    feedback gate genuinely imports the resolver but NOT the service (§26, #22, #24).
 
     As of 4A-C.4.3 the operator router consumes the resolver (effective read, 4A-C.4.2)
-    AND the override service's read plane (list read, 4A-C.4.3). Asserting both bindings
-    keeps the allow-list grounded for each module: were either dropped from the allow-list
-    above, ``test_only_the_operator_router_consumes_the_service_or_resolver`` would fail.
+    AND the override service's read plane (list read, 4A-C.4.3). As of 4B-A the feedback
+    gate consumes the resolver (deny-biased decision) and must never consume the service.
+    Asserting the actual bindings keeps every allow-list entry grounded: were any entry
+    dropped or widened above, ``test_only_sanctioned_modules_consume_the_service_or_resolver``
+    would fail.
     """
     scanned = {str(p.relative_to(_APP_DIR)) for p in _production_modules()}
     for expected in (
-        "feedback/routes.py",
+        _FEEDBACK_GATE_REL,
         "scouting_requests/routes.py",
         "scouting_requests/schedules.py",
         "connectors/registry.py",
-        _ALLOWED_CONSUMER_REL,  # the allow-listed consumer must actually be in scope
+        _ALLOWED_CONSUMER_REL,  # the allow-listed consumers must actually be in scope
     ):
         assert expected in scanned, expected
     # The two control-plane modules exclude themselves (they cannot consume themselves).
     assert "capabilities/service.py" not in scanned
     assert "capabilities/resolver.py" not in scanned
-    # The allow-list is grounded, not vacuous: the operator router really imports BOTH the
-    # resolver and the service, so removing it from the allow-list above would fail the
-    # single-consumer guard for either module.
+    # The operator-router allow-list entry is grounded, not vacuous: it really imports
+    # BOTH the resolver and the service, so removing it above would fail the guard.
     router_path = _APP_DIR / _ALLOWED_CONSUMER_REL
     router_tree = ast.parse(router_path.read_text(encoding="utf-8"), filename=str(router_path))
     router_imports = _control_plane_imports(router_path, router_tree)
     assert _RESOLVER_MODULE in router_imports
     assert _SERVICE_MODULE in router_imports
+    # The feedback-gate allow-list entry is grounded and correctly narrow: it really
+    # imports the resolver, and it must NOT import the service (its sanctioned set is
+    # resolver-only, so a service import would be an offender above).
+    feedback_path = _APP_DIR / _FEEDBACK_GATE_REL
+    feedback_tree = ast.parse(
+        feedback_path.read_text(encoding="utf-8"), filename=str(feedback_path)
+    )
+    feedback_imports = _control_plane_imports(feedback_path, feedback_tree)
+    assert _RESOLVER_MODULE in feedback_imports
+    assert _SERVICE_MODULE not in feedback_imports

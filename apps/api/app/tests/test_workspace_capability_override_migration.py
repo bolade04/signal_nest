@@ -159,11 +159,16 @@ def test_resolver_ships_but_stays_unconsumed_by_live_gates() -> None:
     assert hasattr(resolver, "resolve_capability")
     assert hasattr(resolver, "decide_capability")
 
-    # ...but it must remain unconsumed: no live gate module imports it. The three
-    # enforcement points keep their direct global-flag checks (the resolver is
-    # wired by a later, separately-approved batch).
+    # Phase 4B-A sanctions exactly ONE live gate as a resolver consumer — the
+    # opportunity-feedback route — which routes its capability decision through the
+    # deny-biased resolver. Every OTHER live gate must remain unwired so no capability
+    # can silently activate through it: the scheduling read/write gates and the RSS
+    # connector selection still keep their direct global-flag checks and must not
+    # import the resolver.
+    feedback_gate = (API_DIR / "app/feedback/routes.py").read_text(encoding="utf-8")
+    assert "resolve_capability" in feedback_gate  # sanctioned live consumer (4B-A)
+
     for module_path in (
-        Path("app/feedback/routes.py"),
         Path("app/scouting_requests/routes.py"),
         Path("app/scouting_requests/schedules.py"),
         Path("app/connectors/registry.py"),
