@@ -92,6 +92,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/capabilities/effective": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Capability Effective
+         * @description Return the effective state of each capability for one workspace.
+         *
+         *     The route is a thin adapter over the merged deny-biased resolver: it validates the
+         *     operator-supplied tenant scope, then delegates every precedence decision to
+         *     :func:`resolve_capability` (safety ceiling → honored workspace override → global
+         *     configuration → secure default) and projects each :class:`CapabilityResolution`.
+         *     It implements no precedence of its own, opens no transaction, writes no row, and
+         *     flips no flag.
+         *
+         *     ``capability`` is an optional filter: absent, the response covers every capability
+         *     in :func:`iter_capabilities` (canonical order); supplied, it narrows to that one.
+         *     An unknown ``capability`` value is rejected as 422 by the typed enum before any
+         *     resolution. A cross-tenant or absent workspace is a non-enumerating 404.
+         *
+         *     With shipped defaults (all three global flags ``False``) and no real override row,
+         *     every capability resolves disabled via ``global_configuration`` — the surface is
+         *     dark. A persisted enable on a ``workspace_enableable`` capability would show
+         *     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
+         *     while ``global_flag`` stays ``False``: persisted intent the resolver alone honors,
+         *     with no live gate consuming it, so nothing is globally activated.
+         */
+        get: operations["internal_capability_effective_api_v1_internal_system_capabilities_effective_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/capabilities/registry": {
         parameters: {
             query?: never;
@@ -1524,6 +1563,40 @@ export interface components {
          * @enum {string}
          */
         Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
+        /**
+         * CapabilityEffectiveListOut
+         * @description Effective state for a workspace, one item per resolved capability.
+         */
+        CapabilityEffectiveListOut: {
+            /** Items */
+            items: components["schemas"]["CapabilityEffectiveOut"][];
+        };
+        /**
+         * CapabilityEffectiveOut
+         * @description Operator projection of one resolved ``(capability, workspace)`` pair.
+         *
+         *     A secret-free view of :class:`app.capabilities.resolver.CapabilityResolution`: the
+         *     effective boolean a future gate would consume, the precedence rule that decided it,
+         *     the bound global-flag value, and whether an honored per-workspace override was
+         *     present (and its boolean). Reporting ``effective_enabled`` and ``global_flag``
+         *     separately lets the operator distinguish persisted override *intent* from global
+         *     *activation*. Carries no override ``reason`` note, actor id, timestamp, URL, or
+         *     credential.
+         */
+        CapabilityEffectiveOut: {
+            capability: components["schemas"]["Capability"];
+            decided_by: components["schemas"]["DecisionSource"];
+            /** Effective Enabled */
+            effective_enabled: boolean;
+            /** Global Flag */
+            global_flag: boolean;
+            /** Has Override */
+            has_override: boolean;
+            /** Override Value */
+            override_value: boolean | null;
+            /** Workspace Id */
+            workspace_id: string;
+        };
         /** CapabilityOut */
         CapabilityOut: {
             /** Backend */
@@ -1626,6 +1699,16 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * DecisionSource
+         * @description The single precedence rule that decided a resolution (bounded, operator-safe).
+         *
+         *     The four values are exactly the four precedence outcomes of §8.9, in order:
+         *     the safety ceiling, an honored per-workspace override, the bound global flag,
+         *     and the deny-biased secure default.
+         * @enum {string}
+         */
+        DecisionSource: "safety_ceiling" | "workspace_override" | "global_configuration" | "secure_default";
         /**
          * FeatureFlagsOut
          * @description Coarse, read-only product-capability booleans.
@@ -3338,6 +3421,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilitiesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_capability_effective_api_v1_internal_system_capabilities_effective_get: {
+        parameters: {
+            query: {
+                organization_id: string;
+                workspace_id: string;
+                capability?: components["schemas"]["Capability"] | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityEffectiveListOut"];
                 };
             };
             /** @description Validation Error */

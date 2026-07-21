@@ -12,8 +12,9 @@ operator-only authorization (401 anonymous / 403 non-operator), the exact secret
 response shape, that the projection reproduces ``iter_capabilities()`` + ``get_policy()``
 exactly once each in canonical order (no unknown/duplicate/missing capability),
 dark-state invariants (all three global flags remain ``False``; the read activates
-nothing), that the new router imports neither the resolver nor the service (so 4A-C.4.1
-consumes neither — the dark-state guards stay green unchanged), and that the additive
+nothing), that the registry router still imports the override service **not at all**
+while now importing the resolver only as the sanctioned effective-read consumer added
+in 4A-C.4.2 (the service stays unconsumed until 4A-C.4.3), and that the additive
 route is present in the OpenAPI schema without disturbing existing operator routes.
 """
 
@@ -66,6 +67,28 @@ _FORBIDDEN = (
 
 _OPERATOR = "operator-user"
 _CUSTOMER = "customer-user"
+
+
+def _module_binds(tree: ast.AST, target: str) -> bool:
+    """Whether ``tree`` really *imports* ``target`` (e.g. ``app.capabilities.resolver``).
+
+    Recognizes ``import target[.x]``, ``from target[...] import x``, and
+    ``from <parent> import <leaf>`` where ``<parent>.<leaf> == target``. A docstring or
+    comment mention is ignored — only a binding ``import`` counts.
+    """
+    parent, _, leaf = target.rpartition(".")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == target or alias.name.startswith(target + "."):
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == target or module.startswith(target + "."):
+                return True
+            if module == parent and any(a.name == leaf for a in node.names):
+                return True
+    return False
 
 
 @pytest.fixture(scope="module")
@@ -213,22 +236,21 @@ class TestDarkState:
         for item in h.get(REGISTRY_PATH).json()["items"]:
             assert item["future_activation_phase"]
 
-    def test_router_imports_neither_resolver_nor_service(self):
-        # 4A-C.4.1 consumes neither the resolver nor the override service, so the
-        # 4A-C.3.6 no-consumer guard and the live-gate resolver guard both stay green
-        # unchanged. Assert the new router binds neither via a precise AST scan.
+    def test_router_imports_the_resolver_as_the_sanctioned_consumer(self):
+        # 4A-C.4.2 makes the operator router the FIRST sanctioned production consumer
+        # of the resolver (the effective-read path). Assert the binding really exists
+        # via a precise AST scan, so the reframed live-gate/allow-list guard in
+        # test_capability_override_service.py is grounded in a real import.
         tree = ast.parse(_ROUTER_FILE.read_text(encoding="utf-8"), filename=str(_ROUTER_FILE))
-        forbidden = {"app.capabilities.resolver", "app.capabilities.service"}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name not in forbidden
-                    assert not any(alias.name.startswith(f + ".") for f in forbidden)
-            elif isinstance(node, ast.ImportFrom):
-                assert node.module not in forbidden
-                if node.module in {"app.capabilities", None}:
-                    for alias in node.names:
-                        assert alias.name not in {"resolver", "service"}
+        assert _module_binds(tree, "app.capabilities.resolver")
+
+    def test_router_does_not_import_the_override_service(self):
+        # The resolver is now consumed, but the override service is NOT: the write
+        # plane (list/set/clear) lands in 4A-C.4.3+. The service therefore stays fully
+        # unconsumed after 4A-C.4.2, keeping every mutation path dark. Assert the new
+        # router binds no service symbol via a precise AST scan.
+        tree = ast.parse(_ROUTER_FILE.read_text(encoding="utf-8"), filename=str(_ROUTER_FILE))
+        assert not _module_binds(tree, "app.capabilities.service")
 
 
 # --------------------------------------------------------------------------- #

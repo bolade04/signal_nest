@@ -741,6 +741,72 @@
         "title": "Capability",
         "type": "string"
       },
+      "CapabilityEffectiveListOut": {
+        "description": "Effective state for a workspace, one item per resolved capability.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilityEffectiveOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CapabilityEffectiveListOut",
+        "type": "object"
+      },
+      "CapabilityEffectiveOut": {
+        "description": "Operator projection of one resolved ``(capability, workspace)`` pair.\n\nA secret-free view of :class:`app.capabilities.resolver.CapabilityResolution`: the\neffective boolean a future gate would consume, the precedence rule that decided it,\nthe bound global-flag value, and whether an honored per-workspace override was\npresent (and its boolean). Reporting ``effective_enabled`` and ``global_flag``\nseparately lets the operator distinguish persisted override *intent* from global\n*activation*. Carries no override ``reason`` note, actor id, timestamp, URL, or\ncredential.",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/DecisionSource"
+          },
+          "effective_enabled": {
+            "title": "Effective Enabled",
+            "type": "boolean"
+          },
+          "global_flag": {
+            "title": "Global Flag",
+            "type": "boolean"
+          },
+          "has_override": {
+            "title": "Has Override",
+            "type": "boolean"
+          },
+          "override_value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Value"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "workspace_id",
+          "effective_enabled",
+          "decided_by",
+          "global_flag",
+          "has_override",
+          "override_value"
+        ],
+        "title": "CapabilityEffectiveOut",
+        "type": "object"
+      },
       "CapabilityOut": {
         "properties": {
           "backend": {
@@ -989,6 +1055,17 @@
         ],
         "title": "DeadLetterJobsOut",
         "type": "object"
+      },
+      "DecisionSource": {
+        "description": "The single precedence rule that decided a resolution (bounded, operator-safe).\n\nThe four values are exactly the four precedence outcomes of \u00a78.9, in order:\nthe safety ceiling, an honored per-workspace override, the bound global flag,\nand the deny-biased secure default.",
+        "enum": [
+          "safety_ceiling",
+          "workspace_override",
+          "global_configuration",
+          "secure_default"
+        ],
+        "title": "DecisionSource",
+        "type": "string"
       },
       "FeatureFlagsOut": {
         "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of server feature flags \u2014 never a customer-settable\ntoggle. They let an authenticated client know, before it issues any\nfeature-specific request, whether a dark-deployed capability is live, so it\ncan avoid probing an endpoint that would only answer ``503``. Secret-free:\nonly booleans, never backend topology or configuration values.",
@@ -5544,6 +5621,92 @@
           }
         },
         "summary": "Internal Capabilities",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/capabilities/effective": {
+      "get": {
+        "description": "Return the effective state of each capability for one workspace.\n\nThe route is a thin adapter over the merged deny-biased resolver: it validates the\noperator-supplied tenant scope, then delegates every precedence decision to\n:func:`resolve_capability` (safety ceiling \u2192 honored workspace override \u2192 global\nconfiguration \u2192 secure default) and projects each :class:`CapabilityResolution`.\nIt implements no precedence of its own, opens no transaction, writes no row, and\nflips no flag.\n\n``capability`` is an optional filter: absent, the response covers every capability\nin :func:`iter_capabilities` (canonical order); supplied, it narrows to that one.\nAn unknown ``capability`` value is rejected as 422 by the typed enum before any\nresolution. A cross-tenant or absent workspace is a non-enumerating 404.\n\nWith shipped defaults (all three global flags ``False``) and no real override row,\nevery capability resolves disabled via ``global_configuration`` \u2014 the surface is\ndark. A persisted enable on a ``workspace_enableable`` capability would show\n``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``\nwhile ``global_flag`` stays ``False``: persisted intent the resolver alone honors,\nwith no live gate consuming it, so nothing is globally activated.",
+        "operationId": "internal_capability_effective_api_v1_internal_system_capabilities_effective_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "capability",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Capability"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Capability"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityEffectiveListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Capability Effective",
         "tags": [
           "internal"
         ]
