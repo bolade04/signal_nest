@@ -11,11 +11,15 @@ emission that shares the caller's transaction (plan §8.9, §8.11, §8.17, §8.1
 Phase 4A-C.3.4 adds the **clear plane** (:func:`clear_capability_override`): tenant
 validation, an idempotent delete-or-no-op, and a ``.cleared`` audit — clearing is
 policy-free and reason-free, and after a clear no override remains (plan §8.10).
+Phase 4A-C.3.5 adds single-workspace mutation **concurrency** (:func:`_lock_workspace`):
+a ``SELECT … FOR UPDATE`` row lock on the stable workspace row, acquired before the
+override read-modify-write on every ``set``/``clear``, so concurrent mutations on the
+same workspace serialize — backed by the unique constraint and the ``begin_nested``
+SAVEPOINT retry as the portable backstop (plan §8.21–§8.22).
 
-Deferred to a later, separately-approved sub-batch (plan §8.32): the
-``SELECT … FOR UPDATE`` workspace lock plus the PostgreSQL-gated concurrency test
-(4A-C.3.5). This batch adds no route, no resolver wiring, no flag flip, and no
-migration.
+Deferred to a later, separately-approved sub-batch (plan §8.32): the dark-state and
+no-live-consumer guard tests plus the verification doc (4A-C.3.6). This batch adds no
+route, no resolver wiring, no flag flip, and no migration.
 
 Conventions mirror the established house style (``feedback/service.py``,
 ``scouting_requests/run_history.py``): explicit ``db: Session`` first positional,
@@ -93,6 +97,35 @@ def _validate_tenant(db: Session, *, organization_id: str, workspace_id: str) ->
         raise NotFoundError("Workspace not found.")
     if workspace.organization_id != organization_id:
         raise CapabilityTenantMismatchError("Workspace not found.")
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency — single-workspace mutation lock (4A-C.3.5)
+# --------------------------------------------------------------------------- #
+def _workspace_lock_select(workspace_id: str):
+    """The ``SELECT … FOR UPDATE`` used to serialize mutations on one workspace.
+
+    Factored out so a test can compile it against the PostgreSQL dialect and prove it
+    emits ``FOR UPDATE`` without a live database (plan §8.22, mirroring
+    ``scouting_requests/schedules.py::_workspace_lock_select``).
+    """
+    return select(Workspace.id).where(Workspace.id == workspace_id).with_for_update()
+
+
+def _lock_workspace(db: Session, workspace_id: str) -> None:
+    """Serialize concurrent overrides for one workspace before the read-modify-write.
+
+    Takes a ``SELECT … FOR UPDATE`` row lock on the *stable* workspace row so the
+    override lookup + upsert/delete runs as one atomic critical section held until the
+    caller's transaction commits (plan §8.22, mirroring
+    ``scouting_requests/schedules.py::_lock_workspace_for_cap``). On PostgreSQL a
+    second mutation for the same workspace blocks until the first commits, then
+    re-reads the true state; on SQLite ``FOR UPDATE`` compiles to a harmless no-op
+    (the single-writer engine already serializes writers), so correctness there rests
+    on the unique constraint + the ``begin_nested`` SAVEPOINT retry (§8.21). Scoped to
+    one workspace row, so it never contends across tenants.
+    """
+    db.execute(_workspace_lock_select(workspace_id))
 
 
 def get_capability_override(
@@ -295,8 +328,10 @@ def set_capability_override(
     (§8.12), deny-biased registry policy enforcement (§8.11 — an ``enabled=True``
     for a non-``workspace_enableable`` capability such as RSS is rejected before any
     row or mutation-audit is written; the attempt is recorded as ``.rejected``),
-    bounded reason validation (§8.17), then an idempotent insert-or-update upsert
-    with a ``begin_nested`` SAVEPOINT race backstop (§8.21). Mutation and audit
+    bounded reason validation (§8.17), a ``SELECT … FOR UPDATE`` workspace row lock
+    that serializes concurrent mutations on the same workspace (§8.22), then an
+    idempotent insert-or-update upsert with a ``begin_nested`` SAVEPOINT race backstop
+    (§8.21). Mutation and audit
     share the caller's transaction; the service flushes but never commits (§8.20,
     §8.23). ``actor_user_id`` is required so no override is written anonymously
     (§8.16); the service does not load the user row or check operator rights (a
@@ -331,6 +366,8 @@ def set_capability_override(
         )
 
     reason = _normalize_reason(reason)
+
+    _lock_workspace(db, workspace_id)
 
     existing = _load_override_row(db, workspace_id=workspace_id, capability=capability)
     if existing is not None:
@@ -419,21 +456,23 @@ def clear_capability_override(
 ) -> OverrideMutation:
     """Remove any override for ``capability`` in a workspace (plan §8.10).
 
-    Ordered gates: authoritative tenant validation (§8.12), then one indexed lookup
-    of the ``(workspace_id, capability)`` row. Clearing is deny-biased and carries
-    **no** policy gate — removing an override can only relax toward the secure
-    default, so it is always permitted — and takes **no** ``reason`` (§8.7). When no
-    override exists the call is an idempotent success that writes nothing and emits
-    **no** audit (clearing an absent override is a benign no-op; absence already
-    resolves disabled). When one exists, its prior state is captured, the row is
-    deleted and flushed, and a ``.cleared`` audit sharing the caller's transaction
-    records the removal (§8.19–§8.20). The service flushes but never commits (§8.23);
-    ``actor_user_id`` is required so no clear is anonymous (§8.16). Returns a typed
-    :class:`OverrideMutation` with ``enabled``/``override_id`` set to ``None`` (no
-    override remains). The ``SELECT … FOR UPDATE`` workspace lock is deferred to
-    4A-C.3.5 (§8.22, §8.32).
+    Ordered gates: authoritative tenant validation (§8.12), a ``SELECT … FOR UPDATE``
+    workspace row lock that serializes concurrent mutations on the same workspace
+    (§8.22), then one indexed lookup of the ``(workspace_id, capability)`` row.
+    Clearing is deny-biased and carries **no** policy gate — removing an override can
+    only relax toward the secure default, so it is always permitted — and takes **no**
+    ``reason`` (§8.7). When no override exists the call is an idempotent success that
+    writes nothing and emits **no** audit (clearing an absent override is a benign
+    no-op; absence already resolves disabled). When one exists, its prior state is
+    captured, the row is deleted and flushed, and a ``.cleared`` audit sharing the
+    caller's transaction records the removal (§8.19–§8.20). The service flushes but
+    never commits (§8.23); ``actor_user_id`` is required so no clear is anonymous
+    (§8.16). Returns a typed :class:`OverrideMutation` with ``enabled``/``override_id``
+    set to ``None`` (no override remains).
     """
     _validate_tenant(db, organization_id=organization_id, workspace_id=workspace_id)
+
+    _lock_workspace(db, workspace_id)
 
     existing = _load_override_row(db, workspace_id=workspace_id, capability=capability)
     if existing is None:
