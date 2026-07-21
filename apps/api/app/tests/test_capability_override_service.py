@@ -1294,23 +1294,37 @@ def test_dark_state_rss_stays_disabled_across_service_mutations(factory) -> None
 
 
 # --------------------------------------------------------------------------- #
-# No-live-consumer guard (#22): no production module imports the override service.
-# Precise AST import-boundary scan (not brittle whole-file string matching):
-# a docstring/comment mention is ignored; only a real ``import`` binds a consumer.
+# Live-gate / single-consumer allow-list guard (#22, §26, reframed in 4A-C.4.2).
+# Phase 4A-C.4 intentionally adds the FIRST sanctioned production consumer of the
+# capability control plane: the operator router (``app/system/
+# internal_capabilities_routes.py``). So the 4A-C.3.6 "no production import at all"
+# guard is reframed into an allow-list of exactly that one module — every OTHER
+# production module (every live gate / worker / scheduler / connector included) must
+# still import neither ``app.capabilities.service`` nor ``app.capabilities.resolver``.
+# Precise AST import-boundary scan (not brittle whole-file string matching): a
+# docstring/comment mention is ignored; only a real ``import`` binds a consumer.
 # --------------------------------------------------------------------------- #
 _APP_DIR = Path(__file__).resolve().parents[1]  # apps/api/app
 _API_DIR = _APP_DIR.parent  # apps/api (the import root that holds the ``app`` package)
 _SERVICE_MODULE = "app.capabilities.service"
+_RESOLVER_MODULE = "app.capabilities.resolver"
+#: The capability control-plane modules whose only sanctioned consumer is the operator
+#: router; a live gate importing either re-arms an enforcement path and must fail here.
+_CONTROL_PLANE_MODULES = (_SERVICE_MODULE, _RESOLVER_MODULE)
 _SERVICE_FILE = _APP_DIR / "capabilities" / "service.py"
+_RESOLVER_FILE = _APP_DIR / "capabilities" / "resolver.py"
+#: The single allow-listed production consumer (relative to ``app/``).
+_ALLOWED_CONSUMER_REL = "system/internal_capabilities_routes.py"
 
 
 def _production_modules() -> list[Path]:
-    """Every production module under ``app/`` except the test package and the service
-    module itself (a module trivially imports itself)."""
+    """Every production module under ``app/`` except the test package and the two
+    control-plane modules themselves (a module trivially "imports" itself)."""
     return [
         path
         for path in sorted(_APP_DIR.rglob("*.py"))
-        if "tests" not in path.relative_to(_APP_DIR).parts and path != _SERVICE_FILE
+        if "tests" not in path.relative_to(_APP_DIR).parts
+        and path not in (_SERVICE_FILE, _RESOLVER_FILE)
     ]
 
 
@@ -1330,56 +1344,77 @@ def _absolute_from_base(path: Path, level: int, module: str | None) -> str:
     return base
 
 
-def _module_imports_service(path: Path, tree: ast.AST) -> bool:
+def _module_imports_target(path: Path, tree: ast.AST, target: str) -> bool:
+    """Whether ``path`` really imports ``target`` (e.g. ``app.capabilities.service`` or
+    ``app.capabilities.resolver``) — via absolute *or* relative import. A docstring or
+    comment mention is ignored; only a binding ``import`` counts."""
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):  # import app.capabilities.service [as x]
+        if isinstance(node, ast.Import):  # import <target>[.x] [as y]
             for alias in node.names:
-                if alias.name == _SERVICE_MODULE or alias.name.startswith(_SERVICE_MODULE + "."):
+                if alias.name == target or alias.name.startswith(target + "."):
                     return True
         elif isinstance(node, ast.ImportFrom):
             base = _absolute_from_base(path, node.level, node.module)
-            # from app.capabilities.service import x  /  from ..service import x
-            if base == _SERVICE_MODULE or base.startswith(_SERVICE_MODULE + "."):
+            # from <target> import x  /  from ..<leaf> import x
+            if base == target or base.startswith(target + "."):
                 return True
-            # from app.capabilities import service  /  from . import service
+            # from <parent> import <leaf>  /  from . import <leaf>
             for alias in node.names:
-                if f"{base}.{alias.name}" == _SERVICE_MODULE:
+                if f"{base}.{alias.name}" == target:
                     return True
     return False
 
 
-def test_no_production_module_imports_the_override_service() -> None:
-    """The override service ships with **no live consumer** (§8.29 #22, §8.31).
+def _control_plane_imports(path: Path, tree: ast.AST) -> list[str]:
+    """The control-plane modules (service / resolver) that ``path`` imports."""
+    return [t for t in _CONTROL_PLANE_MODULES if _module_imports_target(path, tree, t)]
 
-    Parses every production module under ``app/`` (excluding the test package and the
-    service module itself) and asserts none imports ``app.capabilities.service`` or a
-    symbol from it — via absolute *or* relative import. Mirrors and strengthens the
-    resolver non-consumption guard; a route/worker/connector/scheduler wiring the
-    service into a live path fails CI here.
+
+def test_only_the_operator_router_consumes_the_service_or_resolver() -> None:
+    """The capability control plane has exactly ONE production consumer (§26, #22).
+
+    Reframed from the 4A-C.3.6 absolute prohibition: 4A-C.4 adds the operator router as
+    the first sanctioned consumer of the resolver (4A-C.4.2) — and later the service
+    (4A-C.4.3+). This guard parses every production module under ``app/`` and asserts the
+    **only** one importing ``app.capabilities.service`` or ``app.capabilities.resolver``
+    (via absolute *or* relative import) is ``system/internal_capabilities_routes.py``.
+    Any other production module — every live gate / worker / scheduler / connector — that
+    re-arms an enforcement path by importing either module fails CI here.
     """
-    offenders = [
-        str(path.relative_to(_APP_DIR))
-        for path in _production_modules()
-        if _module_imports_service(
+    offenders = {}
+    for path in _production_modules():
+        rel = str(path.relative_to(_APP_DIR))
+        if rel == _ALLOWED_CONSUMER_REL:
+            continue  # the single sanctioned consumer (allow-list of one)
+        hits = _control_plane_imports(
             path, ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         )
-    ]
+        if hits:
+            offenders[rel] = hits
     assert not offenders, (
-        "override service must have no live production consumer; found imports in: "
-        + ", ".join(offenders)
+        "only the operator router may consume the capability control plane; found "
+        f"unauthorized imports in: {offenders}"
     )
 
 
-def test_no_consumer_guard_actually_scans_the_live_gate_modules() -> None:
-    """Self-check: the scan really covers the known live-gate modules, so a future
-    consumer cannot slip through an empty/misrouted file set (§8.29 #22)."""
+def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None:
+    """Self-check: the scan really covers the live-gate set and the allow-listed router,
+    the two control-plane modules exclude themselves, and the allow-list is not vacuous —
+    the operator router genuinely imports the resolver (§26, #22, #24)."""
     scanned = {str(p.relative_to(_APP_DIR)) for p in _production_modules()}
     for expected in (
-        "capabilities/resolver.py",
         "feedback/routes.py",
         "scouting_requests/routes.py",
         "scouting_requests/schedules.py",
         "connectors/registry.py",
+        _ALLOWED_CONSUMER_REL,  # the allow-listed consumer must actually be in scope
     ):
         assert expected in scanned, expected
-    assert "capabilities/service.py" not in scanned  # the service excludes itself
+    # The two control-plane modules exclude themselves (they cannot consume themselves).
+    assert "capabilities/service.py" not in scanned
+    assert "capabilities/resolver.py" not in scanned
+    # The allow-list is grounded, not vacuous: the operator router really imports the
+    # resolver, so removing it from the allow-list above would make the guard fail.
+    router_path = _APP_DIR / _ALLOWED_CONSUMER_REL
+    router_tree = ast.parse(router_path.read_text(encoding="utf-8"), filename=str(router_path))
+    assert _RESOLVER_MODULE in _control_plane_imports(router_path, router_tree)
