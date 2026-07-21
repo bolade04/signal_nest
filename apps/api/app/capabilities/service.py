@@ -1,13 +1,18 @@
-"""Governed workspace capability override service — read plane (Phase 4A-C.3.2).
+"""Governed workspace capability override service — read + set planes (4A-C.3.2/.3).
 
 This module is the single, transaction-participating access path for
 :class:`~app.capabilities.models.WorkspaceCapabilityOverride` rows. Phase 4A-C.3.2
-ships **only the read plane**: authoritative tenant validation plus the two
-read-back accessors (:func:`get_capability_override`,
-:func:`list_capability_overrides`). The write plane (``set``/``clear``), policy
-enforcement, idempotent upsert, concurrency locking, and audit emission are later,
-separately-approved sub-batches (4A-C.3.3+), so nothing here mutates a row, emits
-an audit entry, or touches the caller's transaction boundary (plan §8.8, §8.32).
+shipped the read plane (:func:`get_capability_override`,
+:func:`list_capability_overrides`); Phase 4A-C.3.3 adds the **set plane**
+(:func:`set_capability_override`): authoritative tenant validation, deny-biased
+registry-derived policy enforcement, bounded reason validation, an idempotent
+insert-or-update upsert with a ``begin_nested`` SAVEPOINT race backstop, and audit
+emission that shares the caller's transaction (plan §8.9, §8.11, §8.17, §8.19–§8.21).
+
+Deferred to later, separately-approved sub-batches (plan §8.32): the ``clear``
+operation (4A-C.3.4) and the ``SELECT … FOR UPDATE`` workspace lock plus the
+PostgreSQL-gated concurrency test (4A-C.3.5). This batch adds no route, no resolver
+wiring, no flag flip, and no migration.
 
 Conventions mirror the established house style (``feedback/service.py``,
 ``scouting_requests/run_history.py``): explicit ``db: Session`` first positional,
@@ -30,19 +35,31 @@ row exists. Every capability remains dark.
 from __future__ import annotations
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.capabilities.errors import CapabilityTenantMismatchError
+from app.audit.service import record_audit
+from app.capabilities.errors import (
+    CapabilityOverrideNotPermittedError,
+    CapabilityTenantMismatchError,
+)
 from app.capabilities.models import WorkspaceCapabilityOverride
-from app.capabilities.registry import Capability
-from app.capabilities.results import OverridePage
-from app.core.errors import NotFoundError
+from app.capabilities.registry import Capability, get_policy
+from app.capabilities.results import OverrideMutation, OverridePage
+from app.core.errors import NotFoundError, ValidationDomainError
+from app.core.logging import get_logger, log_event
 from app.organizations.models import Workspace
+
+logger = get_logger("signalnest.capabilities")
 
 #: Pagination contract, mirroring ``scouting_requests/run_history.py``. Re-clamped
 #: in the service so a direct call can never over-fetch or use a negative offset.
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+
+#: Maximum length of the optional operator ``reason`` note (plan §8.17). A
+#: defensive, non-secret cap so the note stays a short justification, not a payload.
+MAX_REASON_LEN = 500
 
 
 def _clamp_limit(limit: int) -> int:
@@ -136,9 +153,261 @@ def list_capability_overrides(
     return OverridePage(items=rows, total=total, limit=limit, offset=offset)
 
 
+# --------------------------------------------------------------------------- #
+# Set plane (4A-C.3.3)
+# --------------------------------------------------------------------------- #
+def _normalize_reason(reason: str | None) -> str | None:
+    """Strip the optional operator note; blank → ``None``; over-length → reject.
+
+    Whitespace-only notes collapse to ``None`` (no note). A note longer than
+    :data:`MAX_REASON_LEN` raises :class:`ValidationDomainError` before any row is
+    written (plan §8.17). The note is a non-secret justification, never logged.
+    """
+    if reason is None:
+        return None
+    stripped = reason.strip()
+    if not stripped:
+        return None
+    if len(stripped) > MAX_REASON_LEN:
+        raise ValidationDomainError("Override reason exceeds the maximum length.")
+    return stripped
+
+
+def _state(capability: Capability, enabled: bool, override_id: str | None) -> dict:
+    """Bounded, secret-free audit state dict — only ``{capability, enabled, id}``."""
+    return {
+        "capability": capability.value,
+        "enabled": enabled,
+        "override_id": override_id,
+    }
+
+
+def _load_override_row(
+    db: Session, *, workspace_id: str, capability: Capability
+) -> WorkspaceCapabilityOverride | None:
+    """Load the single ``(workspace_id, capability)`` override row, or ``None``.
+
+    The unique constraint guarantees at most one. Kept as a small internal helper
+    (distinct from :func:`get_capability_override`, which re-validates tenancy) so
+    the set path reads without re-loading the workspace and so the SAVEPOINT
+    race-backstop re-read is expressed once.
+    """
+    return db.scalar(
+        select(WorkspaceCapabilityOverride).where(
+            WorkspaceCapabilityOverride.workspace_id == workspace_id,
+            WorkspaceCapabilityOverride.capability == capability.value,
+        )
+    )
+
+
+def _apply_update(
+    db: Session,
+    row: WorkspaceCapabilityOverride,
+    *,
+    organization_id: str,
+    workspace_id: str,
+    capability: Capability,
+    enabled: bool,
+    actor_user_id: str,
+    reason: str | None,
+) -> OverrideMutation:
+    """Update an existing override in place, or return an idempotent no-op.
+
+    If the stored ``(enabled, reason)`` already match the request, nothing is
+    mutated and no audit entry is written (``changed=False``, plan §8.9/D3).
+    Otherwise the row's ``enabled``/``reason``/``set_by_user_id`` are updated, the
+    change is flushed, and a ``.updated`` audit entry carrying the bounded
+    ``previous_state``/``new_state`` is emitted within the caller's transaction.
+    """
+    if row.enabled == enabled and row.reason == reason:
+        log_event(
+            logger,
+            "workspace_capability_override_set",
+            outcome="success",
+            workspace_id=workspace_id,
+            capability=capability.value,
+            enabled=enabled,
+            created=False,
+            changed=False,
+        )
+        return OverrideMutation(
+            capability=capability,
+            workspace_id=workspace_id,
+            created=False,
+            changed=False,
+            enabled=row.enabled,
+            override_id=row.id,
+        )
+
+    previous = _state(capability, row.enabled, row.id)
+    row.enabled = enabled
+    row.reason = reason
+    row.set_by_user_id = actor_user_id
+    db.flush()
+    record_audit(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        action="workspace_capability_override.updated",
+        entity_type="workspace_capability_override",
+        entity_id=row.id,
+        reason=reason,
+        previous_state=previous,
+        new_state=_state(capability, enabled, row.id),
+    )
+    log_event(
+        logger,
+        "workspace_capability_override_set",
+        outcome="success",
+        workspace_id=workspace_id,
+        capability=capability.value,
+        enabled=enabled,
+        created=False,
+        changed=True,
+    )
+    return OverrideMutation(
+        capability=capability,
+        workspace_id=workspace_id,
+        created=False,
+        changed=True,
+        enabled=enabled,
+        override_id=row.id,
+    )
+
+
+def set_capability_override(
+    db: Session,
+    *,
+    organization_id: str,
+    workspace_id: str,
+    capability: Capability,
+    enabled: bool,
+    actor_user_id: str,
+    reason: str | None = None,
+) -> OverrideMutation:
+    """Record an operator's intent to enable/disable ``capability`` for a workspace.
+
+    Ordered, fail-closed gates (plan §8.9): authoritative tenant validation
+    (§8.12), deny-biased registry policy enforcement (§8.11 — an ``enabled=True``
+    for a non-``workspace_enableable`` capability such as RSS is rejected before any
+    row or mutation-audit is written; the attempt is recorded as ``.rejected``),
+    bounded reason validation (§8.17), then an idempotent insert-or-update upsert
+    with a ``begin_nested`` SAVEPOINT race backstop (§8.21). Mutation and audit
+    share the caller's transaction; the service flushes but never commits (§8.20,
+    §8.23). ``actor_user_id`` is required so no override is written anonymously
+    (§8.16); the service does not load the user row or check operator rights (a
+    route concern). Returns a typed :class:`OverrideMutation`.
+    """
+    _validate_tenant(db, organization_id=organization_id, workspace_id=workspace_id)
+
+    policy = get_policy(capability)
+    if (enabled and not policy.workspace_enableable) or (
+        not enabled and not policy.workspace_disableable
+    ):
+        record_audit(
+            db,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action="workspace_capability_override.rejected",
+            entity_type="workspace_capability_override",
+            entity_id=None,
+            new_state=_state(capability, enabled, None),
+        )
+        log_event(
+            logger,
+            "workspace_capability_override_set",
+            outcome="rejected",
+            workspace_id=workspace_id,
+            capability=capability.value,
+            enabled=enabled,
+        )
+        raise CapabilityOverrideNotPermittedError(
+            "This capability cannot be overridden to the requested state per policy."
+        )
+
+    reason = _normalize_reason(reason)
+
+    existing = _load_override_row(db, workspace_id=workspace_id, capability=capability)
+    if existing is not None:
+        return _apply_update(
+            db,
+            existing,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            capability=capability,
+            enabled=enabled,
+            actor_user_id=actor_user_id,
+            reason=reason,
+        )
+
+    row = WorkspaceCapabilityOverride(
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        capability=capability.value,
+        enabled=enabled,
+        set_by_user_id=actor_user_id,
+        reason=reason,
+    )
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        # A concurrent insert won the unique-constraint race. Roll back only the
+        # savepoint (done by the context manager), re-read the now-present row, and
+        # update it in place — never a duplicate row, never a lost update (§8.21).
+        existing = _load_override_row(db, workspace_id=workspace_id, capability=capability)
+        if existing is None:  # pragma: no cover - constraint fired but row absent
+            raise
+        return _apply_update(
+            db,
+            existing,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            capability=capability,
+            enabled=enabled,
+            actor_user_id=actor_user_id,
+            reason=reason,
+        )
+
+    record_audit(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        action="workspace_capability_override.created",
+        entity_type="workspace_capability_override",
+        entity_id=row.id,
+        reason=reason,
+        new_state=_state(capability, enabled, row.id),
+    )
+    log_event(
+        logger,
+        "workspace_capability_override_set",
+        outcome="success",
+        workspace_id=workspace_id,
+        capability=capability.value,
+        enabled=enabled,
+        created=True,
+        changed=True,
+    )
+    return OverrideMutation(
+        capability=capability,
+        workspace_id=workspace_id,
+        created=True,
+        changed=True,
+        enabled=enabled,
+        override_id=row.id,
+    )
+
+
 __all__ = [
     "DEFAULT_LIMIT",
     "MAX_LIMIT",
+    "MAX_REASON_LEN",
     "get_capability_override",
     "list_capability_overrides",
+    "set_capability_override",
 ]
