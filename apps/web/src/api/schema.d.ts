@@ -157,7 +157,32 @@ export interface paths {
          *     it activates nothing and flips no flag, so every capability stays dark.
          */
         get: operations["internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get"];
-        put?: never;
+        /**
+         * Internal Capability Override Set
+         * @description Record an operator's intent to enable/disable one per-workspace override.
+         *
+         *     The route is a thin adapter over the merged governed override service: it delegates
+         *     every gate to :func:`set_capability_override` — authoritative tenant validation
+         *     (cross-tenant or absent workspace → non-enumerating 404), deny-biased registry policy
+         *     (an ``enabled=True`` for a non-``workspace_enableable`` capability such as RSS →
+         *     422 ``capability_override_not_permitted``, with a service-emitted ``.rejected`` audit
+         *     and no row), bounded reason validation (over-length → 422), and an idempotent upsert
+         *     under a ``SELECT … FOR UPDATE``/SAVEPOINT critical section — then projects the typed
+         *     :class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements
+         *     no policy, persistence, or audit logic of its own and opens no transaction: the
+         *     request-scoped session makes the override row and its single ``AuditLog`` commit
+         *     atomically at the request boundary. An unknown ``capability`` value is rejected as 422
+         *     by the typed enum before any service call.
+         *
+         *     Attribution is server-side: ``actor_user_id`` is taken from the authenticated
+         *     operator, never the request body, so no override is recorded anonymously or under a
+         *     spoofed identity. Recording intent is **not activation** — the write flips no global
+         *     flag and wires the resolver into no live gate, so an enabled override is honored by
+         *     the resolver alone while its bound global flag stays ``False`` and every capability
+         *     remains dark. The response's ``created``/``changed`` let the caller distinguish a real
+         *     write from an idempotent re-PUT (which writes no new audit).
+         */
+        put: operations["internal_capability_override_set_api_v1_internal_system_capabilities_overrides_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1647,6 +1672,30 @@ export interface components {
             requires_external: boolean;
         };
         /**
+         * CapabilityOverrideMutationOut
+         * @description Operator projection of one ``set`` mutation's bounded, secret-free summary.
+         *
+         *     A secret-free view of :class:`app.capabilities.results.OverrideMutation`: the typed
+         *     capability, the workspace scope, whether a new row was ``created`` (vs an in-place
+         *     update or idempotent no-op), whether the stored state actually ``changed`` (so the
+         *     caller can tell a real write from an idempotent re-PUT), the resulting ``enabled``
+         *     value, and the surviving override id. Carries no ``reason`` note, actor id,
+         *     timestamp, URL, credential, or raw ORM row.
+         */
+        CapabilityOverrideMutationOut: {
+            capability: components["schemas"]["Capability"];
+            /** Changed */
+            changed: boolean;
+            /** Created */
+            created: boolean;
+            /** Enabled */
+            enabled: boolean | null;
+            /** Override Id */
+            override_id: string | null;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
          * CapabilityOverrideOut
          * @description Operator projection of one stored per-workspace override row.
          *
@@ -1697,6 +1746,30 @@ export interface components {
             offset: number;
             /** Total */
             total: number;
+        };
+        /**
+         * CapabilityOverrideSetIn
+         * @description Operator request to record one per-workspace override's intent.
+         *
+         *     The operator supplies the tenant scope verbatim (``organization_id`` +
+         *     ``workspace_id`` — never an implicit "current org"), the typed ``capability`` (an
+         *     unknown value is rejected as 422 by the enum before any service call), the desired
+         *     boolean ``enabled`` state, and an optional bounded operator ``reason`` note. The
+         *     request carries no actor id: attribution is taken server-side from the authenticated
+         *     operator, so an override can never be recorded under a spoofed identity. Deny-biased
+         *     policy (e.g. RSS is disable-only), reason-length bounds, and tenant ownership are all
+         *     enforced authoritatively by the merged service, not re-implemented here.
+         */
+        CapabilityOverrideSetIn: {
+            capability: components["schemas"]["Capability"];
+            /** Enabled */
+            enabled: boolean;
+            /** Organization Id */
+            organization_id: string;
+            /** Reason */
+            reason?: string | null;
+            /** Workspace Id */
+            workspace_id: string;
         };
         /**
          * CapabilityRegistryItemOut
@@ -3578,6 +3651,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilityOverridePageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_capability_override_set_api_v1_internal_system_capabilities_overrides_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CapabilityOverrideSetIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityOverrideMutationOut"];
                 };
             };
             /** @description Validation Error */

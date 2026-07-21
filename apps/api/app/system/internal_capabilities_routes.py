@@ -2,7 +2,7 @@
 
 Additive, operator-gated extensions of the ``/internal/system/*`` tier that expose
 the merged capability control plane (registry → resolver → override service). Three
-read-only slices are shipped so far:
+read-only slices plus the first write path are shipped so far:
 
 * ``GET /internal/system/capabilities/registry`` (4A-C.4.1) — a pure projection of
   the closed capability registry (:mod:`app.capabilities.registry`): the governable
@@ -21,16 +21,32 @@ read-only slices are shipped so far:
   (:func:`app.capabilities.service.list_capability_overrides`). This is the **first
   sanctioned production consumer of the override service**, and it consumes only its
   **read** plane: it lists persisted override *intent* but writes no row, opens no
-  transaction, and emits no audit. The set/clear write paths remain later sub-batches
-  (4A-C.4.4–4.5).
+  transaction, and emits no audit. The clear write path remains a later sub-batch
+  (4A-C.4.5).
+* ``PUT /internal/system/capabilities/overrides`` (4A-C.4.4) — records an operator's
+  intent to enable/disable one ``(capability, workspace)`` override, delegating every
+  gate to the merged governed override service
+  (:func:`app.capabilities.service.set_capability_override`). This is the **first write
+  path**, and it consumes only the service's **set** plane: authoritative tenant
+  validation, deny-biased registry policy enforcement (an ``enabled=True`` for a
+  non-``workspace_enableable`` capability such as RSS is refused with 422), bounded
+  reason validation, and an idempotent, audited upsert under the service's
+  ``SELECT … FOR UPDATE``/SAVEPOINT concurrency — all inside the request-scoped
+  transaction, with the operator's id recorded as the actor. Recording override *intent*
+  is **not activation**: it flips no global flag and wires the resolver into no live
+  gate, so an enabled override is honored by the resolver alone while its bound global
+  flag stays ``False`` and every capability remains dark.
 
 The three reads are read-only: none opens a transaction of its own, writes a row, or
-toggles a flag. The effective and overrides reads authoritatively validate the
+toggles a flag. The set write path opens no transaction of its own either — it uses the
+request-scoped session so the override row and its audit row commit atomically at the
+request boundary. The effective, overrides, and set routes authoritatively validate the
 operator-supplied tenant scope (the workspace must exist and be owned by the supplied
 organization) before touching override state, mapping a cross-tenant or absent
 workspace to a non-enumerating 404 — never revealing whether the workspace exists.
-Because all three global flags stay ``False`` and no real override row exists by
-default, every capability resolves disabled via ``global_configuration``.
+Because all three global flags stay ``False``, every capability resolves disabled via
+``global_configuration`` unless an honored per-workspace override is present — and even
+then only the resolver honors it, with no live gate consuming the decision.
 
 Every route requires an authenticated operator (``require_operator``: 401 anonymous,
 403 non-operator) and returns only bounded, secret-free governance metadata. The
@@ -38,7 +54,9 @@ registry and effective projections carry no ``reason`` note, actor id, or timest
 the override-list projection intentionally surfaces the persisted row's non-secret
 governance fields (the bounded operator ``reason`` note, the ``set_by_user_id``
 attribution id, and the created/updated timestamps) so an operator can audit recorded
-intent — but never a credential, URL, callable, or raw ORM model.
+intent; the set projection returns only the bounded mutation summary (``created``,
+``changed``, the resulting ``enabled``, and the surviving override id) — but never a
+credential, URL, callable, or raw ORM model.
 """
 
 from __future__ import annotations
@@ -46,7 +64,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_operator
@@ -61,6 +79,7 @@ from app.capabilities.service import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     list_capability_overrides,
+    set_capability_override,
 )
 from app.core.config import get_settings
 from app.core.errors import NotFoundError
@@ -157,6 +176,45 @@ class CapabilityOverridePageOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CapabilityOverrideSetIn(BaseModel):
+    """Operator request to record one per-workspace override's intent.
+
+    The operator supplies the tenant scope verbatim (``organization_id`` +
+    ``workspace_id`` — never an implicit "current org"), the typed ``capability`` (an
+    unknown value is rejected as 422 by the enum before any service call), the desired
+    boolean ``enabled`` state, and an optional bounded operator ``reason`` note. The
+    request carries no actor id: attribution is taken server-side from the authenticated
+    operator, so an override can never be recorded under a spoofed identity. Deny-biased
+    policy (e.g. RSS is disable-only), reason-length bounds, and tenant ownership are all
+    enforced authoritatively by the merged service, not re-implemented here.
+    """
+
+    organization_id: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
+    capability: Capability
+    enabled: bool
+    reason: str | None = None
+
+
+class CapabilityOverrideMutationOut(BaseModel):
+    """Operator projection of one ``set`` mutation's bounded, secret-free summary.
+
+    A secret-free view of :class:`app.capabilities.results.OverrideMutation`: the typed
+    capability, the workspace scope, whether a new row was ``created`` (vs an in-place
+    update or idempotent no-op), whether the stored state actually ``changed`` (so the
+    caller can tell a real write from an idempotent re-PUT), the resulting ``enabled``
+    value, and the surviving override id. Carries no ``reason`` note, actor id,
+    timestamp, URL, credential, or raw ORM row.
+    """
+
+    capability: Capability
+    workspace_id: str
+    created: bool
+    changed: bool
+    enabled: bool | None
+    override_id: str | None
 
 
 # --------------------------------------------------------------------------- #
@@ -304,4 +362,52 @@ def internal_capability_overrides(
         total=page.total,
         limit=page.limit,
         offset=page.offset,
+    )
+
+
+@router.put("/capabilities/overrides", response_model=CapabilityOverrideMutationOut)
+def internal_capability_override_set(
+    payload: CapabilityOverrideSetIn,
+    db: Session = Depends(get_db),
+    operator: User = Depends(require_operator),
+) -> CapabilityOverrideMutationOut:
+    """Record an operator's intent to enable/disable one per-workspace override.
+
+    The route is a thin adapter over the merged governed override service: it delegates
+    every gate to :func:`set_capability_override` — authoritative tenant validation
+    (cross-tenant or absent workspace → non-enumerating 404), deny-biased registry policy
+    (an ``enabled=True`` for a non-``workspace_enableable`` capability such as RSS →
+    422 ``capability_override_not_permitted``, with a service-emitted ``.rejected`` audit
+    and no row), bounded reason validation (over-length → 422), and an idempotent upsert
+    under a ``SELECT … FOR UPDATE``/SAVEPOINT critical section — then projects the typed
+    :class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements
+    no policy, persistence, or audit logic of its own and opens no transaction: the
+    request-scoped session makes the override row and its single ``AuditLog`` commit
+    atomically at the request boundary. An unknown ``capability`` value is rejected as 422
+    by the typed enum before any service call.
+
+    Attribution is server-side: ``actor_user_id`` is taken from the authenticated
+    operator, never the request body, so no override is recorded anonymously or under a
+    spoofed identity. Recording intent is **not activation** — the write flips no global
+    flag and wires the resolver into no live gate, so an enabled override is honored by
+    the resolver alone while its bound global flag stays ``False`` and every capability
+    remains dark. The response's ``created``/``changed`` let the caller distinguish a real
+    write from an idempotent re-PUT (which writes no new audit).
+    """
+    mutation = set_capability_override(
+        db,
+        organization_id=payload.organization_id,
+        workspace_id=payload.workspace_id,
+        capability=payload.capability,
+        enabled=payload.enabled,
+        actor_user_id=operator.id,
+        reason=payload.reason,
+    )
+    return CapabilityOverrideMutationOut(
+        capability=mutation.capability,
+        workspace_id=mutation.workspace_id,
+        created=mutation.created,
+        changed=mutation.changed,
+        enabled=mutation.enabled,
+        override_id=mutation.override_id,
     )

@@ -851,6 +851,58 @@
         "title": "CapabilityOut",
         "type": "object"
       },
+      "CapabilityOverrideMutationOut": {
+        "description": "Operator projection of one ``set`` mutation's bounded, secret-free summary.\n\nA secret-free view of :class:`app.capabilities.results.OverrideMutation`: the typed\ncapability, the workspace scope, whether a new row was ``created`` (vs an in-place\nupdate or idempotent no-op), whether the stored state actually ``changed`` (so the\ncaller can tell a real write from an idempotent re-PUT), the resulting ``enabled``\nvalue, and the surviving override id. Carries no ``reason`` note, actor id,\ntimestamp, URL, credential, or raw ORM row.",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "override_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Id"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "workspace_id",
+          "created",
+          "changed",
+          "enabled",
+          "override_id"
+        ],
+        "title": "CapabilityOverrideMutationOut",
+        "type": "object"
+      },
       "CapabilityOverrideOut": {
         "description": "Operator projection of one stored per-workspace override row.\n\nA secret-free view of :class:`app.capabilities.models.WorkspaceCapabilityOverride`:\nthe persisted override *intent* an operator recorded \u2014 the typed capability, its\nboolean value, the bounded non-secret operator ``reason`` note, the ``set_by_user_id``\nattribution id, and the row's lifecycle timestamps. These governance fields are\nsurfaced so an operator can audit *who* recorded *what* intent and *when*; the row\ncarries no credential, URL, payload, token, or trace id. ``from_attributes`` lets the\nroute validate the ORM row directly (the ``capability`` string coerces to the typed\n:class:`Capability`).",
         "properties": {
@@ -950,6 +1002,47 @@
           "offset"
         ],
         "title": "CapabilityOverridePageOut",
+        "type": "object"
+      },
+      "CapabilityOverrideSetIn": {
+        "description": "Operator request to record one per-workspace override's intent.\n\nThe operator supplies the tenant scope verbatim (``organization_id`` +\n``workspace_id`` \u2014 never an implicit \"current org\"), the typed ``capability`` (an\nunknown value is rejected as 422 by the enum before any service call), the desired\nboolean ``enabled`` state, and an optional bounded operator ``reason`` note. The\nrequest carries no actor id: attribution is taken server-side from the authenticated\noperator, so an override can never be recorded under a spoofed identity. Deny-biased\npolicy (e.g. RSS is disable-only), reason-length bounds, and tenant ownership are all\nenforced authoritatively by the merged service, not re-implemented here.",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "minLength": 1,
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "workspace_id": {
+            "minLength": 1,
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "workspace_id",
+          "capability",
+          "enabled"
+        ],
+        "title": "CapabilityOverrideSetIn",
         "type": "object"
       },
       "CapabilityRegistryItemOut": {
@@ -5901,6 +5994,64 @@
           }
         },
         "summary": "Internal Capability Overrides",
+        "tags": [
+          "internal"
+        ]
+      },
+      "put": {
+        "description": "Record an operator's intent to enable/disable one per-workspace override.\n\nThe route is a thin adapter over the merged governed override service: it delegates\nevery gate to :func:`set_capability_override` \u2014 authoritative tenant validation\n(cross-tenant or absent workspace \u2192 non-enumerating 404), deny-biased registry policy\n(an ``enabled=True`` for a non-``workspace_enableable`` capability such as RSS \u2192\n422 ``capability_override_not_permitted``, with a service-emitted ``.rejected`` audit\nand no row), bounded reason validation (over-length \u2192 422), and an idempotent upsert\nunder a ``SELECT \u2026 FOR UPDATE``/SAVEPOINT critical section \u2014 then projects the typed\n:class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements\nno policy, persistence, or audit logic of its own and opens no transaction: the\nrequest-scoped session makes the override row and its single ``AuditLog`` commit\natomically at the request boundary. An unknown ``capability`` value is rejected as 422\nby the typed enum before any service call.\n\nAttribution is server-side: ``actor_user_id`` is taken from the authenticated\noperator, never the request body, so no override is recorded anonymously or under a\nspoofed identity. Recording intent is **not activation** \u2014 the write flips no global\nflag and wires the resolver into no live gate, so an enabled override is honored by\nthe resolver alone while its bound global flag stays ``False`` and every capability\nremains dark. The response's ``created``/``changed`` let the caller distinguish a real\nwrite from an idempotent re-PUT (which writes no new audit).",
+        "operationId": "internal_capability_override_set_api_v1_internal_system_capabilities_overrides_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityOverrideSetIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityOverrideMutationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Capability Override Set",
         "tags": [
           "internal"
         ]
