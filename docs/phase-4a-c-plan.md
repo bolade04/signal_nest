@@ -726,6 +726,11 @@ begin only when *all* hold:
 
 Phase 4A-C authorizes neither the gate wiring nor Phase 4B.
 
+> **Forward pointer:** the separately governed Phase 4B activation plan (opportunity
+> feedback internal canary — decisions D1–D4, the 4B-A dark gate-wiring tranche, and the
+> 4B-B single-workspace activation tranche) lives at `docs/phase-4b-plan.md`. That plan is
+> documentation-only and activates nothing; every capability remains dark.
+
 ## 8.31 Definition of done (Phase 4A-C)
 
 Phase 4A-C is done when: the registry, resolver, override table + migration, override
