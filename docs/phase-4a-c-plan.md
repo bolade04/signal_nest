@@ -1,6 +1,6 @@
 # Phase 4A-C — Governed Per-Workspace Capability Override Foundation
 
-**Status:** `PLANNING — DOCUMENTATION ONLY — IMPLEMENTATION NOT STARTED — ALL CAPABILITIES REMAIN DARK`
+**Status:** `PLAN AND DESIGN RECORD — IMPLEMENTATION DELIVERY RECORDED THROUGH 4A-C.4 — 4A-C.4.6 DOCUMENTATION CLOSEOUT COMPLETE — ALL CAPABILITIES REMAIN DARK`
 
 > This is a planning and design document. It authorizes no code, no migration, no
 > contract change, no dependency change, and no feature-flag activation. Phase 4A-C,
@@ -748,19 +748,25 @@ rewrites no historical SHA or closeout evidence.
 - **4A-C.2 — deny-biased capability resolver:** merged (PR #72). The resolver ships
   **unconsumed** — no live gate imports it. Verification:
   `docs/verification/4a-c-2-capability-resolver.md`. All dark.
-- **4A-C.3 — governed override service:** **planning underway** — see
-  `docs/phase-4a-c-3-plan.md`. Service-module-only; no route, no schema, no migration, no
-  resolver wiring, no real override record. The resolver stays unconsumed and every
-  capability remains dark.
-- **4A-C.4 — operator management API + contract:** **planning underway** — see
-  `docs/phase-4a-c-4-plan.md`. Implementation not started. The plan is additive
-  operator-only routes that expose the merged resolver + override service under
-  `/internal/system/capabilities/*`; it flips no flag (all three remain `False`), adds no
-  migration (single head `98289430a3ec` preserved), wires the resolver into no live gate,
-  and leaves PR #34 untouched. It records that this batch introduces the first *sanctioned*
-  consumer of the resolver/service — the operator management API, which is **not** a live
-  gate — so the dark-state guards are reframed accordingly. Every capability remains dark.
+- **4A-C.3 — governed override service:** **merged** (squash-merge of PR #78 at
+  `eda3eee5fa52d005e820cfb4969e32f084b4d656`; closed out by sub-batch 4A-C.3.6).
+  Service-module-only; no route, no schema, no migration, no resolver wiring, no real
+  override record. Verification: `docs/verification/4a-c-3-override-service.md`. The
+  service shipped **unconsumed** and every capability remains dark.
+- **4A-C.4 — operator management API + contract:** **merged** (sub-batches 4A-C.4.1–4.5
+  via PRs #81–#85; final merge SHA `808c2af7d3a054fce59bdf897dbec53ed5f81b81`, exact-SHA
+  verified by CI run `29821019108`, all five jobs green / 933 backend tests / 0 skips;
+  with documentation-only closeout completed through 4A-C.4.6). Additive operator-only routes
+  under `/internal/system/capabilities/*` — registry read, effective read, override list
+  read, override set (`PUT`), override clear (`DELETE`) — each `require_operator`-gated,
+  secret-free, tenant-isolated, and non-enumerating, delegating all governance to the
+  merged resolver + override service. It flips no flag (all three remain `False`), adds no
+  migration (single head `98289430a3ec` preserved), wires the resolver/service into no
+  live gate, and leaves PR #34 untouched. The operator router is the first *sanctioned*
+  consumer of the resolver/service — **not** a live gate — so the dark-state guards are
+  reframed accordingly. Verification: `docs/verification/4a-c-4-operator-capability-api.md`.
+  Every capability remains dark.
 
 ---
 
-**Status:** `PLANNING — DOCUMENTATION ONLY — IMPLEMENTATION NOT STARTED — ALL CAPABILITIES REMAIN DARK`
+**Status:** `4A-C.4 OPERATOR CAPABILITY CONTROL PLANE MERGED AND VERIFIED (PRs #81–#85; final-slice merge SHA 808c2af7) — 4A-C.4.6 DOCUMENTATION CLOSEOUT COMPLETE — ALL CAPABILITIES REMAIN DARK`
