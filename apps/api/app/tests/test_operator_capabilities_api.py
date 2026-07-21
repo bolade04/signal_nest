@@ -12,9 +12,9 @@ operator-only authorization (401 anonymous / 403 non-operator), the exact secret
 response shape, that the projection reproduces ``iter_capabilities()`` + ``get_policy()``
 exactly once each in canonical order (no unknown/duplicate/missing capability),
 dark-state invariants (all three global flags remain ``False``; the read activates
-nothing), that the registry router still imports the override service **not at all**
-while now importing the resolver only as the sanctioned effective-read consumer added
-in 4A-C.4.2 (the service stays unconsumed until 4A-C.4.3), and that the additive
+nothing), that the router now imports **both** control-plane modules as its sanctioned
+consumers — the resolver (the effective-read consumer added in 4A-C.4.2) and the
+override service (the list-read consumer added in 4A-C.4.3) — and that the additive
 route is present in the OpenAPI schema without disturbing existing operator routes.
 """
 
@@ -244,13 +244,15 @@ class TestDarkState:
         tree = ast.parse(_ROUTER_FILE.read_text(encoding="utf-8"), filename=str(_ROUTER_FILE))
         assert _module_binds(tree, "app.capabilities.resolver")
 
-    def test_router_does_not_import_the_override_service(self):
-        # The resolver is now consumed, but the override service is NOT: the write
-        # plane (list/set/clear) lands in 4A-C.4.3+. The service therefore stays fully
-        # unconsumed after 4A-C.4.2, keeping every mutation path dark. Assert the new
-        # router binds no service symbol via a precise AST scan.
+    def test_router_imports_the_override_service_as_the_sanctioned_consumer(self):
+        # 4A-C.4.3 makes the operator router the FIRST sanctioned production consumer
+        # of the override service (the list-read path, `list_capability_overrides`).
+        # Assert the binding really exists via a precise AST scan, so the reframed
+        # allow-list guard in test_capability_override_service.py is grounded in a real
+        # import. This consumes only the service's READ plane — the set/clear write
+        # paths land in 4A-C.4.4–4.5 — so every mutation path stays dark.
         tree = ast.parse(_ROUTER_FILE.read_text(encoding="utf-8"), filename=str(_ROUTER_FILE))
-        assert not _module_binds(tree, "app.capabilities.service")
+        assert _module_binds(tree, "app.capabilities.service")
 
 
 # --------------------------------------------------------------------------- #

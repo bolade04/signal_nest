@@ -851,6 +851,107 @@
         "title": "CapabilityOut",
         "type": "object"
       },
+      "CapabilityOverrideOut": {
+        "description": "Operator projection of one stored per-workspace override row.\n\nA secret-free view of :class:`app.capabilities.models.WorkspaceCapabilityOverride`:\nthe persisted override *intent* an operator recorded \u2014 the typed capability, its\nboolean value, the bounded non-secret operator ``reason`` note, the ``set_by_user_id``\nattribution id, and the row's lifecycle timestamps. These governance fields are\nsurfaced so an operator can audit *who* recorded *what* intent and *when*; the row\ncarries no credential, URL, payload, token, or trace id. ``from_attributes`` lets the\nroute validate the ORM row directly (the ``capability`` string coerces to the typed\n:class:`Capability`).",
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "set_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By User Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "workspace_id",
+          "capability",
+          "enabled",
+          "reason",
+          "set_by_user_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CapabilityOverrideOut",
+        "type": "object"
+      },
+      "CapabilityOverridePageOut": {
+        "description": "A tenant-scoped, bounded, newest-first page of stored override rows.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilityOverrideOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "CapabilityOverridePageOut",
+        "type": "object"
+      },
       "CapabilityRegistryItemOut": {
         "description": "Operator projection of one capability's frozen governance policy.\n\nA secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` \u2014 the\ntyped capability, its human-safe label, the bound global-flag attribute name\n(non-secret, internal; included for operator explainability), whether an override\nmay enable/disable it per workspace, and the documentation-only future-activation\nphase. Carries no credential, URL, callable, or mutable registry object.",
         "properties": {
@@ -5707,6 +5808,99 @@
           }
         },
         "summary": "Internal Capability Effective",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/capabilities/overrides": {
+      "get": {
+        "description": "Return a tenant-scoped, bounded page of a workspace's stored override rows.\n\nThe route is a thin adapter over the merged governed override service: it delegates\ntenant validation, scoping, ordering, and clamping to\n:func:`list_capability_overrides` (which authoritatively confirms the workspace\nexists and is owned by ``organization_id``, then returns a newest-first,\n``created_at DESC, id DESC`` page strictly scoped to that one workspace) and projects\neach row onto :class:`CapabilityOverrideOut`. It implements no query or scoping of its\nown, opens no transaction, writes no row, and emits no audit \u2014 this is a read.\n\nA cross-tenant or absent workspace is a non-enumerating 404. ``limit``/``offset`` are\nbounded by the typed query params (out-of-range \u2192 422) and re-clamped inside the\nservice, so the route can never over-fetch. With no real override row by default the\npage is empty; a persisted override appears here as recorded *intent* only \u2014 listing\nit activates nothing and flips no flag, so every capability stays dark.",
+        "operationId": "internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityOverridePageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Capability Overrides",
         "tags": [
           "internal"
         ]

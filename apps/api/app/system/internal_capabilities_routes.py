@@ -1,7 +1,7 @@
 """Operator-only capability-governance surface (Phase 4A-C.4).
 
 Additive, operator-gated extensions of the ``/internal/system/*`` tier that expose
-the merged capability control plane (registry → resolver → override service). Two
+the merged capability control plane (registry → resolver → override service). Three
 read-only slices are shipped so far:
 
 * ``GET /internal/system/capabilities/registry`` (4A-C.4.1) — a pure projection of
@@ -14,26 +14,39 @@ read-only slices are shipped so far:
   **first sanctioned production consumer of the resolver**: the operator surface
   reads override *intent* and the deciding rule, but it is **not a live gate** — it
   gates no customer request and flips no global flag, so every capability remains
-  dark. The override list and set/clear write paths are later sub-batches
-  (4A-C.4.3–4.5) and the override service stays unconsumed here.
+  dark.
+* ``GET /internal/system/capabilities/overrides`` (4A-C.4.3) — a tenant-scoped,
+  bounded, newest-first page of the stored per-workspace override rows, read through
+  the merged governed override service
+  (:func:`app.capabilities.service.list_capability_overrides`). This is the **first
+  sanctioned production consumer of the override service**, and it consumes only its
+  **read** plane: it lists persisted override *intent* but writes no row, opens no
+  transaction, and emits no audit. The set/clear write paths remain later sub-batches
+  (4A-C.4.4–4.5).
 
-The effective read is read-only: it opens no transaction of its own, writes no row,
-and toggles no flag. It authoritatively validates the operator-supplied tenant scope
-(the workspace must exist and be owned by the supplied organization) before resolving,
-mapping a cross-tenant or absent workspace to a non-enumerating 404 — never revealing
-whether the workspace exists. Because all three global flags stay ``False`` and no
-real override row exists, every capability resolves disabled via
-``global_configuration``.
+The three reads are read-only: none opens a transaction of its own, writes a row, or
+toggles a flag. The effective and overrides reads authoritatively validate the
+operator-supplied tenant scope (the workspace must exist and be owned by the supplied
+organization) before touching override state, mapping a cross-tenant or absent
+workspace to a non-enumerating 404 — never revealing whether the workspace exists.
+Because all three global flags stay ``False`` and no real override row exists by
+default, every capability resolves disabled via ``global_configuration``.
 
 Every route requires an authenticated operator (``require_operator``: 401 anonymous,
-403 non-operator) and returns only bounded, secret-free governance metadata — never a
-credential, URL, callable, ORM model, override ``reason`` note, actor id, or timestamp.
+403 non-operator) and returns only bounded, secret-free governance metadata. The
+registry and effective projections carry no ``reason`` note, actor id, or timestamp;
+the override-list projection intentionally surfaces the persisted row's non-secret
+governance fields (the bounded operator ``reason`` note, the ``set_by_user_id``
+attribution id, and the created/updated timestamps) so an operator can audit recorded
+intent — but never a credential, URL, callable, or raw ORM model.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_operator
@@ -43,6 +56,11 @@ from app.capabilities.resolver import (
     CapabilityResolution,
     DecisionSource,
     resolve_capability,
+)
+from app.capabilities.service import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    list_capability_overrides,
 )
 from app.core.config import get_settings
 from app.core.errors import NotFoundError
@@ -104,6 +122,41 @@ class CapabilityEffectiveListOut(BaseModel):
     """Effective state for a workspace, one item per resolved capability."""
 
     items: list[CapabilityEffectiveOut]
+
+
+class CapabilityOverrideOut(BaseModel):
+    """Operator projection of one stored per-workspace override row.
+
+    A secret-free view of :class:`app.capabilities.models.WorkspaceCapabilityOverride`:
+    the persisted override *intent* an operator recorded — the typed capability, its
+    boolean value, the bounded non-secret operator ``reason`` note, the ``set_by_user_id``
+    attribution id, and the row's lifecycle timestamps. These governance fields are
+    surfaced so an operator can audit *who* recorded *what* intent and *when*; the row
+    carries no credential, URL, payload, token, or trace id. ``from_attributes`` lets the
+    route validate the ORM row directly (the ``capability`` string coerces to the typed
+    :class:`Capability`).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    organization_id: str
+    workspace_id: str
+    capability: Capability
+    enabled: bool
+    reason: str | None
+    set_by_user_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CapabilityOverridePageOut(BaseModel):
+    """A tenant-scoped, bounded, newest-first page of stored override rows."""
+
+    items: list[CapabilityOverrideOut]
+    total: int
+    limit: int
+    offset: int
 
 
 # --------------------------------------------------------------------------- #
@@ -212,3 +265,43 @@ def internal_capability_effective(
         for cap in capabilities
     ]
     return CapabilityEffectiveListOut(items=items)
+
+
+@router.get("/capabilities/overrides", response_model=CapabilityOverridePageOut)
+def internal_capability_overrides(
+    organization_id: str = Query(..., min_length=1),
+    workspace_id: str = Query(..., min_length=1),
+    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _operator: User = Depends(require_operator),
+) -> CapabilityOverridePageOut:
+    """Return a tenant-scoped, bounded page of a workspace's stored override rows.
+
+    The route is a thin adapter over the merged governed override service: it delegates
+    tenant validation, scoping, ordering, and clamping to
+    :func:`list_capability_overrides` (which authoritatively confirms the workspace
+    exists and is owned by ``organization_id``, then returns a newest-first,
+    ``created_at DESC, id DESC`` page strictly scoped to that one workspace) and projects
+    each row onto :class:`CapabilityOverrideOut`. It implements no query or scoping of its
+    own, opens no transaction, writes no row, and emits no audit — this is a read.
+
+    A cross-tenant or absent workspace is a non-enumerating 404. ``limit``/``offset`` are
+    bounded by the typed query params (out-of-range → 422) and re-clamped inside the
+    service, so the route can never over-fetch. With no real override row by default the
+    page is empty; a persisted override appears here as recorded *intent* only — listing
+    it activates nothing and flips no flag, so every capability stays dark.
+    """
+    page = list_capability_overrides(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        limit=limit,
+        offset=offset,
+    )
+    return CapabilityOverridePageOut(
+        items=[CapabilityOverrideOut.model_validate(row) for row in page.items],
+        total=page.total,
+        limit=page.limit,
+        offset=page.offset,
+    )

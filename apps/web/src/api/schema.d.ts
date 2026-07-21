@@ -131,6 +131,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/capabilities/overrides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Internal Capability Overrides
+         * @description Return a tenant-scoped, bounded page of a workspace's stored override rows.
+         *
+         *     The route is a thin adapter over the merged governed override service: it delegates
+         *     tenant validation, scoping, ordering, and clamping to
+         *     :func:`list_capability_overrides` (which authoritatively confirms the workspace
+         *     exists and is owned by ``organization_id``, then returns a newest-first,
+         *     ``created_at DESC, id DESC`` page strictly scoped to that one workspace) and projects
+         *     each row onto :class:`CapabilityOverrideOut`. It implements no query or scoping of its
+         *     own, opens no transaction, writes no row, and emits no audit — this is a read.
+         *
+         *     A cross-tenant or absent workspace is a non-enumerating 404. ``limit``/``offset`` are
+         *     bounded by the typed query params (out-of-range → 422) and re-clamped inside the
+         *     service, so the route can never over-fetch. With no real override row by default the
+         *     page is empty; a persisted override appears here as recorded *intent* only — listing
+         *     it activates nothing and flips no flag, so every capability stays dark.
+         */
+        get: operations["internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/capabilities/registry": {
         parameters: {
             query?: never;
@@ -1611,6 +1645,58 @@ export interface components {
             name: string;
             /** Requires External */
             requires_external: boolean;
+        };
+        /**
+         * CapabilityOverrideOut
+         * @description Operator projection of one stored per-workspace override row.
+         *
+         *     A secret-free view of :class:`app.capabilities.models.WorkspaceCapabilityOverride`:
+         *     the persisted override *intent* an operator recorded — the typed capability, its
+         *     boolean value, the bounded non-secret operator ``reason`` note, the ``set_by_user_id``
+         *     attribution id, and the row's lifecycle timestamps. These governance fields are
+         *     surfaced so an operator can audit *who* recorded *what* intent and *when*; the row
+         *     carries no credential, URL, payload, token, or trace id. ``from_attributes`` lets the
+         *     route validate the ORM row directly (the ``capability`` string coerces to the typed
+         *     :class:`Capability`).
+         */
+        CapabilityOverrideOut: {
+            capability: components["schemas"]["Capability"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Organization Id */
+            organization_id: string;
+            /** Reason */
+            reason: string | null;
+            /** Set By User Id */
+            set_by_user_id: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
+         * CapabilityOverridePageOut
+         * @description A tenant-scoped, bounded, newest-first page of stored override rows.
+         */
+        CapabilityOverridePageOut: {
+            /** Items */
+            items: components["schemas"]["CapabilityOverrideOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
         };
         /**
          * CapabilityRegistryItemOut
@@ -3456,6 +3542,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilityEffectiveListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get: {
+        parameters: {
+            query: {
+                organization_id: string;
+                workspace_id: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityOverridePageOut"];
                 };
             };
             /** @description Validation Error */
