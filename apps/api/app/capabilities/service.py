@@ -1,18 +1,21 @@
-"""Governed workspace capability override service — read + set planes (4A-C.3.2/.3).
+"""Governed workspace capability override service — read + set + clear planes.
 
 This module is the single, transaction-participating access path for
 :class:`~app.capabilities.models.WorkspaceCapabilityOverride` rows. Phase 4A-C.3.2
 shipped the read plane (:func:`get_capability_override`,
-:func:`list_capability_overrides`); Phase 4A-C.3.3 adds the **set plane**
+:func:`list_capability_overrides`); Phase 4A-C.3.3 added the **set plane**
 (:func:`set_capability_override`): authoritative tenant validation, deny-biased
 registry-derived policy enforcement, bounded reason validation, an idempotent
 insert-or-update upsert with a ``begin_nested`` SAVEPOINT race backstop, and audit
 emission that shares the caller's transaction (plan §8.9, §8.11, §8.17, §8.19–§8.21).
+Phase 4A-C.3.4 adds the **clear plane** (:func:`clear_capability_override`): tenant
+validation, an idempotent delete-or-no-op, and a ``.cleared`` audit — clearing is
+policy-free and reason-free, and after a clear no override remains (plan §8.10).
 
-Deferred to later, separately-approved sub-batches (plan §8.32): the ``clear``
-operation (4A-C.3.4) and the ``SELECT … FOR UPDATE`` workspace lock plus the
-PostgreSQL-gated concurrency test (4A-C.3.5). This batch adds no route, no resolver
-wiring, no flag flip, and no migration.
+Deferred to a later, separately-approved sub-batch (plan §8.32): the
+``SELECT … FOR UPDATE`` workspace lock plus the PostgreSQL-gated concurrency test
+(4A-C.3.5). This batch adds no route, no resolver wiring, no flag flip, and no
+migration.
 
 Conventions mirror the established house style (``feedback/service.py``,
 ``scouting_requests/run_history.py``): explicit ``db: Session`` first positional,
@@ -403,10 +406,92 @@ def set_capability_override(
     )
 
 
+# --------------------------------------------------------------------------- #
+# Clear plane (4A-C.3.4)
+# --------------------------------------------------------------------------- #
+def clear_capability_override(
+    db: Session,
+    *,
+    organization_id: str,
+    workspace_id: str,
+    capability: Capability,
+    actor_user_id: str,
+) -> OverrideMutation:
+    """Remove any override for ``capability`` in a workspace (plan §8.10).
+
+    Ordered gates: authoritative tenant validation (§8.12), then one indexed lookup
+    of the ``(workspace_id, capability)`` row. Clearing is deny-biased and carries
+    **no** policy gate — removing an override can only relax toward the secure
+    default, so it is always permitted — and takes **no** ``reason`` (§8.7). When no
+    override exists the call is an idempotent success that writes nothing and emits
+    **no** audit (clearing an absent override is a benign no-op; absence already
+    resolves disabled). When one exists, its prior state is captured, the row is
+    deleted and flushed, and a ``.cleared`` audit sharing the caller's transaction
+    records the removal (§8.19–§8.20). The service flushes but never commits (§8.23);
+    ``actor_user_id`` is required so no clear is anonymous (§8.16). Returns a typed
+    :class:`OverrideMutation` with ``enabled``/``override_id`` set to ``None`` (no
+    override remains). The ``SELECT … FOR UPDATE`` workspace lock is deferred to
+    4A-C.3.5 (§8.22, §8.32).
+    """
+    _validate_tenant(db, organization_id=organization_id, workspace_id=workspace_id)
+
+    existing = _load_override_row(db, workspace_id=workspace_id, capability=capability)
+    if existing is None:
+        log_event(
+            logger,
+            "workspace_capability_override_clear",
+            outcome="success",
+            workspace_id=workspace_id,
+            capability=capability.value,
+            created=False,
+            changed=False,
+        )
+        return OverrideMutation(
+            capability=capability,
+            workspace_id=workspace_id,
+            created=False,
+            changed=False,
+            enabled=None,
+            override_id=None,
+        )
+
+    previous = _state(capability, existing.enabled, existing.id)
+    db.delete(existing)
+    db.flush()
+    record_audit(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        action="workspace_capability_override.cleared",
+        entity_type="workspace_capability_override",
+        entity_id=previous["override_id"],
+        previous_state=previous,
+    )
+    log_event(
+        logger,
+        "workspace_capability_override_clear",
+        outcome="success",
+        workspace_id=workspace_id,
+        capability=capability.value,
+        created=False,
+        changed=True,
+    )
+    return OverrideMutation(
+        capability=capability,
+        workspace_id=workspace_id,
+        created=False,
+        changed=True,
+        enabled=None,
+        override_id=None,
+    )
+
+
 __all__ = [
     "DEFAULT_LIMIT",
     "MAX_LIMIT",
     "MAX_REASON_LEN",
+    "clear_capability_override",
     "get_capability_override",
     "list_capability_overrides",
     "set_capability_override",
