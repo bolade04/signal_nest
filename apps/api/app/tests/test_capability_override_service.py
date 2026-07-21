@@ -15,10 +15,12 @@ this test module. Every capability remains dark.
 from __future__ import annotations
 
 import inspect
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.audit.models import AuditLog
@@ -948,3 +950,215 @@ def test_set_after_clear_recreates_the_override(factory) -> None:
         assert recreated.override_id != first.override_id
         rows = list(s.scalars(select(WorkspaceCapabilityOverride)))
         assert len(rows) == 1 and rows[0].enabled is False
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency — workspace SELECT … FOR UPDATE lock (4A-C.3.5, #17–#18)
+# --------------------------------------------------------------------------- #
+def test_workspace_lock_select_compiles_to_for_update_on_postgres() -> None:
+    """Always-run compile proof: the lock statement emits ``FOR UPDATE`` on PG.
+
+    Mirrors ``test_scout_schedule_api.py::TestCapLockCompiles`` — proves the locking
+    SQL compiles against the PostgreSQL dialect without a live database, so the row
+    lock is real where it matters even though SQLite renders it a no-op (§8.22).
+    """
+    from sqlalchemy.dialects import postgresql
+
+    from app.capabilities.service import _workspace_lock_select
+
+    sql = str(_workspace_lock_select("ws-1").compile(dialect=postgresql.dialect())).upper()
+    assert "FOR UPDATE" in sql
+    assert "WORKSPACES" in sql
+
+
+# The row lock only truly blocks on PostgreSQL; on SQLite ``FOR UPDATE`` is a no-op
+# and the engine serializes writers on the single file. These threaded convergence
+# tests are gated on ``TEST_POSTGRES_URL`` (skipped otherwise); the always-run compile
+# proof above stands in locally. Each worker drives its own session/transaction
+# against a single workspace, so the transactions genuinely overlap (§8.22, #17).
+_pg_only = pytest.mark.skipif(
+    not os.getenv("TEST_POSTGRES_URL"),
+    reason="TEST_POSTGRES_URL not set; skipping live PostgreSQL override-contention test",
+)
+
+
+def _fresh_pg_engine():  # pragma: no cover - gated on live PG
+    engine = create_engine(os.environ["TEST_POSTGRES_URL"], future=True)
+    assert engine.dialect.name == "postgresql"
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def _seed_pg_tenant(make) -> None:  # pragma: no cover - gated on live PG
+    with make() as s:
+        s.add(
+            User(
+                id=_ACTOR,
+                email="op@example.com",
+                full_name="Op",
+                hashed_password="x",
+                is_active=True,
+                is_operator=True,
+            )
+        )
+        s.add(Organization(id=_ORG_A, name="A", slug="a"))
+        s.add(Workspace(id=_WS_A, organization_id=_ORG_A, name="WA", slug="wa"))
+        s.commit()
+
+
+def _override_count(make) -> int:  # pragma: no cover - gated on live PG
+    with make() as s:
+        return int(
+            s.scalar(
+                select(func.count())
+                .select_from(WorkspaceCapabilityOverride)
+                .where(WorkspaceCapabilityOverride.workspace_id == _WS_A)
+            )
+            or 0
+        )
+
+
+def _audit_count(make, action: str) -> int:  # pragma: no cover - gated on live PG
+    with make() as s:
+        return int(
+            s.scalar(select(func.count()).select_from(AuditLog).where(AuditLog.action == action))
+            or 0
+        )
+
+
+@_pg_only
+def test_pg_concurrent_identical_creates_converge_to_one_row() -> (
+    None
+):  # pragma: no cover - gated on live PG
+    """Many concurrent identical ``set`` callers converge to exactly one row (#17)."""
+    engine = _fresh_pg_engine()
+    make = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    try:
+        _seed_pg_tenant(make)
+
+        def _set(_i: int) -> str:
+            s = make()
+            try:
+                set_capability_override(
+                    s,
+                    organization_id=_ORG_A,
+                    workspace_id=_WS_A,
+                    capability=Capability.OPPORTUNITY_FEEDBACK,
+                    enabled=True,
+                    actor_user_id=_ACTOR,
+                )
+                s.commit()
+                return "ok"
+            finally:
+                s.close()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            outcomes = list(pool.map(_set, range(8)))
+
+        # Every call succeeded, exactly one row survives, and exactly one insert won:
+        # the lock serialized the check-then-act so no duplicate row and no lost update.
+        assert outcomes == ["ok"] * 8
+        assert _override_count(make) == 1
+        assert _audit_count(make, "workspace_capability_override.created") == 1
+    finally:
+        engine.dispose()
+
+
+@_pg_only
+def test_pg_concurrent_sets_converge_without_duplicate_or_lost_update() -> (
+    None
+):  # pragma: no cover - gated on live PG
+    """Concurrent ``set`` callers with differing values converge to one row (#17)."""
+    engine = _fresh_pg_engine()
+    make = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    try:
+        _seed_pg_tenant(make)
+
+        def _set(i: int) -> str:
+            s = make()
+            try:
+                set_capability_override(
+                    s,
+                    organization_id=_ORG_A,
+                    workspace_id=_WS_A,
+                    capability=Capability.SCOUT_SCHEDULING,
+                    enabled=(i % 2 == 0),
+                    actor_user_id=_ACTOR,
+                )
+                s.commit()
+                return "ok"
+            finally:
+                s.close()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            outcomes = list(pool.map(_set, range(8)))
+
+        # One row, one create; the rest updated/no-op'd the same row in place under the
+        # lock — never a duplicate, never a lost update. Final value is whichever set
+        # committed last (a valid boolean either way).
+        assert outcomes == ["ok"] * 8
+        assert _override_count(make) == 1
+        assert _audit_count(make, "workspace_capability_override.created") == 1
+        with make() as s:
+            row = s.scalar(
+                select(WorkspaceCapabilityOverride).where(
+                    WorkspaceCapabilityOverride.workspace_id == _WS_A
+                )
+            )
+            assert row is not None and isinstance(row.enabled, bool)
+    finally:
+        engine.dispose()
+
+
+@_pg_only
+def test_pg_concurrent_set_and_clear_converge_to_terminal_state() -> (
+    None
+):  # pragma: no cover - gated on live PG
+    """Concurrent ``set``/``clear`` callers converge to a single terminal state (§8.22)."""
+    engine = _fresh_pg_engine()
+    make = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    try:
+        _seed_pg_tenant(make)
+
+        def _set(_i: int) -> str:
+            s = make()
+            try:
+                set_capability_override(
+                    s,
+                    organization_id=_ORG_A,
+                    workspace_id=_WS_A,
+                    capability=Capability.OPPORTUNITY_FEEDBACK,
+                    enabled=True,
+                    actor_user_id=_ACTOR,
+                )
+                s.commit()
+                return "ok"
+            finally:
+                s.close()
+
+        def _clear(_i: int) -> str:
+            s = make()
+            try:
+                clear_capability_override(
+                    s,
+                    organization_id=_ORG_A,
+                    workspace_id=_WS_A,
+                    capability=Capability.OPPORTUNITY_FEEDBACK,
+                    actor_user_id=_ACTOR,
+                )
+                s.commit()
+                return "ok"
+            finally:
+                s.close()
+
+        tasks = [_set if i % 2 == 0 else _clear for i in range(8)]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            outcomes = list(pool.map(lambda fn: fn(0), tasks))
+
+        # No call errored and no duplicate row survives: the terminal state is a single
+        # row (a set committed last) or none (a clear committed last).
+        assert outcomes == ["ok"] * 8
+        assert _override_count(make) in (0, 1)
+    finally:
+        engine.dispose()
