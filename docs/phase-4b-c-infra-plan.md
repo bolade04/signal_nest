@@ -35,6 +35,11 @@
 
 ## INFRA-2 — Container and runtime hardening (no deployment)
 
+- **Planning artifact:** [deployment-sha-wiring-plan.md](operations/deployment-sha-wiring-plan.md)
+  defines the deployment-SHA provenance design (build → image metadata → ECS task definition →
+  API/worker/migration runtime → readiness/preflight evidence) and the fail-closed **G4**
+  preflight gate. That document is **documentation-only**; wiring implementation, container,
+  workflow, and IaC changes remain separate later tranches.
 - **Objective:** ready the images/runtime contract for staging without deploying.
 - **Consider:** production container review; non-root execution (already UID/GID 10001);
   image minimization; health/readiness endpoints (`/health`, `/readiness`); graceful
