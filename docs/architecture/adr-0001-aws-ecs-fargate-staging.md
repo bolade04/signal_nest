@@ -162,7 +162,7 @@ deployment; separated deployment/runtime/operator/observer roles. These controls
 **mandatory** and must not be reduced for cost.
 
 **Operational implications:** deployment, observability, backups, and rollback are built
-across INFRA-2…INFRA-8 (`docs/phase-4b-c-infra-plan.md`), each separately authorized.
+across INFRA-2…INFRA-9 (`docs/phase-4b-c-infra-plan.md`), each separately authorized.
 
 **Cost implications:** the complete minimum-safe design is expected to sit **below the
 $200/month ceiling with contingency** on current dated planning estimates

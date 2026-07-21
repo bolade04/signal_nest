@@ -1,4 +1,4 @@
-# Phase 4B-C infrastructure roadmap (INFRA-1 → INFRA-8)
+# Phase 4B-C infrastructure roadmap (INFRA-1 → INFRA-9)
 
 - **Status:** Planning. Each tranche is separately reviewed and separately authorized.
   Merging any tranche authorizes **no** provisioning, deployment, or Phase 4B-C activation
@@ -61,7 +61,65 @@
 - **Rollback approach:** revert the PR.
 - **Exact stop boundary:** **No deployment during INFRA-2.**
 
-## INFRA-3 — Infrastructure-as-code (plan-only, no apply)
+## INFRA-3 — Secrets-management scaffolding and G5 planning (no secret operations)
+
+- **Objective:** produce the repository-side secrets contract for SIGNALNEST_STAGING — a
+  complete inventory of every sensitive setting, its exact environment-variable name, and its
+  reviewed disposition (AWS Secrets Manager / non-secret configuration / IAM-derived / absent
+  in staging / local-development-only) — plus the fail-closed **G5** secret-readiness gate
+  definition. **Documentation and placeholder planning only; no secret is created, read,
+  rotated, or stored, and no AWS API is called.**
+- **Consider:** enumerate every `repr=False` field and every `SecretStr`/secret-like setting
+  in `apps/api/app/core/config.py`; map each to its exact environment variable; classify each
+  as secret / non-secret / IAM-derived / absent-in-staging / local-only with exactly one
+  reviewed disposition; the API, worker, and migration-actor secret boundaries (each actor
+  receives only its minimum necessary subset); the browser/SPA exclusion (no backend secret
+  ever reaches the `apps/web` build output); the ECS injection contract (Secrets Manager →
+  task-definition `secrets`, never plaintext task environment, never a Docker build argument,
+  image label, or mutable tag); AWS task-role access where supported; rotation, failure,
+  incident, evidence, and rollback documentation rules; and the fail-closed **G5** gate design.
+- **Future planned deliverables** (named here, **not created in this amendment**):
+  - `docs/operations/aws-staging-secret-inventory.md` — the full field inventory and reviewed
+    dispositions.
+  - `.env.canary.example` — a root-level, values-free placeholder template (variable names
+    only; never a real secret value).
+  - minimal roadmap progress/link updates under `docs/`.
+- **G5 — Secret readiness.** A future gate that MUST be **fail-closed**, **read-only**,
+  **repeatable**, **non-mutating**, **required before any runtime-canary authorization**,
+  **not bypassable by any capability override**, and **incapable of authorizing feature
+  activation**. The future G5 MUST verify that: every required secret-bearing setting has
+  exactly one reviewed disposition; every `repr=False` field is inventoried; `SecretStr` and
+  other secret-like settings are inventoried; ECS secret references match the reviewed
+  inventory; the required secret objects, keys, and enabled versions exist; the correct
+  execution role can access only the required references; the API, worker, and migration
+  actors each receive only their minimum necessary secret subset; browser and SPA artifacts
+  receive no backend secret; no required secret is supplied through committed values, Docker
+  build arguments, image labels, plaintext task environment, mutable tags, development
+  fallbacks, tenant-controlled values, or mock providers; AWS service access uses task roles
+  where supported; PostgreSQL, Redis, object-storage, and non-mock LLM requirements fail
+  closed; and any missing, empty, malformed, inaccessible, excessive, mismatched, or
+  misclassified secret configuration blocks the canary. Secret values are **never** printed,
+  logged, diffed, or retained as evidence. **This amendment only adds G5 to the roadmap; the
+  future INFRA-3 will document the detailed inventory and the full G5 contract; a separately
+  authorized later implementation may implement the gate; no AWS-backed or live G5 check runs
+  during this amendment; and all global feature flags remain Boolean `False`.**
+- **Dependencies:** INFRA-1, INFRA-2.
+- **Expected repository areas:** `docs/operations/`, `docs/`, and a root-level
+  `.env.canary.example` placeholder template (all as later deliverables — none created now).
+- **Expected external resources:** none created.
+- **Tests/validation:** Markdown/link checks; config-flag check (all three flags `False`);
+  Alembic head `98289430a3ec`; contract generation clean; inventory-completeness review.
+- **Security review points:** no secret value, AWS account id, or tenant id committed; the web
+  build is excluded from every secret path; IAM references named only, least-privilege.
+- **Cost implications:** none (no provisioning).
+- **Required human authorization:** review + approve.
+- **Rollback approach:** revert the docs PR.
+- **Exact stop boundary:** **planning and scaffolding only.** No secret, no
+  `.env.canary.example`, no `docs/operations/aws-staging-secret-inventory.md`, no IaC, no AWS
+  authentication, and no G5 execution. Implementing the inventory and gate is the later,
+  separately authorized INFRA-3 implementation.
+
+## INFRA-4 — Infrastructure-as-code (plan-only, no apply)
 
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
@@ -69,7 +127,7 @@
   only); CloudWatch logs and alarms; **AWS Budget definitions (50/75/90/100%)**; resource
   tagging (§A of the contract); SIGNALNEST_STAGING definitions; **plan-only validation
   before any apply**.
-- **Dependencies:** INFRA-1, INFRA-2.
+- **Dependencies:** INFRA-1, INFRA-2, INFRA-3.
 - **Expected repository areas:** a new IaC directory (e.g., `infra/aws/`), `docs/`.
 - **Expected external resources:** none created (plan-only).
 - **Tests/validation:** IaC static validation / `plan`; no `apply`.
@@ -78,18 +136,18 @@
 - **Cost implications:** the IaC encodes the sub-$200 design; a dated estimate accompanies
   it.
 - **Required human authorization:** review + approve the IaC; **apply requires fresh, later
-  authorization (INFRA-8).**
+  authorization (INFRA-9).**
 - **Rollback approach:** revert the IaC PR (nothing applied).
 - **Exact stop boundary:** **No `apply` without fresh human authorization.**
 
-## INFRA-4 — Protected build and deployment workflow (no production deploy)
+## INFRA-5 — Protected build and deployment workflow (no production deploy)
 
 - **Objective:** define the protected CI/CD path for staging.
 - **Consider:** GitHub **OIDC** federation (no long-lived AWS keys); immutable image build;
   image-digest recording; **exact Git SHA** stamping; a **staging GitHub environment** with
   **human approval**; the one-shot migration job; ECS deployment; post-deploy health
   verification; rollback to a prior digest.
-- **Dependencies:** INFRA-2, INFRA-3.
+- **Dependencies:** INFRA-3, INFRA-4.
 - **Expected repository areas:** `.github/workflows/` (new staging workflow, separate PR),
   `docs/`.
 - **Expected external resources:** none created by authoring the workflow (it runs only
@@ -100,15 +158,20 @@
 - **Cost implications:** none until executed.
 - **Required human authorization:** review + approve; **no production deployment**.
 - **Rollback approach:** revert the workflow PR.
-- **Exact stop boundary:** authoring only; execution needs INFRA-8 authorization.
+- **Exact stop boundary:** authoring only; execution needs INFRA-9 authorization.
 
-## INFRA-5 — Secrets, networking, data protection, and recovery
+## INFRA-6 — Secrets, networking, data protection, and recovery
 
-- **Objective:** define secret lifecycle, network isolation, and data-protection procedures.
+- **Objective:** operationalize the secret contract established in INFRA-3 and define secret
+  lifecycle, network isolation, and data-protection procedures. This tranche **implements the
+  operational side** (secrets-management infrastructure and lifecycle, rotation implementation,
+  IAM enforcement, networking and isolation, TLS, data protection, backup and recovery) of the
+  repository-side inventory, dispositions, ECS injection contract, and G5 design authored in
+  INFRA-3; it does not delete or weaken any requirement inherited from that contract.
 - **Consider:** secret creation/rotation procedures; TLS (ALB/CloudFront + ACM); network
   isolation (private subnets, security groups, no public DB/Redis); database initialization;
   backups; restore procedure; egress restrictions (NAT + VPC endpoints); security review.
-- **Dependencies:** INFRA-3.
+- **Dependencies:** INFRA-4 (operationalizes the secret contract established in INFRA-3).
 - **Expected repository areas:** `docs/`, IaC references.
 - **Expected external resources:** none created in this tranche.
 - **Tests/validation:** procedure review; restore-runbook completeness.
@@ -118,7 +181,7 @@
 - **Rollback approach:** revert the PR.
 - **Exact stop boundary:** procedures/definitions only; no secret is created here.
 
-## INFRA-6 — Observability, audit, evidence, and incident readiness (must complete before the canary)
+## INFRA-7 — Observability, audit, evidence, and incident readiness (must complete before the canary)
 
 - **Objective:** ensure the canary is fully observable before any override exists.
 - **Consider:** logs; metrics; alarms; error monitoring; **audit views**; **gate-decision
@@ -126,9 +189,9 @@
   (`workspace_capability_override.created|updated|rejected|cleared`); **secure evidence
   destination**; incident contacts; **independent observer access**; **clear-path evidence**
   (proof the DELETE clear plane works before enabling).
-- **Dependencies:** INFRA-3, INFRA-5.
+- **Dependencies:** INFRA-4, INFRA-6.
 - **Expected repository areas:** `docs/operations/`, IaC (dashboards/alarms).
-- **Expected external resources:** none created here (defined for INFRA-8 apply).
+- **Expected external resources:** none created here (defined for INFRA-9 apply).
 - **Tests/validation:** dashboard/alarm definitions reviewed; evidence template
   (`docs/verification/4b-b-feedback-canary.md`) confirmed sufficient.
 - **Security review points:** redaction of tenant ids/secrets in logs and evidence.
@@ -137,7 +200,7 @@
 - **Rollback approach:** revert the PR.
 - **Exact stop boundary:** **This must complete before the canary.** No override created.
 
-## INFRA-7 — Internal tenant and access readiness
+## INFRA-8 — Internal tenant and access readiness
 
 - **Objective:** verify supported provisioning of internal tenants and roles.
 - **Consider:** supported organization/workspace provisioning surfaces
@@ -145,12 +208,12 @@
   assignment); internal test identities; **operator role**; **observer role**; **three
   independent sessions**; **no SQL provisioning**; **no customer data or integrations**; any
   required application-gap implementation in a **separate PR**.
-- **Dependencies:** INFRA-4, INFRA-6.
+- **Dependencies:** INFRA-5, INFRA-7.
 - **Expected repository areas:** `docs/`; app code only if a provisioning gap is found
   (separate reviewed PR).
 - **Expected external resources:** none created by this planning tranche.
 - **Tests/validation:** provisioning-surface verification against the running app (only in
-  INFRA-8, under authorization); planning/gap analysis here.
+  INFRA-9, under authorization); planning/gap analysis here.
 - **Security review points:** server-side tenant derivation; no client-invented workspace
   header; session independence.
 - **Cost implications:** none.
@@ -158,17 +221,17 @@
 - **Rollback approach:** revert the PR.
 - **Exact stop boundary:** no tenant/user/session created outside an authorized run.
 
-## INFRA-8 — Authorized staging deployment and Phase 4B-C.0 rerun
+## INFRA-9 — Authorized staging deployment and Phase 4B-C.0 rerun
 
 - **Objective:** with fresh authorization, provision and deploy SIGNALNEST_STAGING and rerun
   the environment-setup gate — **without** activating the canary.
 - **Consider:** **fresh cost estimate** (mandatory pre-provisioning recalculation vs the
   $200 ceiling); exact resource-mutation plan; **human authorization**; infrastructure
   **apply**; **exact SHA `3aadb8a` deployment**; read-only readiness verification; internal
-  tenant preparation (INFRA-7 surfaces); **global flags remaining `False`**; **no override
+  tenant preparation (INFRA-8 surfaces); **global flags remaining `False`**; **no override
   creation**; rerun of the environment-setup gate (Phase 4B-C.0); separate later Phase 4B-C
   activation authorization.
-- **Dependencies:** INFRA-1 through INFRA-7 all approved.
+- **Dependencies:** INFRA-1 through INFRA-8 all approved.
 - **Expected repository areas:** `docs/verification/` (evidence), `docs/`.
 - **Expected external resources:** the actual AWS staging resources (created **only** here,
   under fresh authorization).
@@ -183,18 +246,19 @@
   override clear plane readiness confirmed (no override yet exists).
 - **Exact stop boundary:** STOP after environment is verified ready with all flags `False`.
   **Phase 4B-C activation (creating the enable override) is a separate, later, explicitly
-  authorized decision — not part of INFRA-8.**
+  authorized decision — not part of INFRA-9.**
 
 ---
 
 ## Sequencing summary
 
 ```
-INFRA-1 (docs) ─▶ INFRA-2 (container/runtime) ─▶ INFRA-3 (IaC plan-only)
-   ─▶ INFRA-4 (protected deploy workflow) ─▶ INFRA-5 (secrets/net/data)
-   ─▶ INFRA-6 (observability/audit — before canary) ─▶ INFRA-7 (tenants/access)
-   ─▶ INFRA-8 (authorized apply + deploy 3aadb8a + 4B-C.0 rerun; flags stay False)
-   ─▶ [SEPARATE] Phase 4B-C activation: single-workspace enable override (explicit auth)
+INFRA-1 (docs) ─▶ INFRA-2 (container/runtime) ─▶ INFRA-3 (secrets scaffolding and G5 planning)
+   ─▶ INFRA-4 (IaC plan-only) ─▶ INFRA-5 (protected deployment workflow)
+   ─▶ INFRA-6 (secrets, networking, data protection, and recovery)
+   ─▶ INFRA-7 (observability before canary) ─▶ INFRA-8 (internal tenants and access)
+   ─▶ INFRA-9 (separately authorized apply, deployment, and Phase 4B-C.0 rerun while flags remain False)
+   ─▶ [SEPARATE AUTHORIZATION] Phase 4B-C activation: single-workspace enable override (explicit auth)
 ```
 
 Each arrow is a separate review + authorization gate. Nothing downstream is authorized by
