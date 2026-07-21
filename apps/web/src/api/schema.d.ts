@@ -184,7 +184,35 @@ export interface paths {
          */
         put: operations["internal_capability_override_set_api_v1_internal_system_capabilities_overrides_put"];
         post?: never;
-        delete?: never;
+        /**
+         * Internal Capability Override Clear
+         * @description Clear any recorded override for one ``(capability, workspace)`` pair.
+         *
+         *     The route is a thin adapter over the merged governed override service: it delegates
+         *     every gate to :func:`clear_capability_override` — authoritative tenant validation
+         *     (cross-tenant or absent workspace → non-enumerating 404) and a ``SELECT … FOR
+         *     UPDATE``/indexed-lookup critical section — then projects the typed
+         *     :class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements no
+         *     persistence or audit logic of its own and opens no transaction: the request-scoped
+         *     session makes the row delete and its single ``.cleared`` ``AuditLog`` commit atomically
+         *     at the request boundary.
+         *
+         *     The tenant scope and typed ``capability`` are taken as query params (an unknown
+         *     ``capability`` value is rejected as 422 by the enum before any service call), matching
+         *     the operator read routes and avoiding DELETE-with-body client friction. Attribution is
+         *     server-side: ``actor_user_id`` is the authenticated operator, never a request-supplied
+         *     id, so no clear is recorded anonymously or under a spoofed identity.
+         *
+         *     Clearing is deny-biased and always permitted — removing an override can only relax
+         *     toward the secure default. When an override exists it is deleted (``changed=True``,
+         *     exactly one ``.cleared`` audit) and effective state returns to the dark default; when
+         *     none exists the call is an idempotent success (``changed=False``) that writes no row and
+         *     emits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override
+         *     remains), the response's ``changed`` lets the caller distinguish a real removal from an
+         *     absent-clear no-op, and no global flag is touched — clearing activates nothing and every
+         *     capability stays dark.
+         */
+        delete: operations["internal_capability_override_clear_api_v1_internal_system_capabilities_overrides_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3678,6 +3706,41 @@ export interface operations {
                 "application/json": components["schemas"]["CapabilityOverrideSetIn"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityOverrideMutationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    internal_capability_override_clear_api_v1_internal_system_capabilities_overrides_delete: {
+        parameters: {
+            query: {
+                organization_id: string;
+                workspace_id: string;
+                capability: components["schemas"]["Capability"];
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -2,7 +2,7 @@
 
 Additive, operator-gated extensions of the ``/internal/system/*`` tier that expose
 the merged capability control plane (registry → resolver → override service). Three
-read-only slices plus the first write path are shipped so far:
+read-only slices plus both override write paths are shipped so far:
 
 * ``GET /internal/system/capabilities/registry`` (4A-C.4.1) — a pure projection of
   the closed capability registry (:mod:`app.capabilities.registry`): the governable
@@ -21,8 +21,7 @@ read-only slices plus the first write path are shipped so far:
   (:func:`app.capabilities.service.list_capability_overrides`). This is the **first
   sanctioned production consumer of the override service**, and it consumes only its
   **read** plane: it lists persisted override *intent* but writes no row, opens no
-  transaction, and emits no audit. The clear write path remains a later sub-batch
-  (4A-C.4.5).
+  transaction, and emits no audit.
 * ``PUT /internal/system/capabilities/overrides`` (4A-C.4.4) — records an operator's
   intent to enable/disable one ``(capability, workspace)`` override, delegating every
   gate to the merged governed override service
@@ -36,13 +35,27 @@ read-only slices plus the first write path are shipped so far:
   is **not activation**: it flips no global flag and wires the resolver into no live
   gate, so an enabled override is honored by the resolver alone while its bound global
   flag stays ``False`` and every capability remains dark.
+* ``DELETE /internal/system/capabilities/overrides`` (4A-C.4.5) — clears any recorded
+  override for one ``(capability, workspace)`` pair, delegating every gate to the merged
+  governed override service
+  (:func:`app.capabilities.service.clear_capability_override`). This is the **second
+  write path**, and it consumes only the service's **clear** plane: authoritative tenant
+  validation and a ``SELECT … FOR UPDATE`` critical section, then a delete-or-no-op —
+  clearing is deny-biased and always permitted (removing an override can only relax toward
+  the secure default) and takes no reason. It uses the request-scoped transaction so the
+  row delete and its single ``.cleared`` audit commit atomically. The tenant scope and
+  typed capability arrive as query params (avoiding DELETE-with-body friction, matching the
+  read routes). Clearing an existing override returns effective state to the dark default
+  (``changed=True``, one ``.cleared`` audit); clearing an absent override is an idempotent
+  success (``changed=False``) that writes nothing. Either way it flips no global flag, so
+  every capability remains dark.
 
 The three reads are read-only: none opens a transaction of its own, writes a row, or
-toggles a flag. The set write path opens no transaction of its own either — it uses the
-request-scoped session so the override row and its audit row commit atomically at the
-request boundary. The effective, overrides, and set routes authoritatively validate the
-operator-supplied tenant scope (the workspace must exist and be owned by the supplied
-organization) before touching override state, mapping a cross-tenant or absent
+toggles a flag. The set and clear write paths open no transaction of their own either —
+they use the request-scoped session so an override row and its audit row commit atomically
+at the request boundary. The effective, overrides, set, and clear routes authoritatively
+validate the operator-supplied tenant scope (the workspace must exist and be owned by the
+supplied organization) before touching override state, mapping a cross-tenant or absent
 workspace to a non-enumerating 404 — never revealing whether the workspace exists.
 Because all three global flags stay ``False``, every capability resolves disabled via
 ``global_configuration`` unless an honored per-workspace override is present — and even
@@ -78,6 +91,7 @@ from app.capabilities.resolver import (
 from app.capabilities.service import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
+    clear_capability_override,
     list_capability_overrides,
     set_capability_override,
 )
@@ -402,6 +416,57 @@ def internal_capability_override_set(
         enabled=payload.enabled,
         actor_user_id=operator.id,
         reason=payload.reason,
+    )
+    return CapabilityOverrideMutationOut(
+        capability=mutation.capability,
+        workspace_id=mutation.workspace_id,
+        created=mutation.created,
+        changed=mutation.changed,
+        enabled=mutation.enabled,
+        override_id=mutation.override_id,
+    )
+
+
+@router.delete("/capabilities/overrides", response_model=CapabilityOverrideMutationOut)
+def internal_capability_override_clear(
+    organization_id: str = Query(..., min_length=1),
+    workspace_id: str = Query(..., min_length=1),
+    capability: Capability = Query(...),
+    db: Session = Depends(get_db),
+    operator: User = Depends(require_operator),
+) -> CapabilityOverrideMutationOut:
+    """Clear any recorded override for one ``(capability, workspace)`` pair.
+
+    The route is a thin adapter over the merged governed override service: it delegates
+    every gate to :func:`clear_capability_override` — authoritative tenant validation
+    (cross-tenant or absent workspace → non-enumerating 404) and a ``SELECT … FOR
+    UPDATE``/indexed-lookup critical section — then projects the typed
+    :class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements no
+    persistence or audit logic of its own and opens no transaction: the request-scoped
+    session makes the row delete and its single ``.cleared`` ``AuditLog`` commit atomically
+    at the request boundary.
+
+    The tenant scope and typed ``capability`` are taken as query params (an unknown
+    ``capability`` value is rejected as 422 by the enum before any service call), matching
+    the operator read routes and avoiding DELETE-with-body client friction. Attribution is
+    server-side: ``actor_user_id`` is the authenticated operator, never a request-supplied
+    id, so no clear is recorded anonymously or under a spoofed identity.
+
+    Clearing is deny-biased and always permitted — removing an override can only relax
+    toward the secure default. When an override exists it is deleted (``changed=True``,
+    exactly one ``.cleared`` audit) and effective state returns to the dark default; when
+    none exists the call is an idempotent success (``changed=False``) that writes no row and
+    emits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override
+    remains), the response's ``changed`` lets the caller distinguish a real removal from an
+    absent-clear no-op, and no global flag is touched — clearing activates nothing and every
+    capability stays dark.
+    """
+    mutation = clear_capability_override(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        capability=capability,
+        actor_user_id=operator.id,
     )
     return CapabilityOverrideMutationOut(
         capability=mutation.capability,

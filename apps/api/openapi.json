@@ -5907,6 +5907,82 @@
       }
     },
     "/api/v1/internal/system/capabilities/overrides": {
+      "delete": {
+        "description": "Clear any recorded override for one ``(capability, workspace)`` pair.\n\nThe route is a thin adapter over the merged governed override service: it delegates\nevery gate to :func:`clear_capability_override` \u2014 authoritative tenant validation\n(cross-tenant or absent workspace \u2192 non-enumerating 404) and a ``SELECT \u2026 FOR\nUPDATE``/indexed-lookup critical section \u2014 then projects the typed\n:class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements no\npersistence or audit logic of its own and opens no transaction: the request-scoped\nsession makes the row delete and its single ``.cleared`` ``AuditLog`` commit atomically\nat the request boundary.\n\nThe tenant scope and typed ``capability`` are taken as query params (an unknown\n``capability`` value is rejected as 422 by the enum before any service call), matching\nthe operator read routes and avoiding DELETE-with-body client friction. Attribution is\nserver-side: ``actor_user_id`` is the authenticated operator, never a request-supplied\nid, so no clear is recorded anonymously or under a spoofed identity.\n\nClearing is deny-biased and always permitted \u2014 removing an override can only relax\ntoward the secure default. When an override exists it is deleted (``changed=True``,\nexactly one ``.cleared`` audit) and effective state returns to the dark default; when\nnone exists the call is an idempotent success (``changed=False``) that writes no row and\nemits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override\nremains), the response's ``changed`` lets the caller distinguish a real removal from an\nabsent-clear no-op, and no global flag is touched \u2014 clearing activates nothing and every\ncapability stays dark.",
+        "operationId": "internal_capability_override_clear_api_v1_internal_system_capabilities_overrides_delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "capability",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Capability"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityOverrideMutationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Internal Capability Override Clear",
+        "tags": [
+          "internal"
+        ]
+      },
       "get": {
         "description": "Return a tenant-scoped, bounded page of a workspace's stored override rows.\n\nThe route is a thin adapter over the merged governed override service: it delegates\ntenant validation, scoping, ordering, and clamping to\n:func:`list_capability_overrides` (which authoritatively confirms the workspace\nexists and is owned by ``organization_id``, then returns a newest-first,\n``created_at DESC, id DESC`` page strictly scoped to that one workspace) and projects\neach row onto :class:`CapabilityOverrideOut`. It implements no query or scoping of its\nown, opens no transaction, writes no row, and emits no audit \u2014 this is a read.\n\nA cross-tenant or absent workspace is a non-enumerating 404. ``limit``/``offset`` are\nbounded by the typed query params (out-of-range \u2192 422) and re-clamped inside the\nservice, so the route can never over-fetch. With no real override row by default the\npage is empty; a persisted override appears here as recorded *intent* only \u2014 listing\nit activates nothing and flips no flag, so every capability stays dark.",
         "operationId": "internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get",
