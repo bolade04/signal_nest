@@ -6,8 +6,7 @@ This sub-batch ships only the *types*: the capabilities-local typed errors
 these tests exercise shape/immutability and error status/code mapping in isolation
 (mirroring the resolver's result-shape tests).
 
-They also stand guard that 4A-C.3.1 stayed a type-only foundation: no override
-service module was introduced, and the resolver remains unconsumed.
+They also stand guard that the resolver remains unconsumed by any live gate.
 """
 
 from __future__ import annotations
@@ -137,14 +136,8 @@ def test_override_page_empty_defaults_are_coherent() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Dark-state guard: 4A-C.3.1 is type-only — no service, resolver still unconsumed
+# Dark-state guard: the resolver remains unconsumed by any live gate
 # --------------------------------------------------------------------------- #
-def test_no_override_service_module_shipped_in_this_subbatch() -> None:
-    # 4A-C.3.1 ships errors + results only. The service module (set/clear/get/list)
-    # is a later, separately-approved sub-batch.
-    assert not (API_DIR / "app" / "capabilities" / "service.py").exists()
-
-
 def test_resolver_remains_unconsumed_by_live_gates() -> None:
     for module_path in (
         Path("app/feedback/routes.py"),
