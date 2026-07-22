@@ -101,7 +101,11 @@ their global flags are `False`; they are not wired to any live trigger in stagin
 - **Access surfaces:** administrative and **operator** access to `/internal/system/*`
   reaches the ALB over TLS and is additionally restricted (IP allow-list / private access);
   **observer** access is read-only to logs/audit/effective-state views; **health-check**
-  access is the ALB target-group probe against `/readiness` (liveness `/health`).
+  access is the ALB target-group probe against the shallow, dependency-free liveness
+  endpoint `/health` — **never** the dependency-aware `/readiness`. Because ECS replaces
+  tasks that fail their load-balancer health check, probing `/readiness` would turn a
+  shared backend (e.g. database) outage into a task-replacement loop; `/readiness` remains
+  the operational readiness signal only.
 - No raw VPC/subnet/security-group/account ids or domains are recorded here.
 
 ## E. Identity and access (logical least-privilege roles; none created now)

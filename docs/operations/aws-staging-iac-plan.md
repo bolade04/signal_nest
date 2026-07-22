@@ -171,8 +171,10 @@ Mirrors runtime-contract §D:
 - **One VPC**, us-east-1, with **public** subnets (ALB, NAT, CloudFront origin path) and
   **private** subnets (ECS tasks, RDS, ElastiCache). No task, database, or cache node receives
   a public IP.
-- **Public ingress is TLS-only:** ALB HTTPS listener and CloudFront HTTPS, backed by ACM
-  certificates via Route53-validated DNS. HTTP is redirected to HTTPS or refused.
+- **Public ingress is TLS-only:** ALB HTTPS listener (port 443 only) and CloudFront HTTPS,
+  backed by ACM certificates. The **ALB opens no port 80, defines no HTTP listener, and
+  performs no HTTP-to-HTTPS redirect** — plain-HTTP connections are refused. CloudFront
+  performs the viewer `redirect-to-https` on the web/SPA path. §24 locks the full ALB contract.
 - **Least-privilege security groups:** ALB → API on 8000 only; API → RDS 5432 and Redis 6379
   only; worker → RDS/Redis only; no lateral or inbound path beyond the minimum. No `0.0.0.0/0`
   ingress except the public ALB/CloudFront HTTPS entry points.
@@ -488,6 +490,112 @@ are never committed.
    No Lambda@Edge, CloudFront Functions, WAF, multiple origins, custom cache/response-header/
    origin-request policies, signed URLs/cookies, or API behavior; no object upload or
    invalidation.
+
+## 24. ALB module architecture decisions (resolved 2026-07-22, human-approved)
+
+These decisions lock the `alb` module architecture contract and resolve the previously stale /
+omitted ALB language (the `/readiness`-as-probe statement in the runtime contract §D, the
+`alb_security_group_id`-as-input and stale `tags` inputs in the `alb`/`ecs` README stubs, and the
+absence of a recorded SG-ownership / health-check / TLS / header / logging / lifecycle register).
+**Nothing here authorizes any AWS action or any HCL.** The `alb` module remains a
+documentation-only stub; no ALB resource is authored, planned, provisioned, or deployed. Real
+certificate ARN, account id, and DNS values remain future authorized apply-time configuration and
+are never committed. The decisions are verified against committed application behavior (§25).
+
+1. **Health-check semantics.** The ALB target-group health check probes the shallow,
+   dependency-free liveness endpoint **`/health`** (root route, `apps/api/app/main.py`), which
+   returns a constant `{"status":"ok","mode":...}` with no database/cache/network access. The
+   dependency-aware **`/readiness`** endpoint (`/api/v1/system/readiness`, which returns `503`
+   when a required backend is down) is **never** the ALB probe: because ECS replaces tasks that
+   fail their load-balancer health check, probing `/readiness` would turn a shared database
+   outage into a task-replacement loop. `/readiness` remains the operational readiness signal
+   only. This supersedes the earlier runtime-contract §D wording.
+
+2. **Security-group ownership (cycle-free).** The `alb` module **creates and owns the ALB
+   security group** and exposes it as output `alb_security_group_id`. The `ecs` module **creates
+   and owns the API task security group** and **owns both cross-SG rule resources**: ALB SG
+   egress → API task SG on **TCP 8000 only**, and API task SG ingress ← ALB SG on **TCP 8000
+   only**. `ecs` **consumes** `alb_security_group_id` and `api_target_group_arn`. The `alb`
+   module **never** consumes an ECS/API security-group id. This yields a one-way module
+   dependency **`ecs -> alb`** (acyclic). `network` owns neither service security group. No
+   CIDR-based ALB-to-task substitute and no unrestricted ALB security-group egress are
+   authorized.
+
+3. **Exposure and addressing.** Internet-facing ALB (`internal = false`) placed **only in the
+   `network` public subnets**; targets remain in the private application subnets. **IPv4 only**
+   (`ip_address_type = "ipv4"`) — no dual-stack / IPv6 ingress for this staging tranche. Public
+   ingress is **TCP 443 from `0.0.0.0/0`**. **No port 80, no HTTP listener, no HTTP-to-HTTPS
+   redirect**; HTTPS is mandatory.
+
+4. **TLS.** An existing regional ACM certificate is **consumed, never created or queried**,
+   through the root/module variable **`api_certificate_arn`**; it must be valid for the configured
+   `us-east-1` provider. TLS policy **`ELBSecurityPolicy-TLS13-1-2-2021-06`**. TLS terminates at
+   the ALB; ALB-to-target traffic is plain **HTTP** within the restricted VPC security-group path.
+
+5. **ALB and request-handling attributes.** `internal = false`; `ip_address_type = "ipv4"`;
+   HTTP/2 enabled; idle timeout **60 seconds**; invalid header fields dropped; desync mitigation
+   **`defensive`**; host-header preservation **disabled**; X-Forwarded-For handling **`append`**;
+   X-Forwarded-For client-port preservation **disabled**; deletion protection **disabled**
+   (staging only); cross-zone behavior uses the ALB's enabled/default configuration **without a
+   target-group override**.
+
+6. **Target group.** Target type **`ip`**; protocol **HTTP**; protocol version **HTTP/1.1**;
+   port **8000**; health-check **enabled**, protocol **HTTP**, port **`traffic-port`**, path
+   **`/health`**, matcher **`200`**, interval **30s**, timeout **5s**, healthy threshold **2**,
+   unhealthy threshold **3**, deregistration delay **60s**, stickiness **disabled**, slow start
+   **disabled / zero**, load-balancing algorithm **round robin**.
+
+7. **Logging and later integrations (deferred).** ALB **access logging and connection logging
+   are deferred** to the storage/logging integration tranche; the `storage` module will own the
+   S3 bucket and delivery policy, and any later `aws_lb.access_logs.bucket` value must consume an
+   S3 **bucket name, not an ARN**. No conditional or placeholder log-bucket input is added to the
+   initial ALB module. Logging must be resolved **before any live staging plan/apply
+   authorization**. **WAF** remains deferred. **API Route 53 alias** creation remains deferred
+   (added only after the ALB exposes its DNS name and canonical hosted-zone id). The future ALB
+   module must eventually expose outputs: `alb_arn`, `alb_dns_name`,
+   `alb_canonical_hosted_zone_id`, `https_listener_arn`, `api_target_group_arn`, and
+   `alb_security_group_id`.
+
+8. **Naming and tagging.** Use the committed `signalnest-staging` naming convention. Tags are
+   supplied through the root provider `default_tags`; the stale module-level `tags` inputs are
+   removed from the `alb` and `ecs` README contracts and **no module-level `tags` input is
+   added** (mirrors `network`/`edge`).
+
+## 25. ALB application-contract verification and pre-live-apply follow-ups
+
+The decisions in §24 were verified read-only against committed application behavior at
+`main` HEAD `5104de8`. Compatibility summary (all `verified compatible` unless noted):
+
+- API binds `0.0.0.0:8000`, container `EXPOSE 8000` (`apps/api/Dockerfile`) — matches target-group
+  port 8000, target type `ip`, HTTP/1.1.
+- `/health` is dependency-free and anonymous (`apps/api/app/main.py`); `/readiness` is
+  dependency-aware and returns `503` on a failed required probe (`apps/api/app/system/routes.py`,
+  `apps/api/app/system/probes.py`) — confirms the §24.1 split.
+- No WebSocket, SSE, streaming, or long-polling exists; heavy/LLM work is off-request via the
+  durable job queue and worker process — compatible with the 60s idle timeout and HTTP/1.1.
+- Auth is stateless bearer JWT with no server-side session (`apps/api/app/auth/dependencies.py`)
+  and the app is stateless across replicas — compatible with round robin and stickiness disabled.
+- No `TrustedHostMiddleware`, host-based routing, or Host-dependent redirect/cookie logic exists —
+  host-header preservation disabled is safe. CORS origins are an explicit config list, not derived
+  from the Host header.
+- The app imposes no IPv6 requirement (IPv6 is a CloudFront/web-path concern only) — IPv4-only ALB
+  is compatible.
+
+**Pre-live-apply follow-ups (owned outside the ALB module; do not change any §24 attribute):**
+
+- **Rate limiting behind the proxy.** `RateLimitMiddleware` keys on `request.client.host` and does
+  not read `X-Forwarded-For` (`apps/api/app/core/middleware.py`); the code documents it as a
+  placeholder ("production uses Redis adapter"). Once the ALB fronts the API, `request.client.host`
+  becomes the ALB ENI IP, so the naive fixed-window limiter collapses to a single shared bucket
+  across all clients. Resolution is application/ECS-layer (enable uvicorn `--proxy-headers` /
+  `--forwarded-allow-ips` and trust the client-most `X-Forwarded-For`, or land the Redis adapter),
+  or explicitly accept a global staging-only limit until then. No ALB attribute changes.
+- **API graceful shutdown.** The API uvicorn command sets no explicit graceful-shutdown window
+  (`apps/api/Dockerfile`); the ECS tranche must align ECS `stopTimeout` with the 60s
+  deregistration delay so in-flight requests drain cleanly.
+- **Interactive docs exposure.** `/api/v1/docs` and `/api/v1/openapi.json` are mounted
+  unconditionally (`apps/api/app/main.py`); with a single all-paths target group and WAF deferred,
+  they become internet-reachable — to be addressed with the deferred WAF / path-restriction work.
 
 ## 22. Exact future gates
 
