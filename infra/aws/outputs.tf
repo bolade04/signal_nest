@@ -23,3 +23,21 @@ output "name_prefix" {
   description = "Deterministic resource name prefix derived from project + environment."
   value       = local.name_prefix
 }
+
+# --- Network module outputs (INFRA-4 network tranche) ---
+# Non-sensitive identifiers only. No account id, ARN, NAT public IP, or endpoint.
+
+output "vpc_id" {
+  description = "ID of the staging VPC (from the network module)."
+  value       = module.network.vpc_id
+}
+
+output "public_subnet_ids" {
+  description = "Public subnet IDs, ordered by sorted AZ name (from the network module)."
+  value       = module.network.public_subnet_ids
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet IDs, ordered by sorted AZ name (from the network module)."
+  value       = module.network.private_subnet_ids
+}

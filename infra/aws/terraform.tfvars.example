@@ -15,3 +15,13 @@ owner        = "internal-platform-ops"
 cost_center  = "signalnest-staging"
 data_class   = "internal-no-customer"
 phase        = "4B-C"
+
+# --- Network module inputs (INFRA-4 network tranche) ---
+# Addressing is variable-driven and NO real CIDR or AZ name is committed to this
+# repository. Supply real values at plan time via a git-ignored *.tfvars file.
+# The lines below are COMMENTED and use placeholder tokens, not real values:
+#
+# vpc_cidr           = "<RFC1918_CIDR>"        # e.g. a private /16 range
+# availability_zones = ["<AZ_ONE>", "<AZ_TWO>"] # explicit AZ names (>= 2 recommended)
+# subnet_newbits     = 4
+# enable_nat_gateway = true

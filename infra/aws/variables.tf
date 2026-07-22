@@ -92,3 +92,44 @@ variable "phase" {
     error_message = "phase must be a non-empty string."
   }
 }
+
+# --- Network module inputs (INFRA-4 network tranche) ---
+# Addressing is variable-driven; vpc_cidr and availability_zones are REQUIRED and
+# have no committed defaults, so no real CIDR or AZ name is embedded in the repo.
+
+variable "vpc_cidr" {
+  description = "IPv4 CIDR block for the staging VPC (passed to the network module). Supplied at plan time via a git-ignored *.tfvars; no real CIDR is committed. Prefix /16–/24."
+  type        = string
+
+  validation {
+    condition     = can(cidrhost(var.vpc_cidr, 0))
+    error_message = "vpc_cidr must be a valid IPv4 CIDR block (e.g. an RFC1918 /16)."
+  }
+}
+
+variable "availability_zones" {
+  description = "Explicit list of AWS availability zone names for subnet placement (passed to the network module). Supplied explicitly, never discovered via an AWS data source; no real AZ name is committed. Single-AZ is acceptable for staging (contract §N); >= 2 recommended for later ALB/RDS subnet groups."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.availability_zones) >= 1
+    error_message = "availability_zones must contain at least one AZ name."
+  }
+}
+
+variable "subnet_newbits" {
+  description = "Additional prefix bits used to carve per-AZ subnets from vpc_cidr (passed to the network module). Supports up to 2^(subnet_newbits-1) AZs per subnet class."
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.subnet_newbits >= 2 && var.subnet_newbits <= 8
+    error_message = "subnet_newbits must be between 2 and 8."
+  }
+}
+
+variable "enable_nat_gateway" {
+  description = "Provision a single NAT gateway for private-subnet egress (passed to the network module). A single NAT gateway is the cost-minimized staging choice (contract §M)."
+  type        = bool
+  default     = true
+}
