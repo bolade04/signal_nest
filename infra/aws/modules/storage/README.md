@@ -17,7 +17,7 @@ This is **not** the SPA web-origin bucket (owned by `edge`), the remote-state bu
 | `aws_s3_bucket` (×1) | The single private application bucket |
 | `aws_s3_bucket_ownership_controls` | `BucketOwnerEnforced` — ACLs disabled, owner owns every object |
 | `aws_s3_bucket_public_access_block` | All four public-access controls enabled |
-| `aws_s3_bucket_server_side_encryption_configuration` | SSE-S3 (`AES256`) at rest, bucket keys enabled |
+| `aws_s3_bucket_server_side_encryption_configuration` | SSE-S3 (`AES256`) at rest |
 | `aws_s3_bucket_versioning` | Versioning enabled |
 | `aws_s3_bucket_policy` | Denies any request not sent over TLS |
 
@@ -41,7 +41,7 @@ No account id, ARN, region, credential, or KMS input is accepted.
 
 ## 5. Security controls
 - **Encryption:** server-side encryption with S3-managed keys (`AES256`/SSE-S3), no
-  KMS dependency; bucket keys enabled.
+  KMS dependency.
 - **Versioning:** enabled — overwritten/deleted objects retain recoverable history.
 - **Public access:** all four `public_access_block` controls enabled; **no** public
   read or write, **no** ACL resource.
