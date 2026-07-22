@@ -188,6 +188,27 @@
   deployment, OIDC/CI workflow, or feature activation occurred.** The 12 modules remain
   documentation-only; later INFRA-4 module resource implementation remains incomplete, and
   INFRA-5 remains unstarted.
+- **Delivered (INFRA-4 network module resource-definition tranche):** the first bounded
+  module resource bodies — the **`network`** module only. It defines a foundational staging
+  VPC (DNS support + hostnames), an internet gateway, per-AZ public and private subnets
+  (no auto-assigned public IPs), a **single** cost-minimized NAT gateway + EIP (contract §M
+  "largest fixed driver"; toggled by `enable_nat_gateway`), and public/private route tables.
+  Subnet CIDRs are derived deterministically from a supplied `vpc_cidr` via `cidrsubnet()`
+  keyed by sorted AZ name; availability zones are supplied through an explicit
+  `availability_zones` input (never discovered via an AWS data source). The `network` module
+  is wired into the composition-root `main.tf`, exposing `vpc_id`/`public_subnet_ids`/
+  `private_subnet_ids` at the root. No real CIDR, AZ name, account id, ARN, or secret is
+  committed (`vpc_cidr`/`availability_zones` are required, default-free inputs). Validation
+  used **OpenTofu 1.12.3** from a temporary, checksum-verified binary in an isolated `/tmp`
+  environment with the **backend disabled** (`-backend=false`), the lockfile **read-only**
+  (`-lockfile=readonly`, unchanged), and all AWS credentials suppressed
+  (`AWS_EC2_METADATA_DISABLED=true`); `fmt -check` and `validate` passed. **No `tofu plan`/
+  `apply`, no AWS API call, no backend/state, no provisioning, no deployment, and no feature
+  activation occurred.** Security groups, VPC endpoints, and flow logs are explicitly
+  deferred (their rules reference peer modules not yet built). The other **eleven** modules
+  (`edge`, `alb`, `ecs`, `data_sql`, `data_cache`, `storage`, `registry`, `iam`, `secrets`,
+  `observability`, `cost`) remain documentation-only stubs; remote-state remains
+  unconfigured; INFRA-4 is **not** complete; and INFRA-5 remains unstarted.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names
