@@ -4,11 +4,15 @@
 
 This directory is the **repository-only** Infrastructure-as-Code for the internal,
 non-customer **SIGNALNEST_STAGING** (dark canary) environment. It is **staging-only**.
-Three modules — **`network`**, **`edge`**, and **`alb`** — now contain executable HCL
-resource bodies (composed at the root and **offline-validated only**); the remaining
-nine modules are documentation-only stubs. **No live `tofu plan`/`apply` has run, no
-AWS API has been contacted, and nothing has been provisioned or deployed** — the
-committed HCL describes intended resources, it does not mean any resource exists in AWS.
+**Five** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, and **`registry`** —
+now contain executable, **offline-validated** HCL resource bodies; the remaining seven
+modules are documentation-only stubs. Of the five, only **three** (`network`, `edge`, `alb`)
+are currently wired into the **root composition** (`main.tf`); `secrets` and `registry` are
+**implemented but not yet root-composed**. "Implemented" (HCL exists and offline-validates),
+"root-composed" (referenced by `main.tf`), "provisioned", and "deployed" are distinct states
+and are not equivalent. **No live `tofu plan`/`apply` has run, no AWS API has been contacted,
+and nothing has been provisioned or deployed** — the committed HCL describes intended
+resources, it does not mean any resource exists in AWS.
 
 Authoritative design: [`docs/operations/aws-staging-iac-plan.md`](../../docs/operations/aws-staging-iac-plan.md)
 (the INFRA-4 design), under
@@ -42,7 +46,7 @@ infra/aws/
   main.tf                   # composition root: composes network, edge, alb (no root resource/data)
   outputs.tf                # non-sensitive metadata + network/edge/alb module outputs
   terraform.tfvars.example  # synthetic example inputs
-  modules/                  # 12 modules: network, edge, alb implemented; 9 doc-only stubs
+  modules/                  # 12 modules: network, edge, alb, secrets, registry implemented; 7 doc-only stubs
 ```
 
 ## 4. Compatibility constraints and dependency lock
@@ -59,9 +63,11 @@ The `versions.tf` constraints are bounded ranges; the committed
 ## 5. Module inventory (exactly 12)
 
 The twelve reusable modules are fixed by the authoritative design
-(`aws-staging-iac-plan.md` §6). Three are implemented (HCL authored and
-offline-validated only — **not** provisioned); the other nine remain
-documentation-only stubs (`modules/<name>/README.md`, no HCL).
+(`aws-staging-iac-plan.md` §6). **Five** are implemented (HCL authored and
+offline-validated only — **not** provisioned or deployed); the other **seven** remain
+documentation-only stubs (`modules/<name>/README.md`, no HCL). Of the five implemented
+modules, only `network`, `edge`, and `alb` are currently **root-composed**; `secrets` and
+`registry` are implemented but **not yet root-composed**.
 
 | Module | Status |
 | --- | --- |
@@ -72,9 +78,9 @@ documentation-only stubs (`modules/<name>/README.md`, no HCL).
 | `data_sql` | Documentation-only stub |
 | `data_cache` | Documentation-only stub |
 | `storage` | Documentation-only stub |
-| `registry` | Documentation-only stub |
+| `registry` | **Implemented** (offline-validated, **not root-composed**) — two private ECR repositories (`api`, `worker`) + two lifecycle-policy instances; no image built/pushed |
 | `iam` | Documentation-only stub |
-| `secrets` | Documentation-only stub |
+| `secrets` | **Implemented** (offline-validated, **not root-composed**) — four empty Secrets Manager containers + one customer-managed KMS key/alias; no secret value populated |
 | `observability` | Documentation-only stub |
 | `cost` | Documentation-only stub |
 
@@ -91,6 +97,21 @@ provider `default_tags` (no module-level `tags` input). The committed ALB tranch
 **no** HTTP/port-80 listener, no public port 8000, no IPv6 ingress, no unrestricted ALB
 egress, no certificate creation, no Route 53 record, no WAF, no access/connection
 logging or log bucket, no ECS resource, and no target registration/attachment.
+
+The `secrets` and `registry` modules are **implemented and offline-validated but not
+wired into `main.tf`** — the root composition was **not** changed when they were added.
+The `secrets` module creates only the declarative secret *containers* — four empty AWS
+Secrets Manager secrets and one customer-managed KMS key/alias — **no secret value has
+been populated** (values are populated out-of-band under a later, separately authorized
+operational step); it produces outputs for the future `iam` and `ecs` modules
+(`secrets -> iam`, `secrets -> ecs`). The `registry` module declares **two** private ECR
+repositories, `api` and `worker`, and **two** lifecycle-policy instances (immutable tags,
+scan-on-push, AES-256, force-delete disabled, untagged-only expiry preserving tagged
+images). API and worker are separate future image artifacts with distinct immutable
+digests; the migration task **reuses the worker image** with a command override. **No ECR
+image has been built, tagged, scanned remotely, pushed, published, or digest-resolved**,
+and creating the repositories does not make ECS deployable; it produces repository
+references for the future `iam` and `ecs` modules (`registry -> iam`, `registry -> ecs`).
 
 ## 6. Planned module responsibilities
 
@@ -145,8 +166,9 @@ committed.
 
 ## 10. Current validation status
 
-**Offline validation only.** The implemented `network`, `edge`, and `alb` modules and
-the root composition have been checked with `tofu fmt`, `tofu init -backend=false`
+**Offline validation only.** The implemented `network`, `edge`, `alb`, `secrets`, and
+`registry` modules (each in its own tranche) and the root composition have been checked
+with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
 suppressed. The committed `.terraform.lock.hcl` pins `hashicorp/aws 6.55.0`. **No**
@@ -167,12 +189,14 @@ tranche.
 
 **INFRA-4 is not complete** and **INFRA-5 is unstarted.** Done so far: tool-assisted
 validation + `.terraform.lock.hcl` (with cross-platform provider checksums), and the
-`network`, `edge`, and `alb` module bodies (offline-validated only). Remaining:
+`network`, `edge`, `alb`, `secrets`, and `registry` module bodies (offline-validated only;
+`secrets` and `registry` are implemented but **not yet root-composed**). Remaining:
 
-1. **Remaining module bodies:** author HCL for the nine documentation-only stubs
-   (`ecs`, `data_sql`, `data_cache`, `storage`, `registry`, `iam`, `secrets`,
-   `observability`, `cost`) — later INFRA-4 tranches. ECS will own the API task SG and
-   both ALB↔API cross-SG rules and consume the ALB outputs.
+1. **Remaining module bodies + root composition:** author HCL for the **seven**
+   documentation-only stubs (`ecs`, `data_sql`, `data_cache`, `storage`, `iam`,
+   `observability`, `cost`) — later INFRA-4 tranches — and **root-compose** the already
+   implemented `secrets` and `registry` modules. ECS will own the API task SG and both
+   ALB↔API cross-SG rules and consume the ALB outputs.
 2. **Pre-live requirements:** access/connection **logging must be resolved before any
    live staging plan/apply**; DNS, WAF, ACM certificate creation, ECS, and target
    registration remain deferred; the applicable pre-live follow-ups recorded in the
