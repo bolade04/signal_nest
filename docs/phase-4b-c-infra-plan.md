@@ -139,9 +139,22 @@
   [`docs/operations/aws-staging-iac-plan.md`](operations/aws-staging-iac-plan.md).
   **Documentation design only** — no IaC source, no `init`/`validate`/`plan`/`apply`, no AWS
   authentication, no provisioning, no secret operation, and no activation. (Upstream INFRA-3
-  secrets scaffolding merged via PR #93.) The IaC tool is **not** selected in this tranche
-  (candidates + a decision procedure are recorded); authoring the `infra/aws/` source is the
-  later, separately authorized INFRA-4 implementation, and `apply` remains INFRA-9.
+  secrets scaffolding merged via PR #93.) The IaC tool was **not** selected in that plan-only
+  tranche (candidates + a decision procedure were recorded); authoring the `infra/aws/` source is
+  the later, separately authorized INFRA-4 implementation, and `apply` remains INFRA-9.
+- **IaC tool decision — DECIDED: OpenTofu.** The project owner selected **OpenTofu** as
+  SignalNest's authoritative IaC tool (the required INFRA-4 human decision), resolving the sole
+  open tool-selection item from the readiness audit. OpenTofu is the authoritative project CLI
+  and implementation target for the future placeholder-only INFRA-4 skeleton and subsequent
+  authorized AWS tranches; Terraform providers/modules may be reused for compatibility, but
+  Terraform and OpenTofu are **not** interchangeable project authorities. The OpenTofu and
+  provider **versions** remain to be pinned at implementation time from then-current official
+  compatibility evidence. This decision is **documentation-only** and authorizes **no** IaC
+  implementation, OpenTofu install, `init`/`validate`/`plan`/`apply`/`import`/`refresh`/`destroy`,
+  remote-state creation, AWS authentication, provisioning, deployment, feature-flag change, or
+  INFRA-5 work; INFRA-4 remains plan-only and unimplemented, and a separate implementation
+  instruction + review are required before any IaC skeleton is created. See
+  [`docs/operations/aws-staging-iac-plan.md`](operations/aws-staging-iac-plan.md) §16/§21.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names
