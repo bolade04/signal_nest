@@ -171,6 +171,23 @@
   Module resource bodies, tool-assisted validation + the dependency lock, remote-state
   bootstrap, and `apply` remain later, separately authorized tranches; INFRA-4 module
   implementation is **not** yet complete.
+- **Delivered (INFRA-4 tool-assisted validation and dependency-lock tranche):** the first
+  bounded OpenTofu validation of the repository-only skeleton, performed with **OpenTofu
+  1.12.3** run from a temporary, checksum-verified binary in an isolated `/tmp` environment
+  (isolated `TF_DATA_DIR` and CLI config, provider cache outside the repository, all AWS
+  credential/profile variables unset and `AWS_EC2_METADATA_DISABLED=true`). `fmt -check`
+  passed (after one mechanical comment-alignment reformat of `locals.tf`); initialization
+  used **`-backend=false`** (no backend initialized, no state, no AWS API call); the single
+  declared provider resolved to **`hashicorp/aws` v6.55.0** (satisfying `>= 6.55.0, <
+  6.56.0`) and a committed [`infra/aws/.terraform.lock.hcl`](../infra/aws/.terraform.lock.hcl)
+  was generated locking **`darwin_arm64`** (workstation) and **`linux_amd64`** (future Linux
+  execution); read-only (`-lockfile=readonly`) reinitialization reproduced the lockfile
+  unchanged; `tofu validate` succeeded and provider inspection confirmed only the AWS
+  provider is required. **No AWS credentials or profiles were used, and no AWS API call,
+  backend, remote state, plan, resource/data/module implementation, provisioning,
+  deployment, OIDC/CI workflow, or feature activation occurred.** The 12 modules remain
+  documentation-only; later INFRA-4 module resource implementation remains incomplete, and
+  INFRA-5 remains unstarted.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names
