@@ -14,7 +14,10 @@
 #   1. network         — VPC, subnets, route tables, NAT           [ACTIVE]
 #   2. edge            — CloudFront + private S3 SPA origin + web DNS (ACM cert &
 #                        hosted zone CONSUMED, §23); ALB cert/API DNS deferred  [ACTIVE]
-#   3. alb             — ALB, HTTPS listeners, target groups        (stub; depends: network, edge)
+#   3. alb             — ALB, HTTPS listener, API target group      [ACTIVE]
+#                        (draws vpc_id + public_subnet_ids from network and the
+#                        consumed api_certificate_arn from a root var; the API task
+#                        SG and both ALB<->API cross-SG rules are ecs-owned, §24.2)
 #   4. iam             — least-privilege roles/policies             (stub; depends: network)
 #   5. secrets         — Secrets Manager + KMS references (names)   (stub; depends: iam)
 #   6. data_sql        — RDS PostgreSQL + pgvector                  (stub; depends: network)
@@ -53,4 +56,19 @@ module "edge" {
   hosted_zone_id      = var.hosted_zone_id
   acm_certificate_arn = var.acm_certificate_arn
   price_class         = var.price_class
+}
+
+# Internet-facing HTTPS ALB for the private API service. VPC and public subnets flow
+# from the network module; the regional ACM certificate is CONSUMED by value from a
+# required root var (no real ARN committed, §24.4). This module owns only the ALB
+# security group; the API task SG and both ALB<->API cross-SG rules are ecs-owned
+# (§24.2), so the dependency is one-way `ecs -> alb` and no ECS input is required
+# here. The eight-tag common set is applied by the provider's default_tags.
+module "alb" {
+  source = "./modules/alb"
+
+  name_prefix         = local.name_prefix
+  vpc_id              = module.network.vpc_id
+  public_subnet_ids   = module.network.public_subnet_ids
+  api_certificate_arn = var.api_certificate_arn
 }

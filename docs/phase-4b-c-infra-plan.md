@@ -235,6 +235,35 @@
   `storage`, `registry`, `iam`, `secrets`, `observability`, `cost`) remain documentation-only
   stubs; remote-state remains unconfigured; INFRA-4 is **not** complete; and INFRA-5 remains
   unstarted.
+- **Delivered (INFRA-4 alb module resource-definition tranche):** the third executable module —
+  the **`alb`** module — implemented exactly from the locked ALB architecture contract (§24, merged
+  by PR #100). It defines the internet-facing HTTPS entry point for the staging API: an ALB
+  **security group** (public TCP 443 / IPv4 ingress only, created with **no inline rules** so the
+  provider removes AWS's implicit allow-all default egress — the ALB→API `:8000` egress rule is
+  `ecs`-owned, no unrestricted ALB egress), an internet-facing **IPv4 `aws_lb`** in the public
+  subnets with the locked request-handling attributes (HTTP/2 on, idle 60s, drop invalid header
+  fields, desync `defensive`, host-header preservation off, X-Forwarded-For `append`, XFF
+  client-port off, deletion protection off), an IP-target-type API **`aws_lb_target_group`**
+  (HTTP/`HTTP1`, port 8000, health check against liveness `/health` matcher `200`, interval 30s /
+  timeout 5s / healthy 2 / unhealthy 3, deregistration delay 60s, stickiness disabled, slow start
+  0, round robin, no target-group cross-zone override), and an **HTTPS:443 `aws_lb_listener`** that
+  terminates TLS with the CONSUMED regional ACM certificate (policy
+  `ELBSecurityPolicy-TLS13-1-2-2021-06`) and forwards to the target group — **no HTTP:80 listener
+  and no HTTP→HTTPS redirect**. The module exposes the six contract outputs (`alb_arn`,
+  `alb_dns_name`, `alb_canonical_hosted_zone_id`, `https_listener_arn`, `api_target_group_arn`,
+  `alb_security_group_id`); the API task security group and both ALB↔API cross-SG rules remain
+  `ecs`-owned, keeping the one-way `ecs -> alb` dependency acyclic. The ALB certificate ARN is
+  CONSUMED by value via a required root `api_certificate_arn` (static us-east-1 ACM regex; no real
+  ARN committed). The `alb` module is wired into the composition-root `main.tf` alongside `network`
+  and `edge`. Validation used **OpenTofu 1.12.5** offline (`fmt`, `init -backend=false`, `validate`)
+  with the backend disabled, the lockfile read-only (byte-identical), and all AWS credentials
+  suppressed. **No `tofu plan`/`apply`, no AWS API call, no backend/state, no provisioning, no
+  deployment, no certificate/DNS/WAF/log-bucket resource, no ECS target registration, and no feature
+  activation occurred.** Access/connection logging, WAF, and the API Route 53 alias remain deferred;
+  logging must be resolved before any live staging plan/apply. The other **nine** modules (`ecs`,
+  `data_sql`, `data_cache`, `storage`, `registry`, `iam`, `secrets`, `observability`, `cost`) remain
+  documentation-only stubs; remote-state remains unconfigured; INFRA-4 is **not** complete; and
+  INFRA-5 remains unstarted.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names

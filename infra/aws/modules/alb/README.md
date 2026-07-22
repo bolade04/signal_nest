@@ -1,27 +1,38 @@
-# Module: `alb` (documentation-only stub)
+# Module: `alb`
 
 ## 1. Purpose
-Application Load Balancer fronting the private API service with HTTPS-only
-ingress.
+Internet-facing Application Load Balancer fronting the private API service with
+HTTPS-only ingress. This module defines resource bodies but **applies nothing** —
+no infrastructure exists in AWS.
 
-## 2. Planned AWS scope
-Application Load Balancer, HTTPS listener(s), target group(s), listener rules,
-health-check configuration against liveness `/health`.
+## 2. Owned resources (implemented here)
+- `aws_security_group` — the ALB security group (public HTTPS 443 ingress only)
+- `aws_vpc_security_group_ingress_rule` — TCP 443 from `0.0.0.0/0` (IPv4 only)
+- `aws_lb` — internet-facing IPv4 application load balancer in the public subnets
+- `aws_lb_target_group` — IP-target-type API target group (HTTP/1.1, port 8000,
+  health check against liveness `/health`, matcher `200`)
+- `aws_lb_listener` — HTTPS:443 listener (TLS terminates here) forwarding to the
+  target group
 
 ## 3. Out of scope
-ECS services/task definitions (`ecs`), certificates/DNS (`edge`), VPC/subnets/SGs
-(`network`).
+ECS services/task definitions and the API task SG + ALB↔API cross-SG rules (`ecs`),
+certificate/DNS creation (`edge`; the ALB cert is consumed by value), VPC/subnets
+(`network`), access/connection logging and its bucket (`storage`), WAF.
 
-## 4. Planned upstream dependencies
-`network` (subnets, security groups), `edge` (ACM certificate reference).
+## 4. Upstream dependencies
+`network` (`vpc_id`, `public_subnet_ids`). The regional ACM certificate ARN is
+consumed by value from a required root variable (`api_certificate_arn`), not from
+another module. No hard dependency on `edge`.
 
-## 5. Planned inputs (names only, no values)
+## 5. Inputs (names only, no values)
 `vpc_id`, `public_subnet_ids`, `api_certificate_arn`, `api_target_port`,
 `health_check_path`, `name_prefix`. This module **creates and owns** the ALB security
 group, so it takes **no** security-group id input; it also takes **no** `tags` input — the
 authoritative common tag set is applied by the root provider's `default_tags`.
+`api_target_port` (8000) and `health_check_path` (`/health`) default to the locked
+staging values.
 
-## 6. Planned non-sensitive outputs (names only)
+## 6. Non-sensitive outputs (names only)
 `alb_arn`, `alb_dns_name`, `alb_canonical_hosted_zone_id`, `https_listener_arn`,
 `api_target_group_arn`, `alb_security_group_id`.
 
@@ -40,12 +51,20 @@ certificate id, or account id committed. See `docs/operations/aws-staging-iac-pl
 the full locked ALB contract.
 
 ## 8. Staging-only assumptions
-Single ALB, single API target group, desired count 1.
+Single ALB, single API target group. The ALB security group is created with **no
+inline rules** so the provider removes AWS's implicit allow-all default egress; the
+public 443 ingress is a standalone rule, and the ALB→API `:8000` egress rule is added
+by the `ecs` module (no unrestricted ALB egress, no mixing of inline/standalone rules).
+Access/connection logging, WAF, and the API Route 53 alias remain deferred; logging
+must be resolved before any live staging plan/apply.
 
 ## 9. Status
-No executable HCL yet. No resources created. Implementation and validation are
-deferred.
+Resource bodies authored and validated offline only (`tofu fmt`, `tofu init
+-backend=false`, `tofu validate`). **No `tofu plan`/`apply`, no AWS API call, no
+state, no certificate/DNS/WAF/log-bucket resource, no ECS target registration, and
+no provisioning have occurred. Nothing exists in AWS.**
 
 ## 10. Owning tranche
-Real resource bodies belong to the later, separately authorized INFRA-4 module
-implementation tranche.
+INFRA-4 alb resource-definition tranche. INFRA-4 remains incomplete (nine modules
+remain documentation-only stubs); remote-state bootstrap and any `apply` remain
+later, separately authorized tranches (`apply` is INFRA-9).
