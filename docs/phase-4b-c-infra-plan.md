@@ -155,6 +155,22 @@
   INFRA-5 work; INFRA-4 remains plan-only and unimplemented, and a separate implementation
   instruction + review are required before any IaC skeleton is created. See
   [`docs/operations/aws-staging-iac-plan.md`](operations/aws-staging-iac-plan.md) §16/§21.
+- **Delivered (INFRA-4 repository-only OpenTofu skeleton tranche):** the first IaC
+  implementation step — a **repository-only, placeholder-safe** OpenTofu skeleton under
+  [`infra/aws/`](../infra/aws/). It establishes: a flat, **staging-only** root (no
+  `environments/`/`production/`); bounded compatibility **constraints** (OpenTofu
+  `>= 1.12.3, < 1.13.0`; `hashicorp/aws` `>= 6.55.0, < 6.56.0`); root placeholders
+  (`versions.tf`, `providers.tf`, empty `backend.tf`, `variables.tf`, `locals.tf` with the
+  authoritative eight-tag set, composition-root `main.tf`, `outputs.tf`,
+  `terraform.tfvars.example`); **exactly 12 documentation-only module stubs**
+  (`network`, `edge`, `alb`, `ecs`, `data_sql`, `data_cache`, `storage`, `registry`, `iam`,
+  `secrets`, `observability`, `cost`) — each a `README.md` with no HCL; and IaC-safety
+  `.gitignore` rules. **No `.terraform.lock.hcl`, no OpenTofu execution
+  (`fmt`/`init`/`validate`/`plan`/`apply`), no provider download, no AWS authentication, no
+  state, no module resource bodies, no provisioning or deployment, and no INFRA-5 work.**
+  Module resource bodies, tool-assisted validation + the dependency lock, remote-state
+  bootstrap, and `apply` remain later, separately authorized tranches; INFRA-4 module
+  implementation is **not** yet complete.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names

@@ -79,3 +79,21 @@ coverage/
 .idea/
 .vscode/
 *.log
+
+# OpenTofu / Terraform (INFRA-4 IaC — infra/aws/)
+# Never commit local provider caches, state, plans, or real tfvars. The later
+# authorized `.terraform.lock.hcl` MUST be committed, so it is NOT ignored here.
+# Crash logs (crash.log / crash.*.log) are already covered by the global *.log.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfvars
+!*.tfvars.example
+# Re-include the IaC `storage` module dir; the app-level `storage/` rule above
+# (local object storage) would otherwise ignore this documentation-only stub.
+!infra/aws/modules/storage/
