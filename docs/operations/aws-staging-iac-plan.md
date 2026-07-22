@@ -114,7 +114,7 @@ Mirrors runtime-contract §C. All compute is ECS on Fargate in a single VPC in *
 | Registry | ECR | ECR | Private | Immutable tags; digest-pinned pulls. |
 | Secrets | Secrets Manager + KMS | — | Runtime injection only | Names/ARNs referenced only; values never committed (§11). |
 | Telemetry | CloudWatch Logs + alarms; CloudTrail | — | — | JSON stdout/stderr collected; no OTLP in staging. |
-| Edge/DNS | Route53 + ACM | — | — | Public TLS certificates for ALB and CloudFront. |
+| Edge/DNS | Route53 + ACM | — | — | Public TLS certificates for ALB and CloudFront are **consumed** by ARN, not created by IaC (§23). The `edge` module owns only web/SPA CloudFront + S3 origin + web DNS aliases; the ALB cert/record is deferred to ALB work. |
 | Egress | NAT Gateway + VPC endpoints | — | — | Private subnets reach AWS services/pulls without public IPs. |
 
 ## 6. IaC project organization (proposed layout)
@@ -421,15 +421,73 @@ Decisions **already made** (upstream, binding):
   artifacts (runtime contract §§A/B).
 - **IaC tool: OpenTofu** (§16) — project-owner human decision; authoritative CLI and
   implementation target; Terraform providers/modules reusable for compatibility only.
+- **Edge certificate & hosted-zone ownership: CONSUME, not create** (resolved 2026-07-22, §23) —
+  the `edge` module **consumes** an existing CloudFront ACM certificate ARN (in `us-east-1`) and
+  an existing Route 53 hosted-zone id via typed inputs; it never creates, requests, validates,
+  renews, or imports an ACM certificate or a hosted zone. The **values** (real ARN / zone id /
+  domain) are still supplied only at authorized apply time and are never committed — but the
+  *architectural ownership* is no longer open.
 
 Decisions **still required** (recorded here, **not decided in this tranche**):
 
 - **OpenTofu and provider versions** (§16) — must be selected and pinned at implementation time
   from then-current official compatibility evidence (the *tool* is decided; the *version* is not).
 - Remote-state bucket/lock names, KMS key, and bootstrap timing (§7) — implementation-time.
-- Real account id, DNS zone, ACM certificate, CIDR plan, secret ARNs — supplied only at
-  authorized implementation/apply time, never committed.
+- Real account id, DNS zone **id**, ACM certificate **ARN**, CIDR plan, secret ARNs — the concrete
+  **values** are supplied only at authorized implementation/apply time, never committed. (Edge
+  *ownership* of the certificate and hosted zone is architecturally resolved as **consume**, §23;
+  only the values remain apply-time.)
 - Fresh dated cost estimate before any apply (§15) — mandatory at INFRA-9.
+
+## 23. Edge module architecture decisions (resolved 2026-07-22, human-approved)
+
+These four decisions resolve the previously ambiguous / contradictory `edge` language (the
+"create versus consume" tension between the module README and §21) **for static authoring
+only**. Nothing here authorizes any AWS action; no resource exists or is deployed. Real domain,
+hosted-zone id, and certificate ARN remain future authorized apply-time configuration values and
+are never committed.
+
+1. **ACM certificates are consumed, not created.** The `edge` module accepts an existing
+   CloudFront ACM certificate **ARN** through a typed input and validates only (statically, no
+   AWS call) that the ARN denotes an ACM certificate in **`us-east-1`**. It must **not** create,
+   request, validate, renew, or import a certificate, and must **not** declare
+   `aws_acm_certificate`, `aws_acm_certificate_validation`, DNS-validation records, ACM data
+   sources, or certificate-creation provider aliases. The future **ALB** certificate is outside
+   this tranche and is consumed/attached during later ALB work — no ALB certificate input is
+   added to `edge` now.
+2. **Route 53 hosted zone is consumed, not created.** The module accepts an existing hosted-zone
+   **id** through a typed input; it must not create or import a zone. It may create only the
+   web-facing `A` and `AAAA` alias records targeting the CloudFront distribution (IPv6 is
+   enabled), using CloudFront's exported hosted-zone attribute for the alias target (never a
+   hard-coded global id). No `aws_route53_zone`, delegation/NS records, validation records, or
+   API/ALB alias records.
+3. **Current edge tranche is web/SPA only.** Owned here: a **private** S3 SPA-origin bucket
+   (public-access blocked, SSE, lifecycle controls), CloudFront **Origin Access Control**, a
+   bucket policy granting access only to the CloudFront distribution, the CloudFront
+   distribution, and the web `A`/`AAAA` aliases. The private SPA-origin bucket belongs to `edge`;
+   the `storage` module stays reserved for application/runtime storage and remains stub-only.
+   **Deferred:** all ALB resources/listeners/SGs/certificate attachment, the API hostname and its
+   Route 53 record, ALB-to-DNS integration, ECS origins, WAF, asset upload/deployment, CloudFront
+   invalidation, access-log delivery, and observability integration. The API Route 53 alias is
+   added only in a later, separately authorized cross-module pass after the ALB exposes its DNS
+   name and canonical hosted-zone id. After this tranche `network` and `edge` are the only
+   implemented resource modules; the root has exactly the `network` and `edge` child-module
+   blocks; the other ten modules remain documentation-only stubs.
+4. **Hostnames and CloudFront SPA behavior.** The module accepts one complete, caller-supplied
+   web **FQDN** (no apex-domain derivation, no committed real domain; docs use reserved examples
+   such as `app.staging.example.com` / `api.staging.example.com`, and the API hostname is
+   explanatory/deferred only — not a current input or resource). CloudFront SPA policy: private
+   S3 **REST** origin via OAC/**SigV4** (no S3 website endpoint, no public-read ACL/policy);
+   default root object `index.html`; viewer protocol `redirect-to-https`; custom-domain TLS via
+   the consumed certificate ARN with `sni-only` and minimum `TLSv1.2_2021`; compression enabled;
+   allowed methods `GET`/`HEAD`/`OPTIONS`, cached `GET`/`HEAD`; no cookie, query-string, or
+   arbitrary-header forwarding; min/default/max TTL `0`/`3600`/`86400`; SPA fallback mapping
+   CloudFront origin **403 → `/index.html` (200)** and **404 → `/index.html` (200)** with
+   error-caching TTL `0`; IPv6 enabled; no geographic restriction; a typed `price_class`
+   defaulting to `PriceClass_100` (allowed `PriceClass_100`/`PriceClass_200`/`PriceClass_All`).
+   No Lambda@Edge, CloudFront Functions, WAF, multiple origins, custom cache/response-header/
+   origin-request policies, signed URLs/cookies, or API behavior; no object upload or
+   invalidation.
 
 ## 22. Exact future gates
 

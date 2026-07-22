@@ -1,17 +1,19 @@
 # main.tf — composition root (INFRA-4)
 #
 # Wires the reusable modules under `infra/aws/modules/`. In THIS tranche exactly
-# ONE module is active — `network` — with its foundational VPC resource bodies.
-# The remaining eleven modules stay documentation-only stubs (README only, no
-# HCL) and are NOT composed here yet. No `resource`, `data`, `import`, or `moved`
-# block is declared at the root; all resources live inside the module.
+# TWO modules are active — `network` (foundational VPC) and `edge` (web/SPA
+# CloudFront + private S3 origin + web DNS aliases). The remaining ten modules stay
+# documentation-only stubs (README only, no HCL) and are NOT composed here yet. No
+# `resource`, `data`, `import`, or `moved` block is declared at the root; all
+# resources live inside the modules.
 #
 # Planned module composition order / dependency flow (aws-staging-iac-plan.md
-# §6 and §17); modules beyond `network` are authored under later, separately
+# §6 and §17); modules beyond `network`/`edge` are authored under later, separately
 # authorized INFRA-4 tranches:
 #
 #   1. network         — VPC, subnets, route tables, NAT           [ACTIVE]
-#   2. edge            — Route53, ACM, CloudFront, S3 web origin    (stub)
+#   2. edge            — CloudFront + private S3 SPA origin + web DNS (ACM cert &
+#                        hosted zone CONSUMED, §23); ALB cert/API DNS deferred  [ACTIVE]
 #   3. alb             — ALB, HTTPS listeners, target groups        (stub; depends: network, edge)
 #   4. iam             — least-privilege roles/policies             (stub; depends: network)
 #   5. secrets         — Secrets Manager + KMS references (names)   (stub; depends: iam)
@@ -37,4 +39,18 @@ module "network" {
   availability_zones = var.availability_zones
   subnet_newbits     = var.subnet_newbits
   enable_nat_gateway = var.enable_nat_gateway
+}
+
+# Web/SPA edge (private S3 SPA origin + CloudFront/OAC + web DNS aliases). The ACM
+# certificate and Route 53 hosted zone are CONSUMED by value (§23), never created
+# here. The eight-tag common set is applied by the provider's default_tags, so it
+# is NOT passed into the module.
+module "edge" {
+  source = "./modules/edge"
+
+  name_prefix         = local.name_prefix
+  web_fqdn            = var.web_fqdn
+  hosted_zone_id      = var.hosted_zone_id
+  acm_certificate_arn = var.acm_certificate_arn
+  price_class         = var.price_class
 }

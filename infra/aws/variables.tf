@@ -133,3 +133,60 @@ variable "enable_nat_gateway" {
   type        = bool
   default     = true
 }
+
+# --- Edge module inputs (INFRA-4 edge tranche; web/SPA only) ---
+# The web FQDN, hosted-zone id, and certificate ARN are REQUIRED and have no
+# committed defaults, so no real domain, zone id, or ARN is embedded in the repo.
+# The ACM certificate and Route 53 hosted zone are CONSUMED by value (§23), never
+# created. All validation is STATIC (regex/string) — none queries AWS.
+
+variable "web_fqdn" {
+  description = "One complete web FQDN for the SPA (passed to the edge module; e.g. \"app.staging.example.com\"). Supplied at plan time via a git-ignored *.tfvars; no real domain is committed. Bare hostname only — no scheme, port, path, query, or fragment."
+  type        = string
+
+  validation {
+    condition     = !can(regex("[/?#:]", var.web_fqdn))
+    error_message = "web_fqdn must be a bare hostname: no scheme (https://), port, path, query string, or fragment."
+  }
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", lower(var.web_fqdn)))
+    error_message = "web_fqdn must be a valid multi-label FQDN (lowercase labels 1-63 chars, no empty labels, no trailing dot), e.g. app.staging.example.com."
+  }
+
+  validation {
+    condition     = length(var.web_fqdn) <= 253
+    error_message = "web_fqdn must be <= 253 characters."
+  }
+}
+
+variable "hosted_zone_id" {
+  description = "Existing Route 53 hosted-zone id that owns web_fqdn (passed to the edge module; CONSUMED, never created). Supplied at plan time via a git-ignored *.tfvars; no real id is committed. Statically validated only — never queried against AWS."
+  type        = string
+
+  validation {
+    condition     = can(regex("^Z[A-Z0-9]{1,32}$", var.hosted_zone_id))
+    error_message = "hosted_zone_id must be a plausible Route 53 hosted-zone id (starts with 'Z', uppercase alphanumeric)."
+  }
+}
+
+variable "acm_certificate_arn" {
+  description = "Existing CloudFront ACM certificate ARN (passed to the edge module; CONSUMED, never created/validated). MUST be in us-east-1. Supplied at plan time via a git-ignored *.tfvars; no real ARN is committed. Statically validated only — never queried against AWS."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws[a-zA-Z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$", var.acm_certificate_arn))
+    error_message = "acm_certificate_arn must be an ACM certificate ARN in us-east-1 (arn:aws:acm:us-east-1:<account>:certificate/<id>)."
+  }
+}
+
+variable "price_class" {
+  description = "CloudFront distribution price class (passed to the edge module). PriceClass_100 (cheapest, NA+EU) is the cost-minimized staging default."
+  type        = string
+  default     = "PriceClass_100"
+
+  validation {
+    condition     = contains(["PriceClass_100", "PriceClass_200", "PriceClass_All"], var.price_class)
+    error_message = "price_class must be one of PriceClass_100, PriceClass_200, PriceClass_All."
+  }
+}
