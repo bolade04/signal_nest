@@ -213,8 +213,13 @@ Per runtime-contract §§A/B and `deployment-sha-wiring-plan.md` (G4):
   **`3aadb8a1da0f26ffd183a4b05161747038d5957c`**. The Git SHA flows: build → `build_revision`
   (full 40-char lowercase hex) → OCI `org.opencontainers.image.revision` label → image digest →
   task-definition revision.
-- **One digest, three actors.** API, worker, and migration tasks pin the **same** image digest
-  for a given release, so provenance is identical across the plane.
+- **Two images, three actors (corrected — see §26.5).** The Dockerfile and CI build **two**
+  distinct images (`api` and `worker` targets); the API task pins the **API** image by digest,
+  and the worker task **and** the one-shot migration task both pin the **worker** image by digest
+  (migration overrides the command to `python -m app.db.migrate upgrade`). Both images derive from
+  one shared `runtime` base so provenance is aligned, but they are two separate digest-pinned
+  artifacts — not one image. The ECS task-definition interface therefore consumes an API image
+  reference and a worker image reference, both immutable digests, never a `latest` tag.
 - **G4 is fail-closed** and remains **unimplemented** here; this design only records where the
   SHA/digest bindings live in the task definitions so the later wiring and preflight can enforce
   them.
@@ -234,14 +239,18 @@ value appears in this document or in any IaC source.** Dispositions drive the de
   uses CloudWatch, native S3 endpoint).
 - **Local-only (3 fields — `local_storage_dir`, `llm_mock_seed`, `llm_allow_dev_fallback`):**
   unset or safe non-mock default; the mock provider and dev fallback are forbidden in staging.
-- **Non-secret (76 fields):** provided as **plaintext task environment** in the task
-  definition (e.g., `ENVIRONMENT=staging`, `APP_MODE=full`, pool/timeout tuning, feature flags
-  **all `false`**). Field names equal the UPPERCASED model field name (no env prefix).
+- **Non-secret fields:** dispositioned as plaintext task environment **only where a value must
+  differ from a safe application default** (corrected — the earlier "inject all 76 fields"
+  framing is withdrawn; see §26.11). The minimum explicit set is `ENVIRONMENT=staging`,
+  `APP_MODE=full`, `LLM_PROVIDER`, `STORAGE_BACKEND=s3`, `S3_BUCKET`, `S3_REGION`, the per-workload
+  `QUEUE_BACKEND`/`CACHE_BACKEND`/`VECTOR_BACKEND`, and the three feature flags **all `false`**;
+  safe tuning defaults are not duplicated. Field names equal the UPPERCASED model field name.
 - **Validator coupling (documented, no code change):** `is_production_like` requires a strong
   `secret_key`, a non-mock `llm_provider` + `llm_api_key`, and `s3_bucket` when
   `storage_backend=s3`. The **migration** task constructs `Settings` at startup and therefore
-  must receive these secret references even though it does not functionally use them — the task
-  definition design accounts for this over-provisioning.
+  receives `SECRET_KEY`, `DATABASE_URL`, and `LLM_API_KEY` — **not** `REDIS_URL` (corrected to
+  three, not four; migration is pinned with non-Redis backends so `Settings()` does not require
+  `redis_url` — see §26.7). API and worker receive all four.
 - **Browser boundary:** the SPA build receives **only** `VITE_API_BASE_URL` and **no** backend
   secret. KMS encrypts Secrets Manager material; keys are referenced by name/alias only.
 - **G5 alignment:** the design's injection map is exactly what a future fail-closed **G5** would
@@ -352,9 +361,13 @@ merging this plan**:
 
 1. Pin exact OpenTofu and provider versions (tool already DECIDED as OpenTofu, §16).
 2. Bootstrap the encrypted remote-state backend + lock table (one-time, authorized).
-3. Author `network/` → `edge/` → `alb/` → `iam/` → `secrets/` (names only) → `data_sql/` →
-   `data_cache/` → `storage/` → `registry/` → `ecs/` → `observability/` → `cost/` modules, each
-   as an independently reviewed PR where practical.
+3. Author the modules in **producer-before-consumer** order (corrected in §26.8; `iam` moves
+   **after** the resource modules whose ARNs it consumes): `network/` → `edge/` → `alb/` →
+   `secrets/` (empty containers, names only) → `registry/` → `storage/` → `data_sql/` →
+   `data_cache/` → `iam/` (consumes the secret/repository/bucket/data ARNs) → `ecs/` →
+   `observability/` (consumes ECS log-group outputs) → `cost/`, each as an independently reviewed
+   PR where practical. Secret **values** are populated out-of-band between the data modules and
+   ECS service start (§26.6), never by OpenTofu.
 4. Wire digest-pinned images and the exact first-deploy SHA into the task definitions (§10),
    aligned with G4.
 5. Wire the secret-injection map (§11) aligned with the inventory and G5.
@@ -596,6 +609,208 @@ The decisions in §24 were verified read-only against committed application beha
 - **Interactive docs exposure.** `/api/v1/docs` and `/api/v1/openapi.json` are mounted
   unconditionally (`apps/api/app/main.py`); with a single all-paths target group and WAF deferred,
   they become internet-reachable — to be addressed with the deferred WAF / path-restriction work.
+
+## 26. ECS dependency and ownership decisions (resolved 2026-07-22, human-approved)
+
+Locks the future `iam`/`secrets`/`registry`/`storage`/`data_sql`/`data_cache`/`ecs`/`observability`
+module contract so it is **acyclic and implementation-ready**. **Documentation only — no HCL is
+authorized.** All modules named here remain documentation-only stubs; nothing is provisioned. This
+section supersedes contradictory earlier wording (the §10 "one digest", the §17 ordering, and the
+data/log-group/`tags` language in the affected module READMEs). Notation throughout is
+**`producer -> consumer`** (the arrow points to the module that consumes the named output).
+
+### 26.1 Dependency notation and the network/edge relationship
+Every edge is stated as `producer -> consumer : <exact output consumed>`. The root wiring
+(`infra/aws/main.tf:37-74`) shows `edge` consumes **only root variables** (`web_fqdn`,
+`hosted_zone_id`, `acm_certificate_arn`, `price_class`, `name_prefix`) and references **no**
+`module.network` output — so there is **no `network -> edge` edge**; `network` and `edge` are
+independent foundational modules. `alb` consumes `network` (`vpc_id`, `public_subnet_ids`) and a
+root `api_certificate_arn`. The prior audit's `iam -> storage` phrasing was ambiguous and is
+corrected to **`storage -> iam`**: `storage` creates and outputs `bucket_arn`; `iam` consumes it to
+build identity policies. `storage` never consumes an IAM-role output.
+
+### 26.2 Per-workload security-group ownership (three task SGs — NOT one shared)
+`ecs` creates and owns **three** task security groups — **API**, **worker**, and **migration** —
+not one shared application SG. Rationale: only the API receives ALB traffic; the three workloads
+have different egress needs; SGs have no recurring cost; separate SGs avoid granting every workload
+the union of permissions; IAM cannot scope PostgreSQL/Redis/public-HTTPS reachability. Ownership:
+- `alb` owns the ALB SG, public IPv4 TCP 443 ingress to the ALB, and consumes **no** ECS SG id.
+- `ecs` owns the API/worker/migration task SGs **and every standalone cross-SG rule that involves a
+  task SG** (both directions), authored with the AWS provider 6.55.0 families
+  `aws_vpc_security_group_ingress_rule` / `aws_vpc_security_group_egress_rule` — never inline blocks
+  mixed with standalone rules on the same SG.
+- `data_sql` owns the PostgreSQL/RDS SG and **outputs** its id; `data_cache` owns the Redis SG and
+  **outputs** its id. Neither data module consumes an ECS output. `ecs` **consumes** both data SG
+  ids to author the task↔data rules → one-way `data_sql -> ecs`, `data_cache -> ecs` (acyclic).
+- No central security-group module is introduced. No VPC-CIDR-based PostgreSQL/Redis ingress. No
+  public port 8000. Tasks run in `network` private subnets with `assign_public_ip` disabled. ALB
+  target type remains `ip`.
+
+### 26.3 Exact private cross-SG traffic matrix (all task-side rules owned by `ecs`)
+- **ALB↔API:** ALB SG egress → API task SG **TCP 8000**; API task SG ingress ← ALB SG **TCP 8000**.
+  No ALB rule targets the worker or migration SG. No unrestricted ALB SG egress.
+- **PostgreSQL (5432):** egress **TCP 5432** to the PostgreSQL SG from the API, worker, **and**
+  migration task SGs; PostgreSQL SG ingress **TCP 5432** as **three separate** standalone rules
+  (from API, from worker, from migration). Owned by `ecs`; destination SG created by `data_sql`.
+- **Redis (6379):** egress **TCP 6379** to the Redis SG from the API and worker task SGs; Redis SG
+  ingress **TCP 6379** as **two separate** rules (from API, from worker). Owned by `ecs`;
+  destination SG created by `data_cache`. **Migration is explicitly prohibited from Redis access** —
+  executable Settings validation (`apps/api/app/core/config.py:306-312`) requires `redis_url` only
+  when `app_mode=full` and `queue_backend=redis`/`cache_backend=redis`; the migration task is pinned
+  with `queue_backend=inprocess` / `cache_backend=memory` (permitted in staging, which is
+  `is_production_like` but not `is_production`, so the production-only backend forbiddance at
+  `config.py:319-346` does not apply), so migration constructs `Settings()` without Redis. No
+  migration→Redis rule is created.
+
+### 26.4 Outbound HTTPS and DNS baseline (NAT, not SG-referenced; no DNS SG rule)
+SG-**referenced** destinations apply only to private ENIs (ALB, PostgreSQL, Redis). Public services
+reached over the existing single-NAT path have **no repository-owned destination SG**, so, until a
+separately authorized VPC-endpoint / egress-proxy / AWS Network Firewall layer exists, the staging
+baseline for each task SG that needs it is **TCP 443 IPv4 egress via NAT** for: ECR image
+retrieval, Secrets Manager injection, CloudWatch Logs delivery, application S3 access, approved LLM
+providers, and any other enabled external-HTTPS integration. **No** all-protocol `0.0.0.0/0` egress,
+no unrestricted port range, no IPv6 egress (unless IPv6 is separately designed). Fargate platform
+operations (ECR pull, ECS secret injection, `awslogs` delivery) traverse the **task ENI/NAT** path
+and therefore require working private-subnet + NAT connectivity. Security groups **cannot** filter
+by DNS name and **cannot** block the Route 53 Resolver, so **no AmazonProvidedDNS (UDP/TCP 53) SG
+rule is added**; domain-aware DNS filtering (Route 53 Resolver DNS Firewall) and VPC endpoints
+remain separately authorized improvements. Dark connectors remain gated by Boolean feature flags and
+application authorization, not by SG destination filtering.
+
+### 26.5 Two-image artifact contract
+Two immutable, digest-pinned images (`api`, `worker`; `apps/api/Dockerfile:94-118`,
+`.github/workflows/ci.yml:240-260`). API task = API image digest; worker task = worker image
+digest; **migration task = worker image digest** with command override `python -m app.db.migrate
+upgrade` (`.github/workflows/ci.yml:276-279`). No `latest` accepted by the ECS interface. Registry
+documentation must not claim one image serves all three actors. First-deploy SHA
+`3aadb8a1da0f26ffd183a4b05161747038d5957c` (G4). No image is built or pushed in this tranche;
+build/push is INFRA-5.
+
+### 26.6 Secret container vs. value lifecycle
+- `secrets` creates the four secret **containers** (Secrets Manager + KMS) and outputs `secret_arns`
+  only; it does **not** create `aws_secretsmanager_secret_version` resources holding application
+  values. Secret **values** never enter Git, `.tfvars`, HCL, OpenTofu variables/locals/outputs/plan/
+  state.
+- `DATABASE_URL` and `REDIS_URL` embed endpoints produced by `data_sql`/`data_cache`; their values
+  can be composed only **after** those endpoints exist and are populated **out-of-band** by a
+  separately authorized operational procedure (INFRA-6). ECS consumes secret **ARNs** only.
+- Future live rollout is staged and **not authorized now**: (1) prerequisite infrastructure →
+  (2) secret-value population → (3) fail-closed G5 secret-readiness check → (4) ECS service
+  creation/start → (5) separately authorized migration execution. A live apply must not assume an
+  empty container is sufficient for service start. The permanent secret-operator principal remains
+  an **undecided live-operation gate** (INFRA-6) and does not block offline HCL.
+
+### 26.7 Per-workload secret injection (smallest sufficient subset, from executable validation)
+Derived from `apps/api/app/core/config.py` `_validate_runtime` (`:302-389`). All are ECS `secrets`
+`valueFrom` ARN references, never plaintext.
+- **API:** `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`.
+- **Worker:** `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`.
+- **Migration:** `SECRET_KEY`, `DATABASE_URL`, `LLM_API_KEY` — **REDIS_URL excluded** (§26.3
+  rationale). Granting migration `REDIS_URL` would be a G5 `ACTOR_SUBSET_EXCEEDED` over-provision.
+  This resolves the prior "three vs four migration secrets" contradiction in favor of **three**, by
+  executable behavior. `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` remain **unset** for all workloads
+  (task-role credential chain). No secret is granted merely because another workload has it.
+
+### 26.8 IAM roles and cycle breaks
+One shared **execution role** + three distinct **application task roles** (API/worker/migration);
+`ecs` consumes all four ARNs (`iam` outputs `execution_role_arn`, `api_task_role_arn`,
+`worker_task_role_arn`, `migration_task_role_arn`). IAM roles are created outside ECS.
+- **Execution role:** ECR retrieval, CloudWatch Logs stream creation + delivery, retrieval of only
+  the secret ARNs referenced in task definitions, and `kms:Decrypt` only if a separately approved
+  customer-managed KMS key requires it. Application containers do not receive execution-role creds.
+- **Application task roles:** only the AWS API calls the code actually makes. S3 access only for
+  workloads proven to use S3. **No** RDS/Redis IAM permission (socket access is a network/credential
+  matter unless IAM DB auth is separately implemented). **No** ECR / Logs-driver / secret-injection
+  permissions on application roles. Migration task role is empty/minimal unless migration code calls
+  an AWS API.
+- **Dependency direction:** `secrets -> iam`, `registry -> iam`, `storage -> iam`; `iam -> ecs`.
+  `data_sql`/`data_cache` -> `iam` **only if** executable code and the approved runtime require
+  data-resource IAM permissions; stale ARN inputs without a demonstrated consumer are dropped.
+- **CloudWatch scoping breaks `iam -> ecs -> iam`:** IAM scopes the execution-role Logs policy to a
+  **deterministic name prefix** (`arn:aws:logs:us-east-1:<account>:log-group:/ecs/${name_prefix}-*:*`)
+  built from `name_prefix`, **never** by consuming ECS/observability `log_group_arns`. The
+  `log_group_arns` input is removed from the `iam` contract. Resource wildcards are prefix-scoped
+  wherever AWS supports resource-level scoping; the narrow AWS-required exception is ECR
+  authorization (`ecr:GetAuthorizationToken`) which AWS only supports at `Resource: "*"` — documented
+  as the smallest required exception, not a blanket wildcard.
+
+### 26.9 Log-group ownership (ECS owns; observability consumes)
+`ecs` creates and owns **three** deterministic CloudWatch Logs groups (`/ecs/<name_prefix>-api`,
+`/ecs/<name_prefix>-worker`, `/ecs/<name_prefix>-migration`) — one per workload — and outputs their
+names/ARNs. Staging retention **30 days**; default CloudWatch encryption at rest is acceptable for
+this tranche (a customer-managed KMS design remains separately authorized). `awslogs-create-group`
+is disabled/omitted; OpenTofu-created groups must exist before task start. Each task definition uses
+its group, region, and stream prefix; the execution role holds the delivery permissions.
+`observability` **consumes** the ECS log-group outputs for metric filters/alarms and does **not**
+create the ECS workload log groups. This preserves `iam -> ecs -> observability` and forbids
+`iam -> observability -> ecs -> iam` and `ecs -> observability -> ecs`. Logging remains required
+before any live staging plan/apply.
+
+### 26.10 Runtime and deployment baseline
+ECS/Fargate, Linux, **X86_64** (matches the current CI `linux/amd64` build — `ci.yml` sets no
+`platforms:`), Fargate platform version **1.4.0**, private subnets, public IP disabled. Three task
+definitions (API/worker/migration); two long-running services (API, worker); migration is a
+**one-shot** task, never a service. API container port **8000/TCP**, health path **`/health`**
+(bare, `apps/api/app/main.py:103-105`), ALB target type **`ip`**. API desired count **1**, worker
+desired count **1** (staging). Baseline task size **256 CPU / 512 MiB** per workload. API and worker
+deployment **minimum-healthy 100% / maximum 200%**, deployment **circuit breaker enabled with
+rollback**. API **health-check grace period 60s**. **ECS Exec disabled** by default. Autoscaling
+**deferred**. Immutable digest-pinned images required. Read-only root filesystem + writable `/tmp`
+preserved from the container contract (`apps/api/Dockerfile`). Graceful shutdown reflects the actual
+application behavior: exec-form PID 1 receives SIGTERM directly; the worker drains within
+`worker_shutdown_grace_seconds` (default 10s, `config.py:175`); ECS `stopTimeout` must be ≥ that
+worker grace, and the API service `stopTimeout` should accommodate the ALB 60s deregistration delay.
+
+### 26.11 Ordinary environment configuration
+ECS injects **only** the values that must differ from safe application defaults, avoid forbidden
+dev/mock/local behavior, set explicit staging feature flags, select workload backends, or supply
+resource identifiers. The prior "inject all 76 non-secret fields" statement is withdrawn — safe
+tuning defaults are not duplicated. The minimum explicit set (executable names): `ENVIRONMENT=staging`,
+`APP_MODE=full`, `LLM_PROVIDER` (openai/anthropic — mock forbidden), `STORAGE_BACKEND=s3`,
+`S3_BUCKET`, `S3_REGION`, `QUEUE_BACKEND`/`CACHE_BACKEND`/`VECTOR_BACKEND` (per workload; migration
+uses non-Redis backends per §26.3), and the three global capability flags explicitly **`false`**
+(`OPPORTUNITY_FEEDBACK_ENABLED`, `SCOUT_SCHEDULING_ENABLED`, `CONNECTOR_RSS_ENABLED`). AWS access-key
+env vars remain unset (task-role credential chain). If the ECS interface uses per-workload
+`map(string)` env inputs, it must enforce a **denylist precondition** rejecting at least:
+`SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
+
+### 26.12 Complete acyclic module graph
+`producer -> consumer : output`. Independent roots have no in-graph producer.
+- `network -> alb : vpc_id, public_subnet_ids`
+- `network -> data_sql : private_subnet_ids` ; `network -> data_cache : private_subnet_ids`
+- `network -> ecs : vpc_id, private_subnet_ids`
+- `edge` : independent (root vars only)
+- `secrets -> iam : secret_arns` ; `secrets -> ecs : secret_arns`
+- `registry -> iam : repository_arns` ; `registry -> ecs : repository_urls (2 image refs)`
+- `storage -> iam : bucket_arn`
+- `data_sql -> ecs : rds_security_group_id (+ db_endpoint via out-of-band secret value, not HCL)`
+- `data_cache -> ecs : redis_security_group_id (+ redis_endpoint via out-of-band secret value)`
+- `iam -> ecs : execution_role_arn, api/worker/migration_task_role_arn`
+- `alb -> ecs : alb_security_group_id, api_target_group_arn`
+- `ecs -> observability : log_group_names/arns, service names`
+- `cost` : independent (budgets)
+
+No module consumes its own downstream output; no `storage↔iam`, `iam↔logging↔ecs`, `data↔ecs`,
+`secrets↔data↔secrets`, or `observability↔ecs` cycle exists. Distinct phases: (1) implementation/
+authoring order (§26.8 / §17); (2) offline root-composition readiness (each module offline-validates
+in isolation with placeholder vars today; root composition of `ecs` becomes possible only after its
+eight upstreams are authored); (3) future live prerequisite deployment; (4) out-of-band secret-value
+population; (5) future ECS deployment; (6) separately authorized migration execution. **These are not
+one live apply.**
+
+### 26.13 Preserved ALB decisions (unchanged)
+§24 stands: `alb` owns its SG and public IPv4 TCP 443 ingress, no public port 8000, target type
+`ip`, consumes no ECS output, no unrestricted egress; `ecs` owns the API task SG and both ALB↔API
+TCP 8000 cross-SG rules; one-way `alb -> ecs`.
+
+### 26.14 Explicitly deferred / separately authorized
+All prerequisite-module HCL, ECS HCL, root-composition changes, the `terraform.tfvars.example`
+`api_certificate_arn` placeholder (a pre-live, non-blocking follow-up — not changed here), VPC
+endpoints, domain-aware egress filtering, customer-managed KMS keys (unless already mandatory), live
+AWS plan/apply, secret-value population, container build/push, ECS migration execution, observability
+implementation, autoscaling, ECS Exec, production deployment, and feature activation all remain
+separately authorized. **INFRA-4 remains incomplete; INFRA-5 remains unstarted.**
 
 ## 22. Exact future gates
 

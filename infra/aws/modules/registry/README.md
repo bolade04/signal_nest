@@ -14,8 +14,8 @@ Image build/push (INFRA-5 CI/OIDC), ECS services (`ecs`), IAM role definitions
 None (referenced by `ecs` and by the future INFRA-5 build workflow).
 
 ## 5. Planned inputs (names only, no values)
-`repository_names`, `image_tag_mutability`, `lifecycle_policy`, `name_prefix`,
-`tags`.
+`repository_names` (two: `api`, `worker`), `image_tag_mutability`, `lifecycle_policy`,
+`name_prefix`. No `tags` input (provider `default_tags`).
 
 ## 6. Planned non-sensitive outputs (names only)
 `repository_urls`, `repository_arns` (references for IAM/ECS wiring).
@@ -25,7 +25,10 @@ Immutable tags (no overwrite); images pulled by digest (`@sha256:`). No account
 id, ARN, or digest committed. Pull access via least-privilege execution role.
 
 ## 8. Staging-only assumptions
-Staging repositories only; one image serves api/worker/migration actors.
+Staging repositories only. **Two** images/repositories — `api` and `worker` — each
+digest-pinned; the API task uses the API image and the worker **and** migration tasks both
+use the worker image (migration overrides the command). One image does **not** serve all three
+actors (corrected; see `docs/operations/aws-staging-iac-plan.md` §26.5).
 
 ## 9. Status
 No executable HCL yet. No resources created. Implementation and validation are

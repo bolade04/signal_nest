@@ -4,22 +4,30 @@
 Staging observability: log collection, metrics/alarms, and control-plane audit.
 
 ## 2. Planned AWS scope
-CloudWatch log groups (one per service), CloudWatch metric alarms (service
-health, error rate, DB/Redis saturation, budget thresholds), CloudTrail trail.
+CloudWatch **metric filters and alarms** (service health, error rate, DB/Redis
+saturation, budget thresholds) over the ECS-owned log groups, and a CloudTrail trail.
+**The three ECS workload log groups are created and owned by `ecs`** (`/ecs/<name_prefix>-
+{api,worker,migration}`, retention 30 days — see `docs/operations/aws-staging-iac-plan.md`
+§26.9), **not** here; this module consumes their names/ARNs.
 
 ## 3. Out of scope
-Cost budgets themselves (`cost`), application-level tracing (no OTLP in staging),
-secret material (`secrets`).
+The ECS workload log groups themselves (owned by `ecs`), cost budgets themselves
+(`cost`), application-level tracing (no OTLP in staging), secret material (`secrets`).
 
 ## 4. Planned upstream dependencies
-`ecs` (service/log-group naming), `cost` (budget alarm coordination).
+Producer → `observability`: `ecs` (log-group names/ARNs + service names), `cost`
+(budget-alarm coordination). This module consumes ECS log-group outputs and never creates
+the ECS workload log groups, preserving `ecs -> observability` (no
+`observability -> ecs -> observability` cycle).
 
 ## 5. Planned inputs (names only, no values)
-`log_group_names`, `retention_days`, `alarm_thresholds`, `sns_topic_arn`,
-`name_prefix`, `tags`.
+`log_group_arns` (from `ecs`), `service_names` (from `ecs`), `alarm_thresholds`,
+`sns_topic_arn`, `name_prefix`. No `tags` input (provider `default_tags`); log-group
+retention/encryption are owned by `ecs`.
 
 ## 6. Planned non-sensitive outputs (names only)
-`log_group_arns`, `alarm_arns`, `trail_arn` (references).
+`alarm_arns`, `trail_arn` (references). Log-group ARNs are outputs of `ecs`, not of this
+module.
 
 ## 7. Security boundaries
 Secret values are never logged, printed, or attached as evidence (G5). Structured

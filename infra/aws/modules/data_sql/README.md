@@ -13,17 +13,22 @@ Application migration execution (owned by the `ecs` migration run-task), Redis
 (`data_cache`), secret storage (`secrets`).
 
 ## 4. Planned upstream dependencies
-`network` (private subnets, data security group), `secrets`/`iam` (for credential
-references at apply time).
+`network` (private subnets only). This module **creates and owns the PostgreSQL/RDS
+security group** and **outputs its id**; it does **not** consume a data-SG input and
+consumes **no** `ecs` output (one-way `data_sql -> ecs`). The task↔PostgreSQL **5432**
+cross-SG rules are owned by `ecs` (`docs/operations/aws-staging-iac-plan.md` §26.2-26.3).
+`DATABASE_URL` is composed out-of-band and injected via Secrets Manager at runtime, never
+committed and never read into OpenTofu state.
 
 ## 5. Planned inputs (names only, no values)
-`db_subnet_group_name`, `private_subnet_ids`, `data_security_group_id`,
-`instance_class`, `allocated_storage_gb`, `engine_version`, `kms_key_id`,
-`name_prefix`, `tags`.
+`db_subnet_group_name`, `private_subnet_ids`, `instance_class`, `allocated_storage_gb`,
+`engine_version`, `kms_key_id`, `name_prefix`. No `data_security_group_id` input (this
+module creates that SG) and no `tags` input (provider `default_tags`).
 
 ## 6. Planned non-sensitive outputs (names only)
-`db_instance_identifier`, `db_endpoint` (reference, consumed via secret at
-runtime), `db_subnet_group_id`.
+`db_instance_identifier`, `db_endpoint` (reference composed into `DATABASE_URL`
+out-of-band, never read into state), `db_subnet_group_id`, `rds_security_group_id`
+(consumed by `ecs` for the task↔DB rules).
 
 ## 7. Security boundaries
 Not publicly accessible; private subnets only. Encrypted at rest (KMS) and in
