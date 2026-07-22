@@ -190,3 +190,19 @@ variable "price_class" {
     error_message = "price_class must be one of PriceClass_100, PriceClass_200, PriceClass_All."
   }
 }
+
+# --- ALB module inputs (INFRA-4 alb tranche) ---
+# The regional ACM certificate ARN for the ALB HTTPS listener is REQUIRED and has no
+# committed default, so no real ARN is embedded in the repo. The certificate is
+# CONSUMED by value (§24.4), never created/queried. It must be in us-east-1 to match
+# the ALB's provider region (ADR-0001). Validation is STATIC (regex) — never queries AWS.
+
+variable "api_certificate_arn" {
+  description = "Existing REGIONAL ACM certificate ARN for the ALB HTTPS listener (passed to the alb module; CONSUMED, never created/validated). MUST be in us-east-1 to match the ALB provider region (ADR-0001). Supplied at plan time via a git-ignored *.tfvars; no real ARN is committed. Statically validated only — never queried against AWS."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws[a-zA-Z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$", var.api_certificate_arn))
+    error_message = "api_certificate_arn must be an ACM certificate ARN in us-east-1 (arn:aws:acm:us-east-1:<account>:certificate/<id>)."
+  }
+}

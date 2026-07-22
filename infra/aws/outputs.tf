@@ -65,3 +65,38 @@ output "web_url" {
   description = "Public HTTPS URL of the SPA derived from the supplied web FQDN (from the edge module)."
   value       = module.edge.web_url
 }
+
+# --- ALB module outputs (INFRA-4 alb tranche) ---
+# Non-sensitive identifiers/ARNs only. The consumed certificate ARN is an input and
+# is NOT re-exported. `ecs` will consume alb_security_group_id + api_target_group_arn;
+# a later authorized DNS pass consumes alb_dns_name + alb_canonical_hosted_zone_id.
+
+output "alb_arn" {
+  description = "ARN of the Application Load Balancer (from the alb module)."
+  value       = module.alb.alb_arn
+}
+
+output "alb_dns_name" {
+  description = "Public DNS name of the ALB (from the alb module; alias target for the future API Route 53 record)."
+  value       = module.alb.alb_dns_name
+}
+
+output "alb_canonical_hosted_zone_id" {
+  description = "Canonical hosted-zone id of the ALB (from the alb module; used by the future API alias record)."
+  value       = module.alb.alb_canonical_hosted_zone_id
+}
+
+output "https_listener_arn" {
+  description = "ARN of the ALB HTTPS:443 listener (from the alb module)."
+  value       = module.alb.https_listener_arn
+}
+
+output "api_target_group_arn" {
+  description = "ARN of the API target group (from the alb module; consumed by the future ecs module)."
+  value       = module.alb.api_target_group_arn
+}
+
+output "alb_security_group_id" {
+  description = "ID of the ALB-owned security group (from the alb module; consumed by the future ecs module, which owns both ALB<->API cross-SG rules)."
+  value       = module.alb.alb_security_group_id
+}
