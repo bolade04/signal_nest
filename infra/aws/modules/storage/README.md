@@ -12,10 +12,15 @@ The SPA web-origin bucket (owned by `edge`), remote-state bucket (bootstrap,
 later), secret storage (`secrets`).
 
 ## 4. Planned upstream dependencies
-`iam` (task-role access policy).
+None. `storage` creates and outputs `bucket_arn`; `iam` consumes it to scope the task-role
+S3 identity policy (producer → consumer: **`storage -> iam`**). `storage` does **not** consume
+any `iam` output — access is granted by the IAM identity policy, not by a bucket policy that
+references a role — so there is **no** `storage ↔ iam` cycle
+(`docs/operations/aws-staging-iac-plan.md` §26.1/§26.8).
 
 ## 5. Planned inputs (names only, no values)
-`bucket_name`, `kms_key_id`, `lifecycle_rules`, `name_prefix`, `tags`.
+`bucket_name`, `kms_key_id`, `lifecycle_rules`, `name_prefix`. No `tags` input (provider
+`default_tags`).
 
 ## 6. Planned non-sensitive outputs (names only)
 `bucket_id`, `bucket_arn` (reference for IAM policy wiring).
