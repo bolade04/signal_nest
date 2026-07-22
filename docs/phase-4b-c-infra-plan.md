@@ -209,6 +209,32 @@
   (`edge`, `alb`, `ecs`, `data_sql`, `data_cache`, `storage`, `registry`, `iam`, `secrets`,
   `observability`, `cost`) remain documentation-only stubs; remote-state remains
   unconfigured; INFRA-4 is **not** complete; and INFRA-5 remains unstarted.
+- **Delivered (INFRA-4 edge module resource-definition tranche — web/SPA only):** four
+  human-approved edge architecture decisions were recorded (2026-07-22) to resolve the prior
+  create-versus-consume ambiguity for static authoring — (1) ACM certificates are **consumed**
+  by ARN, never created/validated by `edge`; (2) the Route 53 hosted zone is **consumed** by
+  ID, never created; (3) this tranche is **web/SPA only** (private SPA-origin S3 bucket, S3
+  public-access block + SSE + lifecycle, CloudFront Origin Access Control, a bucket policy
+  scoped to only the CloudFront distribution, the CloudFront distribution, and web `A`/`AAAA`
+  Route 53 aliases) while the ALB certificate/attachment and the API hostname/DNS record remain
+  **deferred** to a later ALB integration pass once the ALB exposes its DNS name and canonical
+  hosted-zone id; and (4) the module takes one caller-supplied web FQDN and a fixed CloudFront
+  SPA policy (private S3 REST origin via OAC/SigV4, `index.html` default root object,
+  `redirect-to-https`, `sni-only` + `TLSv1.2_2021`, compression on, `GET`/`HEAD`/`OPTIONS`
+  allowed and `GET`/`HEAD` cached, no cookie/query-string/header forwarding, TTLs 0/3600/86400,
+  403+404 → `/index.html` 200 SPA fallback, IPv6 on, no geo restriction, typed `price_class`
+  defaulting to `PriceClass_100`). No real domain, hosted-zone id, certificate ARN, or account
+  id is committed; those remain future authorized apply-time values. The `edge` module is wired
+  into the composition-root `main.tf` alongside `network`. Validation used **OpenTofu 1.12.3**
+  from a temporary, checksum-verified binary in an isolated `/tmp` environment with the backend
+  disabled, the lockfile read-only (unchanged), and all AWS credentials suppressed; `fmt -check`
+  and `validate` passed. **No `tofu plan`/`apply`, no AWS API call, no backend/state, no
+  provisioning, no deployment, no asset upload, no CloudFront invalidation, and no feature
+  activation occurred.** WAF, Lambda@Edge/CloudFront Functions, access-log delivery, and the ALB
+  are explicitly out of scope. The other **ten** modules (`alb`, `ecs`, `data_sql`, `data_cache`,
+  `storage`, `registry`, `iam`, `secrets`, `observability`, `cost`) remain documentation-only
+  stubs; remote-state remains unconfigured; INFRA-4 is **not** complete; and INFRA-5 remains
+  unstarted.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names

@@ -25,3 +25,14 @@ phase        = "4B-C"
 # availability_zones = ["<AZ_ONE>", "<AZ_TWO>"] # explicit AZ names (>= 2 recommended)
 # subnet_newbits     = 4
 # enable_nat_gateway = true
+
+# --- Edge module inputs (INFRA-4 edge tranche; web/SPA only) ---
+# The ACM certificate and Route 53 hosted zone are CONSUMED by value (never created
+# by the module). NO real domain, hosted-zone id, or certificate ARN is committed to
+# this repository. Supply real values at plan time via a git-ignored *.tfvars file.
+# The lines below are COMMENTED and use placeholder tokens, not real values:
+#
+# web_fqdn            = "<WEB_FQDN>"                  # e.g. app.staging.example.com (bare hostname)
+# hosted_zone_id      = "<ROUTE53_HOSTED_ZONE_ID>"   # existing zone that owns web_fqdn (starts with Z)
+# acm_certificate_arn = "<ACM_CERT_ARN_US_EAST_1>"   # existing us-east-1 ACM cert ARN
+# price_class         = "PriceClass_100"
