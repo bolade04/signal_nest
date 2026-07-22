@@ -1,14 +1,17 @@
-# SIGNALNEST_STAGING — OpenTofu IaC skeleton (INFRA-4, repository-only)
+# SIGNALNEST_STAGING — OpenTofu IaC (INFRA-4, repository-only, partially implemented)
 
 ## 1. Purpose and scope
 
-This directory is the **repository-only, placeholder-safe** Infrastructure-as-Code
-skeleton for the internal, non-customer **SIGNALNEST_STAGING** (dark canary)
-environment. It is **staging-only**. It contains **no** executable resource
-bodies, was **not** produced by any tool run, and provisions **nothing**.
+This directory is the **repository-only** Infrastructure-as-Code for the internal,
+non-customer **SIGNALNEST_STAGING** (dark canary) environment. It is **staging-only**.
+Three modules — **`network`**, **`edge`**, and **`alb`** — now contain executable HCL
+resource bodies (composed at the root and **offline-validated only**); the remaining
+nine modules are documentation-only stubs. **No live `tofu plan`/`apply` has run, no
+AWS API has been contacted, and nothing has been provisioned or deployed** — the
+committed HCL describes intended resources, it does not mean any resource exists in AWS.
 
 Authoritative design: [`docs/operations/aws-staging-iac-plan.md`](../../docs/operations/aws-staging-iac-plan.md)
-(the plan-only INFRA-4 design), under
+(the INFRA-4 design), under
 [`docs/phase-4b-c-infra-plan.md`](../../docs/phase-4b-c-infra-plan.md) (roadmap),
 [`docs/architecture/adr-0001-aws-ecs-fargate-staging.md`](../../docs/architecture/adr-0001-aws-ecs-fargate-staging.md)
 (decision record) and
@@ -36,26 +39,58 @@ infra/aws/
   backend.tf                # empty S3 backend declaration (no values)
   variables.tf              # typed root inputs (no secrets/ids)
   locals.tf                 # name prefix + the authoritative eight-tag set
-  main.tf                   # composition-root placeholder (no module/resource/data)
-  outputs.tf                # non-sensitive metadata outputs
+  main.tf                   # composition root: composes network, edge, alb (no root resource/data)
+  outputs.tf                # non-sensitive metadata + network/edge/alb module outputs
   terraform.tfvars.example  # synthetic example inputs
-  modules/                  # 12 documentation-only stubs (README.md each)
+  modules/                  # 12 modules: network, edge, alb implemented; 9 doc-only stubs
 ```
 
-## 4. Accepted compatibility constraints
+## 4. Compatibility constraints and dependency lock
 
-Bounded ranges only — **not** exact pins. Exact selection + `.terraform.lock.hcl`
-generation are deferred (§10, §12).
+The `versions.tf` constraints are bounded ranges; the committed
+`.terraform.lock.hcl` records the exact selected provider version and checksums
+(generated in the earlier tool-assisted tranche — no longer deferred).
 
-- OpenTofu: `>= 1.12.3, < 1.13.0`
+- OpenTofu: `>= 1.12.3, < 1.13.0` (validated with 1.12.5)
 - AWS provider source: `hashicorp/aws`
-- AWS provider: `>= 6.55.0, < 6.56.0`
+- AWS provider constraint: `>= 6.55.0, < 6.56.0`; **locked to `6.55.0`** in
+  `.terraform.lock.hcl`.
 
 ## 5. Module inventory (exactly 12)
 
 The twelve reusable modules are fixed by the authoritative design
-(`aws-staging-iac-plan.md` §6). In this tranche each is a **documentation-only
-stub** (`modules/<name>/README.md`) with no HCL.
+(`aws-staging-iac-plan.md` §6). Three are implemented (HCL authored and
+offline-validated only — **not** provisioned); the other nine remain
+documentation-only stubs (`modules/<name>/README.md`, no HCL).
+
+| Module | Status |
+| --- | --- |
+| `network` | **Implemented** (offline-validated) — VPC, subnets, route tables, single NAT |
+| `edge` | **Implemented** (offline-validated) — CloudFront + private S3 SPA origin + web DNS aliases |
+| `alb` | **Implemented** (offline-validated) — ALB SG + public HTTPS 443 ingress, internet-facing IPv4 ALB, API IP target group, HTTPS listener |
+| `ecs` | Documentation-only stub |
+| `data_sql` | Documentation-only stub |
+| `data_cache` | Documentation-only stub |
+| `storage` | Documentation-only stub |
+| `registry` | Documentation-only stub |
+| `iam` | Documentation-only stub |
+| `secrets` | Documentation-only stub |
+| `observability` | Documentation-only stub |
+| `cost` | Documentation-only stub |
+
+The root composition (`main.tf`) currently wires exactly `network`, `edge`, and
+`alb`; no later module is composed. The `alb` module owns the ALB security group and
+the public HTTPS ingress and exposes six outputs (`alb_arn`, `alb_dns_name`,
+`alb_canonical_hosted_zone_id`, `https_listener_arn`, `api_target_group_arn`,
+`alb_security_group_id`). The **future** `ecs` module will own the API task security
+group and **both** ALB↔API TCP 8000 cross-security-group rules and will consume the
+ALB outputs; the ALB never consumes an ECS/API security-group id, so the dependency is
+one-way and acyclic: `ecs -> alb`. The regional ACM certificate is supplied through the
+required `api_certificate_arn` input (no real ARN is committed); tags are applied by the
+provider `default_tags` (no module-level `tags` input). The committed ALB tranche adds
+**no** HTTP/port-80 listener, no public port 8000, no IPv6 ingress, no unrestricted ALB
+egress, no certificate creation, no Route 53 record, no WAF, no access/connection
+logging or log bucket, no ECS resource, and no target registration/attachment.
 
 ## 6. Planned module responsibilities
 
@@ -82,7 +117,8 @@ stub** (`modules/<name>/README.md`) with no HCL.
 - `backend.tf` — empty S3 backend declaration; **no** values.
 - `variables.tf` — typed inputs; no secret/account/ARN/CIDR variables.
 - `locals.tf` — deterministic name prefix + the eight-tag set (§A).
-- `main.tf` — composition-root placeholder; no `module`/`resource`/`data`.
+- `main.tf` — composition root; composes the `network`, `edge`, and `alb` modules;
+  no root-level `resource`/`data` block.
 - `outputs.tf` — non-sensitive metadata echoes only.
 - `terraform.tfvars.example` — synthetic example inputs; never real values.
 
@@ -95,7 +131,9 @@ versioning, blocked public access, and **DynamoDB** state locking
 - **No backend identifiers** (bucket, key, region, KMS id, DynamoDB table, role
   ARN, workspace prefix) are committed — `backend.tf` is intentionally empty.
 - **No state bootstrap** is performed. No state bucket or lock table exists.
-- The backend has **not** been initialized (`tofu init` was not run).
+- The S3 backend has **not** been initialized. Offline validation used
+  `tofu init -backend=false`, which deliberately skips backend initialization; a
+  backend-configured `tofu init` has not been run and no state exists.
 
 ## 9. Security rules
 
@@ -107,10 +145,15 @@ committed.
 
 ## 10. Current validation status
 
-**Static review only.** This tranche performed **no** `tofu fmt`, **no**
-`tofu init`, **no** `tofu validate`, **no** provider download, **no** dependency
-lock, and **no** AWS contact. HCL is hand-formatted in conventional two-space
-style; no formatter was executed.
+**Offline validation only.** The implemented `network`, `edge`, and `alb` modules and
+the root composition have been checked with `tofu fmt`, `tofu init -backend=false`
+(using a disposable, repository-external data directory and the locked provider), and
+`tofu validate` — all offline, with the S3 backend disabled and AWS credentials
+suppressed. The committed `.terraform.lock.hcl` pins `hashicorp/aws 6.55.0`. **No**
+`tofu plan`, `apply`, `destroy`, `import`, `state`, or `refresh` has run; **no** AWS
+API has been contacted; **no** repository-local `.terraform` directory or state is
+committed. Offline validation confirms configuration validity — it does **not** mean
+any AWS resource exists.
 
 ## 11. Dark-state rules
 
@@ -120,13 +163,20 @@ global feature flags remain Boolean `false`
 `connector_rss_enabled`). No capability override is created by this or any INFRA
 tranche.
 
-## 12. Next tranches (each separately authorized)
+## 12. Status and next tranches (each separately authorized)
 
-1. **Tool-assisted validation & lock:** install/run OpenTofu, `tofu fmt`,
-   `tofu init -backend=false`, `tofu validate`, and generate
-   `.terraform.lock.hcl` (with cross-platform provider checksums).
-2. **Module-body implementation:** author the real HCL resource bodies for the
-   twelve modules (later INFRA-4 tranche).
+**INFRA-4 is not complete** and **INFRA-5 is unstarted.** Done so far: tool-assisted
+validation + `.terraform.lock.hcl` (with cross-platform provider checksums), and the
+`network`, `edge`, and `alb` module bodies (offline-validated only). Remaining:
+
+1. **Remaining module bodies:** author HCL for the nine documentation-only stubs
+   (`ecs`, `data_sql`, `data_cache`, `storage`, `registry`, `iam`, `secrets`,
+   `observability`, `cost`) — later INFRA-4 tranches. ECS will own the API task SG and
+   both ALB↔API cross-SG rules and consume the ALB outputs.
+2. **Pre-live requirements:** access/connection **logging must be resolved before any
+   live staging plan/apply**; DNS, WAF, ACM certificate creation, ECS, and target
+   registration remain deferred; the applicable pre-live follow-ups recorded in the
+   phase plan (`docs/phase-4b-c-infra-plan.md`) remain unresolved.
 3. **INFRA-5:** protected build/deploy workflow with GitHub **OIDC** and a
    human-approval staging environment (no production deploy).
 4. **Remote-state bootstrap + INFRA-9:** authenticated `plan`, state bootstrap,
@@ -139,8 +189,12 @@ OpenTofu is **never** auto-applied. Any future `apply` is gated behind a
 protected, human-approved deployment path (INFRA-5 approval gate; INFRA-9 fresh
 authorization). Infrastructure setup and canary activation are never combined.
 
-## 14. Documentation-only future commands
+## 14. Command execution scope
 
-Any OpenTofu/AWS command shown in this directory's documentation is **illustrative
-documentation only** and was **not executed** during this tranche. No tool was
-installed, initialized, or run.
+Only **offline** OpenTofu commands (`fmt`, `init -backend=false`, `validate`) have been
+run against the implemented modules, in a repository-external data directory with the
+backend disabled and AWS credentials suppressed. Any **live** OpenTofu/AWS command
+(`plan`, `apply`, `destroy`, `import`, `state`, `refresh`, or any AWS CLI/SDK call)
+shown in this directory's documentation is **illustrative only** and has **not** been
+executed; live operations remain gated behind INFRA-5 approval and INFRA-9 fresh
+authorization (§13).
