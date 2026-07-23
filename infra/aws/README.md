@@ -4,10 +4,10 @@
 
 This directory is the **repository-only** Infrastructure-as-Code for the internal,
 non-customer **SIGNALNEST_STAGING** (dark canary) environment. It is **staging-only**.
-**Six** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, and **`storage`** —
-now contain executable, **offline-validated** HCL resource bodies; the remaining six
-modules are documentation-only stubs. Of the six, only **three** (`network`, `edge`, `alb`)
-are currently wired into the **root composition** (`main.tf`); `secrets`, `registry`, and `storage` are
+**Seven** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, **`storage`**, and **`data_sql`** —
+now contain executable, **offline-validated** HCL resource bodies; the remaining five
+modules are documentation-only stubs. Of the seven, only **three** (`network`, `edge`, `alb`)
+are currently wired into the **root composition** (`main.tf`); `secrets`, `registry`, `storage`, and `data_sql` are
 **implemented but not yet root-composed**. "Implemented" (HCL exists and offline-validates),
 "root-composed" (referenced by `main.tf`), "provisioned", and "deployed" are distinct states
 and are not equivalent. **No live `tofu plan`/`apply` has run, no AWS API has been contacted,
@@ -46,7 +46,7 @@ infra/aws/
   main.tf                   # composition root: composes network, edge, alb (no root resource/data)
   outputs.tf                # non-sensitive metadata + network/edge/alb module outputs
   terraform.tfvars.example  # synthetic example inputs
-  modules/                  # 12 modules: network, edge, alb, secrets, registry, storage implemented; 6 doc-only stubs
+  modules/                  # 12 modules: network, edge, alb, secrets, registry, storage, data_sql implemented; 5 doc-only stubs
 ```
 
 ## 4. Compatibility constraints and dependency lock
@@ -63,11 +63,11 @@ The `versions.tf` constraints are bounded ranges; the committed
 ## 5. Module inventory (exactly 12)
 
 The twelve reusable modules are fixed by the authoritative design
-(`aws-staging-iac-plan.md` §6). **Six** are implemented (HCL authored and
-offline-validated only — **not** provisioned or deployed); the other **six** remain
-documentation-only stubs (`modules/<name>/README.md`, no HCL). Of the six implemented
+(`aws-staging-iac-plan.md` §6). **Seven** are implemented (HCL authored and
+offline-validated only — **not** provisioned or deployed); the other **five** remain
+documentation-only stubs (`modules/<name>/README.md`, no HCL). Of the seven implemented
 modules, only `network`, `edge`, and `alb` are currently **root-composed**; `secrets`,
-`registry`, and `storage` are implemented but **not yet root-composed**.
+`registry`, `storage`, and `data_sql` are implemented but **not yet root-composed**.
 
 | Module | Status |
 | --- | --- |
@@ -75,7 +75,7 @@ modules, only `network`, `edge`, and `alb` are currently **root-composed**; `sec
 | `edge` | **Implemented** (offline-validated) — CloudFront + private S3 SPA origin + web DNS aliases |
 | `alb` | **Implemented** (offline-validated) — ALB SG + public HTTPS 443 ingress, internet-facing IPv4 ALB, API IP target group, HTTPS listener |
 | `ecs` | Documentation-only stub |
-| `data_sql` | Documentation-only stub |
+| `data_sql` | **Implemented** (offline-validated, **not root-composed**) — one private RDS PostgreSQL instance + DB subnet group + rule-free RDS security group + TLS-enforcing parameter group (`rds.force_ssl=1`); `manage_master_user_password=true` (no password in HCL/state); private, encrypted (gp3); no DB provisioned, no pgvector activated |
 | `data_cache` | Documentation-only stub |
 | `storage` | **Implemented** (offline-validated, **not root-composed**) — one private S3 application bucket (SSE-S3/AES256, versioning, all four public-access-block controls, bucket-owner-enforced ownership, TLS-only deny policy); no `bucket_key_enabled`, no KMS, no object stored |
 | `registry` | **Implemented** (offline-validated, **not root-composed**) — two private ECR repositories (`api`, `worker`) + two lifecycle-policy instances; no image built/pushed |
@@ -98,8 +98,9 @@ provider `default_tags` (no module-level `tags` input). The committed ALB tranch
 egress, no certificate creation, no Route 53 record, no WAF, no access/connection
 logging or log bucket, no ECS resource, and no target registration/attachment.
 
-The `secrets`, `registry`, and `storage` modules are **implemented and offline-validated
-but not wired into `main.tf`** — the root composition was **not** changed when they were added.
+The `secrets`, `registry`, `storage`, and `data_sql` modules are **implemented and
+offline-validated but not wired into `main.tf`** — the root composition was **not** changed
+when they were added.
 The `secrets` module creates only the declarative secret *containers* — four empty AWS
 Secrets Manager secrets and one customer-managed KMS key/alias — **no secret value has
 been populated** (values are populated out-of-band under a later, separately authorized
@@ -121,6 +122,18 @@ and its presence does not make the application S3-backed (`storage_backend` is u
 it exposes `bucket_name`/`bucket_arn` for later wiring — the future `iam` module consumes
 `bucket_arn` to scope the task-role S3 policy (`storage -> iam`) and the future
 ECS/root-composition tranche passes `bucket_name` to the application.
+The `data_sql` module declares exactly **four** resources — one private **RDS
+PostgreSQL** instance, its DB subnet group, an RDS security group **created with zero
+rules**, and a DB parameter group that sets only `rds.force_ssl = "1"` (TLS in transit).
+The instance is not publicly accessible, is encrypted at rest (gp3), and uses
+**`manage_master_user_password = true`** so RDS generates and holds the master password
+in an RDS-managed Secrets Manager secret — **no password value or complete `DATABASE_URL`
+enters the HCL or OpenTofu state**, and that master credential is an administrative/bootstrap
+credential, **not** the finished API/worker credential. **No database exists in AWS**, the
+`pgvector` extension is **not** activated (a deferred database-bootstrap step; no committed
+migration creates it), and the module grants no ECS/IAM access. The future `ecs` module
+owns the TCP 5432 ingress rules and consumes `rds_security_group_id` (one-way
+`data_sql -> ecs`); the endpoint is composed into `DATABASE_URL` out-of-band.
 
 ## 6. Planned module responsibilities
 
@@ -176,7 +189,7 @@ committed.
 ## 10. Current validation status
 
 **Offline validation only.** The implemented `network`, `edge`, `alb`, `secrets`,
-`registry`, and `storage` modules (each in its own tranche) and the root composition have been checked
+`registry`, `storage`, and `data_sql` modules (each in its own tranche) and the root composition have been checked
 with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
@@ -198,13 +211,13 @@ tranche.
 
 **INFRA-4 is not complete** and **INFRA-5 is unstarted.** Done so far: tool-assisted
 validation + `.terraform.lock.hcl` (with cross-platform provider checksums), and the
-`network`, `edge`, `alb`, `secrets`, `registry`, and `storage` module bodies (offline-validated only;
-`secrets`, `registry`, and `storage` are implemented but **not yet root-composed**). Remaining:
+`network`, `edge`, `alb`, `secrets`, `registry`, `storage`, and `data_sql` module bodies (offline-validated only;
+`secrets`, `registry`, `storage`, and `data_sql` are implemented but **not yet root-composed**). Remaining:
 
-1. **Remaining module bodies + root composition:** author HCL for the **six**
-   documentation-only stubs (`ecs`, `data_sql`, `data_cache`, `iam`,
+1. **Remaining module bodies + root composition:** author HCL for the **five**
+   documentation-only stubs (`ecs`, `data_cache`, `iam`,
    `observability`, `cost`) — later INFRA-4 tranches — and **root-compose** the already
-   implemented `secrets`, `registry`, and `storage` modules. ECS will own the API task SG and both
+   implemented `secrets`, `registry`, `storage`, and `data_sql` modules. ECS will own the API task SG and both
    ALB↔API cross-SG rules and consume the ALB outputs.
 2. **Pre-live requirements:** access/connection **logging must be resolved before any
    live staging plan/apply**; DNS, WAF, ACM certificate creation, ECS, and target
