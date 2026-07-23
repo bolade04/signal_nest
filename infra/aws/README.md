@@ -4,10 +4,10 @@
 
 This directory is the **repository-only** Infrastructure-as-Code for the internal,
 non-customer **SIGNALNEST_STAGING** (dark canary) environment. It is **staging-only**.
-**Nine** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, **`storage`**, **`data_sql`**, **`data_cache`**, and **`iam`** —
-now contain executable, **offline-validated** HCL resource bodies; the remaining three
-modules are documentation-only stubs. Of the nine, only **three** (`network`, `edge`, `alb`)
-are currently wired into the **root composition** (`main.tf`); `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, and `iam` are
+**Ten** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, **`storage`**, **`data_sql`**, **`data_cache`**, **`iam`**, and **`ecs`** —
+now contain executable, **offline-validated** HCL resource bodies; the remaining two
+modules are documentation-only stubs. Of the ten, only **three** (`network`, `edge`, `alb`)
+are currently wired into the **root composition** (`main.tf`); `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` are
 **implemented but not yet root-composed**. "Implemented" (HCL exists and offline-validates),
 "root-composed" (referenced by `main.tf`), "provisioned", and "deployed" are distinct states
 and are not equivalent. **No live `tofu plan`/`apply` has run, no AWS API has been contacted,
@@ -46,7 +46,7 @@ infra/aws/
   main.tf                   # composition root: composes network, edge, alb (no root resource/data)
   outputs.tf                # non-sensitive metadata + network/edge/alb module outputs
   terraform.tfvars.example  # synthetic example inputs
-  modules/                  # 12 modules: network, edge, alb, secrets, registry, storage, data_sql, data_cache, iam implemented; 3 doc-only stubs
+  modules/                  # 12 modules: network, edge, alb, secrets, registry, storage, data_sql, data_cache, iam, ecs implemented; 2 doc-only stubs
 ```
 
 ## 4. Compatibility constraints and dependency lock
@@ -63,18 +63,18 @@ The `versions.tf` constraints are bounded ranges; the committed
 ## 5. Module inventory (exactly 12)
 
 The twelve reusable modules are fixed by the authoritative design
-(`aws-staging-iac-plan.md` §6). **Nine** are implemented (HCL authored and
-offline-validated only — **not** provisioned or deployed); the other **three** remain
-documentation-only stubs (`modules/<name>/README.md`, no HCL). Of the nine implemented
+(`aws-staging-iac-plan.md` §6). **Ten** are implemented (HCL authored and
+offline-validated only — **not** provisioned or deployed); the other **two** remain
+documentation-only stubs (`modules/<name>/README.md`, no HCL). Of the ten implemented
 modules, only `network`, `edge`, and `alb` are currently **root-composed**; `secrets`,
-`registry`, `storage`, `data_sql`, `data_cache`, and `iam` are implemented but **not yet root-composed**.
+`registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` are implemented but **not yet root-composed**.
 
 | Module | Status |
 | --- | --- |
 | `network` | **Implemented** (offline-validated) — VPC, subnets, route tables, single NAT |
 | `edge` | **Implemented** (offline-validated) — CloudFront + private S3 SPA origin + web DNS aliases |
 | `alb` | **Implemented** (offline-validated) — ALB SG + public HTTPS 443 ingress, internet-facing IPv4 ALB, API IP target group, HTTPS listener |
-| `ecs` | Documentation-only stub |
+| `ecs` | **Implemented** (offline-validated, **not root-composed**) — ECS/Fargate compute plane per §26.2–§26.15: cluster, the three deterministic `/ecs/<name_prefix>-*` log groups, three per-workload task SGs + every task-side cross-SG rule (ALB↔API 8000, PostgreSQL 5432 incl. migration, Redis 6379 api/worker-only, TCP 443 NAT egress; no CIDR ingress), three digest-pinned LINUX/X86_64 task definitions (migration reuses the worker image with the locked command override; execution-role-only secret injection, migration excludes `REDIS_URL`), two services (circuit breaker + rollback, ECS Exec disabled); migration is never a service; nothing exists in AWS |
 | `data_sql` | **Implemented** (offline-validated, **not root-composed**) — one private RDS PostgreSQL instance + DB subnet group + rule-free RDS security group + TLS-enforcing parameter group (`rds.force_ssl=1`); `manage_master_user_password=true` (no password in HCL/state); private, encrypted (gp3); no DB provisioned, no pgvector activated |
 | `data_cache` | **Implemented** (offline-validated, **not root-composed**) — one private ElastiCache for Redis replication group (encrypted at rest, TLS-required in transit, **no `auth_token`** — no Redis credential in HCL/state) + cache subnet group + rule-free Redis security group + empty custom parameter group; no cache provisioned |
 | `storage` | **Implemented** (offline-validated, **not root-composed**) — one private S3 application bucket (SSE-S3/AES256, versioning, all four public-access-block controls, bucket-owner-enforced ownership, TLS-only deny policy); no `bucket_key_enabled`, no KMS, no object stored |
@@ -98,7 +98,7 @@ provider `default_tags` (no module-level `tags` input). The committed ALB tranch
 egress, no certificate creation, no Route 53 record, no WAF, no access/connection
 logging or log bucket, no ECS resource, and no target registration/attachment.
 
-The `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, and `iam` modules are **implemented and
+The `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` modules are **implemented and
 offline-validated but not wired into `main.tf`** — the root composition was **not** changed
 when they were added.
 The `secrets` module creates only the declarative secret *containers* — four empty AWS
@@ -161,8 +161,27 @@ ECS/observability outputs — the §26.8 cycle break), and the sole `Resource:"*
 `kms_key_arn` (`secrets -> iam`), `bucket_arn` (`storage -> iam`), and
 `repository_arns` (`registry -> iam`), and outputs exactly `execution_role_arn`,
 `api_task_role_arn`, `worker_task_role_arn`, and `migration_task_role_arn` for the
-future `ecs` module (one-way `iam -> ecs`). The CI-OIDC deployment role (INFRA-5) and
+`ecs` module (one-way `iam -> ecs`). The CI-OIDC deployment role (INFRA-5) and
 the operator/observer/break-glass roles remain deferred.
+The `ecs` module declares the compute plane locked by §26.2–§26.15: the ECS
+cluster, the **three deterministic ecs-owned log groups** (`observability`
+consumes their outputs and owns alarms, §26.9), **three per-workload task
+security groups plus every task-side cross-SG rule** (ALB↔API TCP 8000 both
+directions; PostgreSQL TCP 5432 from api/worker/**migration**; Redis TCP 6379
+from api/worker **only** — migration is Redis-excluded; TCP 443 IPv4 NAT-baseline
+egress; **no CIDR-based ingress**), **three Fargate task definitions**
+(LINUX/X86_64, platform 1.4.0, immutable `sha256:`-digest-pinned images only —
+the migration task reuses the worker image with the locked
+`python -m app.db.migrate upgrade` override; execution-role-only secret
+injection with the locked per-workload subsets, migration excluding
+`REDIS_URL`), and **two services** (private subnets, no public IP, circuit
+breaker with rollback, ECS Exec disabled; **the migration workload is a task
+definition only — never a service**, and nothing here runs it). **No cluster,
+task, service, rule, or log group exists in AWS** — implemented offline only,
+not planned, applied, provisioned, or deployed. It consumes the implemented
+outputs of `network`, `alb`, `registry`, `secrets`, `data_sql`, `data_cache`,
+and `iam` (one-way edges into `ecs`; `ecs -> observability` remains the only
+outbound edge, acyclic).
 
 ## 6. Planned module responsibilities
 
@@ -218,7 +237,7 @@ committed.
 ## 10. Current validation status
 
 **Offline validation only.** The implemented `network`, `edge`, `alb`, `secrets`,
-`registry`, `storage`, `data_sql`, `data_cache`, and `iam` modules (each in its own tranche) and the root composition have been checked
+`registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` modules (each in its own tranche) and the root composition have been checked
 with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
@@ -240,13 +259,13 @@ tranche.
 
 **INFRA-4 is not complete** and **INFRA-5 is unstarted.** Done so far: tool-assisted
 validation + `.terraform.lock.hcl` (with cross-platform provider checksums), and the
-`network`, `edge`, `alb`, `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, and `iam` module bodies (offline-validated only;
-`secrets`, `registry`, `storage`, `data_sql`, `data_cache`, and `iam` are implemented but **not yet root-composed**). Remaining:
+`network`, `edge`, `alb`, `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` module bodies (offline-validated only;
+`secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` are implemented but **not yet root-composed**). Remaining:
 
-1. **Remaining module bodies + root composition:** author HCL for the **three**
-   documentation-only stubs (`ecs`,
-   `observability`, `cost`) — later INFRA-4 tranches — and **root-compose** the already
-   implemented `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, and `iam` modules. ECS will own the API task SG and both
+1. **Remaining module bodies + root composition:** author HCL for the **two**
+   documentation-only stubs (`observability`, `cost`) — later INFRA-4 tranches — and
+   **root-compose** the already
+   implemented `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, and `ecs` modules. ECS owns the API task SG and both
    ALB↔API cross-SG rules and consume the ALB outputs.
 2. **Pre-live requirements:** access/connection **logging must be resolved before any
    live staging plan/apply**; DNS, WAF, ACM certificate creation, ECS, and target
