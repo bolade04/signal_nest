@@ -21,7 +21,8 @@ consumer are dropped. `iam` consumes **no** ECS output (one-way `iam -> ecs`). S
 `docs/operations/aws-staging-iac-plan.md` §26.8.
 
 ## 5. Planned inputs (names only, no values)
-`secret_arns` (from `secrets`), `bucket_arns` (from `storage`), `repository_arns` (from
+`secret_arns` (from `secrets`), `bucket_arn` (from `storage` — singular; the `storage`
+module outputs exactly one `bucket_arn`), `repository_arns` (from
 `registry`), `name_prefix`. The `log_group_arns` input is **removed**: the execution-role
 CloudWatch Logs policy is scoped to a deterministic name prefix
 (`/ecs/<name_prefix>-*`) built from `name_prefix`, never by consuming ECS/observability

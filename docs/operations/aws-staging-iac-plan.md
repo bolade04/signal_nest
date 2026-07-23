@@ -812,6 +812,49 @@ AWS plan/apply, secret-value population, container build/push, ECS migration exe
 implementation, autoscaling, ECS Exec, production deployment, and feature activation all remain
 separately authorized. **INFRA-4 remains incomplete; INFRA-5 remains unstarted.**
 
+### 26.15 Interface-status update (resolved 2026-07-23; documentation only)
+
+Records which §26.12 interfaces now **exist** as implemented outputs versus remain **planned**
+stub contracts, after the `storage`, `data_sql`, and `data_cache` module implementations
+(merged since §26 was approved). **No §26.1–§26.14 decision is changed**; the graph and all
+edge directions stand. Nothing here is root-composed, provisioned, or deployed; the root
+composition remains exactly `network`, `edge`, `alb`; the inventory remains 8 implemented /
+3 composed / 5 uncomposed / 4 stubs; `iam`, `ecs`, `observability`, and `cost` remain
+documentation-only stubs.
+
+| §26.12 edge | Producer output | Status |
+| --- | --- | --- |
+| `network -> alb` | `vpc_id`, `public_subnet_ids` | EXISTS (root-wired) |
+| `network -> data_sql`, `network -> data_cache` | `private_subnet_ids` | EXISTS (producer); consumer wiring deferred to root composition |
+| `network -> ecs` | `vpc_id`, `private_subnet_ids` | EXISTS (producer); `ecs` PLANNED |
+| `secrets -> iam`, `secrets -> ecs` | `secret_arns` | EXISTS (producer); consumers PLANNED |
+| `registry -> iam` | `repository_arns` | EXISTS (producer); `iam` PLANNED |
+| `registry -> ecs` | `repository_urls` (2 image refs) | EXISTS (producer); `ecs` PLANNED |
+| `storage -> iam` | **`bucket_arn` (singular — exactly one bucket/output; the `iam` planned input name is pinned to `bucket_arn`)** | EXISTS (producer); `iam` PLANNED |
+| `data_sql -> ecs` | `rds_security_group_id` | EXISTS (producer); `ecs` PLANNED |
+| `data_cache -> ecs` | `redis_security_group_id` | EXISTS (producer); `ecs` PLANNED |
+| `iam -> ecs` | `execution_role_arn` + 3 task-role ARNs | PLANNED (both stubs) |
+| `alb -> ecs` | `alb_security_group_id`, `api_target_group_arn` | EXISTS (producer); `ecs` PLANNED |
+| `ecs -> observability` | `log_group_names`/`log_group_arns`, `api_service_name`/`worker_service_name` | PLANNED (both stubs) |
+
+Clarifications locked by this update:
+- **`data_sql.master_user_secret_arn` is administrative.** It references the RDS-managed
+  master/bootstrap secret (created because `manage_master_user_password = true`). It has
+  **no §26.12 graph edge**, is **not** an ECS input, and is **not** the application
+  `DATABASE_URL` (which is composed and populated out-of-band per §26.6). No module consumes
+  it.
+- **Observability input names pinned** to the exact planned `ecs` outputs:
+  `log_group_names`/`log_group_arns` and `api_service_name`/`worker_service_name` (the
+  generic `service_names` name is retired; `ecs` plans no such output).
+- **Runtime-contract alignment:** `aws-staging-runtime-contract.md` §D was aligned with
+  §26.3 (the migration task SG holds a PostgreSQL 5432 rule; only Redis is
+  migration-excluded) and §26.4 (staging egress baseline is NAT-only TCP 443; VPC endpoints
+  remain a separately authorized improvement), and §E with §26.7–§26.8 (secret injection is
+  execution-role `valueFrom`; application task roles hold no Secrets Manager permission).
+- **Still deferred (unchanged, separately authorized):** the stale `infra/aws/main.tf`
+  header/annotation comments (a `.tf` file is outside this documentation tranche), the
+  `cost` module README `tags`-input cleanup, and the phase-plan Delivered-entry backfill.
+
 ## 22. Exact future gates
 
 Nothing below is authorized by merging this plan. Each is a separate review + authorization:
