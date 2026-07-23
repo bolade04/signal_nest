@@ -21,8 +21,9 @@ the ECS workload log groups, preserving `ecs -> observability` (no
 `observability -> ecs -> observability` cycle).
 
 ## 5. Planned inputs (names only, no values)
-`log_group_arns` (from `ecs`), `service_names` (from `ecs`), `alarm_thresholds`,
-`sns_topic_arn`, `name_prefix`. No `tags` input (provider `default_tags`); log-group
+`log_group_names`/`log_group_arns` (from `ecs`), `api_service_name`/`worker_service_name`
+(from `ecs` — the exact planned `ecs` output names; there is no generic `service_names`
+output), `alarm_thresholds`, `sns_topic_arn`, `name_prefix`. No `tags` input (provider `default_tags`); log-group
 retention/encryption are owned by `ecs`.
 
 ## 6. Planned non-sensitive outputs (names only)

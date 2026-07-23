@@ -85,8 +85,10 @@ their global flags are `False`; they are not wired to any live trigger in stagin
 - **Public ingress:** only the **ALB** (API) and **CloudFront** (SPA) are public, TLS-only.
 - **Private subnets:** API, worker, migration task, RDS, and ElastiCache run in **private**
   subnets with **no public IP**.
-- **Security groups:** least-privilege — ALB→API on 8000 only; API/worker→RDS on the DB
-  port only; API/worker→ElastiCache on the cache port only; no lateral wildcards.
+- **Security groups:** least-privilege — ALB→API on 8000 only; API/worker/migration→RDS
+  on the DB port only; API/worker→ElastiCache on the cache port only (the migration task
+  is excluded from Redis, not from RDS — `aws-staging-iac-plan.md` §26.3); no lateral
+  wildcards.
 - **Database isolation:** RDS is **not publicly accessible**; reachable only from the API/
   worker/migration security groups.
 - **Redis/Valkey isolation:** ElastiCache is **not publicly accessible**; same private-only
@@ -95,9 +97,11 @@ their global flags are `False`; they are not wired to any live trigger in stagin
 - **Domain & certificate:** logical staging hostnames via **Route 53** + ACM (no domain or
   certificate created now; logical names only).
 - **Outbound egress:** required for the LLM provider (openai/anthropic) and image pulls.
-  Provided via a **NAT Gateway** (or a documented lower-cost secure alternative — §M),
-  plus **VPC endpoints** (S3 gateway endpoint; interface endpoints for ECR, Secrets Manager,
-  CloudWatch Logs) to keep AWS-service traffic off the NAT path.
+  The staging baseline is **TCP 443 IPv4 egress via the NAT Gateway** for all
+  external/AWS-service traffic (ECR, Secrets Manager, CloudWatch Logs, S3, LLM providers —
+  `aws-staging-iac-plan.md` §26.4). **VPC endpoints** (S3 gateway; ECR/Secrets
+  Manager/CloudWatch Logs interface endpoints) remain a **separately authorized
+  improvement**, not part of the initial staging baseline.
 - **Access surfaces:** administrative and **operator** access to `/internal/system/*`
   reaches the ALB over TLS and is additionally restricted (IP allow-list / private access);
   **observer** access is read-only to logs/audit/effective-state views; **health-check**
@@ -114,8 +118,8 @@ their global flags are `False`; they are not wired to any live trigger in stagin
 | ------------ | ------- | --------------- |
 | Deployment (CI) | build/push image, run migration task, update ECS service | **GitHub OIDC**, short-lived; no long-lived AWS keys; scoped to staging resources |
 | ECS task execution | pull from ECR, read secrets, write logs | execution role, minimum permissions |
-| API task | app runtime (DB, cache, S3, secrets read) | scoped task role; read-only on secrets it needs |
-| Worker task | job processing (DB, cache, S3, secrets read) | scoped task role |
+| API task | app runtime (DB, cache, S3) | scoped task role; **no Secrets Manager permission** — secret values are injected at task start by the **execution role** (`valueFrom`, `aws-staging-iac-plan.md` §26.7–§26.8) |
+| Worker task | job processing (DB, cache, S3) | scoped task role; same execution-role-only secret injection — no direct secret read |
 | Migration task | run one-shot migrations | DB access only; no service-update rights |
 | Internal canary operator | operator control plane (`/internal/system/...`) | application operator role; **not** an AWS admin |
 | Independent observer | read-only logs/audit/effective-state | no mutation rights, no override rights |

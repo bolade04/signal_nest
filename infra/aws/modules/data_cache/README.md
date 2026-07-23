@@ -95,5 +95,6 @@ Implemented, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
 **inactive**. No AWS access, no live Redis, no root-composition change, no application
 activation (`cache_backend`/`queue_backend` unchanged), no IAM/ECS integration, no ingress
 rule. The root `infra/aws/README.md` inventory refresh (7→8 implemented, 4→5 uncomposed,
-5→4 stubs) is a **separate follow-up truthfulness pass** after this module merges
-(repository precedent). INFRA-4 remains incomplete; INFRA-5 remains unstarted.
+5→4 stubs) was **completed by the follow-up truthfulness pass** (PR #112, squash commit
+`5f32d4b6a2ae` on `main` — its subject records the PR number); the root inventory now
+records 8/3/5/4. INFRA-4 remains incomplete; INFRA-5 remains unstarted.
