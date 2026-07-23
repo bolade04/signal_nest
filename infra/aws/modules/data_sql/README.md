@@ -97,6 +97,14 @@ the AWS-managed Secrets Manager key. The **secrets module CMK is not automatical
 reused.** A caller-supplied key requires a compatible Region, key state, key policy, and
 RDS/Secrets Manager grants that this isolated module **cannot** validate.
 
+**Both keys are fixed at creation time (immutability-sensitive).** `storage_kms_key_id`
+maps to `aws_db_instance.kms_key_id`, which is **ForceNew** — changing it after the
+instance exists is **not** an in-place update; it forces instance replacement and, to
+preserve data, a snapshot-restore workflow. The RDS-managed master-secret KMS key
+(`master_user_secret_kms_key_id`) is likewise set when the managed secret is created and
+must not be assumed casually rotatable in place. **Finalize both KMS-key choices before
+the first apply**; they cannot be changed casually afterward.
+
 ## 10. Backups, deletion, snapshots, autoscaling
 `backup_retention_period` defaults to `7` (range `1..35`; backups cannot be disabled).
 `deletion_protection` defaults to `true`. `skip_final_snapshot` defaults to `false`, and

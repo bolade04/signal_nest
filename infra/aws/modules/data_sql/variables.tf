@@ -122,13 +122,13 @@ variable "master_username" {
 }
 
 variable "storage_kms_key_id" {
-  description = "Optional customer-managed KMS key id/ARN for RDS storage encryption at rest. Defaults to null → the AWS-managed RDS key. A caller-supplied key requires a compatible Region, key state, key policy, and RDS grants that this isolated module cannot validate. The secrets module CMK is NOT automatically reused."
+  description = "Optional customer-managed KMS key id/ARN for RDS storage encryption at rest. Defaults to null → the AWS-managed RDS key. A caller-supplied key requires a compatible Region, key state, key policy, and RDS grants that this isolated module cannot validate. The secrets module CMK is NOT automatically reused. FIXED AT CREATION: maps to aws_db_instance.kms_key_id (ForceNew) — changing it after creation forces instance replacement (snapshot-restore to preserve data), not an in-place update; finalize before the first apply."
   type        = string
   default     = null
 }
 
 variable "master_user_secret_kms_key_id" {
-  description = "Optional customer-managed KMS key id/ARN for the RDS-managed master-user Secrets Manager secret. Defaults to null → the AWS-managed Secrets Manager key. A caller-supplied key requires a compatible Region, key state, key policy, and Secrets Manager grants that this isolated module cannot validate. The secrets module CMK is NOT automatically reused."
+  description = "Optional customer-managed KMS key id/ARN for the RDS-managed master-user Secrets Manager secret. Defaults to null → the AWS-managed Secrets Manager key. A caller-supplied key requires a compatible Region, key state, key policy, and Secrets Manager grants that this isolated module cannot validate. The secrets module CMK is NOT automatically reused. FIXED AT CREATION: set when the RDS-managed secret is created; do not assume casual in-place rotation — finalize before the first apply."
   type        = string
   default     = null
 }
