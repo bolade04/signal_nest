@@ -307,6 +307,32 @@
 
 ## INFRA-5 — Protected build and deployment workflow (no production deploy)
 
+- **Delivered (INFRA-5 authoring tranche, recorded 2026-07-24):** the protected staging
+  publish workflow `.github/workflows/staging-publish.yml` — `workflow_dispatch`-only (no
+  push/PR trigger; untrusted PR/fork code can never reach the credentialed job), gated by the
+  protected human-approval **`staging` GitHub environment** (deployment branches restricted
+  to `main`) plus an in-job main-ref guard and a fail-closed guard for the absent INFRA-9
+  prerequisites; workflow-level `contents: read` with `id-token: write` on the single job
+  only; cache-free `linux/amd64` builds of the exact **two §26.5 images** (`api`, `worker`;
+  the migration actor reuses the worker digest — no third image) with the trusted checkout
+  SHA passed as `GIT_REVISION`; the repository's container security gates re-run plus a
+  fail-closed **Trivy CRITICAL/HIGH** scan; GitHub-**OIDC**-only AWS auth (900 s session,
+  no long-lived key anywhere) with account verification that never prints the account id;
+  immutable full-SHA tag push, **registry digest read-back** (`ecr describe-images`) with
+  local/registry digest cross-check, and a non-secret digest-manifest artifact (logical
+  repository names only, per the wiring plan §G) for the git-ignored tfvars handoff.
+  `apps/api/Dockerfile` gained `GIT_REVISION`/`IMAGE_CREATED` build args stamping the four
+  OCI provenance labels on the shared runtime stage (defaults `""`; runtime
+  `BUILD_REVISION`/`APPLICATION_VERSION` deliberately **not** baked — task-definition-owned
+  per the wiring plan §C, preserving safe local defaults). The CI-OIDC **publisher role and
+  provider are specified** (trust `repo:bolade04/signal_nest:environment:staging`, audience
+  `sts.amazonaws.com`, least-privilege ECR push/read actions scoped to the two repository
+  ARNs; no IAM/ECS/secrets action) in `docs/operations/staging-publish-workflow.md` §4 —
+  their HCL and live creation remain later-authorized. **Per the stop boundary below,
+  nothing was executed: no workflow run, no AWS API call, no OIDC provider/role/repository
+  created, no image built for publication, no digest produced, no deployment.** Digest
+  production occurs only when this workflow runs under INFRA-9 authorization after the
+  live prerequisites exist.
 - **Objective:** define the protected CI/CD path for staging.
 - **Consider:** GitHub **OIDC** federation (no long-lived AWS keys); immutable image build;
   image-digest recording; **exact Git SHA** stamping; a **staging GitHub environment** with

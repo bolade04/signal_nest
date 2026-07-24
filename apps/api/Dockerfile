@@ -85,6 +85,21 @@ COPY --chown=10001:10001 pyproject.toml ./pyproject.toml
 # Make the source importable as the ``app`` package without an editable install.
 ENV PYTHONPATH=/app
 
+# Build provenance (INFRA-5; deployment-sha-wiring-plan.md §B). CI passes the
+# exact trusted checkout SHA and an RFC 3339 timestamp; both default to "" so a
+# local ``docker build`` without args is byte-for-byte unaffected at runtime —
+# no BUILD_REVISION/APPLICATION_VERSION ENV is baked here because an empty ENV
+# would override the application's safe defaults (build_revision=None); runtime
+# injection is owned by the ECS task definition (wiring plan §C). The OCI
+# ``revision`` label is the mandatory registry-side provenance the G4 preflight
+# cross-checks against the source SHA and the ECR digest.
+ARG GIT_REVISION=""
+ARG IMAGE_CREATED=""
+LABEL org.opencontainers.image.source="https://github.com/bolade04/signal_nest" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.created="${IMAGE_CREATED}" \
+      org.opencontainers.image.version="${GIT_REVISION}"
+
 # Drop privileges for every runtime target below.
 USER 10001:10001
 
