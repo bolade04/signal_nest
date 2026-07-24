@@ -4,10 +4,10 @@
 
 This directory is the **repository-only** Infrastructure-as-Code for the internal,
 non-customer **SIGNALNEST_STAGING** (dark canary) environment. It is **staging-only**.
-**Eleven** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, **`storage`**, **`data_sql`**, **`data_cache`**, **`iam`**, **`ecs`**, and **`observability`** —
-now contain executable, **offline-validated** HCL resource bodies; the remaining one
-module is a documentation-only stub. Of the eleven, only **three** (`network`, `edge`, `alb`)
-are currently wired into the **root composition** (`main.tf`); `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` are
+**All twelve** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, **`storage`**, **`data_sql`**, **`data_cache`**, **`iam`**, **`ecs`**, **`observability`**, and **`cost`** —
+now contain executable, **offline-validated** HCL resource bodies; no
+documentation-only stub remains. Of the twelve, only **three** (`network`, `edge`, `alb`)
+are currently wired into the **root composition** (`main.tf`); `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` are
 **implemented but not yet root-composed**. "Implemented" (HCL exists and offline-validates),
 "root-composed" (referenced by `main.tf`), "provisioned", and "deployed" are distinct states
 and are not equivalent. **No live `tofu plan`/`apply` has run, no AWS API has been contacted,
@@ -46,7 +46,7 @@ infra/aws/
   main.tf                   # composition root: composes network, edge, alb (no root resource/data)
   outputs.tf                # non-sensitive metadata + network/edge/alb module outputs
   terraform.tfvars.example  # synthetic example inputs
-  modules/                  # 12 modules: network, edge, alb, secrets, registry, storage, data_sql, data_cache, iam, ecs, observability implemented; 1 doc-only stub
+  modules/                  # 12 modules: all twelve implemented (offline-validated); no doc-only stub remains
 ```
 
 ## 4. Compatibility constraints and dependency lock
@@ -63,11 +63,11 @@ The `versions.tf` constraints are bounded ranges; the committed
 ## 5. Module inventory (exactly 12)
 
 The twelve reusable modules are fixed by the authoritative design
-(`aws-staging-iac-plan.md` §6). **Eleven** are implemented (HCL authored and
-offline-validated only — **not** provisioned or deployed); the other **one** remains a
-documentation-only stub (`modules/<name>/README.md`, no HCL). Of the eleven implemented
+(`aws-staging-iac-plan.md` §6). **All twelve** are implemented (HCL authored and
+offline-validated only — **not** provisioned or deployed); **no**
+documentation-only stub remains. Of the twelve implemented
 modules, only `network`, `edge`, and `alb` are currently **root-composed**; `secrets`,
-`registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` are implemented but **not yet root-composed**.
+`registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` are implemented but **not yet root-composed**.
 
 | Module | Status |
 | --- | --- |
@@ -82,7 +82,7 @@ modules, only `network`, `edge`, and `alb` are currently **root-composed**; `sec
 | `iam` | **Implemented** (offline-validated, **not root-composed**) — the four §26.8 ECS-consumed roles: one shared task execution role (ECR pull scoped to the two repositories, deterministic `/ecs/<name_prefix>-*` log delivery with no `CreateLogGroup`, `GetSecretValue` on the four container ARNs, `kms:Decrypt` on the secrets CMK via Secrets Manager; sole `Resource:"*"` = `ecr:GetAuthorizationToken`) + API/worker task roles (application-bucket S3 only) + an intentionally **empty** migration task role; no role exists in AWS |
 | `secrets` | **Implemented** (offline-validated, **not root-composed**) — four empty Secrets Manager containers + one customer-managed KMS key/alias; no secret value populated |
 | `observability` | **Implemented** (offline-validated, **not root-composed**) — metric filters + alarms + audit trail per §6/§14/§26.9: 3 error metric filters over the ecs-owned log groups (evidence-backed `{ $.severity = "ERROR" }` pattern), 12 caller-thresholded alarms (ECS CPU/memory, log errors, RDS CPU/storage/memory, Redis CPU/memory; explicit missing-data behavior, fail-closed for health/saturation), and a single-region management-events CloudTrail with log-file validation delivered to a dedicated private TLS-only audit bucket; creates NO log group (ecs owns them) and no SNS/dashboard/budget resource; nothing exists in AWS |
-| `cost` | Documentation-only stub |
+| `cost` | **Implemented** (offline-validated, **not root-composed**) — one monthly AWS Budget (`COST`/USD) with ACTUAL-spend notifications at the fixed 50/75/90/100% thresholds to a caller-supplied email (§15); `monthly_budget_limit` statically validated ≤ the $200 ADR-§M hard ceiling; **observational only** — no budget action, remediation, SNS topic, or IAM resource; independent (no sibling dependency); no budget exists in AWS |
 
 The root composition (`main.tf`) currently wires exactly `network`, `edge`, and
 `alb`; no later module is composed. The `alb` module owns the ALB security group and
@@ -98,7 +98,7 @@ provider `default_tags` (no module-level `tags` input). The committed ALB tranch
 egress, no certificate creation, no Route 53 record, no WAF, no access/connection
 logging or log bucket, no ECS resource, and no target registration/attachment.
 
-The `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` modules are **implemented and
+The `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` modules are **implemented and
 offline-validated but not wired into `main.tf`** — the root composition was **not** changed
 when they were added.
 The `secrets` module creates only the declarative secret *containers* — four empty AWS
@@ -199,6 +199,15 @@ dimensions reuse the deterministic `<name_prefix>-postgres`/`-redis-001`/
 sink). ALB-dimension alarms are deferred until `alb` exposes `arn_suffix`
 outputs (separately authorized). Optional `sns_topic_arn` is consumed, never
 created. **No filter, alarm, trail, or bucket exists in AWS.**
+The `cost` module declares exactly **one** resource — a monthly AWS Budget
+(`COST` type, USD) with an **ACTUAL-spend** notification at each fixed
+threshold (50/75/90/100%, §15) delivered to a caller-supplied email address.
+It is **independent** (§26.12 — no sibling input, no data source, no
+consumer), **observational only** (a budget alert never stops or remediates
+spending; no budget action, SNS topic, or IAM resource is created), and the
+`monthly_budget_limit` input is statically validated at or below the
+**$200/month ADR-§M hard ceiling** so an over-ceiling budget cannot validate.
+**No budget exists in AWS.**
 
 ## 6. Planned module responsibilities
 
@@ -253,8 +262,8 @@ committed.
 
 ## 10. Current validation status
 
-**Offline validation only.** The implemented `network`, `edge`, `alb`, `secrets`,
-`registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` modules (each in its own tranche) and the root composition have been checked
+**Offline validation only.** All twelve implemented modules (each in its own
+tranche) and the root composition have been checked
 with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
@@ -275,14 +284,12 @@ tranche.
 ## 12. Status and next tranches (each separately authorized)
 
 **INFRA-4 is not complete** and **INFRA-5 is unstarted.** Done so far: tool-assisted
-validation + `.terraform.lock.hcl` (with cross-platform provider checksums), and the
-`network`, `edge`, `alb`, `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` module bodies (offline-validated only;
-`secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` are implemented but **not yet root-composed**). Remaining:
+validation + `.terraform.lock.hcl` (with cross-platform provider checksums), and **all
+twelve module bodies** (offline-validated only;
+`secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` are implemented but **not yet root-composed**). Remaining:
 
-1. **Remaining module body + root composition:** author HCL for the **one**
-   documentation-only stub (`cost`) — a later INFRA-4 tranche — and
-   **root-compose** the already
-   implemented `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, and `observability` modules. ECS owns the API task SG and both
+1. **Root composition:** **root-compose** the already
+   implemented `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` modules. ECS owns the API task SG and both
    ALB↔API cross-SG rules and consume the ALB outputs.
 2. **Pre-live requirements:** access/connection **logging must be resolved before any
    live staging plan/apply**; DNS, WAF, ACM certificate creation, ECS, and target
