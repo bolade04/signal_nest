@@ -515,6 +515,27 @@
 
 ## INFRA-9 — Authorized staging deployment and Phase 4B-C.0 rerun
 
+- **In progress (execution-path repository remediation, recorded 2026-07-24):** INFRA-9 has
+  started; **no live AWS execution has occurred** (no remote-state bootstrap, no plan/apply,
+  no image/digest, no secret population, no migration, no workload deployment, no
+  identity). This remediation removed the ECR/image-digest bootstrap **circularity** the
+  readiness assessment surfaced — the composed root's `api_image_digest`/`worker_image_digest`
+  are plan-time-validated, so the root could not plan without real digests, yet the digests
+  need the two ECR repositories the same root creates. The fix is a composed-root
+  **`deploy_workload`** switch (default `false` = foundation stage): the foundation apply
+  creates the ECR repositories, cluster, log groups, security groups, roles, data stores, and
+  empty secret containers **without** the API/worker task definitions/services (which require
+  digests), so no targeted apply and no manual ECR creation are ever needed; the workload
+  apply (`deploy_workload = true`, real digests supplied after an INFRA-5 publish run) creates
+  the task definitions/services. The digest inputs are nullable but still fail-closed
+  (non-null ⇒ immutable `sha256:<64 hex>`; workload stage ⇒ both digests non-null). The
+  **CI image-publisher role** (GitHub OIDC → ECR push) was authored in the `iam` module,
+  created only when `github_oidc_provider_arn` is supplied; the account-wide OIDC **provider**
+  is consumed, never created — it remains an external prerequisite. Inventory stays
+  **12/12/0/0** (no new module; the publisher role lives in `iam`). This is an internal
+  INFRA-9 milestone, **not a new phase** — INFRA-9 remains one phase and remains **in
+  progress**; the live foundation→workload execution, remote-state bootstrap, cost
+  recalculation, and fresh spend/deploy authorization are still gated ahead.
 - **Objective:** with fresh authorization, provision and deploy SIGNALNEST_STAGING and rerun
   the environment-setup gate — **without** activating the canary.
 - **Consider:** **fresh cost estimate** (mandatory pre-provisioning recalculation vs the

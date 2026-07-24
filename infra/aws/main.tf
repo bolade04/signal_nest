@@ -160,6 +160,11 @@ module "iam" {
   kms_key_arn     = module.secrets.kms_key_arn
   bucket_arn      = module.storage.bucket_arn
   repository_arns = module.registry.repository_arns
+
+  # CI image-publisher role: created only when the GitHub OIDC provider ARN is
+  # supplied (consumed, never created here). Reuses repository_arns to scope ECR
+  # push to exactly the two repos. Null (default) leaves it uncreated.
+  github_oidc_provider_arn = var.github_oidc_provider_arn
 }
 
 # ECS/Fargate compute plane (§26.2-§26.15): cluster, 3 log groups, 3 task SGs +
@@ -177,6 +182,7 @@ module "ecs" {
   rds_security_group_id   = module.data_sql.rds_security_group_id
   redis_security_group_id = module.data_cache.redis_security_group_id
   repository_urls         = module.registry.repository_urls
+  deploy_workload         = var.deploy_workload
   api_image_digest        = var.api_image_digest
   worker_image_digest     = var.worker_image_digest
   execution_role_arn      = module.iam.execution_role_arn

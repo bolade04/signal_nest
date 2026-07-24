@@ -146,14 +146,32 @@ not consume its digest — pushed images are inert until INFRA-9 pins them.
 
 ## 8. Execution preconditions (all INFRA-9-gated, none exist today)
 
+*[Sequencing corrected 2026-07-24, INFRA-9 execution-path tranche — this
+supersedes the earlier single-apply phrasing of step 2, which named
+"composed-root apply creating the two ECR repositories AND the CI-OIDC
+publisher role" as one event. That is not executable: the composed root's
+`api_image_digest`/`worker_image_digest` are plan-time-validated and the ECS
+task defs consume them, so the root cannot plan until real digests exist — yet
+the digests require the ECR repos + a publish run. The composed root now has a
+`deploy_workload` flag (default `false` = foundation stage) that creates the
+ECR repos, cluster, log groups, SGs, roles, data stores, and secret containers
+WITHOUT the API/worker task definitions/services (which need digests). The
+CI-publisher role is created in the `iam` module when `github_oidc_provider_arn`
+is supplied.]*
+
 1. Live remote-state bootstrap (`infra/aws/bootstrap/`) executed under fresh
    authorization.
-2. Composed-root apply creating the two ECR repositories (`registry` module)
-   and the CI-OIDC publisher role/provider per §4's specification.
+2. **Foundation-stage** composed-root apply (`deploy_workload = false`) creating
+   the two ECR repositories (`registry` module) and — if
+   `github_oidc_provider_arn` is supplied — the CI-publisher role (`iam`
+   module); the account-wide GitHub OIDC provider itself is a consumed external
+   prerequisite, not created by the root.
 3. The `staging` environment variables populated with the resulting non-secret
-   identifiers.
-4. Fresh human authorization to run the publish itself, then the manifest →
-   tfvars handoff, then the INFRA-9 plan/apply that deploys the digests.
+   identifiers (including the publisher role ARN output `ci_publisher_role_arn`).
+4. Fresh human authorization to run the publish itself → the manifest → tfvars
+   handoff (both digests) → secret population → the **workload-stage** apply
+   (`deploy_workload = true` with the real digests) that creates the task
+   definitions/services → the one-shot migration run.
 
 Until all four hold, every dispatch of this workflow fails closed at the
 prerequisite guard without contacting AWS.
