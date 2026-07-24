@@ -96,7 +96,9 @@ ARNs; the publisher ARN is consumed by no module — the operator sets it as the
 variable.
 
 ## 7. Security boundaries
-No long-lived keys; deployment via GitHub OIDC (trust in INFRA-5). Application
+No long-lived keys; image publishing via GitHub OIDC (trust design specified by
+INFRA-5, HCL authored here — §2/§3). The CI publisher role can only push to the
+two application repositories (least privilege; no ECS/IAM/secrets/RDS). Application
 containers never receive execution-role credentials. **Execution role:** ECR
 retrieval, prefix-scoped log delivery, retrieval of only the referenced secret
 ARNs, `kms:Decrypt` only on the secrets CMK via Secrets Manager. **Application
