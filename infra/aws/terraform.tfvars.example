@@ -36,3 +36,26 @@ phase        = "4B-C"
 # hosted_zone_id      = "<ROUTE53_HOSTED_ZONE_ID>"   # existing zone that owns web_fqdn (starts with Z)
 # acm_certificate_arn = "<ACM_CERT_ARN_US_EAST_1>"   # existing us-east-1 ACM cert ARN
 # price_class         = "PriceClass_100"
+
+# --- Composition inputs (INFRA-4 root-composition tranche; synthetic examples only) ---
+# app_bucket_name           = "<globally-unique-app-bucket-name>"
+# db_engine_version         = "<postgres-version, e.g. 16.4>"
+# db_name                   = "<initial-database-name>"
+# db_master_username        = "<master-username>"          # password is RDS-managed; never in tfvars
+# redis_engine_version      = "<redis-version, e.g. 7.1>"
+# api_image_digest          = "sha256:<64-hex-digest-of-verified-api-image>"     # exists only after INFRA-5
+# worker_image_digest       = "sha256:<64-hex-digest-of-verified-worker-image>"  # exists only after INFRA-5
+# llm_provider              = "<openai|anthropic>"
+# alarm_thresholds = {
+#   ecs_cpu_high_percent          = <1-100>
+#   ecs_memory_high_percent       = <1-100>
+#   log_error_count_per_period    = <positive-count>
+#   rds_cpu_high_percent          = <1-100>
+#   rds_free_storage_low_bytes    = <positive-bytes>
+#   rds_freeable_memory_low_bytes = <positive-bytes>
+#   redis_cpu_high_percent        = <1-100>
+#   redis_memory_high_percent     = <1-100>
+# }
+# sns_topic_arn             = null                          # or "arn:aws:sns:<region>:<account>:<topic>"
+# monthly_budget_limit      = <1-200>                       # USD; ADR-0001 §M hard ceiling
+# budget_notification_email = "<ops-alias@example.com>"

@@ -206,3 +206,134 @@ variable "api_certificate_arn" {
     error_message = "api_certificate_arn must be an ACM certificate ARN in us-east-1 (arn:aws:acm:us-east-1:<account>:certificate/<id>)."
   }
 }
+
+# --- Composition inputs (INFRA-4 root-composition tranche) ---
+# Every value below is supplied at plan time via a git-ignored *.tfvars; no real
+# bucket name, engine version, username, digest, threshold, email, or ARN is
+# committed. Validation is STATIC — nothing queries AWS.
+
+variable "app_bucket_name" {
+  description = "Globally unique name for the single private application S3 bucket (passed to the storage module). Supplied via a git-ignored *.tfvars; no real name is committed."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.app_bucket_name))
+    error_message = "app_bucket_name must satisfy S3 bucket naming (3-63 chars, lowercase letters, digits, dots, hyphens)."
+  }
+}
+
+variable "db_engine_version" {
+  description = "PostgreSQL engine version for the staging RDS instance (passed to the data_sql module; REQUIRED — the parameter-group family is derived from its major component). Supplied via a git-ignored *.tfvars."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)*$", var.db_engine_version))
+    error_message = "db_engine_version must be a dotted numeric PostgreSQL version (e.g. 16.4)."
+  }
+}
+
+variable "db_name" {
+  description = "Initial PostgreSQL database name created by RDS (passed to the data_sql module as database_name). Supplied via a git-ignored *.tfvars; no real name is committed."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$", var.db_name))
+    error_message = "db_name must satisfy PostgreSQL identifier rules (letter/underscore first, then letters/digits/underscores, <= 63 chars)."
+  }
+}
+
+variable "db_master_username" {
+  description = "Master username for the staging RDS instance (passed to the data_sql module; the PASSWORD is RDS-managed and never enters HCL or state, §26.6). Supplied via a git-ignored *.tfvars; no real username is committed."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-zA-Z][a-zA-Z0-9_]{0,62}$", var.db_master_username))
+    error_message = "db_master_username must start with a letter and contain only letters, digits, and underscores (<= 63 chars)."
+  }
+}
+
+variable "redis_engine_version" {
+  description = "Redis engine version for the staging ElastiCache replication group (passed to the data_cache module; REQUIRED — the parameter-group family is derived from its major component). Supplied via a git-ignored *.tfvars."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+(\\.[0-9]+)*$", var.redis_engine_version))
+    error_message = "redis_engine_version must be a dotted numeric Redis version (e.g. 7.1)."
+  }
+}
+
+variable "api_image_digest" {
+  description = "Immutable sha256 digest of the verified API image (passed to the ecs module; §26.5 — no mutable tag, no latest). No digest exists until INFRA-5 builds and publishes images; supplied via a git-ignored *.tfvars at that later stage."
+  type        = string
+
+  validation {
+    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.api_image_digest))
+    error_message = "api_image_digest must be an immutable digest of the exact form sha256:<64 lowercase hex chars>."
+  }
+}
+
+variable "worker_image_digest" {
+  description = "Immutable sha256 digest of the verified worker image (passed to the ecs module; also reused by the one-shot migration task definition with the locked command override, §26.5). Supplied via a git-ignored *.tfvars after INFRA-5 publishes images."
+  type        = string
+
+  validation {
+    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.worker_image_digest))
+    error_message = "worker_image_digest must be an immutable digest of the exact form sha256:<64 lowercase hex chars>."
+  }
+}
+
+variable "llm_provider" {
+  description = "LLM provider injected as ordinary environment (LLM_PROVIDER, §26.11). Staging forbids the mock provider; exactly openai or anthropic. Supplied via a git-ignored *.tfvars."
+  type        = string
+
+  validation {
+    condition     = contains(["openai", "anthropic"], var.llm_provider)
+    error_message = "llm_provider must be exactly \"openai\" or \"anthropic\" (mock is forbidden in staging, §26.11)."
+  }
+}
+
+variable "alarm_thresholds" {
+  description = "Caller-supplied observability alarm thresholds (passed through to the observability module; the plan documents alarm CATEGORIES, not values — §14). Supplied via a git-ignored *.tfvars."
+  type = object({
+    ecs_cpu_high_percent          = number
+    ecs_memory_high_percent       = number
+    log_error_count_per_period    = number
+    rds_cpu_high_percent          = number
+    rds_free_storage_low_bytes    = number
+    rds_freeable_memory_low_bytes = number
+    redis_cpu_high_percent        = number
+    redis_memory_high_percent     = number
+  })
+}
+
+variable "sns_topic_arn" {
+  description = "Optional pre-existing SNS topic ARN for observability alarm actions (CONSUMED, never created; null means alarms have no actions). Supplied via a git-ignored *.tfvars when used; no real ARN is committed."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.sns_topic_arn == null || can(regex("^arn:[^:]+:sns:", var.sns_topic_arn))
+    error_message = "sns_topic_arn must be null or an SNS topic ARN (arn:<partition>:sns:...)."
+  }
+}
+
+variable "monthly_budget_limit" {
+  description = "Monthly cost-budget limit in USD (passed to the cost module; statically bounded by the $200/month ADR-0001 §M staging hard ceiling). Supplied via a git-ignored *.tfvars."
+  type        = number
+
+  validation {
+    condition     = var.monthly_budget_limit > 0 && var.monthly_budget_limit <= 200
+    error_message = "monthly_budget_limit must be greater than 0 and at most 200 USD (the ADR-0001 §M staging hard ceiling)."
+  }
+}
+
+variable "budget_notification_email" {
+  description = "Email address receiving every budget notification (passed to the cost module as notification_target; observational only). Supplied via a git-ignored *.tfvars; no real address is committed."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.budget_notification_email))
+    error_message = "budget_notification_email must be a plausible email address (local@domain.tld)."
+  }
+}
