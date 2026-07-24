@@ -113,7 +113,8 @@ edges (no interface was changed to compose them). Required caller-supplied
 values (bucket name, DB/Redis engine versions, DB name/master username, image
 digests, LLM provider, alarm thresholds, budget limit/email) are root variables
 supplied via a git-ignored `*.tfvars` — none is committed, and the image digests
-cannot exist until INFRA-5 builds images.
+cannot exist until the INFRA-5-authored publish workflow is executed under the
+later INFRA-9 authorization (INFRA-5 itself is authoring-only).
 The `secrets` module creates only the declarative secret *containers* — four empty AWS
 Secrets Manager secrets and one customer-managed KMS key/alias — **no secret value has
 been populated** (values are populated out-of-band under a later, separately authorized
@@ -324,12 +325,19 @@ Route 53 alias, ACM creation, and the interactive-docs path restriction remain
 **deferred by locked decision** (§23/§24.7/§25; runtime contract §N). Remaining
 (each separately authorized):
 
-1. **INFRA-5:** protected build/deploy workflow with GitHub **OIDC** and a
-   human-approval staging environment (no production deploy); produces the
-   image digests the composition consumes.
+1. **INFRA-5 (workflow authoring): COMPLETE.** The protected staging publish
+   workflow (`.github/workflows/staging-publish.yml`) is authored with GitHub
+   **OIDC** (no long-lived keys), the protected human-approval `staging`
+   GitHub environment, fail-closed prerequisite guards, and the two-image
+   §26.5 build/scan/push/digest-read-back path — **never executed**: per the
+   phase plan's stop boundary ("authoring only; execution needs INFRA-9
+   authorization") no run has occurred and no digest exists. Operator design:
+   `docs/operations/staging-publish-workflow.md`.
 2. **Live remote-state bootstrap + INFRA-9:** executing the authored
    `bootstrap/` root, backend-configured `tofu init`, authenticated `plan`,
-   provisioning, and deployment of the exact first-deploy SHA — under fresh
+   provisioning (including the two ECR repositories and the specified CI-OIDC
+   publisher role), executing the publish workflow to produce the image
+   digests, and deployment of the exact first-deploy SHA — under fresh
    authorization, with all global flags remaining `false`.
 
 ## 13. Never auto-apply

@@ -1,12 +1,13 @@
-# Module: `iam` (implemented — offline-validated only, NOT root-composed)
+# Module: `iam` (implemented — offline-validated only, root-composed)
 
 ## 1. Purpose
 Least-privilege IAM identity plane for the staging compute plane: the **four
 ECS-consumed roles** locked by `docs/operations/aws-staging-iac-plan.md` §26.8 —
 one shared **ECS task execution role** plus three distinct **application task
 roles** (API, worker, migration). Implemented and offline-validated only: **no
-role exists in AWS**, nothing is provisioned, and the module is **not**
-root-composed.
+role exists in AWS** and nothing is provisioned. The module **is root-composed**
+(wired in `infra/aws/main.tf` by the root-composition tranche, PR #120;
+composition is configuration only).
 
 ## 2. Implemented AWS scope (exactly seven resources)
 - `aws_iam_role.execution` — `<name_prefix>-ecs-execution`, trust
@@ -92,18 +93,19 @@ roles deferred (§3). Data sources (`aws_partition`/`aws_region`/
 validate` does not contact AWS.
 
 ## 9. Scope boundaries (this tranche)
-Implemented, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
-**inactive**. No AWS access, no live role, no root-composition change, no
-policy attachment to any existing principal, no ECS integration. Offline
+Implemented and **root-composed** (wired in root `main.tf` by the later
+root-composition tranche), but **unprovisioned** and **inactive**. No AWS
+access, no live role, no policy attachment to any existing principal. Offline
 validation only (`tofu fmt` / `init -backend=false` / `validate` with the
 committed root lockfile, backend disabled, AWS credentials suppressed). GitHub
 CI does not independently validate HCL (its five jobs are
 application/integration checks); HCL correctness rests on the offline harness,
-static validations, and independent review. INFRA-4 remains incomplete;
-INFRA-5 remains unstarted.
+static validations, and independent review.
 
 ## 10. Owning tranche
-Implemented by the INFRA-4 `iam` module resource-definition tranche.
-Root-composition, ECS consumption, any live `plan`/`apply` (INFRA-9), the
-CI-OIDC role (INFRA-5), and the operator/observer/break-glass roles are later,
+Implemented by the INFRA-4 `iam` module resource-definition tranche;
+root-composed by the INFRA-4 root-composition tranche. Any live `plan`/`apply`
+(INFRA-9), the CI-OIDC publisher role (specified by INFRA-5 in
+`docs/operations/staging-publish-workflow.md` §4; HCL + live creation remain
+later-authorized), and the operator/observer/break-glass roles are later,
 separately authorized tranches.

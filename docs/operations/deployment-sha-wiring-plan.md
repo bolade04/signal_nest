@@ -139,11 +139,20 @@ Injection rules:
   the deployment pipeline / IaC variable that carries the authorized SHA — never from tenant
   or client input, request headers, or a mutable lookup.
 - Every component of one deployment (**API, worker, one-shot migration actor**) receives the
-  **same** `BUILD_REVISION` / `APPLICATION_VERSION`, because all three run the **same image
-  digest**. A single task-definition family (or shared container definition) supplies the pair
+  **same** `BUILD_REVISION` / `APPLICATION_VERSION`, because all three are built from the same
+  source SHA *(originally "the same image digest" — corrected by the alignment note below)*. A
+  single task-definition family (or shared container definition) supplies the pair
   identically to each role.
-- Because API, worker, and migration actor share one image digest, their revision is
-  identical by construction; the preflight (§F) verifies this rather than assuming it.
+- Because API, worker, and migration actor share one source revision *(per-image digests per
+  the alignment note below)*, their revision is identical by construction; the preflight (§F)
+  verifies this rather than assuming it.
+- *[Alignment note 2026-07-24 (INFRA-5): the later human-approved §26.5 contract
+  (aws-staging-iac-plan.md, "two images, two repositories, three actors") supersedes this
+  document's one-digest phrasing: the **API** task pins the `api` image digest, while the
+  worker **and** migration tasks share the `worker` image digest. All three are built from
+  the same source SHA in one workflow run, so the **revision** identity above is unchanged;
+  §F's digest checks apply per image (API digest for the API task; worker digest for the
+  worker and migration tasks).]*
 - **Tenant/client input must never control these fields** — they are deployment provenance,
   not request data. `pydantic-settings` reads them only from the process environment, never
   from request scope.
@@ -157,7 +166,9 @@ Intended AWS ECS/Fargate behavior (defined here, applied later):
 - The **ECR image is built once** for a given source SHA.
 - Deployment selects the exact image **by digest** wherever supported (task-definition
   `image` pinned to `...@sha256:<IMAGE_DIGEST>`), not by a mutable tag.
-- **API, worker, and migration actor use the same verified artifact** (same digest).
+- **API, worker, and migration actor use the same verified artifact set** — worker and
+  migration share one digest; the API task pins the api-image digest from the same source SHA
+  *(per the 2026-07-24 §26.5 alignment note in §C)*.
 - **`latest` is never acceptable** deployment evidence.
 - **Rebuilding a different image under an existing tag is prohibited.** Promotion preserves
   artifact identity (re-tag / reference the same digest); it never rebuilds source

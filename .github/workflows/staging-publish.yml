@@ -1,0 +1,280 @@
+name: Staging publish
+
+# INFRA-5 (docs/phase-4b-c-infra-plan.md): the protected staging image build +
+# publish workflow. INFRA-5 AUTHORS this file only — every run is a live
+# execution and requires the separate INFRA-9 fresh authorization plus the
+# protected `staging` GitHub environment's human approval. The workflow:
+#
+#   * builds the exact TWO authoritative images (aws-staging-iac-plan.md §26.5:
+#     `api` and `worker`; the one-shot migration actor REUSES the worker digest
+#     with a command override — a third image is prohibited),
+#   * stamps the trusted checkout SHA into the OCI revision/version labels
+#     (deployment-sha-wiring-plan.md §B; G4 evidence),
+#   * re-runs the repository's container security gates plus a fail-closed
+#     vulnerability scan,
+#   * authenticates to AWS exclusively through GitHub OIDC (no long-lived AWS
+#     key exists anywhere in this repository or its GitHub configuration),
+#   * pushes commit-SHA-tagged images to the two private ECR repositories,
+#     reads the REGISTRY-reported digests back, and
+#   * uploads a non-secret digest manifest artifact (logical repository names
+#     only — never an account id or private registry URI, wiring plan §G) for
+#     the operator's git-ignored *.tfvars handoff consumed by INFRA-9.
+#
+# It never deploys: no ECS API call, no migration execution, no secret access,
+# no task-definition or service mutation. Rollback of a bad publication is
+# "do not consume the digest" — pushed images are inert until INFRA-9 pins
+# them in tfvars.
+
+on:
+  # Manual dispatch ONLY. A push trigger would execute the publish on every
+  # merge to main, violating the INFRA-5 stop boundary ("authoring only;
+  # execution needs INFRA-9 authorization"). No pull_request trigger of any
+  # kind: PR/fork code must never reach an OIDC-credentialed job.
+  workflow_dispatch:
+
+# One publication at a time; a publish mid-push is never cancelled (queued
+# runs wait instead), so a half-pushed tag can't race a second run.
+concurrency:
+  group: staging-publish
+  cancel-in-progress: false
+
+# Least privilege: read-only at the workflow level. The single job below adds
+# id-token: write for itself only.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  # Locked by ADR-0001 for SIGNALNEST_STAGING; non-secret.
+  AWS_REGION: us-east-1
+
+jobs:
+  build-publish:
+    name: Build, verify, and publish the two staging images
+    runs-on: ubuntu-latest
+    # The protected `staging` environment enforces the plan-mandated human
+    # approval gate and restricts runs to main. Its non-secret variables
+    # supply the OIDC publisher-role ARN and account/registry targeting once
+    # the INFRA-9 prerequisites exist; the guard step below fails closed while
+    # they do not. NO AWS access key or secret exists in any secret store.
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write # OIDC federation for this single job only
+    steps:
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Staging publish runs only from refs/heads/main (got ${{ github.ref }})." >&2
+          exit 1
+
+      - name: Fail closed while the INFRA-9 prerequisites are absent
+        env:
+          ROLE_ARN: ${{ vars.AWS_STAGING_PUBLISH_ROLE_ARN }}
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+        run: |
+          if [ -z "${ROLE_ARN}" ] || [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::The staging environment variables AWS_STAGING_PUBLISH_ROLE_ARN and/or AWS_STAGING_ACCOUNT_ID are not set." >&2
+            echo "::error::They exist only after the INFRA-9-gated live prerequisites (remote-state bootstrap, composed-root apply creating the two ECR repositories, and the CI-OIDC publisher role) are provisioned under fresh authorization. Publishing before that is not possible and not authorized." >&2
+            exit 1
+          fi
+
+      - name: Check out the exact trusted revision
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute build metadata
+        id: meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # Fresh, cache-free builds: the publish path never consumes a layer cache
+      # another (less trusted) workflow run may have written. Platform is
+      # pinned to the ECS task-definition runtime (LINUX/X86_64, §26.2).
+      - name: Build API image (linux/amd64, SHA-stamped)
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          target: api
+          platforms: linux/amd64
+          tags: signalnest-api:${{ github.sha }}
+          load: true
+          no-cache: true
+          build-args: |
+            GIT_REVISION=${{ github.sha }}
+            IMAGE_CREATED=${{ steps.meta.outputs.created }}
+
+      - name: Build worker image (linux/amd64, SHA-stamped)
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          target: worker
+          platforms: linux/amd64
+          tags: signalnest-worker:${{ github.sha }}
+          load: true
+          no-cache: true
+          build-args: |
+            GIT_REVISION=${{ github.sha }}
+            IMAGE_CREATED=${{ steps.meta.outputs.created }}
+
+      - name: Security check — non-root, no secrets (API)
+        run: bash scripts/docker-security-check.sh "signalnest-api:${{ github.sha }}"
+
+      - name: Security check — non-root, no secrets (worker)
+        run: bash scripts/docker-security-check.sh "signalnest-worker:${{ github.sha }}"
+
+      - name: API image imports cleanly
+        run: docker run --rm --entrypoint python "signalnest-api:${{ github.sha }}" -c "import app.main; print('api import ok')"
+
+      - name: Migration actor + schema gate run in the worker image
+        run: |
+          docker run --rm -e DATABASE_URL=sqlite:////tmp/publish-ci.db --entrypoint sh "signalnest-worker:${{ github.sha }}" -c '
+            python -m app.db.migrate upgrade &&
+            python -m app.db.migrate check
+          '
+
+      - name: Verify OCI revision labels match the trusted checkout
+        run: |
+          for image in "signalnest-api:${{ github.sha }}" "signalnest-worker:${{ github.sha }}"; do
+            rev="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+            if [ "$rev" != "${{ github.sha }}" ]; then
+              echo "::error::$image carries OCI revision '$rev', expected '${{ github.sha }}'." >&2
+              exit 1
+            fi
+            arch="$(docker inspect --format '{{ .Os }}/{{ .Architecture }}' "$image")"
+            if [ "$arch" != "linux/amd64" ]; then
+              echo "::error::$image platform is '$arch', expected linux/amd64 (ECS §26.2)." >&2
+              exit 1
+            fi
+          done
+          echo "ok: both images stamped with the trusted revision on linux/amd64"
+
+      # Fail-closed vulnerability gate. The authoritative plans require "scan
+      # completion + fail-closed acceptance per image" (registry README §9)
+      # without fixing a threshold; INFRA-5 sets it to CRITICAL+HIGH (subject
+      # to review). ECR scan-on-push additionally re-scans after the push.
+      - name: Vulnerability scan (API) — fail on CRITICAL/HIGH
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: signalnest-api:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Vulnerability scan (worker) — fail on CRITICAL/HIGH
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: signalnest-worker:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_STAGING_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-staging-publish-${{ github.run_id }}
+          role-duration-seconds: 900
+
+      - name: Verify the assumed identity is the intended staging account
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "$actual" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured staging account. Refusing to publish." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured staging account (id not printed)"
+
+      - name: Log in to the staging ECR registry
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'true'
+
+      # mask-password above masks only the ECR auth token. The registry
+      # hostname embeds the AWS account id, which this public repository's
+      # logs must never disclose (wiring-plan §G) — and `docker push` prints
+      # the repository host in its normal output. Registering the host as a
+      # mask redacts EVERY subsequent occurrence structurally, no matter
+      # which future command prints it.
+      - name: Mask the account-bearing registry host in all subsequent logs
+        run: echo "::add-mask::${{ steps.ecr-login.outputs.registry }}"
+
+      - name: Push both images by immutable commit tag and read back digests
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          NAME_PREFIX: ${{ vars.AWS_STAGING_NAME_PREFIX || 'signalnest-staging' }}
+        run: |
+          mkdir -p publish-evidence
+          for target in api worker; do
+            repo="${NAME_PREFIX}/${target}"
+            uri="${REGISTRY}/${repo}:${{ github.sha }}"
+            docker tag "signalnest-${target}:${{ github.sha }}" "$uri"
+            docker push "$uri"
+            digest="$(aws ecr describe-images \
+              --repository-name "$repo" \
+              --image-ids imageTag="${{ github.sha }}" \
+              --query 'imageDetails[0].imageDigest' --output text)"
+            case "$digest" in
+              sha256:*) : ;;
+              *) echo "::error::ECR returned no digest for ${repo}:${{ github.sha }}" >&2; exit 1 ;;
+            esac
+            # Advisory confirmation only: the ECR describe-images digest above
+            # is authoritative. If docker exposes no local RepoDigest the
+            # check is skipped — it can corroborate but never substitute.
+            local_digest="$(docker inspect --format '{{ range .RepoDigests }}{{ println . }}{{ end }}' "$uri" | grep -F "@" | head -1 | cut -d@ -f2 || true)"
+            if [ -n "$local_digest" ] && [ "$local_digest" != "$digest" ]; then
+              echo "::error::Local push digest ($local_digest) and registry digest ($digest) disagree for ${repo}." >&2
+              exit 1
+            fi
+            echo "${target} ${digest}" >> publish-evidence/digests.txt
+            echo "ok: ${target} pushed; registry digest recorded (account-bearing registry host masked in logs)"
+          done
+
+      # Non-secret digest manifest (wiring plan §G): logical repository names
+      # and digests only — never an account id or private registry URI. The
+      # operator composes the full repository@digest URIs privately into the
+      # git-ignored *.tfvars for INFRA-9.
+      - name: Write digest manifest
+        run: |
+          api_digest="$(awk '$1=="api"{print $2}' publish-evidence/digests.txt)"
+          worker_digest="$(awk '$1=="worker"{print $2}' publish-evidence/digests.txt)"
+          cat > publish-evidence/digest-manifest.json <<EOF
+          {
+            "source_commit": "${{ github.sha }}",
+            "platform": "linux/amd64",
+            "workflow_run_id": "${{ github.run_id }}",
+            "workflow_run_attempt": "${{ github.run_attempt }}",
+            "images": [
+              { "logical_repository": "api",    "image_tag": "${{ github.sha }}", "registry_digest": "${api_digest}" },
+              { "logical_repository": "worker", "image_tag": "${{ github.sha }}", "registry_digest": "${worker_digest}" }
+            ],
+            "consumers": {
+              "api_image_digest": "${api_digest}",
+              "worker_image_digest": "${worker_digest}",
+              "note": "Supply these via the git-ignored *.tfvars at INFRA-9; the migration task reuses worker_image_digest (§26.5)."
+            }
+          }
+          EOF
+          cat publish-evidence/digest-manifest.json
+
+      - name: Upload digest manifest artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-digest-manifest-${{ github.sha }}
+          path: publish-evidence/digest-manifest.json
+          retention-days: 90
