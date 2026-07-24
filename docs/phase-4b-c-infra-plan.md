@@ -353,6 +353,38 @@
 
 ## INFRA-6 — Secrets, networking, data protection, and recovery
 
+- **Delivered (INFRA-6 procedures tranche, recorded 2026-07-24):**
+  [`docs/operations/aws-staging-operational-procedures.md`](operations/aws-staging-operational-procedures.md)
+  — the operational side of the INFRA-3 contract, authored strictly within the stop boundary
+  below (**procedures/definitions only; no secret was created; no AWS or GitHub state was
+  touched; no `.tf` file changed; nothing executed**). It defines: the four-secret population
+  procedure (allowlist-exact, file-based sanitized CLI pattern, metadata-only verification via
+  `describe-secret`/`list-secret-version-ids`, built-in `AWSPREVIOUS` rollback, never run in
+  CI); the population-operator principal **design** (interim human operator; permanent
+  least-privilege spec scoped to the four container ARNs + CMK-via-SecretsManager — creation
+  remains separately authorized, resolving §26.6's "undecided live-operation gate" at the
+  design level); per-secret **rotation mechanics** (SECRET_KEY hard cutover; DATABASE_URL
+  application-role rotation; REDIS_URL has **no rotatable credential** under Option A;
+  LLM_API_KEY provider rotation) with the INFRA-6-mechanics / INFRA-7-decision incident
+  boundary made explicit; the **database-initialization** decision — one dedicated
+  least-privilege application DB role inside `DATABASE_URL` for all three actors (§26.7's
+  single shared container implies exactly one application credential, which must carry DDL for
+  the migration actor), the RDS-managed master credential remaining administrative/transient
+  and never embedded, with the pgvector `CREATE EXTENSION` step defined but **still deferred**
+  (`VECTOR_BACKEND` stays omitted); the **backup posture** (existing merged substrate cited:
+  RDS 7-day-default undisableable retention + final snapshot + deletion protection, Redis
+  snapshots, S3 versioning; the unpinned AWS-default backup/maintenance window documented as a
+  gap, not silently fixed); the **restore runbook** (staging targets RPO ≤ 24 h / RTO ≤ 8
+  working hours; RDS PITR/snapshot new-instance restore with the KMS ForceNew caveat,
+  post-restore verification, `DATABASE_URL` recomposition → population → G5 → restart,
+  rollback-of-restore; Redis accept-cache-loss default; S3 version restore); and the
+  TLS/isolation/egress **verification checklists** over the merged IaC plus the security
+  review (no production reuse — no production exists; all values newly generated for staging).
+  The locked six-step live sequence (bootstrap → apply → endpoints → **populate** → **G5** →
+  ECS start → migration) is restated from §26.6/the secrets README, with every live step
+  requiring its own later authorization (population execution is INFRA-9-adjacent). G5
+  implementation remains a separately authorized INFRA-3 follow-up; no scripts were added
+  (expected repository areas are `docs/` + IaC references).
 - **Objective:** operationalize the secret contract established in INFRA-3 and define secret
   lifecycle, network isolation, and data-protection procedures. This tranche **implements the
   operational side** (secrets-management infrastructure and lifecycle, rotation implementation,
