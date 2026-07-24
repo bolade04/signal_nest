@@ -460,6 +460,40 @@
 
 ## INFRA-8 — Internal tenant and access readiness
 
+- **Delivered (INFRA-8 planning/gap-analysis tranche, recorded 2026-07-24):**
+  [`docs/operations/aws-staging-internal-access-plan.md`](operations/aws-staging-internal-access-plan.md)
+  — authored strictly within the boundaries below (**docs/ only; no external resource; no
+  tenant/user/session/membership/role assignment created anywhere; no app code, schema,
+  migration, infra, or workflow change; nothing executed live**). The plan locks: the
+  runtime-contract §I tenant topology binding (two internal organizations `ORG_CANARY`/
+  `ORG_CONTROL`, three workspaces `TARGET_CANARY`/`SAME_ORG_SIBLING`/`CROSS_ORG_CONTROL`);
+  the five-identity inventory with the **three independent sessions** = executing operator +
+  independent observer + feedback-exercising member (logical aliases only; the real role
+  vocabulary is `owner/admin/marketer/reviewer/viewer/compliance_reviewer` + the
+  `is_operator` trust flag — there is **no literal "editor" or "observer" role**: "editor"
+  is the shipped Phase-3C `EDITORS = owner|admin|marketer` tier and "observer" is a
+  read-only access pattern); the ordered **supported-surface provisioning sequence**
+  (`POST /auth/register` → workspace creation → role assignment → independent logins; no
+  SQL ever; fail-report-don't-adopt on any unexpected record); and the **five-gap
+  register**, each deferred to a separately reviewed PR or later tranche per this entry's
+  own carve-out: GAP-1 no supported `is_operator` grant surface (surfacing the
+  **first-operator bootstrap decision** — the single targeted human decision this plan
+  requests, with option (a) an explicitly authorized boot-time bootstrap path recommended);
+  GAP-2 no member/role-assignment surface (blocks the viewer-403 identity; also means role
+  escalation is currently structurally impossible); GAP-3 no observer primitive (ruled:
+  second operator account used read-only **by convention** is the accepted 4B-B model per
+  the INFRA-7 §7 access requirements; a dedicated observer role deliberately deferred);
+  GAP-4 no deactivation/revocation/membership-removal surface (today's only rollback =
+  credential disuse + JWT expiry — INFRA-9 must not assume a revoke-via-API path); GAP-5
+  observer AWS-side CloudWatch/CloudTrail read access has no human IAM path in the merged
+  `iam` module (flagged for a separately authorized tranche). Security contract asserted
+  from enforced code with existing-test citations (server-side path-derived tenant scoping,
+  no tenant header anywhere, stateless independent JWT sessions, no client-writable
+  escalation, no email side effects, 409 duplicate guard); schema sufficient at alembic
+  `98289430a3ec`/12 — **no migration needed or permitted**; restricted-evidence binding to
+  the current taxonomy (live identifiers/credentials/tokens restricted from birth; "G2"
+  confirmed stale and unused). Live execution of the sequence, the gap-fix PRs, the
+  first-operator decision, and surface verification all remain INFRA-9-gated.
 - **Objective:** verify supported provisioning of internal tenants and roles.
 - **Consider:** supported organization/workspace provisioning surfaces
   (`POST /auth/register`, `POST /organizations/{organization_id}/workspaces`, RBAC role
