@@ -48,6 +48,12 @@ live, and the module is **not** root-composed.
   one-shot step (INFRA-5/INFRA-9).
 
 ## 3. Two-image contract (§26.5) and the foundation/workload stage (INFRA-9)
+*[Updated 2026-07-24, INFRA-9 execution-path tranche: the foundation/workload
+staging material below (the `deploy_workload` gate, the nullable-but-fail-closed
+digest inputs, and the deterministic service/family outputs) was added here,
+superseding this section's earlier single-apply assumption that every task
+definition is created in one composed-root apply with real digests already
+present.]*
 Exactly **two** immutable, digest-pinned images: API task = the `api` repository
 URL + `api_image_digest`; worker task = the `worker` repository URL +
 `worker_image_digest`; **the migration task reuses the worker image digest** with
