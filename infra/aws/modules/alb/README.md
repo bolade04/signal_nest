@@ -13,11 +13,19 @@ no infrastructure exists in AWS.
   health check against liveness `/health`, matcher `200`)
 - `aws_lb_listener` — HTTPS:443 listener (TLS terminates here) forwarding to the
   target group
+- `aws_s3_bucket` (+ ownership controls, public-access block, SSE-S3 encryption,
+  versioning, bucket policy) — the dedicated private ALB log-delivery bucket;
+  the ALB's **access and connection logging** both write into it (distinct
+  `alb-access`/`alb-connection` prefixes). This is an infra-telemetry bucket
+  owned here (mirroring the `observability` audit-bucket convention); `storage`
+  still owns exactly one application bucket. Delivery is granted to the regional
+  ELB service account resolved at plan time (`aws_elb_service_account` +
+  `aws_caller_identity` data sources — no account id committed).
 
 ## 3. Out of scope
 ECS services/task definitions and the API task SG + ALB↔API cross-SG rules (`ecs`),
 certificate/DNS creation (`edge`; the ALB cert is consumed by value), VPC/subnets
-(`network`), access/connection logging and its bucket (`storage`), WAF.
+(`network`), WAF and the API Route 53 alias (deferred, §24.7).
 
 ## 4. Upstream dependencies
 `network` (`vpc_id`, `public_subnet_ids`). The regional ACM certificate ARN is
@@ -55,16 +63,18 @@ Single ALB, single API target group. The ALB security group is created with **no
 inline rules** so the provider removes AWS's implicit allow-all default egress; the
 public 443 ingress is a standalone rule, and the ALB→API `:8000` egress rule is added
 by the `ecs` module (no unrestricted ALB egress, no mixing of inline/standalone rules).
-Access/connection logging, WAF, and the API Route 53 alias remain deferred; logging
-must be resolved before any live staging plan/apply.
+Access **and** connection logging are enabled into the module-owned private log
+bucket (the §24.7 pre-live logging gate is resolved in configuration; nothing is
+provisioned). WAF and the API Route 53 alias remain deferred.
 
 ## 9. Status
 Resource bodies authored and validated offline only (`tofu fmt`, `tofu init
--backend=false`, `tofu validate`). **No `tofu plan`/`apply`, no AWS API call, no
-state, no certificate/DNS/WAF/log-bucket resource, no ECS target registration, and
-no provisioning have occurred. Nothing exists in AWS.**
+-backend=false`, `tofu validate`). The log-delivery bucket and both logging
+blocks are configuration only. **No `tofu plan`/`apply`, no AWS API call, no
+state, no certificate/DNS/WAF resource, no ECS target registration, and no
+provisioning have occurred. Nothing exists in AWS.**
 
 ## 10. Owning tranche
-INFRA-4 alb resource-definition tranche. INFRA-4 remains incomplete (nine modules
-remain documentation-only stubs); remote-state bootstrap and any `apply` remain
-later, separately authorized tranches (`apply` is INFRA-9).
+INFRA-4 alb resource-definition tranche; access/connection logging added by the
+INFRA-4 pre-live tranche. Live remote-state bootstrap and any `apply` remain
+later, separately authorized (`apply` is INFRA-9).

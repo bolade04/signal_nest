@@ -1,0 +1,20 @@
+# backend.hcl.example — synthetic partial-backend-config template (main root)
+#
+# WARNING: This is an EXAMPLE template only. The real `backend.hcl` is
+# git-ignored and must NEVER be committed (aws-staging-iac-plan.md §7: backend
+# identifiers are never committed). Fill it from the bootstrap root's outputs
+# AFTER the later-authorized live state bootstrap (bundled with the INFRA-9
+# fresh-authorization gate — see infra/aws/README.md §12), then initialize the
+# main root with:
+#
+#   tofu init -backend-config=backend.hcl
+#
+# Nothing about this file's existence authorizes that live step, and no
+# backend-configured init has been run.
+
+bucket         = "<state-bucket-name-from-bootstrap-output>"
+key            = "signalnest-staging/root.tfstate"
+region         = "us-east-1"
+kms_key_id     = "<state-cmk-arn-from-bootstrap-output>"
+encrypt        = true
+dynamodb_table = "<lock-table-name-from-bootstrap-output>"

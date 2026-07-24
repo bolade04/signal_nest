@@ -162,7 +162,14 @@ secret; outputs never expose secret material.
   deployment role. State is never printed to logs or attached as PR evidence.
 - **Bootstrap ordering:** the state backend itself is provisioned once under a later authorized
   step before any environment module is applied; this document only fixes the design, not the
-  bootstrap execution.
+  bootstrap execution. *[Update 2026-07-24, INFRA-4 pre-live tranche: the bootstrap
+  **configuration** is now authored at `infra/aws/bootstrap/` (a one-time state-backend root:
+  SSE-KMS state bucket + dedicated CMK + DynamoDB lock table, offline-validated only, own
+  committed lockfile, local one-time state) together with a synthetic
+  `infra/aws/backend.hcl.example` template; the real `backend.hcl` is git-ignored. This changes
+  nothing about execution: the live bootstrap run remains the later authorized step (bundled with
+  the INFRA-9 fresh-authorization gate per `infra/aws/README.md` §12) — no plan/apply has run and
+  no backend object exists.]*
 
 ## 8. Network and ingress (design)
 
@@ -563,7 +570,16 @@ are never committed. The decisions are verified against committed application be
    S3 bucket and delivery policy, and any later `aws_lb.access_logs.bucket` value must consume an
    S3 **bucket name, not an ARN**. No conditional or placeholder log-bucket input is added to the
    initial ALB module. Logging must be resolved **before any live staging plan/apply
-   authorization**. **WAF** remains deferred. **API Route 53 alias** creation remains deferred
+   authorization**. *[Resolved 2026-07-24, INFRA-4 pre-live tranche: access **and** connection
+   logging are enabled in configuration, delivering to a dedicated private log bucket **owned by
+   the `alb` module itself** — this supersedes the storage-owned phrasing above, which predated
+   the later human-approved observability audit-bucket convention (the telemetry-owning module
+   owns its delivery bucket; `storage` keeps its locked single-application-bucket contract). Both
+   blocks consume the bucket **name**, per this section. The bucket is SSE-S3/AES256 (the only
+   encryption ELB log delivery supports), versioned, public-access-blocked, TLS-only; the
+   delivery principal is the regional ELB service account resolved at plan time via
+   `aws_elb_service_account` (no account-id literal). Configuration only — nothing provisioned.]*
+   **WAF** remains deferred. **API Route 53 alias** creation remains deferred
    (added only after the ALB exposes its DNS name and canonical hosted-zone id). The future ALB
    module must eventually expose outputs: `alb_arn`, `alb_dns_name`,
    `alb_canonical_hosted_zone_id`, `https_listener_arn`, `api_target_group_arn`, and
@@ -603,6 +619,18 @@ The decisions in §24 were verified read-only against committed application beha
   across all clients. Resolution is application/ECS-layer (enable uvicorn `--proxy-headers` /
   `--forwarded-allow-ips` and trust the client-most `X-Forwarded-For`, or land the Redis adapter),
   or explicitly accept a global staging-only limit until then. No ALB attribute changes.
+  *[Resolved 2026-07-24, INFRA-4 pre-live tranche, via the first option: the API uvicorn command
+  now passes `--proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}"`
+  (`apps/api/Dockerfile`; local/dev behavior unchanged), and the root composition sets
+  `FORWARDED_ALLOW_IPS` to the VPC CIDR for the **API workload only**. With only in-VPC peers
+  trusted, uvicorn resolves the **rightmost untrusted** `X-Forwarded-For` entry — the address the
+  ALB itself appends (`xff_header_processing_mode = "append"`) — so `request.client.host` becomes
+  the real client and `RateLimitMiddleware` needs no code change; client-prepended XFF values can
+  never win. Deliberately **not** `"*"`: with every host trusted, uvicorn degenerates to the
+  leftmost (client-forgeable) entry. SAFETY INVARIANT: this trust is sound only while §26.3 keeps
+  the API task SG's sole ingress the ALB SG on TCP 8000. No second XFF parser was added.
+  Pinned by `apps/api/app/tests/test_rate_limit.py` (spoofing, multi-hop, IPv6, malformed-header,
+  and bucket-isolation scenarios). No ALB attribute changed.]*
 - **API graceful shutdown.** The API uvicorn command sets no explicit graceful-shutdown window
   (`apps/api/Dockerfile`); the ECS tranche must align ECS `stopTimeout` with the 60s
   deregistration delay so in-flight requests drain cleanly.
@@ -854,6 +882,17 @@ Clarifications locked by this update:
 - **Still deferred (unchanged, separately authorized):** the stale `infra/aws/main.tf`
   header/annotation comments (a `.tf` file is outside this documentation tranche), the
   `cost` module README `tags`-input cleanup, and the phase-plan Delivered-entry backfill.
+
+### 26.16 Interface-status completion note (2026-07-24; documentation only)
+
+§26.15 was a point-in-time snapshot; the tranches merged after it made its inventory line
+("8 implemented / 3 composed / 5 uncomposed / 4 stubs") and its PLANNED markers stale. As of the
+INFRA-4 pre-live tranche: **all twelve modules are implemented and root-composed** (no stub
+remains), every §26.12 edge in the §26.15 table — including `iam -> ecs` and
+`ecs -> observability` — **EXISTS root-wired**, and the stale `main.tf` header noted above was
+fixed by the root-composition tranche. **No §26.1–§26.14 decision is changed.** Composition
+remains configuration only: nothing is provisioned or deployed, and `apply` remains INFRA-9-gated
+(§22).
 
 ## 22. Exact future gates
 

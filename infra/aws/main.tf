@@ -47,6 +47,17 @@ locals {
     QUEUE_BACKEND = "redis"
     CACHE_BACKEND = "redis"
   })
+  # API-only (§25 rate-limiting-behind-proxy resolution): uvicorn trusts proxy
+  # headers exclusively from in-VPC peers, so `request.client` becomes the
+  # rightmost UNTRUSTED X-Forwarded-For entry — the ALB-appended real client
+  # (xff_header_processing_mode = "append"), immune to client-prepended spoofing.
+  # SAFETY INVARIANT: this trust is sound only while §26.3 keeps the API task
+  # SG's sole ingress the ALB SG on TCP 8000. NEVER widen this to "*": uvicorn
+  # degenerates to the leftmost (client-forgeable) entry when every host is
+  # trusted. The worker/migration workloads serve no HTTP and never set it.
+  workload_env_api = merge(local.workload_env_redis, {
+    FORWARDED_ALLOW_IPS = var.vpc_cidr
+  })
   workload_env_migration = merge(local.workload_env_common, {
     QUEUE_BACKEND = "inprocess"
     CACHE_BACKEND = "memory"
@@ -173,7 +184,7 @@ module "ecs" {
   worker_task_role_arn    = module.iam.worker_task_role_arn
   migration_task_role_arn = module.iam.migration_task_role_arn
   secret_arns             = module.secrets.secret_arns
-  api_environment         = local.workload_env_redis
+  api_environment         = local.workload_env_api
   worker_environment      = local.workload_env_redis
   migration_environment   = local.workload_env_migration
 }

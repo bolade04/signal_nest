@@ -94,6 +94,10 @@ override.tf.json
 *_override.tf.json
 *.tfvars
 !*.tfvars.example
+# A real partial-backend config carries the state bucket/table/KMS identifiers
+# (never committed, aws-staging-iac-plan.md §7); only the example is tracked.
+backend.hcl
+!backend.hcl.example
 # Re-include the IaC `storage` module dir; the app-level `storage/` rule above
 # (local object storage) would otherwise ignore this documentation-only stub.
 !infra/aws/modules/storage/
