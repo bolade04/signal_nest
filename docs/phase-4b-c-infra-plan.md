@@ -406,6 +406,41 @@
 
 ## INFRA-7 — Observability, audit, evidence, and incident readiness (must complete before the canary)
 
+- **Delivered (INFRA-7 readiness tranche, recorded 2026-07-24):**
+  [`docs/operations/aws-staging-observability-incident-readiness.md`](operations/aws-staging-observability-incident-readiness.md)
+  plus the capability-observability IaC **definitions** in the `observability` module —
+  authored strictly within the boundaries below (**no external resource created; everything
+  is defined for the INFRA-9 apply; no override created; nothing executed live**). IaC: 3
+  capability metric filters over the ecs-owned API log group (`opportunity_feedback_gate_failed`;
+  override-driven ALLOWED gate decisions `decided_by="workspace_override"`; the coarse
+  `workspace_capability_override_set|_clear` mutation events — patterns evidence-backed
+  against the application's structured `event` JSON key, carrying **no tenant identifier**),
+  3 **fixed-threshold(1)** alarms (discrete audit events where any occurrence is the signal —
+  deliberately outside the caller-supplied `alarm_thresholds` contract), and **one canary
+  observability dashboard** (four widgets over deterministic names only — a **disclosed
+  supersede** of the observability module's earlier "no dashboard (none documented)"
+  exclusion, exercised under this tranche's "IaC (dashboards/alarms)" expected area).
+  ALB-dimension alarms remain deferred behind the separately authorized `alb` `arn_suffix`
+  output addition (not exercised here). Docs: the canary observability map; the two-plane
+  **audit-view contract** (CloudWatch coarse paging signals + the Postgres `audit_logs`
+  attribution plane behind the operator read surface, with the CloudWatch-visibility
+  limitation documented and accepted); dark-period **unexpected-enable detection/response**;
+  **clear-path evidence** procedure (the merged, tested operator DELETE plane); the
+  **incident decision framework** (the INFRA-7 side of the INFRA-6 §5.5
+  mechanics/decision boundary — detection, severity, communication, when-to-rotate,
+  containment-by-clear); **incident contacts as roles only**; the **secure evidence
+  destination design** (concrete system = an operator decision recorded before the canary;
+  explicitly NOT this repository and NOT the CloudTrail audit bucket); **independent
+  observer access requirements** (read-only; identity/role/session creation remains
+  INFRA-8); the **retention decisions** the runtime contract assigns to INFRA-7 (workload
+  logs 30 days affirmed; CloudTrail objects ≥ 400 days with a lifecycle rule deferred;
+  `audit_logs` bounded by the staging environment); and the four-surface **redaction
+  matrix** (documenting the sanctioned tenant-id-bearing exception for capability gate
+  events). The 4B-B evidence template gained four sufficiency additions (gate-failed/alarm
+  quiet, observer read-path proof, evidence-destination confirmation, incident-contact
+  roles) and remains placeholder-only. Stale "NOT root-composed" claims in the
+  observability module README were corrected in passing. **No AWS/GitHub state changed; no
+  identity/tenant/session was created; no live command ran; the five flags remain `False`.**
 - **Objective:** ensure the canary is fully observable before any override exists.
 - **Consider:** logs; metrics; alarms; error monitoring; **audit views**; **gate-decision
   observability** (`opportunity_feedback_gate_decided` / `_failed`); override audit events

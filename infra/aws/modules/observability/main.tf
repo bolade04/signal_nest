@@ -376,3 +376,162 @@ resource "aws_cloudtrail" "audit" {
 
   depends_on = [aws_s3_bucket_policy.audit]
 }
+
+# --- Capability-gate and override-audit observability (INFRA-7) ---------------------
+# Three additional metric filters + fixed-threshold alarms + one dashboard over
+# the ecs-owned API log group, authored by the INFRA-7 readiness tranche
+# (phase plan: expected repository area "IaC (dashboards/alarms)"; resources are
+# DEFINED here and created only at the INFRA-9 apply). The API workload emits
+# the capability events as structured JSON — evidence:
+#   apps/api/app/feedback/routes.py     -> "opportunity_feedback_gate_decided" /
+#                                          "opportunity_feedback_gate_failed"
+#   apps/api/app/capabilities/service.py -> "workspace_capability_override_set" /
+#                                           "workspace_capability_override_clear"
+#   apps/api/app/core/logging.py         -> the event name is the top-level
+#                                           "event" JSON key.
+# Unlike the caller-thresholded saturation alarms above, these are DISCRETE
+# audit events where ANY occurrence is the signal (the capability plane is dark
+# until the separately authorized canary), so the threshold is intrinsically 1
+# and deliberately NOT part of the caller-supplied `alarm_thresholds` contract —
+# a tunable here would only invite silencing the canary's primary watch signal.
+# The FULL override audit trail (actor, reason, previous/new state) lives in the
+# application's Postgres `audit_logs` table behind the operator read plane;
+# these filters observe the coarse stdout events so CloudWatch pages on ANY
+# override mutation or override-driven enable. Patterns carry event/outcome/
+# decided_by fields only — no tenant identifier enters any metric or dimension.
+
+locals {
+  capability_signals = {
+    gate-failed = {
+      pattern     = "{ $.event = \"opportunity_feedback_gate_failed\" }"
+      metric      = "api_gate_failed_count"
+      description = "The opportunity-feedback capability gate raised an internal error (fail-closed path). Any occurrence needs investigation before/during the canary."
+    }
+    override-enable = {
+      pattern     = "{ ($.event = \"opportunity_feedback_gate_decided\") && ($.decided_by = \"workspace_override\") && ($.outcome = \"allowed\") }"
+      metric      = "api_override_enable_count"
+      description = "A gate decision was ALLOWED via a workspace override. While the platform is dark any occurrence is unexpected; during the authorized canary this is the primary watch signal."
+    }
+    override-mutation = {
+      pattern     = "{ ($.event = \"workspace_capability_override_set\") || ($.event = \"workspace_capability_override_clear\") }"
+      metric      = "api_override_mutation_count"
+      description = "A workspace capability override was set or cleared through the operator plane. Every mutation should page; the full audit row (actor/reason) is in the application audit_logs table."
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "capability" {
+  for_each = local.capability_signals
+
+  name           = "${var.name_prefix}-${each.key}"
+  log_group_name = var.log_group_names["api"]
+  pattern        = each.value.pattern
+
+  metric_transformation {
+    name          = each.value.metric
+    namespace     = local.metric_namespace
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "capability" {
+  for_each = local.capability_signals
+
+  alarm_name          = "${var.name_prefix}-${each.key}"
+  alarm_description   = each.value.description
+  namespace           = local.metric_namespace
+  metric_name         = each.value.metric
+  statistic           = "Sum"
+  period              = local.period_seconds
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  # Intrinsic threshold: one occurrence of a discrete capability audit event is
+  # the signal (see the section comment) — not caller-tunable by design.
+  threshold          = 1
+  treat_missing_data = "notBreaching"
+  alarm_actions      = local.alarm_actions
+  ok_actions         = local.alarm_actions
+
+  tags = {
+    Name = "${var.name_prefix}-${each.key}"
+  }
+}
+
+# --- Canary observability dashboard (INFRA-7) ---------------------------------------
+# One CloudWatch dashboard summarizing the canary watch surface. This is a
+# DISCLOSED supersede of this module's earlier "no dashboard (none documented)"
+# exclusion: INFRA-7's phase-plan entry names "IaC (dashboards/alarms)" as the
+# tranche's expected repository area, which documents exactly one dashboard.
+# The body references only the deterministic metric names/dimensions already
+# established above — no account id, ARN, tenant identifier, or endpoint enters
+# the committed JSON; the widget region resolves at plan time via the existing
+# region data source.
+resource "aws_cloudwatch_dashboard" "canary" {
+  dashboard_name = "${var.name_prefix}-canary-observability"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type = "metric", x = 0, y = 0, width = 12, height = 6
+        properties = {
+          title  = "Capability gate + override signals (any occurrence pages)"
+          region = data.aws_region.current.region
+          stat   = "Sum", period = local.period_seconds
+          metrics = [
+            [local.metric_namespace, "api_gate_failed_count"],
+            [local.metric_namespace, "api_override_enable_count"],
+            [local.metric_namespace, "api_override_mutation_count"],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 0, width = 12, height = 6
+        properties = {
+          title  = "ERROR-severity log lines per workload"
+          region = data.aws_region.current.region
+          stat   = "Sum", period = local.period_seconds
+          metrics = [
+            [local.metric_namespace, "api_error_count"],
+            [local.metric_namespace, "worker_error_count"],
+            [local.metric_namespace, "migration_error_count"],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 6, width = 12, height = 6
+        properties = {
+          title  = "ECS service CPU / memory utilization"
+          region = data.aws_region.current.region
+          stat   = "Average", period = local.period_seconds
+          metrics = [
+            ["AWS/ECS", "CPUUtilization", "ClusterName", local.cluster_name, "ServiceName", var.api_service_name],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", local.cluster_name, "ServiceName", var.api_service_name],
+            ["AWS/ECS", "CPUUtilization", "ClusterName", local.cluster_name, "ServiceName", var.worker_service_name],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", local.cluster_name, "ServiceName", var.worker_service_name],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 6, width = 12, height = 6
+        properties = {
+          title  = "Data-tier saturation (RDS / Redis)"
+          region = data.aws_region.current.region
+          stat   = "Average", period = local.period_seconds
+          # Redis shows BOTH CPU series: CPUUtilization is what the merged
+          # redis-cpu-high alarm thresholds (the authoritative pager — kept so
+          # dashboard and alarm watch the same signal), EngineCPUUtilization is
+          # the more diagnostic Redis engine-thread series shown alongside it.
+          metrics = [
+            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", local.db_instance_id],
+            ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", local.db_instance_id],
+            ["AWS/ElastiCache", "CPUUtilization", "CacheClusterId", local.cache_cluster_id],
+            ["AWS/ElastiCache", "EngineCPUUtilization", "CacheClusterId", local.cache_cluster_id],
+            ["AWS/ElastiCache", "DatabaseMemoryUsagePercentage", "CacheClusterId", local.cache_cluster_id],
+          ]
+        }
+      },
+    ]
+  })
+}

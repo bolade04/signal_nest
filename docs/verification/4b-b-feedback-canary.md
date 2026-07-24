@@ -100,6 +100,12 @@ Authoritative procedure: `docs/phase-4b-b-plan.md`. Parent plan: `docs/phase-4b-
   acknowledged): `<PLACEHOLDER>`
 - Feedback gate decision event `opportunity_feedback_gate_decided`
   (outcome=allowed, decided_by=workspace_override): `<PLACEHOLDER>`
+- No `opportunity_feedback_gate_failed` event during the window, and the
+  `<prefix>-gate-failed` CloudWatch alarm remained quiet (INFRA-7 signal set):
+  `<PLACEHOLDER>`
+- The `<prefix>-override-enable` / `<prefix>-override-mutation` alarms fired
+  only for the authorized canary actions (correlated against the window):
+  `<PLACEHOLDER>`
 
 ## 9. Cross-workspace safety scan
 
@@ -143,7 +149,17 @@ Authoritative procedure: `docs/phase-4b-b-plan.md`. Parent plan: `docs/phase-4b-
 
 - Executing operator sign-off: `<PLACEHOLDER>`
 - Observer sign-off: `<PLACEHOLDER>`
+- Independent-observer read path proven BEFORE the window (observer session,
+  distinct from the operator, successfully read the effective-state/overrides
+  GET plane and the CloudWatch dashboard — no mutation rights; INFRA-7 §7):
+  `<PLACEHOLDER>`
 - Authorizer acknowledgement of evidence: `<PLACEHOLDER>`
+- Incident contacts for the window recorded (ROLES mapped to people in the
+  restricted copy only — canary authorizer / executing operator / independent
+  observer / infrastructure operator; INFRA-7 §5): `<PLACEHOLDER>`
+- Restricted evidence destination for this filled record confirmed (approved
+  private store per INFRA-7 §6 — never this repository, a PR, CI, or the
+  CloudTrail audit bucket): `<PLACEHOLDER>`
 
 ---
 
