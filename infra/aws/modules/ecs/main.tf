@@ -74,8 +74,11 @@ locals {
   }
 
   # Two immutable image references (§26.5); migration reuses the worker reference.
-  api_image    = "${var.repository_urls["api"]}@${var.api_image_digest}"
-  worker_image = "${var.repository_urls["worker"]}@${var.worker_image_digest}"
+  # Guarded null in the foundation stage (digest null): the task definitions that
+  # consume these are count-gated off, so a null image is never materialized —
+  # the guard only prevents interpolating null into a string at evaluation time.
+  api_image    = var.api_image_digest == null ? null : "${var.repository_urls["api"]}@${var.api_image_digest}"
+  worker_image = var.worker_image_digest == null ? null : "${var.repository_urls["worker"]}@${var.worker_image_digest}"
   workload_image = {
     api       = local.api_image
     worker    = local.worker_image
@@ -253,8 +256,10 @@ resource "aws_vpc_security_group_egress_rule" "task_https" {
   }
 }
 
-# --- API task definition -----------------------------------------------------------
+# --- API task definition (workload stage only) -------------------------------------
 resource "aws_ecs_task_definition" "api" {
+  count = var.deploy_workload ? 1 : 0
+
   family                   = "${var.name_prefix}-api"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -262,6 +267,15 @@ resource "aws_ecs_task_definition" "api" {
   memory                   = tostring(var.task_memory)
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.api_task_role_arn
+
+  # Fail-closed: the workload stage cannot create the API task definition without
+  # a real immutable API image digest (no placeholder, no tag).
+  lifecycle {
+    precondition {
+      condition     = var.api_image_digest != null
+      error_message = "deploy_workload = true requires a non-null api_image_digest (a real immutable sha256 digest from an INFRA-5 publish run)."
+    }
+  }
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -284,8 +298,10 @@ resource "aws_ecs_task_definition" "api" {
   }
 }
 
-# --- Worker task definition --------------------------------------------------------
+# --- Worker task definition (workload stage only) ----------------------------------
 resource "aws_ecs_task_definition" "worker" {
+  count = var.deploy_workload ? 1 : 0
+
   family                   = "${var.name_prefix}-worker"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -314,6 +330,12 @@ resource "aws_ecs_task_definition" "worker" {
   }
 
   lifecycle {
+    # Fail-closed: the worker digest also backs the migration task, so a real
+    # immutable worker image digest is required for the workload stage.
+    precondition {
+      condition     = var.worker_image_digest != null
+      error_message = "deploy_workload = true requires a non-null worker_image_digest (a real immutable sha256 digest from an INFRA-5 publish run)."
+    }
     precondition {
       condition     = var.worker_stop_timeout_seconds >= var.worker_shutdown_grace_seconds
       error_message = "worker_stop_timeout_seconds must be >= worker_shutdown_grace_seconds so the worker can drain in-flight jobs before SIGKILL (§26.10)."
@@ -327,6 +349,8 @@ resource "aws_ecs_task_definition" "worker" {
 # no Redis secret, rule, or configuration. Executing it is a later, separately
 # authorized run-task (INFRA-5/INFRA-9) — nothing here schedules or runs it.
 resource "aws_ecs_task_definition" "migration" {
+  count = var.deploy_workload ? 1 : 0
+
   family                   = "${var.name_prefix}-migration"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -357,9 +381,11 @@ resource "aws_ecs_task_definition" "migration" {
 
 # --- API service (behind the alb-owned target group) -------------------------------
 resource "aws_ecs_service" "api" {
+  count = var.deploy_workload ? 1 : 0
+
   name                               = "${var.name_prefix}-api"
   cluster                            = aws_ecs_cluster.this.id
-  task_definition                    = aws_ecs_task_definition.api.arn
+  task_definition                    = aws_ecs_task_definition.api[0].arn
   desired_count                      = var.api_desired_count
   launch_type                        = "FARGATE"
   platform_version                   = "1.4.0"
@@ -392,9 +418,11 @@ resource "aws_ecs_service" "api" {
 
 # --- Worker service (no port, no load balancer) ------------------------------------
 resource "aws_ecs_service" "worker" {
+  count = var.deploy_workload ? 1 : 0
+
   name                               = "${var.name_prefix}-worker"
   cluster                            = aws_ecs_cluster.this.id
-  task_definition                    = aws_ecs_task_definition.worker.arn
+  task_definition                    = aws_ecs_task_definition.worker[0].arn
   desired_count                      = var.worker_desired_count
   launch_type                        = "FARGATE"
   platform_version                   = "1.4.0"

@@ -56,11 +56,27 @@ variable "bucket_arn" {
 }
 
 variable "repository_arns" {
-  description = "Map of logical repository key (api|worker) -> ECR repository ARN, from the registry module output of the same name. Scopes the execution role's image-pull permissions to exactly the two application repositories."
+  description = "Map of logical repository key (api|worker) -> ECR repository ARN, from the registry module output of the same name. Scopes the execution role's image-pull permissions to exactly the two application repositories (and the CI publisher role's push permissions to the same two)."
   type        = map(string)
 
   validation {
     condition     = length(var.repository_arns) > 0 && alltrue([for a in values(var.repository_arns) : can(regex("^arn:[^:]+:ecr:", a))])
     error_message = "repository_arns must be a non-empty map of ECR repository ARNs (arn:<partition>:ecr:...)."
+  }
+}
+
+# CI image-publisher role trust (staging-publish-workflow.md §4). The account-wide
+# GitHub Actions OIDC provider is CONSUMED, never created here — it is a shared
+# account resource whose ownership this module does not establish, so it remains
+# an external prerequisite. Null (default) leaves the publisher role UNCREATED so
+# offline validation passes with no real ARN committed.
+variable "github_oidc_provider_arn" {
+  description = "ARN of the pre-existing GitHub Actions OIDC provider (token.actions.githubusercontent.com) used by the CI image-publisher role trust policy. Null leaves the publisher role uncreated. Consumed, never created; no real ARN is committed."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_oidc_provider_arn == null || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.github_oidc_provider_arn))
+    error_message = "github_oidc_provider_arn, when set, must be a GitHub Actions OIDC provider ARN (arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com)."
   }
 }

@@ -86,7 +86,7 @@ documentation-only stub remains, and **all twelve are root-composed** (wired in
 | `data_cache` | **Implemented** (offline-validated, **root-composed**) — one private ElastiCache for Redis replication group (encrypted at rest, TLS-required in transit, **no `auth_token`** — no Redis credential in HCL/state) + cache subnet group + rule-free Redis security group + empty custom parameter group; no cache provisioned |
 | `storage` | **Implemented** (offline-validated, **root-composed**) — one private S3 application bucket (SSE-S3/AES256, versioning, all four public-access-block controls, bucket-owner-enforced ownership, TLS-only deny policy); no `bucket_key_enabled`, no KMS, no object stored |
 | `registry` | **Implemented** (offline-validated, **root-composed**) — two private ECR repositories (`api`, `worker`) + two lifecycle-policy instances; no image built/pushed |
-| `iam` | **Implemented** (offline-validated, **root-composed**) — the four §26.8 ECS-consumed roles: one shared task execution role (ECR pull scoped to the two repositories, deterministic `/ecs/<name_prefix>-*` log delivery with no `CreateLogGroup`, `GetSecretValue` on the four container ARNs, `kms:Decrypt` on the secrets CMK via Secrets Manager; sole `Resource:"*"` = `ecr:GetAuthorizationToken`) + API/worker task roles (application-bucket S3 only) + an intentionally **empty** migration task role; no role exists in AWS |
+| `iam` | **Implemented** (offline-validated, **root-composed**) — the four §26.8 ECS-consumed roles: one shared task execution role (ECR pull scoped to the two repositories, deterministic `/ecs/<name_prefix>-*` log delivery with no `CreateLogGroup`, `GetSecretValue` on the four container ARNs, `kms:Decrypt` on the secrets CMK via Secrets Manager; sole `Resource:"*"` = `ecr:GetAuthorizationToken`) + API/worker task roles (application-bucket S3 only) + an intentionally **empty** migration task role; **plus (INFRA-9) the CI image-publisher role** (GitHub OIDC → ECR push, created only when `github_oidc_provider_arn` is supplied — the account-wide OIDC provider is consumed, never created); no role exists in AWS |
 | `secrets` | **Implemented** (offline-validated, **root-composed**) — four empty Secrets Manager containers + one customer-managed KMS key/alias; no secret value populated |
 | `observability` | **Implemented** (offline-validated, **root-composed**) — metric filters + alarms + audit trail per §6/§14/§26.9: 3 error metric filters over the ecs-owned log groups (evidence-backed `{ $.severity = "ERROR" }` pattern) **plus 3 INFRA-7 capability filters** (gate-failed, override-driven enable, override set/clear — API log group, no tenant identifier in any pattern), **15 alarms** (12 caller-thresholded ECS/log/RDS/Redis + 3 INFRA-7 fixed-threshold(1) capability signals), **one INFRA-7 canary observability dashboard** (a disclosed supersede of the module's earlier no-dashboard exclusion), and a single-region management-events CloudTrail with log-file validation delivered to a dedicated private TLS-only audit bucket; creates NO log group (ecs owns them) and no SNS/budget resource; nothing exists in AWS |
 | `cost` | **Implemented** (offline-validated, **root-composed**) — one monthly AWS Budget (`COST`/USD) with ACTUAL-spend notifications at the fixed 50/75/90/100% thresholds to a caller-supplied email (§15); `monthly_budget_limit` statically validated ≤ the $200 ADR-§M hard ceiling; **observational only** — no budget action, remediation, SNS topic, or IAM resource; independent (no sibling dependency); no budget exists in AWS |
@@ -115,6 +115,16 @@ digests, LLM provider, alarm thresholds, budget limit/email) are root variables
 supplied via a git-ignored `*.tfvars` — none is committed, and the image digests
 cannot exist until the INFRA-5-authored publish workflow is executed under the
 later INFRA-9 authorization (INFRA-5 itself is authoring-only).
+The composed root carries a **`deploy_workload`** switch (INFRA-9 execution-path
+tranche; default `false` = foundation stage). In the foundation stage the root
+creates everything **except** the API/worker ECS task definitions and services —
+including the two ECR repositories — so it can plan/apply **without** any image
+digest existing, resolving the digest/ECR bootstrap circularity with **no
+targeted apply and no manual ECR creation**. The image-digest inputs are
+therefore nullable (still fail-closed: a non-null value must be an immutable
+`sha256:<64 hex>` digest, and `deploy_workload = true` requires both digests
+non-null). The workload stage (`deploy_workload = true` with real digests
+supplied after an INFRA-5 publish run) creates the task definitions and services.
 The `secrets` module creates only the declarative secret *containers* — four empty AWS
 Secrets Manager secrets and one customer-managed KMS key/alias — **no secret value has
 been populated** (values are populated out-of-band under a later, separately authorized

@@ -47,13 +47,32 @@ live, and the module is **not** root-composed.
   run-task, no execution here; running it is a later, separately authorized
   one-shot step (INFRA-5/INFRA-9).
 
-## 3. Two-image contract (§26.5)
+## 3. Two-image contract (§26.5) and the foundation/workload stage (INFRA-9)
 Exactly **two** immutable, digest-pinned images: API task = the `api` repository
 URL + `api_image_digest`; worker task = the `worker` repository URL +
 `worker_image_digest`; **the migration task reuses the worker image digest** with
 the locked command override `python -m app.db.migrate upgrade`. Input validation
 rejects anything but `sha256:<64 hex>` — **no mutable tag and no `latest`** can
 enter a task definition. No third image exists.
+
+**Execution stage (INFRA-9 target-free sequencing).** The three task definitions
+and two services are gated on a **`deploy_workload`** input (default `false`).
+In the **foundation stage** (`false`) this module creates the cluster, the three
+log groups, the three task security groups and every cross-SG rule, but **no
+task definitions and no services** — so the composed root can plan/apply (and
+the sibling `registry` module can create the two ECR repositories) **without any
+image digest existing yet**, breaking the digest/ECR bootstrap circularity with
+no targeted apply. The `api_image_digest`/`worker_image_digest` inputs are
+therefore **nullable but still fail-closed** (a non-null value must match
+`sha256:<64 hex>`; mutable tags/`latest`/placeholders are rejected), and a
+`lifecycle` **precondition** on each task definition refuses the **workload
+stage** (`deploy_workload = true`) unless its digest is non-null. The
+`api_service_name`/`worker_service_name`/`migration_task_family` outputs are the
+**deterministic** `<name_prefix>-{api,worker,migration}` strings (stage-
+independent, identical to the resources' own names) so `observability` consumes
+them in both stages with no change. Flipping `deploy_workload` `true → false`
+after workloads exist plans their **destroy** — treat it as a one-way ratchet
+once live and review every workload-stage plan for ECS destroy lines.
 
 ## 4. Upstream dependencies (all producer outputs EXIST; §26.15)
 Producer → `ecs`: `network` (`vpc_id`, `private_subnet_ids`), `alb`

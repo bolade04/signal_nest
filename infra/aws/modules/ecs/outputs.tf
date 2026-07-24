@@ -13,18 +13,18 @@ output "cluster_id" {
 }
 
 output "api_service_name" {
-  description = "Name of the API ECS service (consumed by observability for service metrics/alarms)."
-  value       = aws_ecs_service.api.name
+  description = "Deterministic name of the API ECS service (consumed by observability for service metrics/alarms). Emitted as the stable `<name_prefix>-api` string so it is stage-independent — identical to the service's own name and available in the foundation stage before the service exists (observability alarms may reference it either way)."
+  value       = "${var.name_prefix}-api"
 }
 
 output "worker_service_name" {
-  description = "Name of the worker ECS service (consumed by observability for service metrics/alarms)."
-  value       = aws_ecs_service.worker.name
+  description = "Deterministic name of the worker ECS service (consumed by observability for service metrics/alarms). Emitted as the stable `<name_prefix>-worker` string so it is stage-independent — identical to the service's own name."
+  value       = "${var.name_prefix}-worker"
 }
 
 output "migration_task_family" {
-  description = "Family of the one-shot migration task definition (consumed by the later, separately authorized run-task step; never a service)."
-  value       = aws_ecs_task_definition.migration.family
+  description = "Deterministic family of the one-shot migration task definition (consumed by the later, separately authorized run-task step; never a service). Emitted as the stable `<name_prefix>-migration` string so it is stage-independent — identical to the task definition's own family."
+  value       = "${var.name_prefix}-migration"
 }
 
 output "api_task_security_group_id" {

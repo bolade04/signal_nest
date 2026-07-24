@@ -262,23 +262,64 @@ variable "redis_engine_version" {
   }
 }
 
+# Foundation-vs-workload execution stage (INFRA-9 target-free sequencing).
+# The default `false` is the SAFE foundation stage for a fresh staging deploy:
+# it lets the composed root create everything EXCEPT the API/worker task
+# definitions and services — including the two ECR repositories — WITHOUT
+# fabricated image digests, breaking the digest/ECR bootstrap circularity with
+# no targeted apply and no manual resource creation. Set to `true` only after
+# real immutable digests are published (INFRA-5) and supplied below. Flipping
+# true->false after workloads exist plans their DESTROY; treat as a one-way
+# ratchet once live and review every workload-stage plan for ECS destroy lines.
+variable "deploy_workload" {
+  description = "Whether to create the API/worker ECS task definitions and services (workload stage). Default false = foundation stage (creates ECR repos, cluster, log groups, SGs, roles, data stores, secret containers — everything digests are not needed for). Set true only with real immutable digests supplied (INFRA-9 workload apply)."
+  type        = bool
+  default     = false
+}
+
+# Nullable in the foundation stage (no digest exists until INFRA-5 publishes
+# images to the ECR repos this same root creates). STILL FAIL-CLOSED: a non-null
+# value must be an immutable sha256 digest — a mutable tag, `latest`, malformed
+# string, or fabricated placeholder is rejected. The ecs module additionally
+# preconditions that deploy_workload=true REQUIRES both digests non-null, so a
+# workload apply can never proceed without real digests.
 variable "api_image_digest" {
-  description = "Immutable sha256 digest of the verified API image (passed to the ecs module; §26.5 — no mutable tag, no latest). No digest exists until INFRA-5 builds and publishes images; supplied via a git-ignored *.tfvars at that later stage."
+  description = "Immutable sha256 digest of the verified API image (passed to the ecs module; §26.5 — no mutable tag, no latest). Null in the foundation stage; a real digest exists only after INFRA-5 publishes images, supplied via a git-ignored *.tfvars for the workload apply."
   type        = string
+  default     = null
 
   validation {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.api_image_digest))
-    error_message = "api_image_digest must be an immutable digest of the exact form sha256:<64 lowercase hex chars>."
+    condition     = var.api_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.api_image_digest))
+    error_message = "api_image_digest, when set, must be an immutable digest of the exact form sha256:<64 lowercase hex chars> (null is allowed only for the foundation stage)."
   }
 }
 
 variable "worker_image_digest" {
-  description = "Immutable sha256 digest of the verified worker image (passed to the ecs module; also reused by the one-shot migration task definition with the locked command override, §26.5). Supplied via a git-ignored *.tfvars after INFRA-5 publishes images."
+  description = "Immutable sha256 digest of the verified worker image (passed to the ecs module; also reused by the one-shot migration task definition with the locked command override, §26.5). Null in the foundation stage; supplied via a git-ignored *.tfvars after INFRA-5 publishes images."
   type        = string
+  default     = null
 
   validation {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.worker_image_digest))
-    error_message = "worker_image_digest must be an immutable digest of the exact form sha256:<64 lowercase hex chars>."
+    condition     = var.worker_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.worker_image_digest))
+    error_message = "worker_image_digest, when set, must be an immutable digest of the exact form sha256:<64 lowercase hex chars> (null is allowed only for the foundation stage)."
+  }
+}
+
+# GitHub OIDC identity-provider ARN for the CI image-publisher role (§26.5,
+# staging-publish-workflow.md §4). CONSUMED, never created: the account-wide
+# provider (token.actions.githubusercontent.com) is a shared account resource
+# whose ownership this repository does not establish — it remains an external
+# prerequisite. Null (default) leaves the publisher role uncreated so offline
+# validation passes; supplied via a git-ignored *.tfvars once the provider
+# exists. Contains an account id, so no real value is ever committed.
+variable "github_oidc_provider_arn" {
+  description = "ARN of the pre-existing GitHub Actions OIDC provider used by the CI image-publisher role trust policy (consumed, never created). Null leaves the publisher role uncreated. Supplied via a git-ignored *.tfvars; no real ARN is committed."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_oidc_provider_arn == null || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.github_oidc_provider_arn))
+    error_message = "github_oidc_provider_arn, when set, must be a GitHub Actions OIDC provider ARN (arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com)."
   }
 }
 

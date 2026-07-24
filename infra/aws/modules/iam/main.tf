@@ -2,10 +2,17 @@
 #
 # Owns the FOUR ECS-consumed IAM roles locked by aws-staging-iac-plan.md §26.8:
 # one shared ECS task EXECUTION role plus three distinct APPLICATION task roles
-# (API, worker, migration). `ecs` later consumes all four ARNs. No other role is
-# created here: the CI-OIDC deployment role (trust via GitHub OIDC) is INFRA-5,
-# and the operator/observer/break-glass human roles remain a later, separately
-# designed tranche (their trust boundaries are not yet decided).
+# (API, worker, migration). `ecs` later consumes all four ARNs.
+#
+# It ALSO owns the CI image-publisher role (GitHub OIDC → ECR push), whose design
+# was specified by INFRA-5 (staging-publish-workflow.md §4) and is authored here
+# by the INFRA-9 execution-path tranche. This SUPERSEDES the earlier note that
+# said "the CI-OIDC deployment role ... is INFRA-5" (INFRA-5 authored only the
+# workflow + prose spec; the HCL lands here). The role is created ONLY when the
+# caller supplies `github_oidc_provider_arn` (the account-wide OIDC provider is
+# consumed, never created — it remains an external prerequisite). The
+# operator/observer/break-glass human roles remain a later, separately designed
+# tranche (their trust boundaries are not yet decided).
 #
 # CYCLE BREAK (§26.8): the execution-role CloudWatch Logs policy is scoped to the
 # DETERMINISTIC name prefix /ecs/<name_prefix>-* built from `name_prefix` — this
@@ -210,6 +217,80 @@ resource "aws_iam_role_policy" "app_s3" {
           "s3:DeleteObject",
         ]
         Resource = "${var.bucket_arn}/*"
+      },
+    ]
+  })
+}
+
+# --- CI image-publisher role (GitHub OIDC → ECR push, INFRA-9) ----------------------
+# Authored per staging-publish-workflow.md §4. Created ONLY when the caller
+# supplies github_oidc_provider_arn (the account-wide OIDC provider is consumed,
+# never created — an external prerequisite). Trust is restricted to the exact
+# SignalNest repository AND the protected `staging` environment (sub condition),
+# blocking pull-request/fork execution; audience is the AWS STS default. Least
+# privilege: ecr:GetAuthorizationToken at Resource "*" (the sole AWS-mandated
+# exception, same as the execution role) plus the push/read-back actions scoped
+# to exactly the two application repositories. No ECS, IAM, Secrets Manager,
+# RDS, or any other permission — this role can only push images.
+resource "aws_iam_role" "ci_publisher" {
+  count = var.github_oidc_provider_arn == null ? 0 : 1
+
+  name = "${var.name_prefix}-ci-publisher"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "GitHubOidcStagingPublish"
+        Effect    = "Allow"
+        Principal = { Federated = var.github_oidc_provider_arn }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:sub" = "repo:bolade04/signal_nest:environment:staging"
+          }
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name = "${var.name_prefix}-ci-publisher"
+  }
+}
+
+resource "aws_iam_role_policy" "ci_publisher" {
+  count = var.github_oidc_provider_arn == null ? 0 : 1
+
+  name = "${var.name_prefix}-ci-publisher-ecr"
+  role = aws_iam_role.ci_publisher[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # AWS supports ecr:GetAuthorizationToken only at Resource "*" — the one
+        # documented exception, identical to the execution role's own pattern.
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        # Push + digest read-back, scoped to exactly the two application repos.
+        Sid    = "EcrPushToTwoRepos"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:BatchGetImage",
+          "ecr:DescribeImages",
+        ]
+        Resource = sort(values(var.repository_arns))
       },
     ]
   })

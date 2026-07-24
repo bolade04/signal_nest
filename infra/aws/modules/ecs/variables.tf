@@ -76,23 +76,42 @@ variable "repository_urls" {
   }
 }
 
+# Execution stage (INFRA-9 target-free sequencing). false (default) = foundation
+# stage: this module creates the cluster, the three log groups, the three task
+# security groups and every cross-SG rule, but NO task definitions and NO
+# services — so the composed root can plan/apply (and create the ECR repos in
+# the sibling registry module) without any image digest existing yet. true =
+# workload stage: the three task definitions and two services are created, which
+# requires both real immutable digests (enforced by the precondition below).
+variable "deploy_workload" {
+  description = "Whether to create the API/worker task definitions and services (workload stage). Default false = foundation stage (no task defs/services; digests may be null)."
+  type        = bool
+  default     = false
+}
+
+# Nullable for the foundation stage; STILL FAIL-CLOSED when set (a mutable tag,
+# latest, malformed string, or fabricated placeholder is rejected). The
+# workload-stage precondition (aws_ecs_service.api / the task defs) additionally
+# refuses to create any workload resource unless both digests are non-null.
 variable "api_image_digest" {
-  description = "Immutable sha256 digest of the verified API image (\"sha256:<64 hex>\"). Digest-pinned per §26.5 — no mutable tag and no \"latest\" is accepted."
+  description = "Immutable sha256 digest of the verified API image (\"sha256:<64 hex>\"). Null in the foundation stage; digest-pinned per §26.5 when set — no mutable tag, no \"latest\"."
   type        = string
+  default     = null
 
   validation {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.api_image_digest))
-    error_message = "api_image_digest must be an immutable digest of the exact form sha256:<64 lowercase hex chars>; mutable tags (including latest) are rejected (§26.5)."
+    condition     = var.api_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.api_image_digest))
+    error_message = "api_image_digest, when set, must be an immutable digest of the exact form sha256:<64 lowercase hex chars>; mutable tags (including latest) are rejected (§26.5). Null is allowed only for the foundation stage."
   }
 }
 
 variable "worker_image_digest" {
-  description = "Immutable sha256 digest of the verified worker image (\"sha256:<64 hex>\"). Also used by the one-shot migration task definition with the locked command override (§26.5); no third image exists."
+  description = "Immutable sha256 digest of the verified worker image (\"sha256:<64 hex>\"). Null in the foundation stage; also used by the one-shot migration task definition with the locked command override (§26.5); no third image exists."
   type        = string
+  default     = null
 
   validation {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.worker_image_digest))
-    error_message = "worker_image_digest must be an immutable digest of the exact form sha256:<64 lowercase hex chars>; mutable tags (including latest) are rejected (§26.5)."
+    condition     = var.worker_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.worker_image_digest))
+    error_message = "worker_image_digest, when set, must be an immutable digest of the exact form sha256:<64 lowercase hex chars>; mutable tags (including latest) are rejected (§26.5). Null is allowed only for the foundation stage."
   }
 }
 
