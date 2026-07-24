@@ -33,8 +33,13 @@ authorities — OpenTofu is the sole authoritative CLI.
 ## 3. Layout
 
 Flat, single-root, staging-only. There are **no** `environments/`, `envs/`,
-`staging/`, or `production/` directories and **no** second root module. Production
-infrastructure is out of scope for INFRA-4.
+`staging/`, or `production/` directories and **no** second root module **for the
+SIGNALNEST_STAGING environment composition**. Production infrastructure is out of
+scope for INFRA-4. The `bootstrap/` directory is the explicit carve-out from that
+rule: it is the one-time **state-backend** bootstrap root fixed by the plan's §7
+(a root cannot remote-back itself into a bucket that does not exist yet), composes
+**zero** environment resources, and is not an environment split — see
+`bootstrap/README.md`.
 
 ```
 infra/aws/
@@ -42,11 +47,13 @@ infra/aws/
   versions.tf               # OpenTofu + AWS provider compatibility constraints
   providers.tf              # default AWS provider (region + default tags)
   backend.tf                # empty S3 backend declaration (no values)
+  backend.hcl.example       # synthetic partial-backend-config template (real backend.hcl git-ignored)
   variables.tf              # typed root inputs (no secrets/ids)
   locals.tf                 # name prefix + the authoritative eight-tag set
   main.tf                   # composition root: composes ALL TWELVE modules (no root resource/data)
   outputs.tf                # non-sensitive metadata + composed-module reference outputs
   terraform.tfvars.example  # synthetic example inputs
+  bootstrap/                # one-time remote-state backend root (§7; config only, never auto-applied)
   modules/                  # 12 modules: all twelve implemented (offline-validated); no doc-only stub remains
 ```
 
@@ -73,7 +80,7 @@ documentation-only stub remains, and **all twelve are root-composed** (wired in
 | --- | --- |
 | `network` | **Implemented** (offline-validated) — VPC, subnets, route tables, single NAT |
 | `edge` | **Implemented** (offline-validated) — CloudFront + private S3 SPA origin + web DNS aliases |
-| `alb` | **Implemented** (offline-validated) — ALB SG + public HTTPS 443 ingress, internet-facing IPv4 ALB, API IP target group, HTTPS listener |
+| `alb` | **Implemented** (offline-validated, **root-composed**) — ALB SG + public HTTPS 443 ingress, internet-facing IPv4 ALB, API IP target group, HTTPS listener; **access + connection logging enabled** into a dedicated private module-owned log bucket (SSE-S3, versioned, public-access-blocked, TLS-only; delivery via the plan-time-resolved regional ELB service account — the §24.7 pre-live logging gate is resolved in configuration) |
 | `ecs` | **Implemented** (offline-validated, **root-composed**) — ECS/Fargate compute plane per §26.2–§26.15: cluster, the three deterministic `/ecs/<name_prefix>-*` log groups, three per-workload task SGs + every task-side cross-SG rule (ALB↔API 8000, PostgreSQL 5432 incl. migration, Redis 6379 api/worker-only, TCP 443 NAT egress; no CIDR ingress), three digest-pinned LINUX/X86_64 task definitions (migration reuses the worker image with the locked command override; execution-role-only secret injection, migration excludes `REDIS_URL`), two services (circuit breaker + rollback, ECS Exec disabled); migration is never a service; nothing exists in AWS |
 | `data_sql` | **Implemented** (offline-validated, **root-composed**) — one private RDS PostgreSQL instance + DB subnet group + rule-free RDS security group + TLS-enforcing parameter group (`rds.force_ssl=1`); `manage_master_user_password=true` (no password in HCL/state); private, encrypted (gp3); no DB provisioned, no pgvector activated |
 | `data_cache` | **Implemented** (offline-validated, **root-composed**) — one private ElastiCache for Redis replication group (encrypted at rest, TLS-required in transit, **no `auth_token`** — no Redis credential in HCL/state) + cache subnet group + rule-free Redis security group + empty custom parameter group; no cache provisioned |
@@ -84,19 +91,21 @@ documentation-only stub remains, and **all twelve are root-composed** (wired in
 | `observability` | **Implemented** (offline-validated, **root-composed**) — metric filters + alarms + audit trail per §6/§14/§26.9: 3 error metric filters over the ecs-owned log groups (evidence-backed `{ $.severity = "ERROR" }` pattern), 12 caller-thresholded alarms (ECS CPU/memory, log errors, RDS CPU/storage/memory, Redis CPU/memory; explicit missing-data behavior, fail-closed for health/saturation), and a single-region management-events CloudTrail with log-file validation delivered to a dedicated private TLS-only audit bucket; creates NO log group (ecs owns them) and no SNS/dashboard/budget resource; nothing exists in AWS |
 | `cost` | **Implemented** (offline-validated, **root-composed**) — one monthly AWS Budget (`COST`/USD) with ACTUAL-spend notifications at the fixed 50/75/90/100% thresholds to a caller-supplied email (§15); `monthly_budget_limit` statically validated ≤ the $200 ADR-§M hard ceiling; **observational only** — no budget action, remediation, SNS topic, or IAM resource; independent (no sibling dependency); no budget exists in AWS |
 
-The root composition (`main.tf`) currently wires exactly `network`, `edge`, and
-`alb`; no later module is composed. The `alb` module owns the ALB security group and
-the public HTTPS ingress and exposes six outputs (`alb_arn`, `alb_dns_name`,
-`alb_canonical_hosted_zone_id`, `https_listener_arn`, `api_target_group_arn`,
-`alb_security_group_id`). The **future** `ecs` module will own the API task security
-group and **both** ALB↔API TCP 8000 cross-security-group rules and will consume the
-ALB outputs; the ALB never consumes an ECS/API security-group id, so the dependency is
-one-way and acyclic: `ecs -> alb`. The regional ACM certificate is supplied through the
-required `api_certificate_arn` input (no real ARN is committed); tags are applied by the
-provider `default_tags` (no module-level `tags` input). The committed ALB tranche adds
-**no** HTTP/port-80 listener, no public port 8000, no IPv6 ingress, no unrestricted ALB
-egress, no certificate creation, no Route 53 record, no WAF, no access/connection
-logging or log bucket, no ECS resource, and no target registration/attachment.
+The root composition (`main.tf`) wires **all twelve** modules. The `alb` module owns
+the ALB security group and the public HTTPS ingress and exposes six outputs
+(`alb_arn`, `alb_dns_name`, `alb_canonical_hosted_zone_id`, `https_listener_arn`,
+`api_target_group_arn`, `alb_security_group_id`); it also owns the dedicated private
+ALB log-delivery bucket, with **access and connection logging enabled** into it
+(distinct `alb-access`/`alb-connection` prefixes — the §24.7 pre-live logging gate,
+resolved in configuration). The `ecs` module owns the API task security group and
+**both** ALB↔API TCP 8000 cross-security-group rules and consumes the ALB outputs;
+the ALB never consumes an ECS/API security-group id, so the dependency is one-way and
+acyclic: `ecs -> alb`. The regional ACM certificate is supplied through the required
+`api_certificate_arn` input (no real ARN is committed); tags are applied by the
+provider `default_tags` (no module-level `tags` input). The ALB plane still has
+**no** HTTP/port-80 listener, no public port 8000, no IPv6 ingress, no unrestricted
+ALB egress, no certificate creation, no Route 53 record, and no WAF (WAF and the API
+Route 53 alias remain deferred by locked decision).
 
 The `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` modules are **now wired
 into `main.tf`** by the root-composition tranche, exactly along the locked §26.12
@@ -242,16 +251,30 @@ spending; no budget action, SNS topic, or IAM resource is created), and the
   §26.12 graph; no root-level `resource`/`data` block.
 - `outputs.tf` — non-sensitive metadata echoes only.
 - `terraform.tfvars.example` — synthetic example inputs; never real values.
+- `backend.hcl.example` — synthetic partial-backend-config template; the real
+  `backend.hcl` is git-ignored and filled from the bootstrap outputs only at
+  the later-authorized live bootstrap.
+- `bootstrap/` — the one-time state-backend root (§3 carve-out; own README,
+  own committed lockfile, local one-time state; configuration only).
 
-## 8. Remote-state design (not initialized)
+## 8. Remote-state design (configuration authored, not initialized)
 
 The design targets an **S3** state backend with **SSE-KMS** encryption,
 versioning, blocked public access, and **DynamoDB** state locking
-(`aws-staging-iac-plan.md` §7). In this tranche:
+(`aws-staging-iac-plan.md` §7). Status:
 
+- The bootstrap **configuration** is authored at `bootstrap/` (SSE-KMS state
+  bucket + dedicated CMK/alias + `LockID` DynamoDB lock table) and
+  offline-validated only. §7 also permits the tool-native S3 `use_lockfile`
+  equivalent; DynamoDB is authored as the plan's named mechanism and the
+  live-bootstrap authorizer may revisit that choice.
 - **No backend identifiers** (bucket, key, region, KMS id, DynamoDB table, role
-  ARN, workspace prefix) are committed — `backend.tf` is intentionally empty.
-- **No state bootstrap** is performed. No state bucket or lock table exists.
+  ARN, workspace prefix) are committed — `backend.tf` is intentionally empty,
+  the bucket/table names are required git-ignored `*.tfvars` inputs, and only
+  synthetic `*.example` templates are tracked.
+- **No live state bootstrap has been performed.** No state bucket, lock table,
+  or key exists in AWS; the live run is bundled with the INFRA-9
+  fresh-authorization gate (§12).
 - The S3 backend has **not** been initialized. Offline validation used
   `tofu init -backend=false`, which deliberately skips backend initialization; a
   backend-configured `tofu init` has not been run and no state exists.
@@ -267,7 +290,7 @@ committed.
 ## 10. Current validation status
 
 **Offline validation only.** All twelve implemented modules (each in its own
-tranche) and the root composition have been checked
+tranche), the root composition, and the `bootstrap/` root have been checked
 with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
@@ -287,19 +310,25 @@ tranche.
 
 ## 12. Status and next tranches (each separately authorized)
 
-**INFRA-4 is not complete** and **INFRA-5 is unstarted.** Done so far: tool-assisted
-validation + `.terraform.lock.hcl` (with cross-platform provider checksums), **all
-twelve module bodies**, and the **full root composition** (all twelve modules wired
-in `main.tf` per the locked §26.12 graph — offline-validated only; composed, but
-**nothing provisioned or deployed**). Remaining:
+**INFRA-4 repository-only scope is complete**; **INFRA-5 is unstarted.** Done:
+tool-assisted validation + `.terraform.lock.hcl` (cross-platform provider
+checksums), **all twelve module bodies**, the **full root composition** (all
+twelve modules wired in `main.tf` per the locked §26.12 graph), the resolved
+pre-live-apply gates (ALB **access + connection logging**; the §25
+rate-limiting-behind-proxy fix — uvicorn trusted-proxy resolution, VPC-CIDR-only
+trust, pinned by `apps/api/app/tests/test_rate_limit.py`; API graceful shutdown
+via the earlier ECS `stopTimeout` work), and the **remote-state bootstrap
+configuration** (`bootstrap/` + `backend.hcl.example`). Everything is
+offline-validated only — **nothing provisioned or deployed**. WAF, the API
+Route 53 alias, ACM creation, and the interactive-docs path restriction remain
+**deferred by locked decision** (§23/§24.7/§25; runtime contract §N). Remaining
+(each separately authorized):
 
-1. **Pre-live requirements:** access/connection **logging must be resolved before any
-   live staging plan/apply**; DNS, WAF, ACM certificate creation, ECS, and target
-   registration remain deferred; the applicable pre-live follow-ups recorded in the
-   phase plan (`docs/phase-4b-c-infra-plan.md`) remain unresolved.
-2. **INFRA-5:** protected build/deploy workflow with GitHub **OIDC** and a
-   human-approval staging environment (no production deploy).
-3. **Remote-state bootstrap + INFRA-9:** authenticated `plan`, state bootstrap,
+1. **INFRA-5:** protected build/deploy workflow with GitHub **OIDC** and a
+   human-approval staging environment (no production deploy); produces the
+   image digests the composition consumes.
+2. **Live remote-state bootstrap + INFRA-9:** executing the authored
+   `bootstrap/` root, backend-configured `tofu init`, authenticated `plan`,
    provisioning, and deployment of the exact first-deploy SHA — under fresh
    authorization, with all global flags remaining `false`.
 

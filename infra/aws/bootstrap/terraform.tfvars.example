@@ -1,0 +1,23 @@
+# terraform.tfvars.example — synthetic, non-sensitive example inputs (bootstrap)
+#
+# WARNING: This is an EXAMPLE template only. NEVER replace these values with a
+# real bucket name, table name, account id, ARN, or any sensitive identifier,
+# and NEVER commit a filled-in real `.tfvars`. Real `*.tfvars` files are
+# git-ignored; only `*.tfvars.example` is tracked (aws-staging-iac-plan.md §7:
+# exact names are never committed).
+
+project_name = "SignalNest"
+environment  = "staging"
+aws_region   = "us-east-1"
+alias        = "SIGNALNEST_STAGING"
+owner        = "internal-platform-ops"
+cost_center  = "signalnest-staging"
+data_class   = "internal-no-customer"
+phase        = "4B-C"
+
+# --- Bootstrap-specific inputs (REQUIRED at the later-authorized live run) ---
+# The lines below are COMMENTED and use placeholder tokens, not real values:
+#
+# state_bucket_name = "<globally-unique-state-bucket-name>"
+# lock_table_name   = "<state-lock-table-name>"
+# kms_deletion_window_in_days = 30

@@ -263,7 +263,29 @@
   logging must be resolved before any live staging plan/apply. The other **nine** modules (`ecs`,
   `data_sql`, `data_cache`, `storage`, `registry`, `iam`, `secrets`, `observability`, `cost`) remain
   documentation-only stubs; remote-state remains unconfigured; INFRA-4 is **not** complete; and
-  INFRA-5 remains unstarted.
+  INFRA-5 remains unstarted. *(Point-in-time record; superseded by the consolidated entry below.)*
+- **Delivered (INFRA-4 module-completion, root-composition, and pre-live/remote-state tranches;
+  consolidated entry, recorded 2026-07-24):** the nine remaining modules were implemented in
+  their own reviewed tranches (`secrets`, `registry`, `storage`, `data_sql`, `data_cache`,
+  `iam`, `ecs`, `observability`, `cost` — each offline-validated with the byte-identical
+  committed lockfile), and the root composition wired **all twelve modules** into `main.tf`
+  along the locked `aws-staging-iac-plan.md` §26.12 acyclic graph (first full-graph offline
+  `validate`; configuration only). The pre-live tranche then resolved the pre-live-apply
+  gates: ALB **access + connection logging** into a dedicated private `alb`-owned log bucket
+  (§24.7 resolved; delivery principal via `aws_elb_service_account`, no account-id literal);
+  the §25 rate-limiting-behind-proxy follow-up (uvicorn `--proxy-headers` +
+  `--forwarded-allow-ips` = VPC CIDR for the API workload only, rightmost-untrusted
+  `X-Forwarded-For` resolution, pinned by `apps/api/app/tests/test_rate_limit.py`; graceful
+  shutdown was already resolved by the ECS `stopTimeout` work); and the **remote-state
+  bootstrap configuration** (`infra/aws/bootstrap/`: SSE-KMS state bucket + dedicated CMK +
+  DynamoDB lock table, offline-validated, local one-time state, names never committed) plus
+  the `infra/aws/backend.hcl.example` backend-readiness template (real `backend.hcl`
+  git-ignored). WAF, the API Route 53 alias, ACM creation, and the interactive-docs
+  path-restriction remain **deferred by locked decision** (§23/§24.7/§25; runtime contract §N:
+  WAF optional in staging). **No `plan`/`apply`, no AWS API call, no state, no provisioning,
+  no deployment, no secret value, and no flag change occurred; nothing exists in AWS.** The
+  **live** state bootstrap and environment `apply` remain bundled behind the INFRA-9
+  fresh-authorization gate; INFRA-5 remains unstarted.
 - **Objective:** author IaC defining SIGNALNEST_STAGING without applying it.
 - **Consider:** AWS provider/version pinning; VPC and networking; ECS cluster and task
   definitions; ALB; RDS PostgreSQL; ElastiCache; S3; ECR; Secrets/KMS references (names

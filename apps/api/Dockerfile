@@ -105,7 +105,14 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # exec form -> uvicorn is PID 1 and receives SIGTERM directly. No --reload, one
 # worker process per container (horizontal scale is by replica, not in-process).
-CMD ["sh", "-c", "exec uvicorn app.main:app --host \"$API_HOST\" --port \"$API_PORT\" --no-server-header"]
+#
+# FORWARDED_ALLOW_IPS bounds which direct peers may rewrite the client address
+# via X-Forwarded-For (uvicorn ProxyHeadersMiddleware). Default 127.0.0.1 keeps
+# local/dev behavior: proxy headers from arbitrary peers are ignored. Behind the
+# staging ALB the deployment sets it to the VPC CIDR so the rate limiter keys on
+# the real client, not the ALB ENI. Never "*": with every host trusted, uvicorn
+# falls back to the leftmost (client-forgeable) X-Forwarded-For entry.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host \"$API_HOST\" --port \"$API_PORT\" --no-server-header --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]
 
 # ---------------------------------------------------------------------------
 # worker — the durable job worker. No HTTP server, no exposed port.
