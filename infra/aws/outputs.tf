@@ -100,3 +100,94 @@ output "alb_security_group_id" {
   description = "ID of the ALB-owned security group (from the alb module; consumed by the future ecs module, which owns both ALB<->API cross-SG rules)."
   value       = module.alb.alb_security_group_id
 }
+
+# --- Composition outputs (INFRA-4 root-composition tranche) ---
+# Non-sensitive references from the nine newly composed modules. No secret
+# value, credential, account identity, endpoint address, or notification
+# address is exposed; ARNs/names are configuration references (established
+# module-output convention).
+
+output "secret_names" {
+  description = "Map of the four logical secret keys -> Secrets Manager container name (from the secrets module; containers are EMPTY — values are populated out-of-band under INFRA-6)."
+  value       = module.secrets.secret_names
+}
+
+output "repository_urls" {
+  description = "Map of logical repository key (api|worker) -> ECR repository URL (from the registry module; no image exists until INFRA-5)."
+  value       = module.registry.repository_urls
+}
+
+output "app_bucket_name" {
+  description = "Name of the private application S3 bucket (from the storage module)."
+  value       = module.storage.bucket_name
+}
+
+output "db_instance_identifier" {
+  description = "Identifier of the staging RDS PostgreSQL instance (from the data_sql module)."
+  value       = module.data_sql.db_instance_identifier
+}
+
+output "rds_security_group_id" {
+  description = "ID of the rule-free PostgreSQL security group (from the data_sql module; the 5432 rules are ecs-owned)."
+  value       = module.data_sql.rds_security_group_id
+}
+
+output "redis_security_group_id" {
+  description = "ID of the rule-free Redis security group (from the data_cache module; the 6379 rules are ecs-owned)."
+  value       = module.data_cache.redis_security_group_id
+}
+
+output "execution_role_arn" {
+  description = "ARN of the shared ECS task execution role (from the iam module)."
+  value       = module.iam.execution_role_arn
+}
+
+output "api_task_role_arn" {
+  description = "ARN of the API application task role (from the iam module)."
+  value       = module.iam.api_task_role_arn
+}
+
+output "worker_task_role_arn" {
+  description = "ARN of the worker application task role (from the iam module)."
+  value       = module.iam.worker_task_role_arn
+}
+
+output "migration_task_role_arn" {
+  description = "ARN of the intentionally empty migration task role (from the iam module)."
+  value       = module.iam.migration_task_role_arn
+}
+
+output "ecs_cluster_id" {
+  description = "ID/ARN of the staging ECS cluster (from the ecs module)."
+  value       = module.ecs.cluster_id
+}
+
+output "api_service_name" {
+  description = "Name of the API ECS service (from the ecs module)."
+  value       = module.ecs.api_service_name
+}
+
+output "worker_service_name" {
+  description = "Name of the worker ECS service (from the ecs module)."
+  value       = module.ecs.worker_service_name
+}
+
+output "migration_task_family" {
+  description = "Family of the one-shot migration task definition (from the ecs module; never a service)."
+  value       = module.ecs.migration_task_family
+}
+
+output "log_group_names" {
+  description = "Map of workload -> ecs-owned CloudWatch log-group name (from the ecs module)."
+  value       = module.ecs.log_group_names
+}
+
+output "trail_arn" {
+  description = "ARN of the CloudTrail audit trail (from the observability module)."
+  value       = module.observability.trail_arn
+}
+
+output "budget_name" {
+  description = "Name of the monthly staging cost budget (from the cost module; observational only)."
+  value       = module.cost.budget_name
+}
