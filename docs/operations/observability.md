@@ -32,6 +32,10 @@ raising into the caller.
 **Never logged in production structured logs:** user/org/workspace/location ids, the
 raw database job id, worker id, object keys, full URLs, emails, IPs, request/response
 bodies, payloads, or any secret. Correlation ids (safe, opaque) are used instead.
+*(One documented exception: the capability gate/override audit events deliberately
+carry `organization_id`/`workspace_id` so an unexpected enable is detectable and
+attributable — the only sanctioned id-bearing event family; see the redaction matrix
+in [aws-staging-observability-incident-readiness.md](./aws-staging-observability-incident-readiness.md) §9.)*
 
 ## Secret redaction
 

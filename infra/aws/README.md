@@ -88,7 +88,7 @@ documentation-only stub remains, and **all twelve are root-composed** (wired in
 | `registry` | **Implemented** (offline-validated, **root-composed**) — two private ECR repositories (`api`, `worker`) + two lifecycle-policy instances; no image built/pushed |
 | `iam` | **Implemented** (offline-validated, **root-composed**) — the four §26.8 ECS-consumed roles: one shared task execution role (ECR pull scoped to the two repositories, deterministic `/ecs/<name_prefix>-*` log delivery with no `CreateLogGroup`, `GetSecretValue` on the four container ARNs, `kms:Decrypt` on the secrets CMK via Secrets Manager; sole `Resource:"*"` = `ecr:GetAuthorizationToken`) + API/worker task roles (application-bucket S3 only) + an intentionally **empty** migration task role; no role exists in AWS |
 | `secrets` | **Implemented** (offline-validated, **root-composed**) — four empty Secrets Manager containers + one customer-managed KMS key/alias; no secret value populated |
-| `observability` | **Implemented** (offline-validated, **root-composed**) — metric filters + alarms + audit trail per §6/§14/§26.9: 3 error metric filters over the ecs-owned log groups (evidence-backed `{ $.severity = "ERROR" }` pattern), 12 caller-thresholded alarms (ECS CPU/memory, log errors, RDS CPU/storage/memory, Redis CPU/memory; explicit missing-data behavior, fail-closed for health/saturation), and a single-region management-events CloudTrail with log-file validation delivered to a dedicated private TLS-only audit bucket; creates NO log group (ecs owns them) and no SNS/dashboard/budget resource; nothing exists in AWS |
+| `observability` | **Implemented** (offline-validated, **root-composed**) — metric filters + alarms + audit trail per §6/§14/§26.9: 3 error metric filters over the ecs-owned log groups (evidence-backed `{ $.severity = "ERROR" }` pattern) **plus 3 INFRA-7 capability filters** (gate-failed, override-driven enable, override set/clear — API log group, no tenant identifier in any pattern), **15 alarms** (12 caller-thresholded ECS/log/RDS/Redis + 3 INFRA-7 fixed-threshold(1) capability signals), **one INFRA-7 canary observability dashboard** (a disclosed supersede of the module's earlier no-dashboard exclusion), and a single-region management-events CloudTrail with log-file validation delivered to a dedicated private TLS-only audit bucket; creates NO log group (ecs owns them) and no SNS/budget resource; nothing exists in AWS |
 | `cost` | **Implemented** (offline-validated, **root-composed**) — one monthly AWS Budget (`COST`/USD) with ACTUAL-spend notifications at the fixed 50/75/90/100% thresholds to a caller-supplied email (§15); `monthly_budget_limit` statically validated ≤ the $200 ADR-§M hard ceiling; **observational only** — no budget action, remediation, SNS topic, or IAM resource; independent (no sibling dependency); no budget exists in AWS |
 
 The root composition (`main.tf`) wires **all twelve** modules. The `alb` module owns
@@ -200,11 +200,17 @@ The `observability` module consumes the four ecs outputs
 (`log_group_names`/`log_group_arns`, `api_service_name`/`worker_service_name`)
 and creates **no log group** (ecs owns the three groups, §26.9): 3 error metric
 filters (pattern `{ $.severity = "ERROR" }`, matching the application's JSON
-`severity` field), 12 alarms whose thresholds are **caller-supplied** via the
-`alarm_thresholds` input (the plan documents categories, not values) with
-explicit per-alarm missing-data behavior (fail-closed `breaching` for
-service-health and DB/Redis saturation; `notBreaching` for match-only error
-counts), and a single-region management-events **CloudTrail** trail with
+`severity` field) plus **3 INFRA-7 capability filters** over the API log group
+(gate-failed, override-driven enable, override set/clear — patterns match only
+`event`/`outcome`/`decided_by`; no tenant identifier), **15 alarms** — 12 with
+**caller-supplied** thresholds via the `alarm_thresholds` input (the plan
+documents categories, not values) and 3 INFRA-7 capability alarms at an
+**intrinsic fixed threshold of 1** (any occurrence of a discrete audit event is
+the signal) — with explicit per-alarm missing-data behavior (fail-closed
+`breaching` for service-health and DB/Redis saturation; `notBreaching` for
+match-only counts), **one INFRA-7 canary observability dashboard**
+(`aws_cloudwatch_dashboard.canary`, a disclosed supersede of the module's
+earlier no-dashboard exclusion), and a single-region management-events **CloudTrail** trail with
 log-file validation delivered to a dedicated private, versioned, SSE-S3,
 TLS-only **audit** bucket (service-principal writes scoped by `aws:SourceArn`;
 `storage` still owns all application buckets). DB/Redis/cluster alarm

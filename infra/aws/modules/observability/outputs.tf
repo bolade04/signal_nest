@@ -7,11 +7,12 @@
 # root composition.
 
 output "alarm_arns" {
-  description = "Map of alarm key -> CloudWatch alarm ARN for every alarm owned by this module (log-error x3, service CPU/memory x4, RDS saturation x3, Redis saturation x2)."
+  description = "Map of alarm key -> CloudWatch alarm ARN for every alarm owned by this module (log-error x3, service CPU/memory x4, RDS saturation x3, Redis saturation x2, capability gate/override x3 — the INFRA-7 fixed-threshold canary signals)."
   value = merge(
     { for k, a in aws_cloudwatch_metric_alarm.log_errors : "${k}-log-errors" => a.arn },
     { for k, a in aws_cloudwatch_metric_alarm.service_cpu_high : "${k}-cpu-high" => a.arn },
     { for k, a in aws_cloudwatch_metric_alarm.service_memory_high : "${k}-memory-high" => a.arn },
+    { for k, a in aws_cloudwatch_metric_alarm.capability : "capability-${k}" => a.arn },
     {
       "rds-cpu-high"      = aws_cloudwatch_metric_alarm.rds_cpu_high.arn
       "rds-storage-low"   = aws_cloudwatch_metric_alarm.rds_storage_low.arn
@@ -20,6 +21,11 @@ output "alarm_arns" {
       "redis-memory-high" = aws_cloudwatch_metric_alarm.redis_memory_high.arn
     },
   )
+}
+
+output "canary_dashboard_name" {
+  description = "Name of the INFRA-7 canary observability CloudWatch dashboard (operator read surface; nothing downstream consumes it)."
+  value       = aws_cloudwatch_dashboard.canary.dashboard_name
 }
 
 output "trail_arn" {
