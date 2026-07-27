@@ -160,7 +160,7 @@ jobs:
       # without fixing a threshold; INFRA-5 sets it to CRITICAL+HIGH (subject
       # to review). ECR scan-on-push additionally re-scans after the push.
       - name: Vulnerability scan (API) — fail on CRITICAL/HIGH
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: signalnest-api:${{ github.sha }}
           format: table
@@ -169,7 +169,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Vulnerability scan (worker) — fail on CRITICAL/HIGH
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: signalnest-worker:${{ github.sha }}
           format: table
