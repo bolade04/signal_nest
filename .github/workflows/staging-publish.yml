@@ -123,6 +123,95 @@ jobs:
             GIT_REVISION=${{ github.sha }}
             IMAGE_CREATED=${{ steps.meta.outputs.created }}
 
+      # Fail-closed zero-handoff bootstrap gate (Batch 4C.1B): the worker image
+      # must carry app/db/bootstrap_app_role.py byte-identical to the trusted
+      # checkout and import it with no settings, AWS, or database side effects.
+      # Runs strictly BEFORE Trivy and before any AWS credential exists in this
+      # job (OIDC/STS/ECR steps come later), against the locally built image
+      # only. Fixed sanitized messages; no file contents, hashes only in
+      # variables, no registry identifiers.
+      - name: Verify bootstrap module inside the worker image (fail-closed)
+        run: |
+          set -euo pipefail
+          image="signalnest-worker:${{ github.sha }}"
+          cid="$(docker create "$image")"
+          cleanup() {
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+            rm -f /tmp/bootstrap_in_image.py /tmp/verify_bootstrap_import.py
+          }
+          trap cleanup EXIT
+          if ! docker cp "$cid:/app/app/db/bootstrap_app_role.py" /tmp/bootstrap_in_image.py 2>/dev/null; then
+            echo "::error::bootstrap module missing from the worker image" >&2
+            exit 1
+          fi
+          src_hash="$(sha256sum apps/api/app/db/bootstrap_app_role.py | awk '{print $1}')"
+          img_hash="$(sha256sum /tmp/bootstrap_in_image.py | awk '{print $1}')"
+          if [ "$src_hash" != "$img_hash" ]; then
+            echo "::error::bootstrap module in the worker image is not byte-identical to the trusted checkout" >&2
+            exit 1
+          fi
+          echo "ok: bootstrap module present and byte-identical to the trusted checkout"
+          cat > /tmp/verify_bootstrap_import.py <<'PY'
+          """Fail-closed import-safety probe for app.db.bootstrap_app_role.
+
+          Fixed sanitized output only; exits nonzero on any violation.
+          """
+          import socket
+          import sys
+
+
+          class _Deny(Exception):
+              pass
+
+
+          def _deny(*_args, **_kwargs):
+              raise _Deny()
+
+
+          class _DenySocket(socket.socket):
+              def __init__(self, *_args, **_kwargs):
+                  raise _Deny()
+
+
+          # Any socket creation or name resolution during import would mean an
+          # AWS or database call: deny both so such an import fails loudly. A
+          # subclass (not a bare function) keeps stdlib imports that reference
+          # the socket class working while still refusing construction.
+          socket.socket = _DenySocket  # type: ignore[misc]
+          socket.create_connection = _deny  # type: ignore[assignment]
+          socket.getaddrinfo = _deny  # type: ignore[assignment]
+
+          try:
+              import app.db.bootstrap_app_role as bootstrap
+          except _Deny:
+              print("bootstrap-import-check: FAIL network-activity-on-import")
+              sys.exit(1)
+          except BaseException:
+              print("bootstrap-import-check: FAIL import-error")
+              sys.exit(1)
+
+          for name in ("app.core.config", "app.db.session", "app.db.migrate"):
+              if name in sys.modules:
+                  print("bootstrap-import-check: FAIL forbidden-module-imported")
+                  sys.exit(1)
+
+          if not callable(getattr(bootstrap, "main", None)):
+              print("bootstrap-import-check: FAIL entrypoint-missing")
+              sys.exit(1)
+
+          try:
+              import boto3  # noqa: F401
+              import psycopg  # noqa: F401
+          except BaseException:
+              print("bootstrap-import-check: FAIL dependency-missing")
+              sys.exit(1)
+
+          print("bootstrap-import-check: PASS")
+          PY
+          docker run --rm --network none \
+            -v /tmp/verify_bootstrap_import.py:/tmp/verify_bootstrap_import.py:ro \
+            --entrypoint python "$image" /tmp/verify_bootstrap_import.py
+
       - name: Security check — non-root, no secrets (API)
         run: bash scripts/docker-security-check.sh "signalnest-api:${{ github.sha }}"
 
