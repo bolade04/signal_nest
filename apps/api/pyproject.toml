@@ -38,6 +38,9 @@ dev = [
     # set) run the real SKIP LOCKED claim integration tests. Dialect SQL
     # compilation tests run without a server.
     "psycopg[binary]>=3.1",
+    # boto3 is needed to import the staging DB bootstrap module under test
+    # (app/db/bootstrap_app_role.py); its AWS clients are fully mocked in tests.
+    "boto3>=1.34",
 ]
 
 [build-system]
