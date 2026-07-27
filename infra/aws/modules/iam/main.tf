@@ -180,7 +180,7 @@ resource "aws_iam_role" "worker_task" {
 # API/worker S3 grant. No aws_iam_role_policy is attached.
 resource "aws_iam_role" "migration_task" {
   name               = "${var.name_prefix}-migration-task"
-  description        = "Migration one-shot task role for ${var.name_prefix}: intentionally empty (no attached policy) — migration code calls no AWS API."
+  description        = "Migration one-shot task role for ${var.name_prefix}: intentionally empty (no attached policy) - migration code calls no AWS API."
   assume_role_policy = local.ecs_tasks_trust
 
   tags = {
