@@ -200,19 +200,34 @@ deliberately; this is not a zero-downtime rotation. (Key-versioning support
 would be a separate application change.)
 
 ### 5.2 `DATABASE_URL` — application-role credential rotation
-Rotate the **application role's** password (§6): as the administrative
-identity, in a psql session started with history disabled
+
+Two rotation paths exist. The zero-handoff noninteractive path (section 6.1)
+is the default and preferred mechanism whenever the rotation can be driven by
+the one-shot bootstrap task; the interactive human path below is retained for
+any operator-performed rotation that is not run through that task.
+
+**Preferred (zero-handoff, noninteractive):** re-run the bootstrap module in
+its separately-authorized recovery mode (section 6.1). The task generates a
+fresh password internally, rotates the role's credential via a driver-bound
+parameter, writes the recomposed `DATABASE_URL` directly to its container, and
+verifies with a fresh TLS round trip - no operator ever sees or handles the
+value, and no password-bearing SQL is ever rendered. Then restart api/worker
+(and any future migration run picks up the new value automatically).
+
+**Interactive (human-performed rotation):** rotate the **application role's**
+password (section 6.2): as the administrative identity, in a psql session
+started with history disabled
 (`PSQL_HISTORY=/dev/null psql "sslmode=require" ...`), use the interactive
-**`\password <APP_ROLE>`** meta-command — it prompts without echo and never
+**`\password <APP_ROLE>`** meta-command - it prompts without echo and never
 places the literal in psql's history. A literal
 `ALTER ROLE ... PASSWORD '<value>'` statement is **prohibited**: psql's
 default readline history (`~/.psql_history`) would persist the plaintext SQL
-to disk. Then recompose the URL (§2 format) → §3 population → restart
-api/worker (and any future migration run picks up the new value
-automatically). The RDS-managed
-**master** secret rotates independently under RDS's own managed rotation —
-it is administrative, is never embedded in `DATABASE_URL`, and its rotation
-never requires an application change.
+to disk. Then recompose the URL (section 2 format), populate per section 3,
+restart api/worker.
+
+In both paths the RDS-managed **master** secret rotates independently under
+RDS's own managed rotation - it is administrative, is never embedded in
+`DATABASE_URL`, and its rotation never requires an application change.
 
 ### 5.3 `REDIS_URL` — no rotatable credential
 Option A carries **no auth token**; access control is network-only (SG +
@@ -252,13 +267,127 @@ dedicated application database role** (working name `<APP_ROLE>`, e.g.
   `DATABASE_URL` would put superuser-equivalent rights in every task and fuse
   application-credential rotation to master-credential rotation.
 
-**Procedure (executed once, at live-sequence step 2–3, under that
-authorization):**
+There are two authored forms of this procedure. The **zero-handoff
+noninteractive bootstrap** (section 6.1) is the **default and mandatory**
+mechanism for the first creation of `<APP_ROLE>`: it is executed by a one-shot
+ECS task with no human in the credential path. The **interactive
+human-performed procedure** (section 6.2) is retained only as a fallback for
+operator-performed work outside that task, and its literal-SQL prohibition is
+unchanged.
+
+### 6.1 Zero-handoff noninteractive bootstrap (default; module-driven)
+
+**Rationale (why the interactive password-handoff design is prohibited as the
+default):** any procedure in which an operator generates, reads, types,
+copies, pastes, or otherwise transports the application password - even
+transiently, even via `\password` - places the plaintext credential in a
+human's hands and therefore inside some terminal, clipboard, prompt buffer, or
+transcript. That violates the no-transcript / no-terminal secret rules
+(section 10 leak-vector rules): the value must never exist in an
+operator-visible surface at any moment. A credential no human ever sees cannot
+be leaked by a human. The bootstrap task therefore generates and consumes the
+password entirely inside its own process memory and hands the finished
+`DATABASE_URL` straight to Secrets Manager.
+
+**Executor:** the one-shot ECS task running module
+`apps/api/app/db/bootstrap_app_role.py` (invoked as
+`python -m app.db.bootstrap_app_role`), under a temporary task role and a
+temporary task definition provisioned for this gate. **No ECS Exec** is used
+or enabled at any point; there is no interactive shell into the task. The
+temporary task role and task definition are **retired in a later gate** once
+the bootstrap has succeeded - they are not standing infrastructure.
+
+**What the task does (no operator sees or handles any credential):**
+
+1. Reads only **non-secret** configuration from its environment (master and
+   target secret identifiers by reference, DB host/port/name, expected account
+   id and region, and an optional mode selector). No secret value and no ARN
+   is hard-coded; nothing secret is printed.
+2. Verifies identity (`sts:GetCallerIdentity`) against the expected account and
+   region, and confirms the target `DATABASE_URL` container has **no**
+   `AWSCURRENT` version (metadata-only `DescribeSecret`; default mode aborts if
+   it is already populated).
+3. Reads the RDS-managed **master** credential
+   (`GetSecretValue` on the master secret only) into task memory at runtime,
+   never to disk, argv, env, or logs.
+4. Connects to the database as master over **TLS** (`sslmode=require`) and, as
+   a session guard **before any credential statement**, disables statement
+   logging for the session so no SQL text is ever written to the database log.
+5. Generates the application password **inside the task** with
+   `secrets.token_urlsafe(48)` - a fresh, high-entropy, URL-safe value that
+   exists only in process memory.
+6. Creates the role with a **restricted** attribute set:
+   `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, using
+   a driver-bound password parameter (see the literal-SQL exception below).
+   Transfers ownership of the application database to `<APP_ROLE>` and
+   re-checks the metadata (all attribute flags false except `LOGIN`; database
+   owner is `<APP_ROLE>`) **before** writing any secret.
+7. Composes `DATABASE_URL` in memory in the section 2 format (username and
+   password percent-encoded) and writes it with a single `PutSecretValue`
+   **directly to the existing empty `DATABASE_URL` container**. The container
+   is never created, deleted, or replicated here; the composed value never
+   leaves the task except as that one write.
+8. Performs a **mandatory fresh TLS authentication round trip**: opens a new,
+   independent connection **as `<APP_ROLE>` using the newly written
+   credential** (`sslmode=require`) and runs a trivial `SELECT 1`. Success is
+   not declared until this round trip passes. It then closes all connections,
+   drops its in-memory references to the password and URL, and discards its
+   AWS clients.
+
+**Modes.** The task defaults to **create-only**: it refuses to run if the role
+already exists or the target container is already populated. A **recovery
+mode** exists (it rotates an existing role's password via a driver-bound
+`ALTER ROLE` parameter and rewrites the container) but is **never
+auto-invoked**; selecting it requires **separate operational authorization**
+and is the noninteractive path referenced by section 5.2.
+
+**Fixed sanitized exit codes.** The task communicates outcome only through a
+stable, unique, documented exit-code map (authored in the module docstring of
+`apps/api/app/db/bootstrap_app_role.py`); it emits only fixed constant strings,
+never a value, never an exception object, never a response body. The map:
+
+| Code | Meaning |
+| --- | --- |
+| 0  | Success (role created/rotated, secret written, round trip verified) |
+| 10 | Configuration invalid (missing/malformed environment; field name only) |
+| 11 | Identity mismatch (account or region does not match expected) |
+| 12 | Target not empty (`DATABASE_URL` container already has a version; default mode) |
+| 13 | Role exists (`<APP_ROLE>` already present; default mode; report-only) |
+| 14 | Master secret failure (access denied / not found / wrong JSON shape) |
+| 15 | DB connect failure (master TLS connect or session-setup guard failed) |
+| 16 | Role or ownership failure (create/alter, ownership transfer, or metadata check failed **before** any secret write) |
+| 17 | Secret write failure (role committed but `PutSecretValue` failed/invalid) - **recovery required** |
+| 18 | Verify failure (secret written but new-credential round trip failed) - **recovery required** |
+| 19 | Cleanup failure (operation succeeded but a resource close failed) |
+| 20 | Recovery precondition (recovery mode selected but role absent) |
+
+Codes 17 and 18 mean the role change committed but the container or its
+verification did not settle cleanly; both require the separately-authorized
+recovery mode, not an ad-hoc manual fix.
+
+**Approved literal-SQL exception (precisely scoped).** The general prohibition
+on password-bearing SQL (sections 5.2 and 6.2) remains fully in force. The
+single approved exception is a **driver-bound parameter**: inside this
+controlled noninteractive process, the password is passed to the role
+statement as a **client-side bound parameter** (psycopg `ClientCursor` `%s`
+placeholder), which the driver escapes and quotes. This is permitted because
+the value is **never rendered** into shell history, psql history,
+operator-visible SQL, logs, argv, environment variables, task definitions, or
+transcripts, and no human is present. **String interpolation of the password
+into SQL (f-string, `format`, or concatenation) remains prohibited
+everywhere**, including inside this task. Interactive **`\password`** remains
+the rule for any human-performed operation (section 6.2).
+
+### 6.2 Interactive human-performed procedure (fallback)
+
+Retained for any operator-performed role work that is **not** run through the
+bootstrap task of section 6.1. Executed once, at live-sequence step 2-3, under
+that authorization:
 
 1. Retrieve the master credential transiently from the RDS-managed secret
    (administrative access; interactive; never written to disk or history).
 2. Connect with `PSQL_HISTORY=/dev/null psql "sslmode=require" ...` to the
-   instance endpoint (psql history disabled for the whole session — psql's
+   instance endpoint (psql history disabled for the whole session - psql's
    default `~/.psql_history` would otherwise persist any literal credential
    SQL to disk).
 3. `CREATE ROLE <APP_ROLE> LOGIN;` then set its password with the interactive
@@ -269,15 +398,15 @@ authorization):**
    (`ALTER DATABASE <DB_NAME> OWNER TO <APP_ROLE>;`) so migrations can run
    DDL without superuser rights.
 4. **Optional, separately authorized:** `CREATE EXTENSION IF NOT EXISTS
-   vector;` (requires master privileges). This remains **deferred** — the
+   vector;` (requires master privileges). This remains **deferred** - the
    composed root deliberately omits `VECTOR_BACKEND` (application default
    `bruteforce`); run this step only when the pgvector bootstrap is explicitly
    authorized. Nothing in this tranche changes that posture.
-5. Compose `DATABASE_URL` per §2 and populate per §3. Discard all transient
-   credential material; the master credential remains only in its RDS-managed
-   secret.
+5. Compose `DATABASE_URL` per section 2 and populate per section 3. Discard all
+   transient credential material; the master credential remains only in its
+   RDS-managed secret.
 6. End state: master = administrative/incident-only; `<APP_ROLE>` = the sole
-   application credential, rotatable per §5.2.
+   application credential, rotatable per section 5.2.
 
 ## 7. Backup posture (existing substrate — referenced, not modified)
 
