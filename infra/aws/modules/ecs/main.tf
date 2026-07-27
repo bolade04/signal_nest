@@ -138,7 +138,7 @@ resource "aws_security_group" "task" {
   for_each = local.workloads
 
   name        = "${var.name_prefix}-${each.key}-task-sg"
-  description = "${each.key} task SG for ${var.name_prefix}; every rule is a standalone resource owned by the ecs module (§26.2)."
+  description = "${each.key} task SG for ${var.name_prefix}; every rule is a standalone resource owned by the ecs module (sec.26.2)."
   vpc_id      = var.vpc_id
 
   tags = {
@@ -149,7 +149,7 @@ resource "aws_security_group" "task" {
 # --- ALB↔API TCP 8000 (§26.3/§26.13) — both rules owned here -----------------------
 resource "aws_vpc_security_group_egress_rule" "alb_to_api" {
   security_group_id            = var.alb_security_group_id
-  description                  = "ALB egress to the API task SG only, TCP 8000 (owned by ecs; §26.3)."
+  description                  = "ALB egress to the API task SG only, TCP 8000 (owned by ecs; sec.26.3)."
   ip_protocol                  = "tcp"
   from_port                    = 8000
   to_port                      = 8000
@@ -162,7 +162,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_api" {
 
 resource "aws_vpc_security_group_ingress_rule" "api_from_alb" {
   security_group_id            = aws_security_group.task["api"].id
-  description                  = "API task ingress from the ALB SG only, TCP 8000 (§26.3). No public 8000."
+  description                  = "API task ingress from the ALB SG only, TCP 8000 (sec.26.3). No public 8000."
   ip_protocol                  = "tcp"
   from_port                    = 8000
   to_port                      = 8000
@@ -178,7 +178,7 @@ resource "aws_vpc_security_group_egress_rule" "task_to_postgres" {
   for_each = local.workloads
 
   security_group_id            = aws_security_group.task[each.key].id
-  description                  = "${each.key} task egress to the PostgreSQL SG only, TCP 5432 (§26.3)."
+  description                  = "${each.key} task egress to the PostgreSQL SG only, TCP 5432 (sec.26.3)."
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
@@ -193,7 +193,7 @@ resource "aws_vpc_security_group_ingress_rule" "postgres_from_task" {
   for_each = local.workloads
 
   security_group_id            = var.rds_security_group_id
-  description                  = "PostgreSQL ingress from the ${each.key} task SG only, TCP 5432 (three separate standalone rules; owned by ecs, destination SG owned by data_sql; §26.3)."
+  description                  = "PostgreSQL ingress from the ${each.key} task SG only, TCP 5432 (three separate standalone rules; owned by ecs, destination SG owned by data_sql; sec.26.3)."
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
@@ -209,7 +209,7 @@ resource "aws_vpc_security_group_egress_rule" "task_to_redis" {
   for_each = toset(["api", "worker"])
 
   security_group_id            = aws_security_group.task[each.key].id
-  description                  = "${each.key} task egress to the Redis SG only, TCP 6379 (§26.3; migration has no Redis rule)."
+  description                  = "${each.key} task egress to the Redis SG only, TCP 6379 (sec.26.3; migration has no Redis rule)."
   ip_protocol                  = "tcp"
   from_port                    = 6379
   to_port                      = 6379
@@ -224,7 +224,7 @@ resource "aws_vpc_security_group_ingress_rule" "redis_from_task" {
   for_each = toset(["api", "worker"])
 
   security_group_id            = var.redis_security_group_id
-  description                  = "Redis ingress from the ${each.key} task SG only, TCP 6379 (two separate standalone rules; owned by ecs, destination SG owned by data_cache; §26.3)."
+  description                  = "Redis ingress from the ${each.key} task SG only, TCP 6379 (two separate standalone rules; owned by ecs, destination SG owned by data_cache; sec.26.3)."
   ip_protocol                  = "tcp"
   from_port                    = 6379
   to_port                      = 6379
@@ -245,7 +245,7 @@ resource "aws_vpc_security_group_egress_rule" "task_https" {
   for_each = local.workloads
 
   security_group_id = aws_security_group.task[each.key].id
-  description       = "${each.key} task HTTPS egress via NAT (TCP 443 IPv4 only; §26.4 staging baseline — ECR, Secrets Manager, CloudWatch Logs, S3, approved LLM providers)."
+  description       = "${each.key} task HTTPS egress via NAT (TCP 443 IPv4 only; sec.26.4 staging baseline - ECR, Secrets Manager, CloudWatch Logs, S3, approved LLM providers)."
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
