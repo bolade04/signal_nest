@@ -42,7 +42,7 @@
 # ingress; the `ecs` module later attaches the ALB->API :8000 egress rule to this SG.
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb-sg"
-  description = "ALB SG for ${var.name_prefix}: public HTTPS 443 ingress only; ALB->API :8000 egress owned by the ecs module."
+  description = "ALB SG for ${var.name_prefix}: public HTTPS 443 ingress only; ALB to API :8000 egress owned by the ecs module."
   vpc_id      = var.vpc_id
 
   tags = {
