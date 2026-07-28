@@ -58,10 +58,17 @@ locals {
   workload_env_api = merge(local.workload_env_redis, {
     FORWARDED_ALLOW_IPS = var.vpc_cidr
   })
-  workload_env_migration = merge(local.workload_env_common, {
-    QUEUE_BACKEND = "inprocess"
-    CACHE_BACKEND = "memory"
-  })
+  # The one-shot migration task runs the hardened `app.db.migrate` entrypoint in
+  # migration mode: ENVIRONMENT=staging selects staging validation, and
+  # SN_MIGRATION_MODE=1 relaxes ONLY the staging secret-presence requirements so
+  # the actor initializes with DATABASE_URL alone (no SECRET_KEY/REDIS_URL/
+  # LLM_API_KEY, no app_mode=full backends). These two non-secret variables are
+  # the entire migration environment - proven by the Batch 4F one-shot run. The
+  # app secrets are excluded from the migration secret subset in the ecs module.
+  workload_env_migration = {
+    ENVIRONMENT       = "staging"
+    SN_MIGRATION_MODE = "1"
+  }
 }
 
 module "network" {

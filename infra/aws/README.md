@@ -81,7 +81,7 @@ documentation-only stub remains, and **all twelve are root-composed** (wired in
 | `network` | **Implemented** (offline-validated) — VPC, subnets, route tables, single NAT |
 | `edge` | **Implemented** (offline-validated) — CloudFront + private S3 SPA origin + web DNS aliases |
 | `alb` | **Implemented** (offline-validated, **root-composed**) — ALB SG + public HTTPS 443 ingress, internet-facing IPv4 ALB, API IP target group, HTTPS listener; **access + connection logging enabled** into a dedicated private module-owned log bucket (SSE-S3, versioned, public-access-blocked, TLS-only; delivery via the plan-time-resolved regional ELB service account — the §24.7 pre-live logging gate is resolved in configuration) |
-| `ecs` | **Implemented** (offline-validated, **root-composed**) — ECS/Fargate compute plane per §26.2–§26.15: cluster, the three deterministic `/ecs/<name_prefix>-*` log groups, three per-workload task SGs + every task-side cross-SG rule (ALB↔API 8000, PostgreSQL 5432 incl. migration, Redis 6379 api/worker-only, TCP 443 NAT egress; no CIDR ingress), three digest-pinned LINUX/X86_64 task definitions (migration reuses the worker image with the locked command override; execution-role-only secret injection, migration excludes `REDIS_URL`), two services (circuit breaker + rollback, ECS Exec disabled); migration is never a service; nothing exists in AWS |
+| `ecs` | **Implemented** (offline-validated, **root-composed**) — ECS/Fargate compute plane per §26.2–§26.15: cluster, the three deterministic `/ecs/<name_prefix>-*` log groups, three per-workload task SGs + every task-side cross-SG rule (ALB↔API 8000, PostgreSQL 5432 incl. migration, Redis 6379 api/worker-only, TCP 443 NAT egress; no CIDR ingress), three digest-pinned LINUX/X86_64 task definitions (migration reuses the worker image with the bare `python -m app.db.migrate` upgrade-and-verify command; execution-role-only secret injection, migration injects `DATABASE_URL` only), two services (circuit breaker + rollback, ECS Exec disabled); migration is never a service; nothing exists in AWS |
 | `data_sql` | **Implemented** (offline-validated, **root-composed**) — one private RDS PostgreSQL instance + DB subnet group + rule-free RDS security group + TLS-enforcing parameter group (`rds.force_ssl=1`); `manage_master_user_password=true` (no password in HCL/state); private, encrypted (gp3); no DB provisioned, no pgvector activated |
 | `data_cache` | **Implemented** (offline-validated, **root-composed**) — one private ElastiCache for Redis replication group (encrypted at rest, TLS-required in transit, **no `auth_token`** — no Redis credential in HCL/state) + cache subnet group + rule-free Redis security group + empty custom parameter group; no cache provisioned |
 | `storage` | **Implemented** (offline-validated, **root-composed**) — one private S3 application bucket (SSE-S3/AES256, versioning, all four public-access-block controls, bucket-owner-enforced ownership, TLS-only deny policy); no `bucket_key_enabled`, no KMS, no object stored |
@@ -195,10 +195,10 @@ directions; PostgreSQL TCP 5432 from api/worker/**migration**; Redis TCP 6379
 from api/worker **only** — migration is Redis-excluded; TCP 443 IPv4 NAT-baseline
 egress; **no CIDR-based ingress**), **three Fargate task definitions**
 (LINUX/X86_64, platform 1.4.0, immutable `sha256:`-digest-pinned images only —
-the migration task reuses the worker image with the locked
-`python -m app.db.migrate upgrade` override; execution-role-only secret
-injection with the locked per-workload subsets, migration excluding
-`REDIS_URL`), and **two services** (private subnets, no public IP, circuit
+the migration task reuses the worker image with the bare
+`python -m app.db.migrate` upgrade-and-verify entrypoint; execution-role-only secret
+injection with the locked per-workload subsets, migration injecting
+`DATABASE_URL` only), and **two services** (private subnets, no public IP, circuit
 breaker with rollback, ECS Exec disabled; **the migration workload is a task
 definition only — never a service**, and nothing here runs it). **No cluster,
 task, service, rule, or log group exists in AWS** — implemented offline only,

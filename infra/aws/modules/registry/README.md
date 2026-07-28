@@ -25,7 +25,7 @@ The runtime model (merged PR #103 §26.5; executable `apps/api/Dockerfile` targe
 - **worker** repository — holds the worker image (`python -m app.jobs.worker`).
 - The **API** task pins the **API** image digest; the **worker** task **and** the
   one-shot **migration** task both pin the **worker** image digest (migration
-  overrides the command to `python -m app.db.migrate upgrade`). API and worker are
+  runs the bare `python -m app.db.migrate` upgrade-and-verify entrypoint). API and worker are
   **independently built artifacts with distinct immutable digests** — one image does
   **not** serve all three actors. No third (migration/frontend) repository or image.
 

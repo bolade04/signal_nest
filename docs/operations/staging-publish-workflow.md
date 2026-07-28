@@ -20,7 +20,7 @@
 | Logical image | Dockerfile target | Build context | Runtime | ECR repository | Consumed by |
 | --- | --- | --- | --- | --- | --- |
 | `api` | `apps/api/Dockerfile` `--target api` | `apps/api` | `uvicorn app.main:app`, port 8000, `/health` liveness, UID/GID 10001 | `<name_prefix>/api` | ECS **API** task definition (`repository@sha256:<api_image_digest>`) |
-| `worker` | `apps/api/Dockerfile` `--target worker` | `apps/api` | `python -m app.jobs.worker`, no port, UID/GID 10001 | `<name_prefix>/worker` | ECS **worker** task definition **and** the one-shot **migration** task definition (same digest, command override `python -m app.db.migrate upgrade`) |
+| `worker` | `apps/api/Dockerfile` `--target worker` | `apps/api` | `python -m app.jobs.worker`, no port, UID/GID 10001 | `<name_prefix>/worker` | ECS **worker** task definition **and** the one-shot **migration** task definition (same digest; migration runs the bare `python -m app.db.migrate` upgrade-and-verify entrypoint) |
 
 There is **no third image and no frontend image**: the SPA is compiled
 statically and served from the private S3 origin behind CloudFront (`edge`

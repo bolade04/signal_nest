@@ -57,7 +57,7 @@ present.]*
 Exactly **two** immutable, digest-pinned images: API task = the `api` repository
 URL + `api_image_digest`; worker task = the `worker` repository URL +
 `worker_image_digest`; **the migration task reuses the worker image digest** with
-the locked command override `python -m app.db.migrate upgrade`. Input validation
+the bare hardened entrypoint `python -m app.db.migrate` (upgrade-and-verify). Input validation
 rejects anything but `sha256:<64 hex>` — **no mutable tag and no `latest`** can
 enter a task definition. No third image exists.
 

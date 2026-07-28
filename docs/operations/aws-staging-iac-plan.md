@@ -223,7 +223,7 @@ Per runtime-contract §§A/B and `deployment-sha-wiring-plan.md` (G4):
 - **Two images, three actors (corrected — see §26.5).** The Dockerfile and CI build **two**
   distinct images (`api` and `worker` targets); the API task pins the **API** image by digest,
   and the worker task **and** the one-shot migration task both pin the **worker** image by digest
-  (migration overrides the command to `python -m app.db.migrate upgrade`). Both images derive from
+  (migration runs the bare `python -m app.db.migrate` upgrade-and-verify entrypoint). Both images derive from
   one shared `runtime` base so provenance is aligned, but they are two separate digest-pinned
   artifacts — not one image. The ECS task-definition interface therefore consumes an API image
   reference and a worker image reference, both immutable digests, never a `latest` tag.
@@ -708,8 +708,10 @@ application authorization, not by SG destination filtering.
 ### 26.5 Two-image artifact contract
 Two immutable, digest-pinned images (`api`, `worker`; `apps/api/Dockerfile:94-118`,
 `.github/workflows/ci.yml:240-260`). API task = API image digest; worker task = worker image
-digest; **migration task = worker image digest** with command override `python -m app.db.migrate
-upgrade` (`.github/workflows/ci.yml:276-279`). No `latest` accepted by the ECS interface. Registry
+digest; **migration task = worker image digest** running the bare hardened entrypoint
+`python -m app.db.migrate` (upgrade-and-verify internally). `.github/workflows/ci.yml:276-279`
+separately exercises the module's `upgrade`/`check` subcommands against a throwaway SQLite DB as a
+CI schema-gate test — that is not the ECS task's runtime command. No `latest` accepted by the ECS interface. Registry
 documentation must not claim one image serves all three actors. First-deploy SHA
 `3aadb8a1da0f26ffd183a4b05161747038d5957c` (G4). No image is built or pushed in this tranche;
 build/push is INFRA-5.
@@ -733,10 +735,11 @@ Derived from `apps/api/app/core/config.py` `_validate_runtime` (`:302-389`). All
 `valueFrom` ARN references, never plaintext.
 - **API:** `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`.
 - **Worker:** `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`.
-- **Migration:** `SECRET_KEY`, `DATABASE_URL`, `LLM_API_KEY` — **REDIS_URL excluded** (§26.3
-  rationale). Granting migration `REDIS_URL` would be a G5 `ACTOR_SUBSET_EXCEEDED` over-provision.
-  This resolves the prior "three vs four migration secrets" contradiction in favor of **three**, by
-  executable behavior. `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` remain **unset** for all workloads
+- **Migration:** `DATABASE_URL` **only**. The one-shot actor runs the hardened `app.db.migrate`
+  entrypoint in migration mode (`SN_MIGRATION_MODE=1`), which needs nothing but `DATABASE_URL` to
+  upgrade-and-verify the schema; `SECRET_KEY`/`REDIS_URL`/`LLM_API_KEY` would each be a G5
+  `ACTOR_SUBSET_EXCEEDED` over-provision. This supersedes the earlier "three migration secrets"
+  decision (proven end-to-end by the Batch 4F one-shot run). `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` remain **unset** for all workloads
   (task-role credential chain). No secret is granted merely because another workload has it.
 
 ### 26.8 IAM roles and cycle breaks
