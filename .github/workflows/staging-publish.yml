@@ -212,6 +212,220 @@ jobs:
             -v /tmp/verify_bootstrap_import.py:/tmp/verify_bootstrap_import.py:ro \
             --entrypoint python "$image" /tmp/verify_bootstrap_import.py
 
+      # Fail-closed hardened-migration gate (Batch 4F): the worker image must
+      # carry app/db/migrate.py and app/core/config.py byte-identical to the
+      # trusted checkout, and the migration entrypoint must behave as reviewed -
+      # bare invocation upgrades then verifies the DB revision, fails closed on
+      # every mismatch, initializes migration-mode with DATABASE_URL only, and
+      # keeps ordinary staging startup strict. Runs strictly BEFORE Trivy and
+      # before any AWS credential exists in this job, against the locally built
+      # image only, over --network none. Fixed sanitized output; hashes only in
+      # variables; no source, values, or exceptions in logs.
+      - name: Verify hardened migration entrypoint inside the worker image (fail-closed)
+        run: |
+          set -euo pipefail
+          image="signalnest-worker:${{ github.sha }}"
+          cid="$(docker create "$image")"
+          cleanup() {
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+            rm -f /tmp/mig_in_image.py /tmp/cfg_in_image.py /tmp/verify_migration.py
+          }
+          trap cleanup EXIT
+          # Byte-integrity of the two migration-hardening source files.
+          check_file() {
+            in_path="$1"; tmp="$2"; src="$3"
+            if ! docker cp "$cid:/app/$in_path" "$tmp" 2>/dev/null; then
+              echo "::error::migration source $in_path missing from the worker image" >&2
+              exit 1
+            fi
+            if [ "$(sha256sum "$src" | awk '{print $1}')" != "$(sha256sum "$tmp" | awk '{print $1}')" ]; then
+              echo "::error::migration source $in_path not byte-identical to the trusted checkout" >&2
+              exit 1
+            fi
+          }
+          check_file "app/db/migrate.py" /tmp/mig_in_image.py apps/api/app/db/migrate.py
+          check_file "app/core/config.py" /tmp/cfg_in_image.py apps/api/app/core/config.py
+          echo "migration source integrity: PASS"
+          cat > /tmp/verify_migration.py <<'PY'
+          """Fail-closed in-image verification of the hardened migration entrypoint.
+
+          Fixed sanitized output only; exits nonzero on any violation. No database
+          connection, no AWS, no secret retrieval, no network.
+          """
+          import os
+          import socket
+          import sys
+          from types import SimpleNamespace
+
+
+          def _fail(token: str) -> None:
+              print(f"hardened-migration-check: FAIL {token}")
+              sys.exit(1)
+
+
+          # Deny any socket use during import so a stray DB/AWS call fails loudly.
+          class _DenySocket(socket.socket):
+              def __init__(self, *_a, **_k):
+                  raise _Deny()
+
+
+          class _Deny(Exception):
+              pass
+
+
+          def _deny(*_a, **_k):
+              raise _Deny()
+
+
+          socket.socket = _DenySocket  # type: ignore[misc]
+          socket.create_connection = _deny  # type: ignore[assignment]
+          socket.getaddrinfo = _deny  # type: ignore[assignment]
+
+          try:
+              import app.db.migrate as m
+          except _Deny:
+              _fail("import-network-activity")
+          except BaseException:
+              _fail("import-error")
+
+          # The upgrade path must not pull the app session engine (import-time DB).
+          for forbidden in ("app.db.session",):
+              if forbidden in sys.modules:
+                  _fail("forbidden-module-imported")
+
+          try:
+              import alembic  # noqa: F401
+              import psycopg  # noqa: F401
+              import sqlalchemy  # noqa: F401
+          except BaseException:
+              _fail("dependency-missing")
+          print("migration import safety: PASS")
+
+          # Bare-command contract via monkeypatch (no DB, no network).
+          def _patch(code_head=None, upgrade_raises=False, db_rows=None, engine_raises=False):
+              state = {"upgraded": None}
+              m._single_code_head = lambda: code_head
+
+              def _up(_cfg, target):
+                  state["upgraded"] = target
+                  if upgrade_raises:
+                      raise RuntimeError("boom")
+
+              m.command.upgrade = _up
+              m.alembic_config = lambda: object()
+
+              class _Conn:
+                  def __enter__(self):
+                      return self
+
+                  def __exit__(self, *_a):
+                      return None
+
+                  def execute(self, _q):
+                      if engine_raises:
+                          raise RuntimeError("boom")
+
+                      class _R:
+                          def scalars(self_inner):
+                              class _A:
+                                  def all(self_a):
+                                      return db_rows or []
+
+                              return _A()
+
+                      return _R()
+
+              class _Eng:
+                  def connect(self):
+                      return _Conn()
+
+                  def dispose(self):
+                      return None
+
+              m.create_engine = lambda *_a, **_k: _Eng()
+              m.get_settings = lambda: SimpleNamespace(database_url="sqlite:////tmp/x")
+              return state
+
+          # Bare main([]) dispatches upgrade_and_verify exactly once.
+          _seen = {"n": 0}
+          _orig = m.upgrade_and_verify
+          m.upgrade_and_verify = lambda: (_seen.__setitem__("n", _seen["n"] + 1) or 0)
+          m.get_settings = lambda: SimpleNamespace(debug=False)
+          if m.main([]) != 0 or _seen["n"] != 1:
+              _fail("bare-dispatch")
+          m.upgrade_and_verify = _orig
+
+          # Silence the migrate module's own lifecycle logs so only fixed
+          # classification lines reach the workflow log.
+          import logging
+
+          logging.disable(logging.CRITICAL)
+
+          _patch(code_head=None)
+          if m.upgrade_and_verify() != m.EXIT_CODE_HEADS:
+              _fail("multi-code-head")
+          _st = _patch(code_head="h", upgrade_raises=True)
+          if m.upgrade_and_verify() != m.EXIT_UPGRADE_FAILED or _st["upgraded"] != "h":
+              _fail("upgrade-blocks-verify")
+          _patch(code_head="h", engine_raises=True)
+          if m.upgrade_and_verify() != m.EXIT_READBACK_FAILED:
+              _fail("readback")
+          _patch(code_head="h", db_rows=["h", "h2"])
+          if m.upgrade_and_verify() != m.EXIT_DB_HEADS:
+              _fail("multi-db-head")
+          _patch(code_head="h", db_rows=["other"])
+          if m.upgrade_and_verify() != m.EXIT_REVISION_MISMATCH:
+              _fail("mismatch")
+          _st = _patch(code_head="h", db_rows=["h"])
+          if m.upgrade_and_verify() != m.EXIT_OK or _st["upgraded"] != "h":
+              _fail("exact-match")
+          print("migration bare-command contract: PASS")
+
+          # Migration-mode staging: initializes with DATABASE_URL only.
+          from app.core.config import Settings
+
+          for _k in ("SECRET_KEY", "REDIS_URL", "LLM_API_KEY", "DATABASE_URL"):
+              os.environ.pop(_k, None)
+          _pg = "postgresql+psycopg://u:p@synthetic.invalid:5432/db?sslmode=require"
+          try:
+              _s = Settings(
+                  _env_file=None,
+                  environment="staging",
+                  migration_mode=True,
+                  database_url=_pg,
+              )
+              if not (_s.migration_mode and _s.environment == "staging"):
+                  _fail("migration-mode-shape")
+          except _Deny:
+              _fail("migration-mode-network")
+          except BaseException:
+              _fail("migration-mode-init")
+          # No development fallback.
+          try:
+              Settings(_env_file=None, environment="development", migration_mode=True, database_url=_pg)
+              _fail("migration-mode-dev-fallback")
+          except SystemExit:
+              raise
+          except BaseException:
+              pass
+          print("migration-mode staging contract: PASS")
+
+          # Ordinary staging strictness: no migration mode + only DATABASE_URL fails closed.
+          try:
+              Settings(_env_file=None, environment="staging", app_mode="full", database_url=_pg)
+              _fail("ordinary-staging-not-strict")
+          except SystemExit:
+              raise
+          except BaseException:
+              pass
+          print("ordinary staging strictness: PASS")
+
+          print("hardened-migration-check: PASS")
+          PY
+          docker run --rm --network none \
+            -v /tmp/verify_migration.py:/tmp/verify_migration.py:ro \
+            --entrypoint python "$image" /tmp/verify_migration.py
+
       - name: Security check — non-root, no secrets (API)
         run: bash scripts/docker-security-check.sh "signalnest-api:${{ github.sha }}"
 
