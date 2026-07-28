@@ -17,7 +17,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AppMode = Literal["local", "full"]
@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     environment: Environment = "development"
     debug: bool = True
     api_prefix: str = "/api/v1"
+
+    #: Internal migration-only flag, set by the one-shot migration actor's ECS
+    #: task (env ``SN_MIGRATION_MODE``) and never by ordinary API/worker startup.
+    #: When true, Settings construction relaxes only the staging/production
+    #: *secret-presence* requirements (secret_key, LLM provider key, S3 bucket,
+    #: Redis) because the migration actor needs nothing but ``DATABASE_URL`` - while
+    #: still requiring a production-like environment on a real PostgreSQL URL (no
+    #: development or sqlite fallback) and preserving every structural and
+    #: production-runtime validation. Ordinary staging startup never sets this, so
+    #: its validation is unchanged.
+    migration_mode: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("migration_mode", "SN_MIGRATION_MODE"),
+        repr=False,
+    )
 
     # --- Observability (Phase 3A.4b Batch 2) ---------------------------------
     #: Stable, non-secret service identifier stamped onto every structured log
@@ -139,7 +154,7 @@ class Settings(BaseSettings):
     #: Namespace prefix applied to every Redis key this app writes.
     redis_key_prefix: str = "signalnest"
     #: Pub/sub channel used to signal "a durable job is available". Coordination
-    #: only — the database remains the authoritative source of queued work.
+    #: only - the database remains the authoritative source of queued work.
     redis_notify_channel: str = "signalnest:jobs:available"
     #: Bounded TTL for an optional Redis advisory lock (seconds). Must be > 0.
     redis_lock_ttl_seconds: float = 30.0
@@ -237,7 +252,7 @@ class Settings(BaseSettings):
     # --- Opportunity feedback (Phase 3C, 3C-B) -------------------------------
     #: Master switch for opportunity feedback capture (dark by default). While
     #: off, no feedback write path is exposed to customers: the 3C-B persistence
-    #: foundation ships fully inert behind this flag. Capture-only by design —
+    #: foundation ships fully inert behind this flag. Capture-only by design -
     #: enabling this never influences scoring, ranking, or model training.
     opportunity_feedback_enabled: bool = False
 
@@ -345,7 +360,25 @@ class Settings(BaseSettings):
                     "(vector_backend=bruteforce is local-only)"
                 )
 
-        if self.is_production_like:
+        # The one-shot migration actor applies schema DDL and needs only
+        # DATABASE_URL; it must not require the application's runtime secrets.
+        # ``migration_mode`` relaxes ONLY the staging/production secret-presence
+        # checks below. It never relaxes the environment/database requirements:
+        # migration_mode must run production-like on real PostgreSQL, so an
+        # accidental development or sqlite fallback fails closed.
+        if self.migration_mode:
+            if not self.is_production_like:
+                errors.append(
+                    "migration_mode requires environment=staging|production "
+                    "(no development fallback)"
+                )
+            if self.is_sqlite:
+                errors.append(
+                    "migration_mode requires a PostgreSQL database_url "
+                    "(no sqlite/local fallback)"
+                )
+
+        if self.is_production_like and not self.migration_mode:
             if self.secret_key == "dev-insecure-change-me" or not self.secret_key.strip():
                 errors.append(
                     "secret_key must be set to a strong, non-empty value in "

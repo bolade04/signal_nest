@@ -5,21 +5,35 @@ replicas never migrate themselves (they only verify compatibility at startup via
 :mod:`app.db.schema`). Running DDL from every replica would race N writers against
 one schema and is explicitly disallowed.
 
-Subcommands:
+Invocation:
 
-* ``upgrade`` (default) — apply migrations up to ``head`` (or an explicit target).
-* ``check``             — report schema compatibility without mutating; exit code
-                          ``0`` when startup-safe, ``1`` otherwise.
-* ``downgrade <rev>``   — step the schema down to an explicit revision (operator
-                          escape hatch; requires the target revision, never a bare
-                          ``head``).
+* *(no subcommand)* - the default, fail-closed staging path: upgrade to the single
+                      code head, then read the database's Alembic revision back and
+                      exit ``0`` **only** when it exactly equals that head.
+* ``upgrade``          - apply migrations up to ``head`` (or an explicit target)
+                        without the post-upgrade read-back (operator/CI use).
+* ``check``            - report schema compatibility without mutating; exit code
+                        ``0`` when startup-safe, ``1`` otherwise.
+* ``downgrade <rev>``  - step the schema down to an explicit revision (operator
+                        escape hatch; requires the target revision, never a bare
+                        ``head``).
 
-Structured, secret-free logs describe each step; the database URL is never logged.
+Exit codes for the default upgrade-and-verify path: ``0`` success (db at head);
+``3`` code graph has zero or multiple heads; ``4`` Alembic upgrade failed; ``5``
+post-upgrade revision read-back failed; ``6`` database has zero or multiple
+Alembic revisions; ``7`` database revision does not match the code head.
+
+Structured, secret-free logs describe each step; the database URL, credentials and
+raw driver exceptions are never logged.
 """
 
 from __future__ import annotations
 
 import argparse
+
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 from alembic import command
 from app.core.config import get_settings
@@ -32,6 +46,99 @@ from app.db.schema import (
 )
 
 logger = get_logger("signalnest.db.migrate")
+
+# Fixed exit codes for the default upgrade-and-verify path (documented above).
+EXIT_OK = 0
+EXIT_CODE_HEADS = 3
+EXIT_UPGRADE_FAILED = 4
+EXIT_READBACK_FAILED = 5
+EXIT_DB_HEADS = 6
+EXIT_REVISION_MISMATCH = 7
+
+
+def _single_code_head() -> str | None:
+    """The lone code head, or ``None`` when the graph has zero or multiple heads."""
+    heads = ScriptDirectory.from_config(alembic_config()).get_heads()
+    return heads[0] if len(heads) == 1 else None
+
+
+def upgrade_and_verify() -> int:
+    """Default path: upgrade to the single head, then verify the DB reached it.
+
+    Fail-closed: returns ``0`` only after the database's Alembic revision is read
+    back and matches the exact single code head. Emits only fixed, secret-free
+    classifications; never the URL, credentials, SQL, or a driver traceback.
+    """
+    code_head = _single_code_head()
+    if code_head is None:
+        _record("upgrade_verify", "failure")
+        log_event(
+            logger, "migrate.head.ambiguous", component="migrate", outcome="failure"
+        )
+        return EXIT_CODE_HEADS
+
+    log_event(logger, "migrate.upgrade.start", component="migrate", target=code_head)
+    try:
+        command.upgrade(alembic_config(), code_head)
+    except Exception:
+        _record("upgrade_verify", "failure")
+        log_event(
+            logger, "migrate.upgrade.failed", component="migrate", outcome="failure"
+        )
+        return EXIT_UPGRADE_FAILED
+
+    # Read the applied revision back through the application DATABASE_URL over its
+    # own short-lived TLS connection (never app.db.session; the URL carries the
+    # TLS mode). Any driver error is swallowed to a fixed classification.
+    engine = create_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            db_revisions = (
+                conn.execute(text("SELECT version_num FROM alembic_version"))
+                .scalars()
+                .all()
+            )
+    except Exception:
+        _record("upgrade_verify", "failure")
+        log_event(
+            logger, "migrate.verify.readback_failed", component="migrate", outcome="failure"
+        )
+        return EXIT_READBACK_FAILED
+    finally:
+        engine.dispose()
+
+    if len(db_revisions) != 1:
+        _record("upgrade_verify", "failure")
+        log_event(
+            logger,
+            "migrate.verify.db_heads",
+            component="migrate",
+            outcome="failure",
+            db_head_count=len(db_revisions),
+            code_head=code_head,
+        )
+        return EXIT_DB_HEADS
+    if db_revisions[0] != code_head:
+        _record("upgrade_verify", "failure")
+        log_event(
+            logger,
+            "migrate.verify.mismatch",
+            component="migrate",
+            outcome="failure",
+            db_revision=db_revisions[0],
+            code_head=code_head,
+        )
+        return EXIT_REVISION_MISMATCH
+
+    _record("upgrade_verify", "success")
+    log_event(
+        logger,
+        "migrate.upgrade_verify.done",
+        component="migrate",
+        outcome="success",
+        head=code_head,
+    )
+    return EXIT_OK
 
 
 def _record(operation: str, outcome: str) -> None:
@@ -107,7 +214,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="report compatibility without mutating")
 
     args = parser.parse_args(argv)
-    cmd = args.command or "upgrade"
+    # The bare, argv-less invocation is the fail-closed staging path:
+    # upgrade to the single head, then verify the database reached it.
+    if args.command is None:
+        return upgrade_and_verify()
+    cmd = args.command
     if cmd == "upgrade":
         return upgrade(args.target)
     if cmd == "downgrade":
