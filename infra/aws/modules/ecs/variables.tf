@@ -138,7 +138,7 @@ variable "migration_task_role_arn" {
 
 # --- Secret containers (secrets -> ecs; §26.6/§26.7) -------------------------------
 variable "secret_arns" {
-  description = "Map of the four logical secret keys (SECRET_KEY/DATABASE_URL/REDIS_URL/LLM_API_KEY) -> Secrets Manager container ARN, from the secrets module output of the same name. This module injects the locked per-workload SUBSETS as task-definition `secrets` valueFrom references (api/worker: all four; migration: three — REDIS_URL excluded, §26.7). References only — never secret values."
+  description = "Map of the four logical secret keys (SECRET_KEY/DATABASE_URL/REDIS_URL/LLM_API_KEY) -> Secrets Manager container ARN, from the secrets module output of the same name. This module injects the locked per-workload SUBSETS as task-definition `secrets` valueFrom references (api/worker: all four; migration: DATABASE_URL only -- the migration-mode actor needs no other secret, sec.26.7). References only -- never secret values."
   type        = map(string)
 
   validation {

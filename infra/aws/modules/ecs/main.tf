@@ -28,8 +28,9 @@
 #
 # IMAGES (§26.5): exactly two immutable digest-pinned images. API task = api image
 # digest; worker task = worker image digest; migration task = the SAME worker image
-# digest with the locked command override `python -m app.db.migrate upgrade`. No
-# third image, no mutable tag (input validation rejects anything but sha256:<hex64>).
+# digest with the bare hardened entrypoint `python -m app.db.migrate` (upgrade then
+# internal head-verify; no `upgrade` subcommand override). No third image, no
+# mutable tag (input validation rejects anything but sha256:<hex64>).
 #
 # RUNTIME (§26.10): Fargate, LINUX/X86_64 (matches the CI linux/amd64 build),
 # platform version 1.4.0, private subnets, assign_public_ip=false, 256 CPU/512 MiB
@@ -53,13 +54,17 @@ locals {
 
   log_group_names = { for w in local.workloads : w => "/ecs/${var.name_prefix}-${w}" }
 
-  # Locked per-workload secret subsets (§26.7): api/worker = all four; migration =
-  # three (REDIS_URL excluded — granting it would be a G5 ACTOR_SUBSET_EXCEEDED
-  # over-provision). Sorted for deterministic task-definition JSON.
+  # Locked per-workload secret subsets (sec.26.7): api/worker = all four;
+  # migration = DATABASE_URL ONLY. The one-shot migration actor runs the hardened
+  # `app.db.migrate` entrypoint in migration mode (SN_MIGRATION_MODE=1), which
+  # needs nothing but DATABASE_URL to upgrade-and-verify the schema; injecting
+  # SECRET_KEY/LLM_API_KEY/REDIS_URL would be a G5 ACTOR_SUBSET_EXCEEDED
+  # over-provision. Proven end-to-end by the Batch 4F one-shot run. Sorted for
+  # deterministic task-definition JSON.
   workload_secret_keys = {
     api       = ["SECRET_KEY", "DATABASE_URL", "REDIS_URL", "LLM_API_KEY"]
     worker    = ["SECRET_KEY", "DATABASE_URL", "REDIS_URL", "LLM_API_KEY"]
-    migration = ["SECRET_KEY", "DATABASE_URL", "LLM_API_KEY"]
+    migration = ["DATABASE_URL"]
   }
   workload_secrets = {
     for w, ks in local.workload_secret_keys : w => [
@@ -344,10 +349,19 @@ resource "aws_ecs_task_definition" "worker" {
 }
 
 # --- Migration task definition (one-shot; NEVER a service) -------------------------
-# Reuses the worker image digest with the locked command override (§26.5). No
-# stopTimeout override (the ECS default applies to the short-lived one-shot task);
-# no Redis secret, rule, or configuration. Executing it is a later, separately
-# authorized run-task (INFRA-5/INFRA-9) — nothing here schedules or runs it.
+# Reuses the worker image digest (sec.26.5). The BARE `app.db.migrate` command
+# invokes the hardened upgrade-and-verify entrypoint: it upgrades to the single
+# Alembic head, reads the applied revision back over the injected DATABASE_URL,
+# and exits 0 only on an exact head match (fail-closed otherwise). No `upgrade`
+# subcommand override, no shell wrapper. The migration container runs in
+# migration mode (ENVIRONMENT=staging + SN_MIGRATION_MODE=1, composed by the
+# root) with DATABASE_URL as its only injected secret. No stopTimeout override
+# (ECS default applies to the short-lived one-shot task); no Redis secret, rule,
+# or configuration. Executing it is a later, separately authorized run-task
+# (INFRA-5/INFRA-9) - nothing here schedules or runs it. The task role remains
+# the intentionally EMPTY migration role (zero AWS permissions): the entrypoint
+# makes no AWS API call, so this is security-equivalent to no task role while
+# preserving the module's uniform role-wiring architecture.
 resource "aws_ecs_task_definition" "migration" {
   count = var.deploy_workload ? 1 : 0
 
@@ -370,7 +384,7 @@ resource "aws_ecs_task_definition" "migration" {
 
   container_definitions = jsonencode([
     merge(local.container_common["migration"], {
-      command = ["python", "-m", "app.db.migrate", "upgrade"]
+      command = ["python", "-m", "app.db.migrate"]
     })
   ])
 
