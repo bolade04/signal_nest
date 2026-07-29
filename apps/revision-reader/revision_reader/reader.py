@@ -212,13 +212,14 @@ def _run(argv: list[str]) -> int:
 
     # TAMPER DETECTOR (evidence quality, NOT the control): the control is that we connect to
     # the baked host regardless of the DSN. As a tamper signal, if the DSN names a host it
-    # must equal the baked host. The comparison is against urllib's parsed hostname, which is
-    # lowercased — DNS is case-insensitive, so a case variant of the SAME host correctly
-    # matches — but is NOT NFKC-normalised, so a Unicode look-alike (e.g. a Cyrillic
-    # homoglyph) does not collapse onto the ASCII baked host and trips the detector. Only the
-    # host is checked here; the database and role are baked too, so a mismatch in those
-    # surfaces as a connect/auth failure (52) rather than at this line. A mismatch fails
-    # closed and visibly.
+    # must equal the baked host, and a mismatch fails closed here. The comparison is against
+    # urllib's parsed hostname, which str.lower()s it — DNS is case-insensitive, so a case
+    # variant of the SAME host matches — but does NOT NFKC-normalise, so essentially every
+    # Unicode look-alike (e.g. a Cyrillic homoglyph) stays distinct from the ASCII baked host
+    # and trips the detector; the one fold-to-ASCII exception, U+212A KELVIN->'k', would miss
+    # the SIGNAL but still cannot redirect the read. Only the host is compared: the database
+    # and role are baked and never read from the DSN, so a DSN naming a different database or
+    # role is simply ignored — the password is the sole DSN-derived value.
     dsn_host = _dsn_host_or_none(dsn)
     if dsn_host is not None and dsn_host != host:
         return _fail(EXIT_CONFIG_FAILED)
