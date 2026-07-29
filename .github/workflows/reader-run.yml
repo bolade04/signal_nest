@@ -269,7 +269,11 @@ jobs:
               # The reader's exit codes are a disjoint 50-57 band; 50 specifically means an
               # override command was appended and rejected.
               tokens = {50: "argv rejected (an override command was supplied)",
-                        51: "configuration refused (missing DSN, or TLS not required)",
+                        # 51 now also covers the DSN naming a host other than the baked one
+                        # (a containerOverrides tamper signal, NOT a mere config typo), an
+                        # unbaked/malformed pin, a missing CA bundle, or a rejected password.
+                        # TLS is no longer derived from the DSN — it is the baked verify-full.
+                        51: "configuration refused (missing/invalid DSN, host tamper vs the baked destination, unbaked pins, or missing CA)",
                         52: "database connection failed", 53: "alembic_version table missing",
                         54: "no revision rows", 55: "multiple revision rows",
                         56: "malformed revision", 57: "unexpected failure"}
