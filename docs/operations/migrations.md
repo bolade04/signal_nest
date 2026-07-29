@@ -230,9 +230,15 @@ separate authorization.
 ## Dedicated revision-reader ECS task (authored, NOT provisioned)
 
 Nothing in this section is deployed or permitted today. The reader exists as
-code, IaC and reviewed workflows; `enable_revision_reader` defaults to `false`,
-no reader image has been published, and no reader task has ever run. Enabling,
-publishing and invoking are three separate later authorizations.
+code, IaC and reviewed workflows. It has a **two-stage lifecycle**:
+`enable_revision_reader_publication_bootstrap` (Stage A — the reader ECR
+repository + publisher role, so the image can be published) and
+`enable_revision_reader_runtime` (Stage B — the log group, security group, the
+reader→RDS ingress rule, execution/runner roles, and the task definition).
+Runtime requires publication bootstrap **and** a pinned image digest. Both
+default to `false`, no reader image has been published, and no reader task has
+ever run. Publishing (Stage A), pinning-plus-runtime (Stage B) and invoking are
+separate later authorizations; **disable runtime before bootstrap** on teardown.
 
 **It is a dedicated artefact, not the worker image.** The design this section
 originally sketched — reuse the worker image with a task-definition `command` —

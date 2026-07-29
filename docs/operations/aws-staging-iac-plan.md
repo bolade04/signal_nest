@@ -916,11 +916,21 @@ decisions is the accurate framing, not a bookkeeping convenience:
 * §26.12 is a decision about the *edges among those modules*, not an exhaustiveness claim.
   `revision_reader`'s only inbound edges come from foundation-stage modules (`network` for
   `vpc_id`, `data_sql` for the RDS security group, `secrets` for the `DATABASE_URL` ARN and
-  CMK, and `ecs` for the ungated cluster id), so acyclicity is preserved.
+  CMK, and `ecs` for the ungated cluster id), so acyclicity is preserved. Gate 4M adds a
+  reader→RDS `5432` ingress rule that the reader module attaches to the RDS SG it already
+  consumes: it is one more resource on the existing `data_sql → revision_reader` edge, not a
+  new edge, and it is deliberately owned here (runtime-gated) rather than in the `ecs`
+  module's workload `for_each`, so the reader's SG rule appears and disappears with the reader
+  runtime lifecycle without touching `ecs` state.
 * The reader is a verification **instrument** for the schema state the workload apply depends
-  on. It is gated by its own `enable_revision_reader` flag (default `false`) and consumes
-  nothing that `deploy_workload` gates — gating the check on the flag it exists to gate would
-  be circular, which is the whole reason it sits outside the workload graph.
+  on. It is gated by its own **two** lifecycle flags —
+  `enable_revision_reader_publication_bootstrap` (Stage A: ECR repository + publisher role) and
+  `enable_revision_reader_runtime` (Stage B: log group, SG, reader→RDS ingress, execution/runner
+  roles, task definition), both default `false` — and consumes nothing that `deploy_workload`
+  gates. The split publishes the image before the secret-bearing execution role exists; runtime
+  requires bootstrap **and** a pinned digest, and teardown disables runtime before bootstrap.
+  Gating the check on the flag it exists to gate would be circular, which is the whole reason it
+  sits outside the workload graph.
 
 It is not part of `registry`/`iam` because `registry`'s fixed two-repository map feeds
 `repository_arns`, which feeds **both** the shared execution role's ECR pull grant and the

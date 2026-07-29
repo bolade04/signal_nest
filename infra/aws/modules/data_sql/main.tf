@@ -16,8 +16,9 @@
 #
 # NETWORK/SG BOUNDARY (§26): this module CREATES and OWNS the RDS security group and
 # OUTPUTS its id, but authors NO ingress/egress rules. `ecs` later owns the three
-# standalone TCP 5432 ingress rules (from the API, worker, and migration task SGs) —
-# one-way `data_sql -> ecs`, acyclic. There is no ECS dependency here, no CIDR input,
+# standalone TCP 5432 ingress rules (from the API, worker, and migration task SGs), and
+# `revision_reader` owns a fourth (from the reader task SG, runtime-gated) — every rule
+# one-way into this SG, acyclic. There is no ECS or reader dependency here, no CIDR input,
 # and no 0.0.0.0/0 anywhere. pgvector is NOT preloaded via shared_preload_libraries;
 # `CREATE EXTENSION vector` is a later database-bootstrap step, not part of this HCL.
 #
@@ -49,11 +50,12 @@ resource "aws_db_subnet_group" "this" {
 
 # --- RDS security group: created here, ZERO rules -----------------------------------
 # Intentionally declares no ingress and no egress. ECS owns the standalone TCP 5432
-# ingress rules (from API/worker/migration task SGs) in a later tranche. Declaring no
-# egress block leaves the security group with no egress rule.
+# ingress rules (from API/worker/migration task SGs); the revision_reader module owns the
+# reader-task 5432 ingress rule (runtime-gated). Declaring no egress block leaves the
+# security group with no egress rule.
 resource "aws_security_group" "rds" {
   name        = "${var.name_prefix}-pg-sg"
-  description = "RDS PostgreSQL SG for ${var.name_prefix}; ingress rules are owned by the ecs module."
+  description = "RDS PostgreSQL SG for ${var.name_prefix}; ingress rules are owned by the ecs and revision_reader modules."
   vpc_id      = var.vpc_id
 
   tags = {

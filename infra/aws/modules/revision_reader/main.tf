@@ -5,11 +5,12 @@
 #
 #   1. CIRCULARITY. The reader verifies the live schema revision BEFORE the workload plan
 #      is generated. If it lived in the workload plan it gates, it could never run first.
-#      It is gated by its own `enabled` flag, never by `deploy_workload`, and it consumes
-#      NOTHING that `deploy_workload` gates — no task definition, no service, neither
-#      workload image digest. It does consume `module.ecs.cluster_id`, and that is fine:
-#      `aws_ecs_cluster` is ungated and exists in the foundation stage today, so every
-#      prerequisite of this module can be satisfied while the workload stays dark.
+#      It is gated by its own two lifecycle flags (publication_bootstrap_enabled and
+#      runtime_enabled), never by `deploy_workload`, and it consumes NOTHING that
+#      `deploy_workload` gates — no task definition, no service, neither workload image
+#      digest. It does consume `module.ecs.cluster_id`, and that is fine: `aws_ecs_cluster`
+#      is ungated and exists in the foundation stage today, so every prerequisite of this
+#      module can be satisfied while the workload stays dark.
 #
 #   2. BLAST RADIUS. The reader gets its OWN ECR repository and its OWN publisher role
 #      here, rather than a third entry in registry's fixed two-repository map. That map
@@ -33,12 +34,22 @@
 # =====================================================================================
 
 locals {
-  family      = "${var.name_prefix}-revision-reader"
-  repo_name   = "${var.name_prefix}/revision-reader"
-  log_group   = "/ecs/${var.name_prefix}-revision-reader"
-  container   = "revision-reader"
-  create      = var.enabled ? 1 : 0
-  create_oidc = var.enabled && var.github_oidc_provider_arn != null ? 1 : 0
+  family    = "${var.name_prefix}-revision-reader"
+  repo_name = "${var.name_prefix}/revision-reader"
+  log_group = "/ecs/${var.name_prefix}-revision-reader"
+  container = "revision-reader"
+
+  # STAGE A — publication bootstrap. ECR repository + lifecycle, and the publisher OIDC role.
+  create_bootstrap      = var.publication_bootstrap_enabled ? 1 : 0
+  create_oidc_publisher = var.publication_bootstrap_enabled && var.github_oidc_provider_arn != null ? 1 : 0
+
+  # STAGE B — reader runtime. Log group, SG, egress, reader->RDS ingress, execution role,
+  # runner role, task definition. `create_task` (task.tf) additionally requires bootstrap (so
+  # the ECR repository the image is derived from exists) and a digest; the runtime_enabled
+  # variable validations already enforce runtime => bootstrap and runtime => digest, so those
+  # conjunctions are belt-and-braces, not the primary control.
+  create_runtime     = var.runtime_enabled ? 1 : 0
+  create_oidc_runner = var.runtime_enabled && var.github_oidc_provider_arn != null ? 1 : 0
 
   # Comprehension over the repository rather than `[0]`, so that supplying a digest while
   # the module is DISABLED yields null instead of erroring on an empty tuple. A plan that
@@ -50,9 +61,9 @@ locals {
   ])
 }
 
-# --- dedicated ECR repository --------------------------------------------------------
+# --- dedicated ECR repository (STAGE A: publication bootstrap) -----------------------
 resource "aws_ecr_repository" "reader" {
-  count = local.create
+  count = local.create_bootstrap
 
   name                 = local.repo_name
   image_tag_mutability = "IMMUTABLE"
@@ -70,7 +81,7 @@ resource "aws_ecr_repository" "reader" {
 }
 
 resource "aws_ecr_lifecycle_policy" "reader" {
-  count = local.create
+  count = local.create_bootstrap
 
   repository = aws_ecr_repository.reader[0].name
   policy = jsonencode({
@@ -87,12 +98,12 @@ resource "aws_ecr_lifecycle_policy" "reader" {
   })
 }
 
-# --- dedicated log group -------------------------------------------------------------
+# --- dedicated log group (STAGE B: reader runtime) -----------------------------------
 # Its OWN group, not the shared migration group: the reader's stdout IS the verification
 # evidence, so it must not interleave with another workload's diagnostics, and the runner
 # role is then scoped to exactly this group rather than an /ecs/<prefix>-* prefix.
 resource "aws_cloudwatch_log_group" "reader" {
-  count = local.create
+  count = local.create_runtime
 
   name              = local.log_group
   retention_in_days = var.log_retention_days
@@ -100,9 +111,9 @@ resource "aws_cloudwatch_log_group" "reader" {
   tags = merge(var.tags, { Name = local.log_group })
 }
 
-# --- dedicated security group: egress only, no ingress at all ------------------------
+# --- dedicated security group: egress only, no ingress at all (STAGE B) --------------
 resource "aws_security_group" "reader" {
-  count = local.create
+  count = local.create_runtime
 
   name        = "${var.name_prefix}-revision-reader"
   description = "Revision reader task. Egress only: PostgreSQL to RDS, HTTPS for pull/secrets/logs."
@@ -114,7 +125,7 @@ resource "aws_security_group" "reader" {
 # No ingress rule exists, deliberately: nothing ever connects TO the reader.
 
 resource "aws_vpc_security_group_egress_rule" "reader_to_postgres" {
-  count = local.create
+  count = local.create_runtime
 
   security_group_id            = aws_security_group.reader[0].id
   referenced_security_group_id = var.rds_security_group_id
@@ -125,7 +136,7 @@ resource "aws_vpc_security_group_egress_rule" "reader_to_postgres" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "reader_https" {
-  count = local.create
+  count = local.create_runtime
 
   security_group_id = aws_security_group.reader[0].id
   cidr_ipv4         = "0.0.0.0/0"
@@ -136,3 +147,25 @@ resource "aws_vpc_security_group_egress_rule" "reader_https" {
 }
 
 # NOTE: no Redis egress. The reader has no cache dependency and must not acquire one.
+
+# --- RDS ingress FROM the reader SG (Gate 4M defect fix, STAGE B) ---------------------
+# The reader SG has egress to RDS:5432 (above), but security groups are STATEFUL and
+# default-deny ingress, so the reader could not actually connect without a matching INGRESS
+# rule on the RDS security group. As merged in Gate 4J that rule did not exist anywhere: the
+# api/worker/migration ingress rules on the RDS SG are owned by the `ecs` module (for_each
+# over its workload set) and the reader is not in that set, so a reader task would have failed
+# at connect. This rule is owned HERE, not added to the ecs module's for_each, for two reasons:
+# it is RUNTIME-gated (it must appear and disappear with the reader runtime lifecycle, which
+# the ecs module does not track), and the reader module already receives `var.rds_security_group_id`,
+# so no new cross-module edge is introduced. Exactly one rule, targeting exactly the RDS SG,
+# sourced from exactly the reader SG, TCP 5432 only — never a CIDR.
+resource "aws_vpc_security_group_ingress_rule" "rds_from_reader" {
+  count = local.create_runtime
+
+  security_group_id            = var.rds_security_group_id
+  referenced_security_group_id = aws_security_group.reader[0].id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "RDS PostgreSQL ingress from the revision-reader task SG only, TCP 5432. Owned by revision_reader (runtime-gated); api/worker/migration ingress is owned by ecs."
+}

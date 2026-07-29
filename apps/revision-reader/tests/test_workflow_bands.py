@@ -47,11 +47,11 @@ for _p in (CI, PUBLISH, RUN):
 # Each entry: (expected_exit, normalised_dsn_or_None, class_label).
 # ------------------------------------------------------------------ #
 BAKED = "<BAKED>"
-_NUL = f"postgresql+psycopg://app_role:s3cr3t%00pw@{BAKED}:5432/signalnest?sslmode=require"
-_MYSQL = f"mysql://app_role:pw@{BAKED}:5432/signalnest?sslmode=require"
-_MULTI = f"postgresql://app_role:pw@evil.invalid,{BAKED}:5432/d?sslmode=require"
-_POS1 = f"postgresql+psycopg://app_role:s3cr3tpw@{BAKED}:5432/signalnest?sslmode=require"
-_POS2 = f"postgresql://app_role:p%40ss@{BAKED}:5432/signalnest?sslmode=require"
+_NUL = f"postgresql+psycopg://signalnest_app:s3cr3t%00pw@{BAKED}:5432/signalnest?sslmode=require"
+_MYSQL = f"mysql://signalnest_app:pw@{BAKED}:5432/signalnest?sslmode=require"
+_MULTI = f"postgresql://signalnest_app:pw@evil.invalid,{BAKED}:5432/d?sslmode=require"
+_POS1 = f"postgresql+psycopg://signalnest_app:s3cr3tpw@{BAKED}:5432/signalnest?sslmode=require"
+_POS2 = f"postgresql://signalnest_app:p%40ss@{BAKED}:5432/signalnest?sslmode=require"
 CANONICAL = [
     (51, None, "no_dsn"),
     (51, "postgresql://u:pw@attacker.example.com:5432/d?sslmode=require", "arbitrary_host"),
@@ -202,7 +202,7 @@ def test_oracle_reader_produces_canonical_code(monkeypatch, tmp_path, code, dsn,
     ca.write_bytes(b"-----BEGIN CERTIFICATE-----\n" + b"x" * 2000)
     monkeypatch.setattr(R._pinned, "EXPECTED_DB_HOST", FAKE_BAKED_HOST)
     monkeypatch.setattr(R._pinned, "EXPECTED_DB_NAME", "signalnest")
-    monkeypatch.setattr(R._pinned, "EXPECTED_DB_USER", "app_role")
+    monkeypatch.setattr(R._pinned, "EXPECTED_DB_USER", "signalnest_app")
     monkeypatch.setattr(R._pinned, "CA_BUNDLE_PATH", str(ca))
     state = _install_fake_psycopg(monkeypatch)
 

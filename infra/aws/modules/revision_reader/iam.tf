@@ -38,7 +38,7 @@ locals {
 
 # --- ECS task execution role ---------------------------------------------------------
 resource "aws_iam_role" "reader_execution" {
-  count = local.create
+  count = local.create_runtime
 
   name               = "${var.name_prefix}-revision-reader-execution"
   description        = "Starts the revision-reader task: pull the reader image, inject DATABASE_URL, write reader logs. Nothing else."
@@ -47,7 +47,7 @@ resource "aws_iam_role" "reader_execution" {
 }
 
 resource "aws_iam_role_policy" "reader_execution" {
-  count = local.create
+  count = local.create_runtime
 
   name = "${var.name_prefix}-revision-reader-execution"
   role = aws_iam_role.reader_execution[0].id
@@ -154,7 +154,7 @@ locals {
 
 # --- reader publisher role: pushes the reader repository and nothing else ------------
 resource "aws_iam_role" "reader_publisher" {
-  count = local.create_oidc
+  count = local.create_oidc_publisher
 
   name               = "${var.name_prefix}-revision-reader-publisher"
   description        = "CI identity that publishes the reader image. Scoped to the reader ECR repository; cannot reach the api or worker repositories."
@@ -163,7 +163,7 @@ resource "aws_iam_role" "reader_publisher" {
 }
 
 resource "aws_iam_role_policy" "reader_publisher" {
-  count = local.create_oidc
+  count = local.create_oidc_publisher
 
   name = "${var.name_prefix}-revision-reader-publisher"
   role = aws_iam_role.reader_publisher[0].id
@@ -209,7 +209,7 @@ resource "aws_iam_role_policy" "reader_publisher" {
 
 # --- reader runner role: runs the exact revision and reads its log stream -------------
 resource "aws_iam_role" "reader_runner" {
-  count = local.create_oidc
+  count = local.create_oidc_runner
 
   name               = "${var.name_prefix}-revision-reader-runner"
   description        = "CI identity that invokes the reader task and reads its log stream. Cannot register task definitions, create services, push images, or read secrets."
@@ -218,7 +218,7 @@ resource "aws_iam_role" "reader_runner" {
 }
 
 resource "aws_iam_role_policy" "reader_runner" {
-  count = local.create_oidc
+  count = local.create_oidc_runner
 
   name = "${var.name_prefix}-revision-reader-runner"
   role = aws_iam_role.reader_runner[0].id

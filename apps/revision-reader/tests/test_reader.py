@@ -34,7 +34,7 @@ from revision_reader import reader as R  # noqa: E402
 
 BAKED_HOST = "test-db.abc123.us-east-1.rds.amazonaws.com"
 BAKED_DBNAME = "signalnest"
-BAKED_USER = "app_role"
+BAKED_USER = "signalnest_app"
 SENTINEL_PW = "sn-sentinel-p4ss-do-not-leak"
 
 

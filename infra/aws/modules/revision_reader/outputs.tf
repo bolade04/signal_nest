@@ -1,11 +1,14 @@
 # Outputs are the exact values the reader publication and invocation workflows need.
 #
-# The RESOURCE-DERIVED outputs are null when the module is disabled — `one()` rather than
-# `[0]`, so a disabled module still evaluates instead of erroring on an empty list. Three
-# are NOT: `task_definition_family`, `container_name` and `enabled` are computed from
-# inputs and always return a value (`enabled` returning false is the whole point of it).
+# The RESOURCE-DERIVED outputs are null when their stage is disabled — `one()` rather than
+# `[0]`, so a disabled stage still evaluates instead of erroring on an empty list
+# (bootstrap-stage: repository_url/repository_arn/publisher_role_arn; runtime-stage:
+# log_group_name/security_group_id/execution_role_arn/runner_role_arn/task_definition_arn).
+# FOUR are NOT null-gated: `task_definition_family`, `container_name`,
+# `publication_bootstrap_enabled` and `runtime_enabled` are computed from inputs and always
+# return a value (the two enablement flags returning false is the whole point of them).
 # Do not restate this as "every output is null when disabled": a consumer branching on
-# `== null` to detect a disabled module would branch wrongly on those three.
+# `== null` to detect a disabled stage would branch wrongly on those four.
 #
 # NOTHING SENSITIVE IS EXPORTED. No secret ARN is re-exported (the caller already holds
 # it), no DSN, no account-derived value that is not already public in the plan.
@@ -65,7 +68,19 @@ output "container_name" {
   value       = local.container
 }
 
-output "enabled" {
-  description = "Whether this module materialized anything. Independent of deploy_workload by design — the reader must be able to run BEFORE the workload plan it gates."
-  value       = var.enabled
+output "publication_bootstrap_enabled" {
+  description = "Whether the publication-bootstrap stage (ECR repository + publisher role) is materialized. Independent of deploy_workload by design."
+  value       = var.publication_bootstrap_enabled
 }
+
+output "runtime_enabled" {
+  description = "Whether the reader runtime stage (log group, SG, ingress, execution/runner roles, task definition) is materialized. Independent of deploy_workload by design."
+  value       = var.runtime_enabled
+}
+
+# NOTE on lifecycle-gated outputs: the resource-derived outputs above (repository_url,
+# repository_arn -> bootstrap stage; log_group_name, security_group_id, execution_role_arn,
+# runner_role_arn, task_definition_arn -> runtime stage) each use one(<resource>[*]) and so
+# return null exactly when their own resource's count is 0 — the output gating follows the
+# resource lifecycle automatically, with no unsafe [0] index. publisher_role_arn is bootstrap;
+# runner_role_arn is runtime; they are no longer coupled.

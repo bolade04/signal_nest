@@ -323,6 +323,20 @@ variable "github_oidc_provider_arn" {
   }
 }
 
+# owner/name of the repository whose Actions workflows federate through the OIDC provider.
+# Pinned into the reader publisher/runner trust-policy `sub` claims so only this repository's
+# workflows can assume those roles. Wired to the revision_reader module; no account data.
+variable "github_repository" {
+  description = "GitHub repository (owner/name) allowed to assume the reader OIDC roles via the sub claim. Consumed by the revision_reader module's trust policies."
+  type        = string
+  default     = "bolade04/signal_nest"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must be of the form owner/name."
+  }
+}
+
 variable "llm_provider" {
   description = "LLM provider injected as ordinary environment (LLM_PROVIDER, §26.11). Staging forbids the mock provider; exactly openai or anthropic. Supplied via a git-ignored *.tfvars."
   type        = string
@@ -385,8 +399,19 @@ variable "budget_notification_email" {
 # gating the check on the flag it exists to gate would be circular. Both variables
 # default to the inert value — Gate 4J authors this capability and provisions
 # nothing. Enabling it is a later, separately authorized gate.
-variable "enable_revision_reader" {
-  description = "Whether to create the dedicated revision-reader stack (its own ECR repository, log group, security group, execution/publisher/runner roles, and — once a digest exists — its task definition). Independent of deploy_workload by design. Default false creates nothing."
+# TWO-STAGE READER LIFECYCLE (Gate 4M). Publication bootstrap and reader runtime are
+# separately controlled so the image can be published before any runtime resource — and,
+# in particular, before the execution role that holds the DATABASE_URL secret grant —
+# exists. No backward-compatible `enable_revision_reader` alias exists: a single composite
+# flag would silently recreate the coupling this gate removes.
+variable "enable_revision_reader_publication_bootstrap" {
+  description = "STAGE A. Create only the reader ECR repository + lifecycle policy + publisher OIDC role/policy. Creates NO runtime resource and requires no image digest. Independent of deploy_workload. Default false creates nothing."
+  type        = bool
+  default     = false
+}
+
+variable "enable_revision_reader_runtime" {
+  description = "STAGE B. Create the reader runtime (log group, SG, egress, reader->RDS ingress, execution role, runner role, task definition). Requires publication bootstrap = true AND a non-null revision_reader_image_digest (enforced in the module). Independent of deploy_workload. Default false creates nothing."
   type        = bool
   default     = false
 }

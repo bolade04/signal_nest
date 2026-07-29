@@ -4,8 +4,11 @@ A single-purpose program that reads the live Alembic revision from
 `alembic_version` and prints it. One line, one SQL statement, nothing else.
 
 **Status: authored, not provisioned.** No reader image has been published, no
-reader task has ever run, and `enable_revision_reader` defaults to `false`.
-Publishing, enabling and invoking are three separate later authorizations.
+reader task has ever run, and both lifecycle flags
+(`enable_revision_reader_publication_bootstrap`, `enable_revision_reader_runtime`)
+default to `false`. Applying publication bootstrap, publishing the image, applying
+runtime (which requires a pinned digest), and invoking are separate later
+authorizations.
 
 ## Why this is a separate artefact
 
@@ -189,14 +192,18 @@ anything from a BLOCKED run.
 
 ### Sequence
 
-The order below matters: the publisher role does not exist until the module is applied, and
-the task definition does not exist until a digest is pinned. Each step's workflow fails
-closed with a named variable if you arrive early.
+The order below matters: the publisher role does not exist until **Stage A** is applied, and
+the task definition (and the execution/runner roles, log group, security group and reader→RDS
+ingress) does not exist until **Stage B** is applied with a pinned digest. Each step's
+workflow fails closed with a named variable if you arrive early.
 
-1. **Apply the module** — set `enable_revision_reader = true` in the git-ignored
-   `*.tfvars` (leave `revision_reader_image_digest` null for now), plan, review, apply.
-   This creates the ECR repository, log group, security group and the three roles. No
-   task definition yet, so nothing is invocable. Independent of `deploy_workload`.
+1. **Apply Stage A (publication bootstrap)** — set
+   `enable_revision_reader_publication_bootstrap = true` in the git-ignored `*.tfvars`
+   (leave `enable_revision_reader_runtime = false` and `revision_reader_image_digest` null
+   for now), plan, review, apply. This creates **only** the ECR repository, its lifecycle
+   policy and the publisher role — deliberately no execution role and therefore no
+   `DATABASE_URL` secret grant yet, so the image is published against a stage that cannot
+   reach the database. Independent of `deploy_workload`.
 2. **Set the publish environment's variables** on `staging-reader-publish`:
 
    | Variable | Source |
@@ -209,9 +216,14 @@ closed with a named variable if you arrive early.
    environment). It verifies the built image *before* any credential exists in the job,
    then pushes and reads the registry digest back. Publishing is inert: the image does
    nothing until its digest is pinned and a run is invoked.
-4. **Pin the digest** — put the digest from the run's manifest artifact into
-   `revision_reader_image_digest`, plan, review, apply. This registers the task
-   definition, which is what gives the runner role a `RunTask` grant at all.
+4. **Apply Stage B (runtime) with the pinned digest** — put the digest from the run's
+   manifest artifact into `revision_reader_image_digest` **and** set
+   `enable_revision_reader_runtime = true` (keeping `..._publication_bootstrap = true`),
+   plan, review, apply. Runtime with no bootstrap or no digest is rejected at plan time by a
+   cross-variable `validation`. This creates the log group, security group, the reader→RDS
+   `5432` ingress rule, the execution and runner roles, and registers the task definition —
+   which is what gives the runner role a `RunTask` grant at all. On teardown, set
+   `..._runtime = false` (removing these) **before** `..._publication_bootstrap = false`.
 5. **Set the run environment's variables** on `staging-reader-run`:
 
    | Variable | Source |

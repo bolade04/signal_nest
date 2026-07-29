@@ -246,14 +246,16 @@ module "cost" {
 module "revision_reader" {
   source = "./modules/revision_reader"
 
-  enabled                      = var.enable_revision_reader
-  name_prefix                  = local.name_prefix
-  aws_region                   = var.aws_region
-  vpc_id                       = module.network.vpc_id
-  rds_security_group_id        = module.data_sql.rds_security_group_id
-  database_url_secret_arn      = module.secrets.secret_arns["DATABASE_URL"]
-  secrets_kms_key_arn          = module.secrets.kms_key_arn
-  ecs_cluster_arn              = module.ecs.cluster_id
-  github_oidc_provider_arn     = var.github_oidc_provider_arn
-  revision_reader_image_digest = var.revision_reader_image_digest
+  publication_bootstrap_enabled = var.enable_revision_reader_publication_bootstrap
+  runtime_enabled               = var.enable_revision_reader_runtime
+  name_prefix                   = local.name_prefix
+  aws_region                    = var.aws_region
+  vpc_id                        = module.network.vpc_id
+  rds_security_group_id         = module.data_sql.rds_security_group_id
+  database_url_secret_arn       = module.secrets.secret_arns["DATABASE_URL"]
+  secrets_kms_key_arn           = module.secrets.kms_key_arn
+  ecs_cluster_arn               = module.ecs.cluster_id
+  github_oidc_provider_arn      = var.github_oidc_provider_arn
+  github_repository             = var.github_repository
+  revision_reader_image_digest  = var.revision_reader_image_digest
 }
