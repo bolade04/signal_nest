@@ -128,8 +128,19 @@ output "db_instance_identifier" {
 }
 
 output "rds_security_group_id" {
-  description = "ID of the rule-free PostgreSQL security group (from the data_sql module; the 5432 rules are ecs-owned)."
+  description = "ID of the PostgreSQL security group (from the data_sql module; api/worker/migration 5432 ingress is ecs-owned, the reader's 5432 ingress is revision_reader-owned)."
   value       = module.data_sql.rds_security_group_id
+}
+
+# SENSITIVE. The reader bakes its destination host/db/role into the image at build time
+# (revision_reader/_pinned), so the build must be given the exact RDS hostname. Exposing it
+# here — marked sensitive so it is redacted from plan/apply logs and CLI output — lets the
+# reader image build read it from state via `tofu output -raw` rather than a hand-copied
+# value that could silently drift from the real endpoint. Hostname only; carries no credential.
+output "rds_db_address" {
+  description = "RDS instance hostname (no port), the reader image's baked destination host. Sensitive: redacted from logs; read explicitly with `tofu output -raw rds_db_address`."
+  value       = module.data_sql.db_address
+  sensitive   = true
 }
 
 output "redis_security_group_id" {
@@ -192,13 +203,26 @@ output "budget_name" {
   value       = module.cost.budget_name
 }
 
-# --- Gate 4J: dedicated live revision-reader ----------------------------------
-# Every value below is null while `enable_revision_reader` is false. These are the
-# exact references the reader publication and invocation workflows consume; no
-# secret ARN, DSN, or credential is re-exported here.
+# --- Gate 4J / 4M: dedicated live revision-reader -----------------------------
+# Two-stage lifecycle (Gate 4M): repository_url and publisher_role_arn belong to the
+# publication-bootstrap stage and are null while enable_revision_reader_publication_bootstrap
+# is false; the log group, security group, execution/runner roles and task definition belong
+# to the runtime stage and are null while enable_revision_reader_runtime is false. These are
+# the exact references the reader publication and invocation workflows consume; no secret ARN,
+# DSN, or credential is re-exported here.
+
+output "revision_reader_publication_bootstrap_enabled" {
+  description = "Whether the reader publication-bootstrap stage (ECR repository + publisher role) is materialized."
+  value       = module.revision_reader.publication_bootstrap_enabled
+}
+
+output "revision_reader_runtime_enabled" {
+  description = "Whether the reader runtime stage (log group, SG, ingress, execution/runner roles, task definition) is materialized."
+  value       = module.revision_reader.runtime_enabled
+}
 
 output "revision_reader_repository_url" {
-  description = "ECR repository URL for the dedicated reader image (publication target). Null when the reader is disabled."
+  description = "ECR repository URL for the dedicated reader image (publication target). Null unless the publication-bootstrap stage is enabled."
   value       = module.revision_reader.repository_url
 }
 

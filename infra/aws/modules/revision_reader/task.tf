@@ -41,7 +41,12 @@ locals {
   # A task definition cannot exist without a real image, and the runner's RunTask grant is
   # derived from this resource's ARN — so with no digest pinned the runner can invoke
   # nothing at all. Fail-closed by construction rather than by a runtime check.
-  create_task = var.enabled && var.revision_reader_image_digest != null ? 1 : 0
+  #
+  # Gate 4M: requires runtime AND publication_bootstrap (the execution role it names is
+  # runtime-gated; local.image derives from the bootstrap-owned ECR repository) AND a
+  # digest. The runtime_enabled validations already enforce runtime => bootstrap and
+  # runtime => digest, so the bootstrap/digest conjuncts here are belt-and-braces.
+  create_task = var.runtime_enabled && var.publication_bootstrap_enabled && var.revision_reader_image_digest != null ? 1 : 0
 }
 
 resource "aws_ecs_task_definition" "reader" {

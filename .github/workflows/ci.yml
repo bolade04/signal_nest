@@ -477,7 +477,7 @@ jobs:
           build-args: |
             EXPECTED_DB_HOST=test-db.abc123.us-east-1.rds.amazonaws.com
             EXPECTED_DB_NAME=signalnest
-            EXPECTED_DB_USER=app_role
+            EXPECTED_DB_USER=signalnest_app
 
       - name: In-image verification band
         run: |
@@ -552,17 +552,17 @@ jobs:
           expect 51 -e DATABASE_URL='postgresql://u:pw@evil.invalid%2Cdb.invalid[v1.x]/d?sslmode=require'
           # BLOCKING 3 (new): a percent-encoded NUL in the password — invisible raw, a NUL
           # after unquote that would truncate libpq's conninfo. Gated on the DECODED value.
-          expect 51 -e DATABASE_URL="postgresql+psycopg://app_role:s3cr3t%00pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 51 -e DATABASE_URL="postgresql+psycopg://signalnest_app:s3cr3t%00pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
           # Wrong scheme, multi-host, and userinfo '@' ambiguity all fail closed.
-          expect 51 -e DATABASE_URL="mysql://app_role:pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
-          expect 51 -e DATABASE_URL="postgresql://app_role:pw@evil.invalid,${BAKED_HOST}:5432/d?sslmode=require"
+          expect 51 -e DATABASE_URL="mysql://signalnest_app:pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 51 -e DATABASE_URL="postgresql://signalnest_app:pw@evil.invalid,${BAKED_HOST}:5432/d?sslmode=require"
           expect 51 -e DATABASE_URL='postgresql://u:p@ss@evil.invalid:443/d?sslmode=require'
           # A DSN naming the BAKED host with a valid, decodable password reaches connect: the
           # discrete-param path (driver-suffix normalise + '%40' password decode) dials the
           # baked host, which will not answer under --network none -> CONNECT_FAILED (52).
           # This is the positive control that the reader actually connects, not just rejects.
-          expect 52 -e DATABASE_URL="postgresql+psycopg://app_role:s3cr3tpw@${BAKED_HOST}:5432/signalnest?sslmode=require"
-          expect 52 -e DATABASE_URL="postgresql://app_role:p%40ss@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 52 -e DATABASE_URL="postgresql+psycopg://signalnest_app:s3cr3tpw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 52 -e DATABASE_URL="postgresql://signalnest_app:p%40ss@${BAKED_HOST}:5432/signalnest?sslmode=require"
 
           echo "== (7) baked pins and the CA bundle are present and non-empty =="
           docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "

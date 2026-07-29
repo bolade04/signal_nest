@@ -5,20 +5,41 @@ Owns the **dedicated live database revision-reader** capability: a private ECR
 repository for a minimal reader image, a dedicated CloudWatch log group, an
 egress-only security group, three purpose-built IAM roles, and a task definition
 that runs the reader with no overrideable surface. This module defines resource
-bodies but **applies nothing** — `enabled` defaults to `false`, no reader image
-has been published, and no reader task has ever run.
+bodies but **applies nothing** — both lifecycle flags
+(`publication_bootstrap_enabled`, `runtime_enabled`) default to `false`, no reader
+image has been published, and no reader task has ever run.
+
+The module has a **two-stage lifecycle** (Gate 4M). **Stage A — publication
+bootstrap** (`publication_bootstrap_enabled`) creates only the ECR repository, its
+lifecycle policy and the publisher OIDC role, so the image can be published. **Stage
+B — runtime** (`runtime_enabled`) creates the log group, security group, the
+reader→RDS ingress rule, the execution and runner roles, and the task definition.
+Runtime **requires** publication bootstrap and a pinned image digest (enforced by
+cross-variable `validation`), so the image is published before the execution role
+that holds the `DATABASE_URL` secret grant exists. On teardown, disable `runtime`
+before `publication_bootstrap`.
 
 The reader verifies that the live schema is at this repository's Alembic code
 head, which is a precondition of the workload apply.
 
 ## 2. Owned resources (implemented here)
-- `aws_ecr_repository` — private, **immutable** tags, scan-on-push, AES-256.
+**Stage A — publication bootstrap** (`publication_bootstrap_enabled`):
+- `aws_ecr_repository` — private, **immutable** tags, scan-on-push, AES-256,
+  `force_delete = false`.
 - `aws_ecr_lifecycle_policy` — expire untagged reader images beyond the newest 10.
+- publisher `aws_iam_role` + `aws_iam_role_policy` (only with an OIDC provider ARN).
+
+**Stage B — runtime** (`runtime_enabled`):
 - `aws_cloudwatch_log_group` — `/ecs/<prefix>-revision-reader`.
 - `aws_security_group` + two `aws_vpc_security_group_egress_rule` — TCP 5432 to
-  the RDS security group, TCP 443 for pull/secrets/logs. **No ingress rule
-  exists**: nothing ever connects *to* the reader. No Redis egress.
-- `aws_iam_role` × 3 + `aws_iam_role_policy` × 3 — execution, publisher, runner.
+  the RDS security group, TCP 443 for pull/secrets/logs. **No ingress rule on the
+  reader SG**: nothing ever connects *to* the reader. No Redis egress.
+- `aws_vpc_security_group_ingress_rule` — the reader→RDS `5432` ingress on the **RDS**
+  SG, sourced from the reader SG (never a CIDR). Owned here rather than in `ecs`
+  because it is runtime-gated; without it the stateful default-deny RDS SG would refuse
+  the reader's connection.
+- execution and runner `aws_iam_role` + `aws_iam_role_policy` (runner only with an
+  OIDC provider ARN).
 - `aws_ecs_task_definition` × 1 — created only when an image digest is pinned.
 
 There is **no service**, no autoscaling, no alarm, no secret, no KMS key, no
@@ -26,7 +47,7 @@ task role, and no scheduled invocation. Nothing here starts a task.
 
 ## 3. Why this is not part of `registry`, `iam` or `ecs`
 1. **Circularity.** The reader must be able to run *before* the workload plan it
-   gates. It is gated by its own `enabled` flag, never by `deploy_workload`, and
+   gates. It is gated by its own two lifecycle flags, never by `deploy_workload`, and
    consumes nothing that `deploy_workload` gates. It does consume
    `module.ecs.cluster_id`, which is fine: `aws_ecs_cluster` is ungated and
    exists in the foundation stage today.
@@ -76,7 +97,8 @@ parameter can reach them. They deliberately do not appear in the table below.
 
 | Name | Default | Notes |
 | ---- | ------- | ----- |
-| `enabled` | `false` | Independent of `deploy_workload` by design. |
+| `publication_bootstrap_enabled` | `false` | Stage A: ECR repo + lifecycle + publisher role. Independent of `deploy_workload`. |
+| `runtime_enabled` | `false` | Stage B: log group, SG, reader→RDS ingress, execution/runner roles, task def. Requires bootstrap + a pinned digest (cross-variable `validation`). |
 | `name_prefix` | — | Deterministic staging prefix. |
 | `aws_region` | — | Log configuration and `kms:ViaService`. |
 | `vpc_id` | — | For the reader security group. |
@@ -100,14 +122,22 @@ variable.
 ## 6. Outputs
 `repository_url`, `repository_arn`, `log_group_name`, `security_group_id`,
 `execution_role_arn`, `publisher_role_arn`, `runner_role_arn`,
-`task_definition_arn`, `task_definition_family`, `container_name`, `enabled`.
-No secret ARN, DSN or credential is re-exported.
+`task_definition_arn`, `task_definition_family`, `container_name`,
+`publication_bootstrap_enabled`, `runtime_enabled`. No secret ARN, DSN or
+credential is re-exported.
 
-The resource-derived outputs are `null` when the module is disabled. Three are **not**:
-`task_definition_family`, `container_name` and `enabled` are computed from inputs and
-always return a value — `enabled` returning `false` is the point of it. Saying "all
-outputs are null when disabled" would have been an overclaim, and a consumer that
-branched on `== null` to detect a disabled module would branch wrongly.
+The resource-derived outputs follow the two-stage lifecycle: `repository_url`/
+`repository_arn` are `null` unless Stage A is enabled; `log_group_name`/
+`security_group_id`/`execution_role_arn`/`task_definition_arn` are `null` unless Stage B
+is enabled. The two OIDC-role outputs carry an **additional** condition: `publisher_role_arn`
+is `null` unless Stage A **and** a `github_oidc_provider_arn` are both present, and
+`runner_role_arn` likewise requires Stage B **and** the provider ARN. Each is a `one()` over
+its own count-gated resource, so no unsafe `[0]` index is ever taken. Four are **not**
+null-gated: `task_definition_family`, `container_name`, `publication_bootstrap_enabled`
+and `runtime_enabled` are computed from inputs and always return a value — the two
+enablement flags returning `false` is the point of them. Saying "all outputs are null
+when disabled" would have been an overclaim, and a consumer that branched on `== null`
+to detect a disabled stage would branch wrongly.
 
 `task_definition_arn` **includes the revision suffix** and the invocation
 workflow must pass that exact value: the runner's `RunTask` grant is scoped to
@@ -117,8 +147,9 @@ running something else.
 Five outputs are consumed by the two workflows via protected-environment variables:
 `log_group_name`, `security_group_id`, `publisher_role_arn`, `runner_role_arn` and
 `task_definition_arn`, plus `container_name`, which the run workflow defaults rather than
-requires. The other five — `repository_url`, `repository_arn`, `execution_role_arn`,
-`task_definition_family` and `enabled` — are **diagnostic and consumed by nothing today**,
+requires. The others — `repository_url`, `repository_arn`, `execution_role_arn`,
+`task_definition_family`, `publication_bootstrap_enabled` and `runtime_enabled` — are
+**diagnostic and consumed by nothing today**,
 listed as such so nobody assumes they are wired. `repository_url` in particular is not
 read by the publish workflow, which composes the repository path from the name prefix,
 matching the convention `staging-publish.yml` already uses;
@@ -245,7 +276,12 @@ Ranked compensating controls (defence in depth, not the primary boundary):
    caller.
 
 ## 10. Fail-closed posture
-- `enabled = false` (the default) creates nothing at all.
+- Both flags `false` (the default) creates nothing at all, including no reader→RDS
+  ingress rule.
+- `runtime_enabled = true` is **rejected at plan time** unless
+  `publication_bootstrap_enabled = true` and a non-null image digest are both present
+  (cross-variable `validation`), so runtime can never reference the bootstrap-owned ECR
+  repository that was never created.
 - With no image digest there is **no task definition**, therefore no `RunTask`
   grant on the runner role, therefore nothing invocable. The role can exist and
   do nothing.
@@ -259,5 +295,6 @@ exact scope, because absences do not fail loudly when they stop holding.
 
 ## 12. Status
 Authored and offline-validated. `tofu fmt`, `tofu validate` and `tofu test` pass.
-**Nothing is provisioned.** Enabling this module, publishing a reader image, and
-invoking the reader are three separate later authorizations.
+**Nothing is provisioned.** Applying Stage A (publication bootstrap), publishing a
+reader image, applying Stage B (runtime, which needs the pinned digest), and invoking
+the reader are separate later authorizations.

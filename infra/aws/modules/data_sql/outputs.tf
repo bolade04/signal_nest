@@ -48,7 +48,7 @@ output "db_subnet_group_name" {
 }
 
 output "rds_security_group_id" {
-  description = "ID of the RDS security group owned by this module (created with no rules). Consumed by the future ecs module, which owns the standalone TCP 5432 ingress rules from the API/worker/migration task SGs."
+  description = "ID of the RDS security group owned by this module (created with no rules). Its TCP 5432 ingress rules are owned externally: the ecs module owns the API/worker/migration task-SG rules, and the revision_reader module owns the reader task-SG rule (runtime-gated)."
   value       = aws_security_group.rds.id
 }
 

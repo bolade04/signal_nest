@@ -1,20 +1,51 @@
 # Gate 4J — dedicated revision-reader prerequisite module.
 
-variable "enabled" {
+# TWO INDEPENDENT LIFECYCLES (Gate 4M). Publication bootstrap and reader runtime are
+# separately gated so the image can be published before any runtime resource — and, in
+# particular, before the execution role that holds the DATABASE_URL secret grant — exists.
+#
+# Both DELIBERATELY INDEPENDENT OF `deploy_workload`: the reader verifies the live schema
+# revision BEFORE the workload plan, so it must not be gated by the flag it is meant to
+# gate. Neither consumes anything `deploy_workload` gates.
+
+variable "publication_bootstrap_enabled" {
   type        = bool
   default     = false
   description = <<-EOT
-    Whether to create the revision-reader prerequisite resources (ECR repository, log
-    group, security group, execution role, publisher role, runner role, task definition).
+    STAGE A. Creates ONLY the publication-bootstrap resources: the dedicated reader ECR
+    repository, its lifecycle policy, and the publisher OIDC role + policy (the last only
+    when github_oidc_provider_arn is set). Creates NO runtime resource — no log group,
+    security group, execution role, runner role, RDS ingress, or task definition, and in
+    particular no DATABASE_URL secret grant. Requires no image digest.
 
-    DELIBERATELY INDEPENDENT OF `deploy_workload`. The reader exists to verify the live
-    schema revision BEFORE the workload plan is generated, so it must not be gated by the
-    flag it is meant to gate — that would be circular. It consumes NOTHING that
-    `deploy_workload` gates; it does consume `module.ecs.cluster_id`, which is ungated and
-    exists in the foundation stage today.
-
-    Default false: Gate 4J authors these resources and does not provision them.
+    Default false: nothing is provisioned until a later authorized apply.
   EOT
+}
+
+variable "runtime_enabled" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    STAGE B. Creates the reader runtime resources (log group, security group, egress rules,
+    the reader->RDS ingress rule, execution role + policy, runner role + policy, and the
+    task definition). Runtime MUST NOT be enabled by publication alone.
+
+    INVARIANT: runtime_enabled = true requires publication_bootstrap_enabled = true (the
+    task definition's image and the execution role's ECR pull both reference the
+    bootstrap-owned ECR repository) AND a non-null immutable revision_reader_image_digest.
+    Enforced at plan time by the validations below, so an invalid combination errors
+    cleanly rather than crashing on an empty resource tuple.
+  EOT
+
+  validation {
+    condition     = !var.runtime_enabled || var.publication_bootstrap_enabled
+    error_message = "revision_reader runtime_enabled requires publication_bootstrap_enabled = true — publish the image via the bootstrap stage before provisioning runtime."
+  }
+
+  validation {
+    condition     = !var.runtime_enabled || var.revision_reader_image_digest != null
+    error_message = "revision_reader runtime_enabled requires a non-null revision_reader_image_digest (immutable sha256) — the task definition must reference an exact published image, never a mutable tag."
+  }
 }
 
 variable "name_prefix" {
