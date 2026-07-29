@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.logging import get_logger, request_id_ctx
+from app.core.logging import get_logger, log_event, request_id_ctx
 
 logger = get_logger("signalnest.errors")
 
@@ -227,7 +229,18 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception):
-        logger.exception("Unhandled error: %s", exc)
+        # Fixed low-cardinality event + exception class only. The raw message
+        # and traceback are never logged: the formatter redacts extra_fields but
+        # NOT the message/event text or exc_info, and a driver exception can
+        # embed the DSN, SQL or bound parameters. Correlation (request_id,
+        # trace_id) is stamped automatically from context by the formatter.
+        log_event(
+            logger,
+            "unhandled_error",
+            level=logging.ERROR,
+            outcome="failure",
+            error_class=type(exc).__name__,
+        )
         return JSONResponse(
             status_code=500,
             content=_envelope("internal_error", "An unexpected error occurred"),

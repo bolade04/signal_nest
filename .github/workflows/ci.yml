@@ -288,6 +288,92 @@ jobs:
           fi
           echo "ok: schema gate correctly rejects an uninitialized database"
 
+      - name: Bare migration actor command + revision tools (exact ECS shape, fail-closed)
+        # ECS runs the migration actor with command = ["python","-m","app.db.migrate"]
+        # — NO subcommand (infra/aws/modules/ecs/main.tf). The steps above only
+        # exercise the explicit `upgrade`/`check` subcommands, which dispatch to a
+        # DIFFERENT function; this step executes the real bare command end to end
+        # (upgrade + read-back verification), plus the raw revision reader and the
+        # offline comparator, against controlled SQLite state with no network.
+        # Positive event output, distinct failure classifications, and no
+        # secret-bearing output are all asserted.
+        run: |
+          docker run --rm --network none -e LOG_FORMAT=json --entrypoint sh signalnest-worker:ci -c '
+            set -eu
+            export DATABASE_URL=sqlite:////tmp/bare.db
+
+            echo "== (1) bare command, fresh DB: exit 0 + verification event =="
+            python -m app.db.migrate > /tmp/out1.json 2> /tmp/err1.log
+            grep -q "\"event\": \"migrate.upgrade_verify.done\"" /tmp/out1.json
+            grep -q "\"code_head\"" /tmp/out1.json
+            grep -q "\"db_revision\"" /tmp/out1.json
+            test ! -s /tmp/err1.log
+            ! grep -q "Traceback" /tmp/out1.json
+
+            echo "== (2) bare command, corrupted version table: exit 4 + fixed classification =="
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare.db\"); c.execute(\"INSERT INTO alembic_version VALUES (\x27aaaaaaaaaaaa\x27)\"); c.commit()"
+            rc=0; python -m app.db.migrate > /tmp/out2.json 2> /tmp/err2.log || rc=$?
+            test "$rc" -eq 4
+            grep -q "\"event\": \"migrate.upgrade.failed\"" /tmp/out2.json
+            grep -q "\"error_class\"" /tmp/out2.json
+            ! grep -q "Traceback" /tmp/out2.json
+            ! grep -q "Traceback" /tmp/err2.log
+
+            echo "== (3) revision tools import cleanly =="
+            python -c "import app.db.revision_status, app.db.revision_compare; print(\"revision tools import ok\")"
+
+            echo "== (4) reader: one valid row -> exactly one revision line; matches comparator =="
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare.db\"); c.execute(\"DELETE FROM alembic_version WHERE version_num=\x27aaaaaaaaaaaa\x27\"); c.commit()"
+            rev=$(python -m app.db.revision_status)
+            echo "$rev" | grep -Eq "^[0-9a-f]{12}$"
+            python -m app.db.revision_status | python -m app.db.revision_compare
+
+            echo "== (5) reader: stray argv rejected (30) =="
+            rc=0; python -m app.db.revision_status extra >/dev/null 2>&1 || rc=$?
+            test "$rc" -eq 30
+
+            echo "== (6) reader: zero rows (33) =="
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare.db\"); c.execute(\"DELETE FROM alembic_version\"); c.commit()"
+            rc=0; python -m app.db.revision_status >/dev/null 2>/tmp/err33 || rc=$?
+            test "$rc" -eq 33 && grep -q "no-revision-rows" /tmp/err33
+
+            echo "== (7) reader: multiple rows (34) =="
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare.db\"); c.executemany(\"INSERT INTO alembic_version VALUES (?)\", [(\"aaaaaaaaaaaa\",),(\"bbbbbbbbbbbb\",)]); c.commit()"
+            rc=0; python -m app.db.revision_status >/dev/null 2>/tmp/err34 || rc=$?
+            test "$rc" -eq 34 && grep -q "multiple-revision-rows" /tmp/err34
+
+            echo "== (8) reader: malformed revision (35) =="
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare.db\"); c.execute(\"DELETE FROM alembic_version\"); c.execute(\"INSERT INTO alembic_version VALUES (\x27NOTAREVISION\x27)\"); c.commit()"
+            rc=0; python -m app.db.revision_status >/dev/null 2>/tmp/err35 || rc=$?
+            test "$rc" -eq 35 && grep -q "malformed-revision" /tmp/err35
+
+            echo "== (9) reader: version table missing (32) =="
+            python -c "import sqlite3; sqlite3.connect(\"/tmp/fresh.db\").close()"
+            rc=0; DATABASE_URL=sqlite:////tmp/fresh.db python -m app.db.revision_status >/dev/null 2>/tmp/err32 || rc=$?
+            test "$rc" -eq 32 && grep -q "version-table-missing" /tmp/err32
+
+            echo "== (10) comparator: mismatch (43), multi-line (41), empty (41) =="
+            rc=0; printf "aaaaaaaaaaaa\n" | python -m app.db.revision_compare >/dev/null 2>&1 || rc=$?
+            test "$rc" -eq 43
+            rc=0; printf "aaaaaaaaaaaa\nbbbbbbbbbbbb\n" | python -m app.db.revision_compare >/dev/null 2>&1 || rc=$?
+            test "$rc" -eq 41
+            rc=0; printf "" | python -m app.db.revision_compare >/dev/null 2>&1 || rc=$?
+            test "$rc" -eq 41
+
+            echo "== (10b) end-to-end provenance: DB at a NON-head revision -> reader|comparator must MISMATCH (43) =="
+            # A reader that prints the code head instead of the database value
+            # would make the pipe above tautological; this closes it.
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare.db\"); c.execute(\"DELETE FROM alembic_version\"); c.execute(\"INSERT INTO alembic_version VALUES (\x27aaaaaaaaaaaa\x27)\"); c.commit()"
+            rc=0; python -m app.db.revision_status | python -m app.db.revision_compare >/dev/null 2>&1 || rc=$?
+            test "$rc" -eq 43
+
+            echo "== (11) no secret-bearing output: the database URL never appears =="
+            ! grep -q "sqlite:" /tmp/out1.json
+            ! grep -q "sqlite:" /tmp/out2.json
+
+            echo "bare-command + revision-tools in-image verification: PASS"
+          '
+
   integration-smoke:
     name: Integration smoke
     runs-on: ubuntu-latest
