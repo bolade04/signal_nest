@@ -489,6 +489,10 @@ def test_adversarial_lane_corpus_fails_closed_or_targets_baked_host(baked, dsn):
         assert state["kwargs"]["user"] == BAKED_USER
         assert state["connects"] == 1
     else:
+        # Pin the classification, not just the absence of a connect: a fail-closed case that
+        # silently degraded 51 -> 57 must not pass. Every non-admitted adversarial DSN is
+        # refused at config validation (host tamper / bad scheme / bad password / bracket).
+        assert rc == R.EXIT_CONFIG_FAILED
         assert state["connects"] == 0
 
 

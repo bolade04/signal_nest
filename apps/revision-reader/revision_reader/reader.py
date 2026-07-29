@@ -118,7 +118,15 @@ def _fail(code: int) -> int:
 
 def _scrub_connection_environment() -> None:
     """Delete every connection-influencing environment variable. ``del os.environ[k]`` calls
-    ``unsetenv`` at the C level, so libpq (loaded later) sees nothing."""
+    ``unsetenv`` at the C level, so libpq (loaded later) sees nothing.
+
+    This intentionally does NOT cover interpreter-level variables (PYTHONPATH, PYTHONHOME,
+    LD_PRELOAD, …): CPython consumes those at startup, before this function runs, so scrubbing
+    them here would be theatre. They are neutralised instead by the absence of any
+    attacker-writable path in the running image — read-only root filesystem, no declared or
+    mounted volume, distroless with no shell, and the execution role's ``s3:GetObject`` Deny —
+    so there is nowhere to plant a module for them to load. The worst case is an import that
+    fails and exits non-zero (fail closed), never a redirected read."""
     for key in [k for k in os.environ if k.startswith(_SCRUBBED_ENV_PREFIXES)]:
         del os.environ[key]
     for key in _SCRUBBED_ENV_EXACT:
@@ -203,10 +211,14 @@ def _run(argv: list[str]) -> int:
         return _fail(EXIT_CONFIG_FAILED)
 
     # TAMPER DETECTOR (evidence quality, NOT the control): the control is that we connect to
-    # the baked host regardless of the DSN. But if the DSN names a host at all, it must equal
-    # the baked host byte-for-byte (exact ASCII — never case-folded or NFKC-normalised, which
-    # collapse distinct hosts). A mismatch means the injected secret was tampered with; fail
-    # closed and visibly rather than silently ignoring it.
+    # the baked host regardless of the DSN. As a tamper signal, if the DSN names a host it
+    # must equal the baked host. The comparison is against urllib's parsed hostname, which is
+    # lowercased — DNS is case-insensitive, so a case variant of the SAME host correctly
+    # matches — but is NOT NFKC-normalised, so a Unicode look-alike (e.g. a Cyrillic
+    # homoglyph) does not collapse onto the ASCII baked host and trips the detector. Only the
+    # host is checked here; the database and role are baked too, so a mismatch in those
+    # surfaces as a connect/auth failure (52) rather than at this line. A mismatch fails
+    # closed and visibly.
     dsn_host = _dsn_host_or_none(dsn)
     if dsn_host is not None and dsn_host != host:
         return _fail(EXIT_CONFIG_FAILED)
