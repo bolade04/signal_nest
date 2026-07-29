@@ -470,6 +470,14 @@ jobs:
           platforms: linux/amd64
           tags: signalnest-revision-reader:ci
           load: true
+          # SYNTHETIC destination pins for CI only — never a real endpoint. They must be
+          # non-empty (the Dockerfile fails the build otherwise) and a plausible RDS-style
+          # host so the reader's host validation admits them; the in-image band then proves
+          # the reader connects only to THIS baked host and rejects any other.
+          build-args: |
+            EXPECTED_DB_HOST=test-db.abc123.us-east-1.rds.amazonaws.com
+            EXPECTED_DB_NAME=signalnest
+            EXPECTED_DB_USER=app_role
 
       - name: In-image verification band
         run: |
@@ -518,7 +526,11 @@ jobs:
             fi
           done
 
-          echo "== (6) configuration failures are fail-closed and disclose nothing =="
+          echo "== (6) destination is BAKED: any host but the baked one fails closed =="
+          # Gate 4J.1. The host/db/role are baked (build args above); the reader connects to
+          # the baked host regardless of the DSN and takes only the password from it. So
+          # every redirect shape fails closed at CONFIG (51) — the DSN host is never dialled.
+          BAKED_HOST=test-db.abc123.us-east-1.rds.amazonaws.com
           expect() {
             want="$1"; shift
             rc=0
@@ -533,41 +545,43 @@ jobs:
             fi
           }
           expect 51                                                             # no DSN at all
-          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d'        # TLS not required
-          # The redirect attack: caller-settable environment + 443 egress to 0.0.0.0/0 +
-          # PostgreSQL-on-any-port would otherwise let a RunTask caller feed the reader a
-          # revision of their choosing with exit 0. The port pin closes it.
-          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid:443/d?sslmode=require'
-          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=requireXXX'
-          # Parser divergence: libpq honours connection keywords in the query string, so
-          # a positional port check alone is insufficient. Query keys are allowlisted to
-          # exactly {sslmode}; multi-host URIs are refused outright.
-          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=require&port=443'
-          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=require&host=evil.invalid'
-          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid:443,db.invalid:5432/d?sslmode=require'
-          # These two slipped the port pin: urlsplit reports the whole comma-joined string
-          # as the hostname and takes everything after the FIRST colon as the port, so `evil,db:5432`
-          # reads as port 5432 and the portless `evil,db` reads as unspecified — while
-          # libpq would try the attacker's host first. Rejecting ',' in the authority is
-          # what makes the single-destination guarantee total rather than accidental.
-          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid,db.invalid:5432/d?sslmode=require'
-          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid,db.invalid/d?sslmode=require'
-          # The same ambiguity one decoding stage later: urlsplit does not decode the host,
-          # libpq does. If libpq decodes before splitting on ',', these become a multi-host
-          # list and a redirected port respectively.
-          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid%2Cdb.invalid:5432/d?sslmode=require'
-          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid%3A443/d?sslmode=require'
-          # Delimiter ambiguity: two parsers locate the end of userinfo by finding an '@'.
-          # Rather than reason about whose convention wins, more than one literal '@' is
-          # refused outright — a real '@' in a credential arrives percent-encoded.
+          # BLOCKING 1 (confirmed exploit): arbitrary DNS host / IP -> tamper detector, never dialled.
+          expect 51 -e DATABASE_URL='postgresql://u:pw@attacker.example.com:5432/d?sslmode=require'
+          expect 51 -e DATABASE_URL='postgresql://u:pw@203.0.113.9:5432/d?sslmode=require'
+          # BLOCKING 2 (confirmed exploit): the exact bracketed-authority bypass.
+          expect 51 -e DATABASE_URL='postgresql://u:pw@evil.invalid%2Cdb.invalid[v1.x]/d?sslmode=require'
+          # BLOCKING 3 (new): a percent-encoded NUL in the password — invisible raw, a NUL
+          # after unquote that would truncate libpq's conninfo. Gated on the DECODED value.
+          expect 51 -e DATABASE_URL="postgresql+psycopg://app_role:s3cr3t%00pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          # Wrong scheme, multi-host, and userinfo '@' ambiguity all fail closed.
+          expect 51 -e DATABASE_URL="mysql://app_role:pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 51 -e DATABASE_URL="postgresql://app_role:pw@evil.invalid,${BAKED_HOST}:5432/d?sslmode=require"
           expect 51 -e DATABASE_URL='postgresql://u:p@ss@evil.invalid:443/d?sslmode=require'
-          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid:443@db.invalid:5432/d?sslmode=require'
-          # The percent-encoded form IS legitimate (compose_database_url quotes both
-          # credentials), so it must reach connect — 52, not 51.
-          expect 52 -e DATABASE_URL='postgresql://u:p%40ss@db.invalid:5432/d?sslmode=require'
-          # The REAL secret's scheme (bootstrap_app_role.py writes postgresql+psycopg://):
-          # reaching 52 rather than 51 proves the driver suffix is normalised for libpq.
-          expect 52 -e DATABASE_URL='postgresql+psycopg://u:p@db.invalid:5432/d?sslmode=require'
-          expect 52 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=require'
+          # A DSN naming the BAKED host with a valid, decodable password reaches connect: the
+          # discrete-param path (driver-suffix normalise + '%40' password decode) dials the
+          # baked host, which will not answer under --network none -> CONNECT_FAILED (52).
+          # This is the positive control that the reader actually connects, not just rejects.
+          expect 52 -e DATABASE_URL="postgresql+psycopg://app_role:s3cr3tpw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 52 -e DATABASE_URL="postgresql://app_role:p%40ss@${BAKED_HOST}:5432/signalnest?sslmode=require"
+
+          echo "== (7) baked pins and the CA bundle are present and non-empty =="
+          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          import os
+          from revision_reader import _pinned
+          assert _pinned.EXPECTED_DB_HOST == '${BAKED_HOST}', _pinned.EXPECTED_DB_HOST
+          assert _pinned.EXPECTED_DB_NAME and _pinned.EXPECTED_DB_USER
+          assert os.path.isfile(_pinned.CA_BUNDLE_PATH), _pinned.CA_BUNDLE_PATH
+          print('pins + CA present ok')"
+
+          echo "== (8) the baked CA bundle is byte-identical to the reviewed, pinned asset =="
+          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          import hashlib, pathlib
+          print(hashlib.sha256(pathlib.Path('/etc/ssl/rds/rds-global-bundle.pem').read_bytes()).hexdigest())")"
+          want="e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
+          test "$got" = "$want" || { echo "::error::baked CA sha256 ${got} != ${want}" >&2; exit 1; }
+
+          echo "== (9) exact interpreter patch version (logged, not asserted — drift visible) =="
+          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+            -c "import sys; print('reader interpreter:', sys.version)"
 
           echo "revision-reader in-image verification: PASS"

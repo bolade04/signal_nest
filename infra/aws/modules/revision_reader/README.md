@@ -37,8 +37,13 @@ task role, and no scheduled invocation. Nothing here starts a task.
    self-contained means a defect in this new, less-exercised path cannot reach
    the api/worker repositories backing the currently-pinned staging digests.
    `registry/main.tf` and `iam/main.tf` are untouched.
-3. **Lifecycle.** Everything here is destroyable as a unit without touching
-   `registry`, `iam` or `ecs` state.
+3. **Lifecycle.** The module is coordinated for teardown as a unit and touches no
+   `registry`, `iam` or `ecs` state — but it is **not self-destructing under the CI
+   identities**. `aws_ecr_repository.reader` sets `force_delete = false` to protect
+   published images, and both CI roles are explicitly denied `ecr:BatchDeleteImage`, so
+   `tofu destroy` fails while any reader image remains in the repository. Destruction
+   therefore requires a separate **administrative image-retirement step** (empty the
+   repository) before OpenTofu can remove it.
 
 ## 4. The control this module rests on
 ECS `ContainerOverride` exposes `{name, command, environment, environmentFiles,
@@ -55,7 +60,20 @@ constrains **nothing** about override payload, environment, subnets,
 `securityGroups` or `assignPublicIp`: no condition keys exist. That is precisely
 why the primary control lives in the image and not in this module.
 
+**Destination authenticity (Gate 4J.1) lives in the image for the same reason.** Since
+network placement and `environment` are caller-supplied and un-constrainable by IAM,
+*which* database the reader reads is decided by values BAKED into the digest-pinned
+image — the expected host, database and role (from build args) plus `sslmode=verify-full`
+against a committed CA bundle. The reader connects to the baked host and takes only the
+password from the injected DSN. See §9.
+
 ## 5. Inputs
+Note: the destination pins (`EXPECTED_DB_HOST`/`_NAME`/`_USER`) are **image build args**, not
+module variables — they are supplied at publication from the protected
+`staging-reader-publish` environment and baked into the digest-pinned image, so no RunTask
+parameter can reach them. They deliberately do not appear in the table below.
+
+
 | Name | Default | Notes |
 | ---- | ------- | ----- |
 | `enabled` | `false` | Independent of `deploy_workload` by design. |
@@ -115,6 +133,9 @@ override-audit gate.
   `CreateLogStream`/`PutLogEvents` on **exactly** the reader group. No
   `logs:CreateLogGroup`: this module creates the group, so granting creation
   would be unused privilege that also permits writing outside the audited group.
+  Also an explicit **`Deny` on `s3:GetObject`** (Gate 4J.1): `environmentFiles` is a
+  caller-supplied override that fetches from S3 using this role, so the Deny makes that
+  channel's closure unconditional rather than relying on the absence of an allow.
 - **Publisher role** — pushes the reader repository; explicitly denied ECS,
   `iam:PassRole`, secrets, KMS key administration and repository deletion.
 - **Runner role** — `RunTask` on the **exact revision**, `DescribeTasks`
@@ -154,82 +175,74 @@ separate authorization.
 This is the attack that matters most, because it defeats the *verification* rather than
 the container: a reader pointed at a database the caller controls would report whatever
 revision that database contains, with exit 0, without ever engaging the entrypoint
-hardening. The security lane raised it as blocking and was right to.
+hardening.
 
-**The chain, as it stood.** `ContainerOverride.environment` is caller-settable and IAM has
-no condition key for it. The reader validated only that a DSN was present and contained an
-`sslmode` substring — no host or port constraint. This module's own
-`aws_vpc_security_group_egress_rule.reader_https` permits egress to `0.0.0.0/0` on **443**,
-which is unavoidable without VPC interface endpoints (ECR, Secrets Manager and CloudWatch
-Logs have no managed prefix list). PostgreSQL's wire protocol does not care which port it
-runs on. So a DSN naming `attacker-host:443` was reachable, and anything answering a
-minimal handshake plus one query could dictate the result.
+**Why the network cannot be the anchor.** `ContainerOverride.environment` is caller-settable
+and IAM has no condition key for it, so `DATABASE_URL` must be treated as hostile. The
+network placement is caller-supplied too: subnets, `securityGroups` and `assignPublicIp`
+are members of the RunTask `networkConfiguration`, and **IAM has no condition key for any of
+them**. So the reader's own security group — outbound 5432 only to the RDS SG — is a
+property of `reader-run.yml`, **not** of authorization: a RunTask holder can attach a
+different security group (including the unmanaged VPC default SG, which this module does not
+manage and which permits broad egress). An earlier design tried to close the redirect with a
+DSN port pin composed with that security group; that composition is **false against the very
+actor it names**, because the actor supplies the security group in the same call. Do not
+reintroduce "the port pin composes with the SG to close the path" language — it was wrong.
 
-**How it is closed.** The reader now pins the DSN port to 5432 (or unspecified, which
-libpq resolves to 5432). Outbound 5432 is permitted **only** to the RDS security group, so
-a port-constrained DSN can reach nothing but the intended database. The two halves compose:
-neither the port pin nor the security group closes the path alone.
+**How it is actually closed (Gate 4J.1): baked destination + verify-full.** The host,
+database name and role are **baked into the image** at build time (`revision_reader/_pinned`,
+generated from the `EXPECTED_DB_HOST`/`_NAME`/`_USER` build args the publish workflow
+supplies from the protected `staging-reader-publish` environment). A baked source constant is
+the only trust anchor no RunTask parameter can reach: `ContainerOverride` has no member that
+rewrites image contents, `environment` overrides touch only `os.environ` (which the reader
+does **not** read these from), and an image `ENV` value *would* be overridable — a source
+constant is not. The reader connects with discrete `psycopg` keyword arguments to the **baked
+host**, and takes exactly one value from the DSN: the password. The authority is never parsed
+for a destination nor handed to libpq, which structurally eliminates the whole class of
+`urlsplit`-vs-libpq parser-divergence bugs (including the bracketed-authority bypass).
 
-That control deliberately lives **in the image**, which is digest-pinned and has no
-override channel, precisely because the environment does. It is enforced before any socket
-is opened, and `tests/test_reader.py` pins it with the attack DSNs themselves
-(`evil.invalid:443`, `:80`, `:6379`), each asserted to be refused with **zero** connection
-attempts. Both in-image bands replay it against the built artefact.
+Because the AWS RDS CA signs **every** customer's instance, TLS alone would only prove "some
+RDS server". So the reader also sets `sslmode=verify-full` with `sslrootcert` pointing at a
+committed, checksum-pinned AWS RDS CA bundle baked at `/etc/ssl/rds/rds-global-bundle.pem`
+(carried forward from the builder after a build-time `sha256sum -c`, so the image bytes equal
+the reviewed bytes). The baked host says *which* server; verify-full proves the server owns
+that name. The decoded password is gated to printable ASCII (`[\x21-\x7e]`), because a
+percent-encoded NUL is invisible to a raw-string check but truncates libpq's conninfo at the
+C boundary — silently dropping `sslmode`/`sslrootcert`. The query is schema-qualified to
+`public.alembic_version` so a shadowed role's `search_path` cannot select a different schema.
+A tamper detector additionally fails closed (exact-ASCII) if the DSN names a host other than
+the baked one — evidence quality, not the control.
 
-Pinning the port is not sufficient on its own, and assuming it was would have left the
-hole open. A libpq URI honours connection **keywords in its query string**, so
-`?host=evil&port=443` passes a positional port check while libpq connects elsewhere; and
-libpq accepts multi-host URIs, which it tries in order. The DSN check therefore allowlists
-the query string to exactly `{sslmode}` — which also excludes `service=`/`passfile=`
-(a whole connection definition from a file) and `options=` (server settings, including
-clearing the read-only default) — rejects a fragment, and rejects any DSN whose port slot
-does not parse cleanly. Each of those forms is a named test case.
+`tests/test_reader.py` pins all of this against the built artefact's own interpreter in the
+CI in-image band, and `apps/revision-reader` carries two independent DSN attack corpora
+(security-lane and adversarial-lane, asserted disjoint).
 
-Multi-host URIs needed their own rule rather than falling out of the port check, and the
-distinction is worth recording because it was the fourth hole found in this one function.
-libpq tries each host of a multi-host URI in turn; `urlsplit` does not model that syntax at
-all. It returns the whole comma-joined string as the hostname and takes everything after
-the **first** colon as the port. `evil,db:5432` therefore reads as a clean port 5432 and
-the portless `evil,db` reads as unspecified — both satisfying the port pin while libpq
-would try the attacker's host first. Only the two-colon shape was caught, and only because
-its port string `443,db:5432` fails `int()` — an accident rather than a guard. The authority now
-rejects `,` outright, which is what makes the single-destination guarantee total.
+**What remains unresolved / residual, honestly.**
+- **Credential scope (unchanged).** The injected identity still OWNS the database. "Read-only"
+  is a property of the reader's behaviour, not the credential. A dedicated `SELECT`-only
+  PostgreSQL role delivered as its own secret is the only unconditional fix and requires
+  separate authorization; it is **not** provisioned here.
+- **Environment-shadows-secrets (moot by design).** Whether `containerOverrides.environment`
+  can shadow a `secrets`-sourced variable is still offline-unverifiable — but the baked-host
+  design **does not depend on the answer**: even a fully attacker-controlled `DATABASE_URL`
+  cannot change host/db/role, so the worst outcome is a failed authentication, never a false
+  head at exit 0.
+- **CA authenticity vs byte-stability.** The pinned SHA-256 proves the bundle has not changed
+  since it was committed, not that it is genuinely AWS's — that provenance is a one-time
+  manual review of the committed asset against AWS's published truststore.
+- **Environment coupling.** Baking host/db/role makes the reader image environment-specific:
+  one digest per endpoint, and an RDS rename/restore/blue-green cutover requires republishing
+  the reader before it can verify anything.
 
-It also requires exactly one literal `@` in the authority. Two parsers locate the end of
-userinfo by finding an `@`, and a disagreement about *which* one would mean the DSN was
-validated against one host and connected to another. That ambiguity is refused rather than
-adjudicated — it cannot occur in a legitimate DSN, because `compose_database_url`
-percent-encodes both credentials, so a real `@` arrives as `%40`. Removing the question is
-worth more than winning the argument about whose parsing convention prevails.
-
-The same pass replaced the `sslmode` substring check with a parsed exact-value check —
-`sslmode=requireXXX` contains `sslmode=require` and guaranteed nothing — and made the
-reader normalise the `postgresql+psycopg://` scheme that `bootstrap_app_role.py` actually
-writes, which libpq does not accept. Without that second fix the reader could not have
-connected to the live database at all.
-
-**What remains unresolved, honestly.** Whether ECS lets a `containerOverrides.environment`
-entry *shadow* a `secrets`-sourced variable of the same name is **unverified** and cannot
-be established offline. `ContainerOverride` has no `secrets` member, so the binding itself
-cannot be re-pointed (AWS containers-roadmap issue 1269 requests exactly that capability,
-which is evidence it does not exist) — classification: **structurally derived**, not
-directly observed. The port pin makes the answer far less important, since a shadowed
-DATABASE_URL can now only address port 5432 behind the RDS security group, but it does not
-make it irrelevant: a caller able to reach the real database could still substitute
-credentials for it. Resolve it before treating a reader result as authoritative under a
-threat model that includes a compromised runner role.
-
-Ranked compensating controls, unchanged:
+Ranked compensating controls (defence in depth, not the primary boundary):
 1. `ecs:RunTask` on this revision is held by **one** identity, assumable only by a job
    declaring the `staging-reader-run` environment. No human permission set holds it.
 2. `.github/workflows/reader-run.yml` sends no `--overrides` at all and is reviewed
-   through the same path as this module.
-3. That workflow asserts positively on the **whole** `overrides` object in the RunTask
-   response, so an `environment` override is detected rather than merely disallowed.
-
-Control 3 is detection by the same principal that made the call. It is meaningful only
-because control 1 makes that principal the sole caller; do not present it as a boundary
-against a caller who already holds RunTask.
+   through the same path as this module; it asserts positively on the whole `overrides`
+   object in the RunTask response. This is detection by the calling principal — meaningful
+   only because control 1 makes it the sole caller; it is **not** a boundary against a caller
+   who already holds RunTask. The baked-destination control above is what holds against that
+   caller.
 
 ## 10. Fail-closed posture
 - `enabled = false` (the default) creates nothing at all.

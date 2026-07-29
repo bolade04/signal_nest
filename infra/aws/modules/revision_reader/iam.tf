@@ -106,6 +106,18 @@ resource "aws_iam_role_policy" "reader_execution" {
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = ["${aws_cloudwatch_log_group.reader[0].arn}:*"]
       },
+      {
+        # DEFENCE IN DEPTH (Gate 4J.1). `environmentFiles` is a caller-supplied
+        # ContainerOverride channel that fetches an env file from S3 USING THIS EXECUTION
+        # ROLE. The role holds no s3 grant, so it is already closed by ABSENCE — but a
+        # future same-account bucket resource-policy could grant this role access without
+        # any identity-policy allow. An explicit Deny makes the closure unconditional and
+        # survives future widening: the reader mounts nothing from S3, ever.
+        Sid      = "DenyS3EnvironmentFileFetch"
+        Effect   = "Deny"
+        Action   = "s3:GetObject"
+        Resource = "*"
+      },
     ]
   })
 }

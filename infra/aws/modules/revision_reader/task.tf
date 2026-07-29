@@ -23,6 +23,18 @@
 #                 the process needs no writable path at all. The api/worker tasks mount a
 #                 /tmp volume because Fargate supports no tmpfs and their frameworks write;
 #                 this program does not.
+#
+# MAINTENANCE INVARIANT (Gate 4J.1): do NOT add a volume with `configuredAtLaunch = true`.
+# RunTask's `volumeConfigurations` can only configure a volume the task definition already
+# DECLARES; with none declared, that caller-supplied channel is inert. A configuredAtLaunch
+# volume would open it.
+#
+# DESTINATION AUTHENTICITY (Gate 4J.1): the host, database and role are baked into the image
+# (revision_reader/_pinned, generated from build args), and the reader connects with
+# sslmode=verify-full against a committed CA bundle. The `environment` block below stays
+# empty precisely BECAUSE it is caller-replaceable — nothing that decides which server is
+# read may live in an overridable channel. The reader takes only the password from the
+# injected DATABASE_URL secret and connects to the baked host regardless of the DSN.
 # =====================================================================================
 
 locals {
@@ -57,8 +69,8 @@ resource "aws_ecs_task_definition" "reader" {
     readonlyRootFilesystem = true
 
     # Empty, and NOT a control: ContainerOverride carries `environment`, so anything set
-    # here is caller-replaceable. Configuration that must hold is enforced inside the
-    # program (the reader rejects a DSN without sslmode=require|verify) — never here.
+    # here is caller-replaceable. Configuration that must hold is baked into the IMAGE (the
+    # expected host/db/role and the verify-full CA), never here — see the header.
     environment = []
 
     # DATABASE_URL ONLY. The reader needs no SECRET_KEY, REDIS_URL or LLM_API_KEY, and the

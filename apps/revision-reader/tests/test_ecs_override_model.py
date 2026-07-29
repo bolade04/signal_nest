@@ -12,8 +12,9 @@ This reads the shape definitions out of botocore's bundled ECS service model —
 data the AWS SDK and CLI use to construct the request — so a model update that introduced
 the member fails here on the next dependency bump.
 
-Skipped, never silently passed, when botocore is absent: a check that quietly evaporates
-is worse than no check, because the suite still reports green.
+botocore is a HARD test dependency (declared in the dev extra), imported directly rather
+than via importorskip: a check that quietly skips to green is worse than no check. If the
+model cannot be inspected, this file ERRORS rather than passing.
 """
 
 from __future__ import annotations
@@ -36,13 +37,11 @@ TASK_OVERRIDE_ROLE_MEMBERS = {"taskRoleArn", "executionRoleArn"}
 
 
 def _load_ecs_model() -> dict:
-    botocore = pytest.importorskip(
-        "botocore", reason="botocore not installed; the ECS model cannot be inspected"
-    )
+    import botocore  # HARD dependency: ImportError -> collection error, never a skip.
+
     base = Path(botocore.__file__).parent / "data" / "ecs"
     candidates = sorted(base.glob("*/service-2.json*")) if base.is_dir() else []
-    if not candidates:
-        pytest.skip(f"no ECS service model found under {base}")
+    assert candidates, f"no ECS service model found under {base} — cannot verify the claim"
     path = candidates[-1]
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as handle:
@@ -81,8 +80,13 @@ def test_task_override_still_carries_both_role_arns(shapes):
     assert TASK_OVERRIDE_ROLE_MEMBERS <= members
 
 
-def test_run_task_request_has_no_condition_key_for_overrides(shapes):
-    """`overrides` is a request member, and IAM exposes no condition key for its contents.
-    Asserting it is a member is what makes the surrounding claim concrete: the payload is
-    caller-supplied, so nothing about it can be constrained by policy."""
+def test_overrides_is_a_caller_supplied_request_member(shapes):
+    """`overrides` is a member of RunTaskRequest — i.e. a value the caller supplies.
+
+    NOTE ON WHAT THIS DOES NOT PROVE: botocore's service model carries no IAM condition-key
+    metadata, so this test CANNOT establish that IAM lacks a condition key for override
+    contents. That absence is a documented assumption drawn from the AWS Service
+    Authorization Reference, recorded in the module README, not proven here. This test only
+    pins that the override payload is caller-supplied at all — which is why the reader's
+    destination controls live in the image, not in IAM."""
     assert "overrides" in set(shapes["RunTaskRequest"]["members"])

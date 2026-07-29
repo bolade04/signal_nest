@@ -64,8 +64,13 @@ jobs:
 
       - name: Refuse to run off main
         if: github.ref != 'refs/heads/main'
+        # github.ref via env, never inlined into the shell string — a ref name can carry
+        # shell metacharacters, and interpolating ${{ github.ref }} into run: is a
+        # script-injection surface (GitHub security-hardening guidance).
+        env:
+          REF: ${{ github.ref }}
         run: |
-          echo "::error::Reader run executes only from refs/heads/main (got ${{ github.ref }})." >&2
+          echo "::error::Reader run executes only from refs/heads/main (got ${REF})." >&2
           exit 1
 
       - name: Fail closed while the reader prerequisites are absent

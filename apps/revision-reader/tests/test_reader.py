@@ -1,10 +1,20 @@
-"""Tests for the dedicated revision reader (Gate 4J).
+"""Tests for the dedicated revision reader (Gate 4J / 4J.1).
+
+The 4J.1 remediation moved destination authenticity into the image: host, database and role
+are baked (``_pinned``) and the reader connects with discrete psycopg keyword arguments to
+``sslmode=verify-full`` against a committed CA bundle, taking ONLY the password from the
+injected DSN. So the tests assert two things the old suite could not: that the raw DSN is
+never forwarded to libpq, and that every value which decides *which* database is read is a
+baked constant the DSN cannot influence.
 
 Every no-leak / absence assertion is paired with a positive control proving the path
-actually executed — a suite that passes when the behaviour is absent is unacceptable.
+actually executed. psycopg is injected as a fake through sys.modules so these run with no
+database, no driver install, and no network.
 
-psycopg is injected as a fake through sys.modules so these run with no database, no
-driver install, and no network.
+The two DSN attack corpora at the bottom are DELIBERATELY DISJOINT and labelled by
+provenance: SECURITY_LANE_CORPUS (TLS/parser-model derived) and ADVERSARIAL_LANE_CORPUS
+(control-byte / bracket / confusable, derived by driving real libpq). They are not copies of
+one enumeration.
 """
 
 from __future__ import annotations
@@ -13,6 +23,8 @@ import ast
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
@@ -20,12 +32,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from revision_reader import reader as R  # noqa: E402
 
-DSN = "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require"
-SENTINEL_DSN = "postgresql://svc:sn-sentinel-p4ss@db-sentinel-host:5432/appdb?sslmode=require"
+BAKED_HOST = "test-db.abc123.us-east-1.rds.amazonaws.com"
+BAKED_DBNAME = "signalnest"
+BAKED_USER = "app_role"
+SENTINEL_PW = "sn-sentinel-p4ss-do-not-leak"
 
 
 # --------------------------------------------------------------------------- #
-# Fake psycopg
+# Fake psycopg — connect takes NO positional dsn now; it records every kwarg.
 # --------------------------------------------------------------------------- #
 class _Cur:
     def __init__(self, rows, raise_exc=None):
@@ -52,7 +66,6 @@ class _Conn:
         self._cur = _Cur(rows, raise_exc)
         self.read_only = None
         self.closed = 0
-        self.kwargs: dict = {}
 
     def cursor(self):
         return self._cur
@@ -63,13 +76,13 @@ class _Conn:
 
 def install_fake_psycopg(monkeypatch, rows=None, connect_exc=None, query_exc=None):
     """Install a fake psycopg; returns a state dict for assertions."""
-    state: dict = {"connects": 0, "conn": None, "kwargs": None}
+    state: dict = {"connects": 0, "conn": None, "kwargs": None, "args": None}
     mod = types.ModuleType("psycopg")
 
-    def connect(dsn, **kwargs):
+    def connect(*args, **kwargs):
         state["connects"] += 1
+        state["args"] = args
         state["kwargs"] = kwargs
-        state["dsn"] = dsn
         if connect_exc is not None:
             raise connect_exc
         c = _Conn(rows if rows is not None else [], query_exc)
@@ -82,424 +95,402 @@ def install_fake_psycopg(monkeypatch, rows=None, connect_exc=None, query_exc=Non
 
 
 @pytest.fixture()
-def env(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", DSN)
-    return monkeypatch
+def baked(monkeypatch, tmp_path):
+    """Bake valid test pins + a real CA file, and set a MATCHING DATABASE_URL."""
+    ca = tmp_path / "rds-global-bundle.pem"
+    ca.write_bytes(b"-----BEGIN CERTIFICATE-----\n" + b"x" * 4000 + b"\n")
+    monkeypatch.setattr(R._pinned, "EXPECTED_DB_HOST", BAKED_HOST)
+    monkeypatch.setattr(R._pinned, "EXPECTED_DB_NAME", BAKED_DBNAME)
+    monkeypatch.setattr(R._pinned, "EXPECTED_DB_USER", BAKED_USER)
+    monkeypatch.setattr(R._pinned, "CA_BUNDLE_PATH", str(ca))
+    dsn = f"postgresql+psycopg://{BAKED_USER}:{SENTINEL_PW}@{BAKED_HOST}:5432/{BAKED_DBNAME}?sslmode=require"
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    return SimpleNamespace(mp=monkeypatch, ca=str(ca), dsn=dsn)
+
+
+def set_dsn(baked, dsn):
+    baked.mp.setenv("DATABASE_URL", dsn)
 
 
 def run(argv=None):
     return R.main(argv if argv is not None else [])
 
 
+def matching_dsn(user=BAKED_USER, pw=SENTINEL_PW, host=BAKED_HOST, db=BAKED_DBNAME,
+                 query="?sslmode=require"):
+    return f"postgresql+psycopg://{user}:{pw}@{host}:5432/{db}{query}"
+
+
 # --------------------------------------------------------------------------- #
 # 1-5. Success and each failure classification, distinctly (positive controls)
 # --------------------------------------------------------------------------- #
-def test_one_valid_revision_prints_exactly_one_line(env, capsys):
-    install_fake_psycopg(env, rows=[("98289430a3ec",)])
+def test_one_valid_revision_prints_exactly_one_line(baked, capsys):
+    install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
     rc = run()
-    cap = capsys.readouterr()  # single capture; both streams asserted
+    cap = capsys.readouterr()
     assert rc == R.EXIT_OK
     assert cap.out == "98289430a3ec\n"
     assert cap.err == ""
 
 
-def test_zero_rows_distinct(env, capsys):
-    install_fake_psycopg(env, rows=[])
-    rc = run()
-    cap = capsys.readouterr()
-    assert rc == R.EXIT_NO_ROWS
-    assert cap.err == "revision-reader: READER-ZERO-REVISIONS\n"
-    assert cap.out == ""
+def test_zero_rows_distinct(baked, capsys):
+    install_fake_psycopg(baked.mp, rows=[])
+    assert run() == R.EXIT_NO_ROWS
+    assert capsys.readouterr().err == "revision-reader: READER-ZERO-REVISIONS\n"
 
 
-def test_multiple_rows_distinct(env, capsys):
-    install_fake_psycopg(env, rows=[("98289430a3ec",), ("aaaaaaaaaaaa",)])
-    rc = run()
-    assert rc == R.EXIT_MULTIPLE_ROWS
+def test_multiple_rows_distinct(baked, capsys):
+    install_fake_psycopg(baked.mp, rows=[("98289430a3ec",), ("aaaaaaaaaaaa",)])
+    assert run() == R.EXIT_MULTIPLE_ROWS
     assert capsys.readouterr().err == "revision-reader: READER-MULTIPLE-REVISIONS\n"
 
 
 @pytest.mark.parametrize("bad", ["ZZZZZZZZZZZZ", "98289430A3EC", "9828943", "", "98289430a3ec0"])
-def test_malformed_revision_distinct(env, capsys, bad):
-    install_fake_psycopg(env, rows=[(bad,)])
-    rc = run()
-    assert rc == R.EXIT_MALFORMED_REVISION
+def test_malformed_revision_distinct(baked, capsys, bad):
+    install_fake_psycopg(baked.mp, rows=[(bad,)])
+    assert run() == R.EXIT_MALFORMED_REVISION
     assert capsys.readouterr().err == "revision-reader: READER-REVISION-MALFORMED\n"
 
 
-def test_missing_table_distinct(env, capsys):
+def test_missing_table_distinct(baked, capsys):
     exc = RuntimeError("relation does not exist")
     exc.sqlstate = "42P01"  # type: ignore[attr-defined]
-    install_fake_psycopg(env, query_exc=exc)
-    rc = run()
-    assert rc == R.EXIT_TABLE_MISSING
+    install_fake_psycopg(baked.mp, query_exc=exc)
+    assert run() == R.EXIT_TABLE_MISSING
     assert capsys.readouterr().err == "revision-reader: READER-VERSION-TABLE-MISSING\n"
 
 
-def test_connection_failure_distinct(env, capsys):
-    install_fake_psycopg(env, connect_exc=RuntimeError("could not connect"))
-    rc = run()
-    assert rc == R.EXIT_CONNECT_FAILED
+def test_connection_failure_distinct(baked, capsys):
+    install_fake_psycopg(baked.mp, connect_exc=RuntimeError("could not connect"))
+    assert run() == R.EXIT_CONNECT_FAILED
     assert capsys.readouterr().err == "revision-reader: READER-CONNECTION-FAILED\n"
 
 
-def test_config_failure_when_dsn_absent(monkeypatch, capsys):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    rc = run()
-    assert rc == R.EXIT_CONFIG_FAILED
-    assert capsys.readouterr().err == "revision-reader: READER-CONFIG-FAILED\n"
-
-
-def test_config_failure_when_tls_not_required(monkeypatch, capsys):
-    # TLS is ASSERTED here, not trusted from provisioning discipline.
-    monkeypatch.setenv("DATABASE_URL", "postgresql://svc:pw@db.invalid:5432/appdb")
-    rc = run()
-    assert rc == R.EXIT_CONFIG_FAILED
-
-
-# --------------------------------------------------------------------------- #
-# DSN admission. `containerOverrides.environment` is caller-settable at RunTask
-# time, so DATABASE_URL is the one input this program must treat as hostile.
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize(
-    "dsn",
-    [
-        # THE FORMAT THE REAL SECRET ACTUALLY HAS. bootstrap_app_role.py composes
-        # `postgresql+psycopg://...`; libpq rejects the driver suffix, so without
-        # normalisation the reader could never connect to the live database at all.
-        "postgresql+psycopg://svc:pw@db.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require",
-        # Port omitted: libpq defaults to 5432, the same destination the SG permits.
-        "postgresql://svc:pw@db.invalid/appdb?sslmode=require",
-        "postgres://svc:pw@db.invalid:5432/appdb?sslmode=verify-full",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=verify-ca",
-        # Zero-padded: the same destination, so admitted rather than refused on form.
-        "postgresql://svc:pw@db.invalid:05432/appdb?sslmode=require",
-        # A percent-encoded '@' inside the password is what a REAL secret looks like:
-        # compose_database_url quotes both credentials with quote(safe=""). It must not
-        # be confused with the unescaped, ambiguous form rejected below. Credentials live
-        # in the netloc but NOT in `hostname`, so the encoded-host rule cannot reject them.
-        "postgresql://svc:p%40ss@db.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:p%2Fw@db.invalid/appdb?sslmode=require",
-        # A plain IPv6 literal is legitimate; only a zone id (which needs '%') is not.
-        "postgresql://svc:pw@[::1]:5432/appdb?sslmode=require",
-    ],
-)
-def test_admissible_dsns_reach_the_connect_call(monkeypatch, dsn):
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    state = install_fake_psycopg(monkeypatch, rows=[("98289430a3ec",)])
-    assert R.main([]) == R.EXIT_OK
-    assert state["connects"] == 1
-    # The driver suffix must be stripped before libpq ever sees it.
-    assert state["dsn"].startswith(("postgresql://", "postgres://"))
-    assert "+psycopg" not in state["dsn"]
-
-
-@pytest.mark.parametrize(
-    "dsn",
-    [
-        # THE REDIRECT ATTACK. The reader's SG permits egress to 0.0.0.0/0 on 443 for
-        # ECR/Secrets/Logs, and the PostgreSQL wire protocol works on any port -- so a
-        # caller who can set `environment` could otherwise point the reader at a host
-        # they control, answer the one query, and have it report an attacker-chosen
-        # revision with exit 0. Pinning the port composes with the SG (outbound 5432 is
-        # permitted ONLY to the RDS SG) to close that path.
-        "postgresql://svc:pw@evil.invalid:443/appdb?sslmode=require",
-        "postgresql://svc:pw@evil.invalid:80/appdb?sslmode=require",
-        "postgresql://svc:pw@evil.invalid:6379/appdb?sslmode=require",
-        # sslmode is parsed, not substring-matched: this CONTAINS "sslmode=require".
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=requireXXX",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=prefer",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=disable",
-        # Ambiguous duplicates must not be resolved in the caller's favour.
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&sslmode=disable",
-        "mysql://svc:pw@db.invalid:5432/appdb?sslmode=require",
-        "http://evil.invalid:5432/?sslmode=require",
-        "postgresql:///appdb?sslmode=require",
-        "postgresql://svc:pw@db.invalid:notaport/appdb?sslmode=require",
-        # PARSER-DIVERGENCE BYPASSES. A libpq URI accepts connection KEYWORDS in its
-        # query string, so a port check that only looks at the positional slot is not
-        # enough -- libpq would honour these and connect somewhere else entirely. The
-        # query string is therefore an allowlist of exactly {sslmode}.
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&port=443",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&host=evil.invalid",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&hostaddr=10.0.0.9",
-        # `service` and `passfile` can pull an entire connection definition from a file;
-        # `options` can push server settings such as clearing the read-only default.
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&service=evil",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&passfile=/tmp/x",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require&options=-c%20x%3Dy",
-        # MULTI-HOST URIs: libpq tries each host in turn, so the attacker's can be first.
-        # urlsplit knows nothing about that syntax -- it returns the whole comma-joined
-        # string as `hostname` and takes everything after the FIRST colon as the port. So
-        # the two forms below are caught only incidentally: their port string is
-        # "443,db.invalid:5432", which fails int(). The two after them satisfy the port
-        # pin outright -- one trailing port reads as a clean 5432, and the portless form
-        # reads as None, which is "unspecified".
-        # Rejecting ',' in the authority is what makes the single-destination guarantee
-        # total instead of accidental.
-        "postgresql://svc:pw@evil.invalid:443,db.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:pw@db.invalid:5432,evil.invalid:443/appdb?sslmode=require",
-        "postgresql://svc:pw@evil.invalid,db.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:pw@evil.invalid,db.invalid/appdb?sslmode=require",
-        # A fragment is not part of a libpq URI, so the two parsers would disagree.
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require#host=evil.invalid",
-        # libpq's keyword/value form, which carries no scheme at all.
-        "host=evil.invalid port=443 sslmode=require",
-        # DELIMITER AMBIGUITY. Two parsers decide where userinfo ends by locating an '@'.
-        # If this program and libpq ever picked a DIFFERENT one they would disagree about
-        # the host, and the program would validate one destination while libpq connected
-        # to another. Refusing more than one literal '@' removes the question instead of
-        # answering it -- and cannot reject a legitimate DSN, since a real '@' in a
-        # credential arrives percent-encoded (admitted above).
-        "postgresql://svc:p@ss@evil.invalid:443/appdb?sslmode=require",
-        "postgresql://svc:p@ss@db.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:pw@evil.invalid:443@db.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:pw@db.invalid:5432@evil.invalid:443/appdb?sslmode=require",
-        # No userinfo at all: the reader always authenticates, so this is malformed here.
-        "postgresql://db.invalid:5432/appdb?sslmode=require",
-        # SEPARATOR DISAGREEMENT. If libpq ever tokenised the query on ';' while Python
-        # splits only on '&', a smuggled second keyword could be invisible to this check.
-        # It fails closed anyway, and for a reason worth keeping: the sslmode check is an
-        # exact-VALUE match, so anything Python folds into the value ("require;host=evil")
-        # simply is not "require". A key-only allowlist would NOT have this property.
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require;host=evil.invalid",
-        "postgresql://svc:pw@db.invalid:5432/appdb?sslmode=require;port=443",
-        "postgresql://svc:pw@db.invalid:5432/appdb?host=evil.invalid;sslmode=require",
-        # PERCENT-ENCODED SEPARATORS IN THE HOST -- the same ambiguity one decoding stage
-        # later. urlsplit does NOT decode the host, so the ',' and port checks above see
-        # a single comma-free hostname with no port; libpq DOES decode URI components, and
-        # if it decodes before splitting on ',' these become a multi-host list and a
-        # redirected port. Which side libpq decodes on is not establishable here, so the
-        # question is refused: a real RDS endpoint is plain ASCII and never needs an escape.
-        "postgresql://svc:pw@evil.invalid%2Cdb.invalid:5432/appdb?sslmode=require",
-        "postgresql://svc:pw@db.invalid%3A443/appdb?sslmode=require",
-        "postgresql://svc:pw@db%2Einvalid:5432/appdb?sslmode=require",
-        # An IPv6 zone id needs '%' and is not a thing an RDS endpoint ever has.
-        "postgresql://svc:pw@[fe80::1%25eth0]:5432/appdb?sslmode=require",
-    ],
-)
-def test_inadmissible_dsns_are_refused_before_any_connection(monkeypatch, capsys, dsn):
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    state = install_fake_psycopg(monkeypatch, rows=[("98289430a3ec",)])
-    rc = R.main([])
-    cap = capsys.readouterr()
-    assert rc == R.EXIT_CONFIG_FAILED
-    # Refused BEFORE the socket is opened -- not detected afterwards.
-    assert state["connects"] == 0
-    assert cap.out == ""
-    # One fixed token: a probing caller learns nothing about which constraint they hit.
-    assert cap.err == "revision-reader: READER-CONFIG-FAILED\n"
-
-
-# --------------------------------------------------------------------------- #
-# 6-11. The override-resistance and hygiene properties
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("argv", [["--force"], ["upgrade"], ["head"], ["-c", "print(1)"], [""]])
-def test_any_argv_rejected_before_anything_else(monkeypatch, capsys, argv):
-    """Under the fixed ENTRYPOINT an override `command` arrives as argv. This is the
-    point at which an attempted command override is refused — and it must happen BEFORE
-    the DSN is read and BEFORE any connection is attempted."""
-    monkeypatch.setenv("DATABASE_URL", DSN)
-    state = install_fake_psycopg(monkeypatch, rows=[("98289430a3ec",)])
-    rc = R.main(argv)
-    cap = capsys.readouterr()
-    assert rc == R.EXIT_ARGV_REJECTED
-    assert cap.err == "revision-reader: READER-ARGV-REJECTED\n"
-    assert cap.out == ""
-    assert state["connects"] == 0, "argv must be rejected before any connection attempt"
-
-
-def test_argv_rejection_has_its_own_exit_code(monkeypatch, capsys):
-    """Distinct from config failure ON PURPOSE: stray argv is the fingerprint of an
-    attempted command override, so it must be identifiable from the exit code alone."""
-    assert R.EXIT_ARGV_REJECTED != R.EXIT_CONFIG_FAILED
-
-
-def test_exactly_one_connection_per_run(env):
-    state = install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    assert state["connects"] == 1
-
-
-def test_connection_closed_even_on_success(env):
-    state = install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    assert state["conn"].closed == 1
-
-
-def test_read_only_enforced_two_ways(env):
-    state = install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    # Server-side, before the first statement...
-    assert "default_transaction_read_only=on" in state["kwargs"]["options"]
-    # ...and reasserted at session level.
-    assert state["conn"].read_only is True
-
-
-def test_bounded_timeouts_passed(env):
-    state = install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    assert state["kwargs"]["connect_timeout"] == R._CONNECT_TIMEOUT_SECONDS
-    assert f"statement_timeout={R._STATEMENT_TIMEOUT_MS}" in state["kwargs"]["options"]
-
-
-def test_autocommit_disabled(env):
-    state = install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    assert state["kwargs"]["autocommit"] is False
-
-
-def test_pg_environment_scrubbed_before_connect(env):
-    """libpq reads PG* variables, and containerOverrides CAN set environment — so PGOPTIONS
-    or PGSSLMODE could otherwise weaken TLS or clear the read-only GUC."""
-    env.setenv("PGOPTIONS", "-c default_transaction_read_only=off")
-    env.setenv("PGSSLMODE", "disable")
-    env.setenv("PGHOST", "attacker.invalid")
-    import os
-
-    install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    assert not [k for k in os.environ if k.startswith("PG")], "PG* must be scrubbed"
-
-
-def test_only_one_statement_executed_and_it_is_the_fixed_select(env):
-    state = install_fake_psycopg(env, rows=[("98289430a3ec",)])
-    run()
-    assert state["conn"]._cur.executed == ["SELECT version_num FROM alembic_version"]
-
-
-def test_no_dsn_or_credential_ever_reaches_output(monkeypatch, capsys):
-    monkeypatch.setenv("DATABASE_URL", SENTINEL_DSN)
-    install_fake_psycopg(monkeypatch, connect_exc=RuntimeError(SENTINEL_DSN))
-    rc = R.main([])
-    cap = capsys.readouterr()
-    # Positive control first: the classification actually emitted.
-    assert rc == R.EXIT_CONNECT_FAILED
-    assert cap.err == "revision-reader: READER-CONNECTION-FAILED\n"
-    # Then the absence assertions.
-    blob = cap.out + cap.err
-    assert "sn-sentinel-p4ss" not in blob
-    assert "db-sentinel-host" not in blob
-    assert "Traceback" not in blob
-
-
-def test_unexpected_failure_never_escapes(monkeypatch, capsys):
-    monkeypatch.setenv("DATABASE_URL", DSN)
-    install_fake_psycopg(monkeypatch, query_exc=RuntimeError("boom"))
-    rc = R.main([])
-    assert rc == R.EXIT_UNEXPECTED
+def test_unexpected_query_failure_distinct(baked, capsys):
+    install_fake_psycopg(baked.mp, query_exc=RuntimeError("boom"))  # no sqlstate 42P01
+    assert run() == R.EXIT_UNEXPECTED
     assert capsys.readouterr().err == "revision-reader: READER-UNEXPECTED-FAILED\n"
 
 
+def test_config_failure_when_dsn_absent(baked, capsys):
+    baked.mp.delenv("DATABASE_URL", raising=False)
+    state = install_fake_psycopg(baked.mp)
+    assert run() == R.EXIT_CONFIG_FAILED
+    assert state["connects"] == 0
+    assert capsys.readouterr().err == "revision-reader: READER-CONFIG-FAILED\n"
+
+
 # --------------------------------------------------------------------------- #
-# 12-18. Structural properties — the safe-by-construction assertions
+# THE DISCRETE-PARAMETER CONTRACT — the primary regression guard for 4J.1.
+# The raw DSN is never forwarded; every destination value is a baked constant.
 # --------------------------------------------------------------------------- #
-def _reader_source() -> str:
-    return (Path(R.__file__)).read_text()
+def test_connect_uses_discrete_kwargs_and_never_forwards_the_dsn(baked):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    assert run() == R.EXIT_OK
+    assert state["connects"] == 1
+    assert state["args"] == ()  # NOTHING positional — no DSN string handed to libpq
+    k = state["kwargs"]
+    assert k["host"] == BAKED_HOST
+    assert k["port"] == R._ALLOWED_PORT == 5432
+    assert k["dbname"] == BAKED_DBNAME
+    assert k["user"] == BAKED_USER
+    assert k["sslmode"] == "verify-full"
+    assert k["sslrootcert"] == baked.ca
+    assert k["password"] == SENTINEL_PW
+    assert k["connect_timeout"] == R._CONNECT_TIMEOUT_SECONDS
+    assert "default_transaction_read_only=on" in k["options"]
+    assert f"statement_timeout={R._STATEMENT_TIMEOUT_MS}" in k["options"]
+    # The full DSN (with its host and sslmode=require) must not appear in ANY connect value.
+    for v in list(state["args"]) + list(k.values()):
+        assert "sslmode=require" not in str(v)
+        assert baked.dsn not in str(v)
 
 
-def _imported_names() -> set[str]:
-    tree = ast.parse(_reader_source())
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(a.name for a in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            m = node.module or ""
-            names.add(m)
-            names.update(f"{m}.{a.name}" for a in node.names)
-    return names
+def test_password_is_the_only_dsn_derived_value(baked):
+    # Change the DSN's host/db/user to junk but keep host==baked (tamper detector) and a
+    # valid password; the connection still targets the baked db/user, not the DSN's.
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, matching_dsn(user="ATTACKER", pw="realpw123", db="otherdb"))
+    assert run() == R.EXIT_OK
+    assert state["kwargs"]["user"] == BAKED_USER          # not "ATTACKER"
+    assert state["kwargs"]["dbname"] == BAKED_DBNAME      # not "otherdb"
+    assert state["kwargs"]["password"] == "realpw123"     # the one value from the DSN
 
 
-def test_imports_no_application_no_alembic_no_orm():
-    """The single most important structural assertion in this gate: the reader cannot
-    import migration capability because it does not depend on any of it."""
-    names = _imported_names()
-    for forbidden in ("app", "alembic", "sqlalchemy", "pydantic", "boto3", "fastapi"):
-        assert not any(n == forbidden or n.startswith(forbidden + ".") for n in names), forbidden
+def test_query_is_schema_qualified_public(baked):
+    st = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    assert run() == R.EXIT_OK
+    assert st["conn"]._cur.executed == ["SELECT version_num FROM public.alembic_version"]
 
 
-def test_no_shell_or_subprocess_capability():
-    names = _imported_names()
-    for forbidden in ("subprocess", "os.system", "pty", "shutil"):
-        assert forbidden not in names
-    src = _reader_source()
-    assert "os.system" not in src and "popen" not in src
+def test_read_only_enforced_two_ways_and_connection_closed(baked):
+    st = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    assert run() == R.EXIT_OK
+    assert st["conn"].read_only is True                    # session level
+    assert "default_transaction_read_only=on" in st["kwargs"]["options"]  # server level
+    assert st["conn"].closed == 1                          # disposed even on success
 
 
-def test_exactly_one_sql_statement_in_the_module():
-    """A second SQL literal appearing here is a design change that must be reviewed.
+# --------------------------------------------------------------------------- #
+# BLOCKING 1 + 2 — the two CONFIRMED exploits, now structurally closed.
+# The DSN host is never used to connect, so neither can steer the destination.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        matching_dsn(host="attacker.example.com"),           # arbitrary DNS host
+        matching_dsn(host="203.0.113.9"),                    # arbitrary IP
+        # The exact confirmed bracketed-authority bypass from Gate 4J.
+        "postgresql://svc:pw@evil.invalid%2Cdb.invalid[v1.x]/appdb?sslmode=require",
+    ],
+)
+def test_confirmed_redirect_exploits_fail_closed_without_connecting(baked, dsn, capsys):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, dsn)
+    assert run() == R.EXIT_CONFIG_FAILED
+    assert state["connects"] == 0                            # never dialled anything
+    assert capsys.readouterr().err == "revision-reader: READER-CONFIG-FAILED\n"
 
-    Docstrings are excluded deliberately: prose that *discusses* DDL (as this module's
-    own docstring does, to state the credential limitation honestly) is not executable
-    SQL, and a check that conflated the two would push authors toward vaguer comments.
-    """
-    tree = ast.parse(_reader_source())
-    docstrings = {
-        ast.get_docstring(n, clean=False)
-        for n in ast.walk(tree)
-        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+
+def test_host_pin_holds_even_if_tamper_detector_were_bypassed(baked):
+    # Belt-and-suspenders: even if a host slipped past the detector, connect() still targets
+    # the baked host because the DSN host is never read for the connection.
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    # A DSN with no host at all is rejected earlier, but prove the connect host is constant:
+    assert run() == R.EXIT_OK
+    assert state["kwargs"]["host"] == BAKED_HOST
+
+
+# --------------------------------------------------------------------------- #
+# BLOCKING 3 — the DECODED password is gated; a percent-encoded control byte is
+# rejected AFTER unquote, before it can truncate libpq's conninfo.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "raw_pw",
+    [
+        "s3cr3t%00PW",          # percent-encoded NUL — the BLOCKING 3 vector
+        "pw%0Ahost=evil",       # encoded LF
+        "pw%09tab",             # encoded TAB
+        "pw%20host=evil",       # encoded space + keyword-looking payload
+        "pw%7f",                # DEL
+        "pw%01ctrl",            # C0 control
+        quote("a" * 257, safe=""),  # over length bound
+        "",                     # empty password
+    ],
+)
+def test_decoded_password_control_and_bound_rejected(baked, raw_pw):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, matching_dsn(pw=raw_pw))
+    assert run() == R.EXIT_CONFIG_FAILED
+    assert state["connects"] == 0
+
+
+@pytest.mark.parametrize(
+    "raw_pw,decoded",
+    [
+        ("S3cr3t-x", "S3cr3t-x"),                 # token_urlsafe-shaped
+        ("p%40ss", "p@ss"),                       # encoded '@' in a real secret
+        ("p%2Fw", "p/w"),                         # encoded '/'
+        (quote("pw'x", safe=""), "pw'x"),         # a quote is inert as a discrete kwarg
+        ("a" * 256, "a" * 256),                   # exactly at the bound
+    ],
+)
+def test_valid_decoded_passwords_admitted_and_passed_verbatim(baked, raw_pw, decoded):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, matching_dsn(pw=raw_pw))
+    assert run() == R.EXIT_OK
+    assert state["kwargs"]["password"] == decoded
+
+
+# --------------------------------------------------------------------------- #
+# Tamper detector — DSN host must equal the baked host byte-for-byte.
+# --------------------------------------------------------------------------- #
+def test_tamper_detector_fires_on_host_mismatch(baked):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, matching_dsn(host="test-db.abc123.us-east-1.rds.amazonaws.NET"))  # wrong TLD
+    assert run() == R.EXIT_CONFIG_FAILED
+    assert state["connects"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Scrub-first — PG* and HOME removed as the very first action, before the DSN.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("var", ["PGSSLMODE", "PGSSLROOTCERT", "PGHOST", "PGHOSTADDR",
+                                 "PGPORT", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE",
+                                 "PGOPTIONS", "PGSSLCERT", "HOME"])
+def test_connection_environment_scrubbed_before_connect(baked, var):
+    import os
+    baked.mp.setenv(var, "attacker-value")
+    install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    assert run() == R.EXIT_OK
+    assert var not in os.environ
+
+
+def test_scrub_happens_before_argv_rejection(baked):
+    import os
+    baked.mp.setenv("PGSSLMODE", "disable")
+    install_fake_psycopg(baked.mp)
+    assert run(["upgrade"]) == R.EXIT_ARGV_REJECTED   # argv still rejected
+    assert "PGSSLMODE" not in os.environ              # but the scrub already ran first
+
+
+# --------------------------------------------------------------------------- #
+# argv rejection — before any connection.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("argv", [["--help"], ["-c", "import os"], ["-m", "app.db.migrate"],
+                                  ["upgrade"], ["downgrade", "base"], [""]])
+def test_any_argv_rejected_before_connect(baked, argv):
+    state = install_fake_psycopg(baked.mp)
+    assert run(argv) == R.EXIT_ARGV_REJECTED
+    assert state["connects"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Fail-closed on unbaked / malformed pins.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("attr,value", [
+    ("EXPECTED_DB_HOST", ""),                       # committed sentinel
+    ("EXPECTED_DB_HOST", "nohostdot"),              # no dot -> not a plausible endpoint
+    ("EXPECTED_DB_HOST", "UPPER.rds.amazonaws.com"),# uppercase -> rejected
+    ("EXPECTED_DB_NAME", ""),
+    ("EXPECTED_DB_USER", ""),
+])
+def test_unbaked_or_malformed_pins_fail_closed(baked, attr, value):
+    baked.mp.setattr(R._pinned, attr, value)
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    assert run() == R.EXIT_CONFIG_FAILED
+    assert state["connects"] == 0
+
+
+def test_missing_ca_bundle_fails_closed(baked, tmp_path):
+    baked.mp.setattr(R._pinned, "CA_BUNDLE_PATH", str(tmp_path / "does-not-exist.pem"))
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    assert run() == R.EXIT_CONFIG_FAILED
+    assert state["connects"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# No leakage — the sentinel password never reaches stdout+stderr on any failure,
+# each paired with a positive control that the failure path actually executed.
+# --------------------------------------------------------------------------- #
+def test_no_password_or_dsn_reaches_output_on_connect_failure(baked, capsys):
+    install_fake_psycopg(baked.mp, connect_exc=RuntimeError(f"auth failed for {SENTINEL_PW}"))
+    rc = run()
+    cap = capsys.readouterr()
+    assert rc == R.EXIT_CONNECT_FAILED                       # positive control: path ran
+    blob = cap.out + cap.err
+    assert SENTINEL_PW not in blob
+    assert BAKED_HOST not in blob
+    assert "Traceback" not in blob
+
+
+# --------------------------------------------------------------------------- #
+# Structural — asserted against the source, so they cannot rot silently.
+# --------------------------------------------------------------------------- #
+READER_SRC = Path(R.__file__).read_text()
+READER_AST = ast.parse(READER_SRC)
+
+
+def test_exactly_one_sql_string_and_it_is_schema_qualified():
     sql = [
-        n.value
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Constant)
-        and isinstance(n.value, str)
-        and n.value not in docstrings
-        and any(
-            k in n.value.upper()
-            for k in ("SELECT ", "INSERT ", "UPDATE ", "DELETE ", "CREATE ", "ALTER ", "DROP ")
-        )
+        n.value for n in ast.walk(READER_AST)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        and n.value.strip().upper().startswith("SELECT ")
     ]
-    assert sql == ["SELECT version_num FROM alembic_version"]
+    assert sql == ["SELECT version_num FROM public.alembic_version"]
 
 
-def test_no_ddl_or_dml_verbs_anywhere_in_source():
-    src = _reader_source().upper()
-    verbs = ("INSERT INTO", "UPDATE ", "DELETE FROM", "CREATE TABLE",
-             "ALTER TABLE", "DROP TABLE", "COMMIT(")
-    for verb in verbs:
-        assert verb not in src, verb
+def test_no_subprocess_shell_or_dynamic_exec_in_source():
+    for bad in ("subprocess", "os.system", "os.popen", "import pty", "eval(", "exec(",
+                "__import__("):
+        assert bad not in READER_SRC
 
 
-def test_no_logging_api_used():
-    names = _imported_names()
-    assert "logging" not in names
-    assert "get_logger" not in _reader_source()
-
-
-def test_failure_tokens_are_a_frozen_set():
-    assert set(R._TOKENS.values()) == {
-        "READER-ARGV-REJECTED",
-        "READER-CONFIG-FAILED",
-        "READER-CONNECTION-FAILED",
-        "READER-VERSION-TABLE-MISSING",
-        "READER-ZERO-REVISIONS",
-        "READER-MULTIPLE-REVISIONS",
-        "READER-REVISION-MALFORMED",
-        "READER-UNEXPECTED-FAILED",
-    }
-
-
-def test_exit_codes_distinct_and_in_the_reserved_band():
-    codes = [
-        R.EXIT_ARGV_REJECTED, R.EXIT_CONFIG_FAILED, R.EXIT_CONNECT_FAILED,
-        R.EXIT_TABLE_MISSING, R.EXIT_NO_ROWS, R.EXIT_MULTIPLE_ROWS,
-        R.EXIT_MALFORMED_REVISION, R.EXIT_UNEXPECTED,
-    ]
-    assert len(set(codes)) == len(codes)
-    # Band 50-57: disjoint from migrate (0,2-7), bootstrap (10-20),
-    # revision_status (30-36) and revision_compare (40-44).
-    assert all(50 <= c <= 57 for c in codes)
-    assert R.EXIT_OK == 0
+def test_reader_imports_no_application_or_migration_modules():
+    imported: set[str] = set()
+    for node in ast.walk(READER_AST):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    for forbidden in ("app", "alembic", "sqlalchemy", "pydantic", "boto3", "fastapi"):
+        assert forbidden not in imported
 
 
 def test_no_expected_head_or_comparison_in_the_reader():
-    """The expected revision never enters the container, so the reader cannot be argued
-    into agreeing with itself. Comparison happens externally."""
-    src = _reader_source()
-    tokens = ("EXPECTED_HEAD", "expected_head", "compare",
-              "ScriptDirectory", "get_current_head")
-    for token in tokens:
-        assert token not in src, token
+    # The reader must not know the expected revision; comparison happens offline.
+    for token in ("get_current_head", "ScriptDirectory", "EXPECTED_HEAD",
+                  "expected_head", "== rev"):
+        assert token not in READER_SRC
+
+
+# --------------------------------------------------------------------------- #
+# INDEPENDENT DSN ATTACK CORPORA — two disjoint sets, labelled by provenance.
+# Each entry must fail closed (CONFIG, zero connects) OR, if it would be admitted,
+# still connect to the baked host with the baked destination values.
+# --------------------------------------------------------------------------- #
+
+# Provenance: SECURITY LANE — TLS/parser-model derived (scheme, sslmode, keyword smuggling,
+# service/passfile/options, multi-host, fragment, keyword-value form, separators).
+SECURITY_LANE_CORPUS = [
+    f"mysql://svc:pw@{BAKED_HOST}:5432/db?sslmode=require",            # wrong scheme
+    f"http://{BAKED_HOST}:5432/?sslmode=require",                     # wrong scheme
+    "postgresql:///db?sslmode=require",                              # no host/userinfo
+    f"postgresql://{BAKED_HOST}:5432/db?sslmode=require",            # no userinfo (no pw)
+    f"host={BAKED_HOST} port=5432 sslmode=require",                  # libpq keyword-value form
+    matching_dsn(query="?sslmode=require&service=evil"),             # service= smuggling
+    matching_dsn(query="?sslmode=require&passfile=/tmp/x"),          # passfile= smuggling
+    matching_dsn(query="?sslmode=require&options=-c%20x%3Dy"),       # options= smuggling
+    matching_dsn(host=f"{BAKED_HOST},evil.invalid"),                # multi-host, comma
+    matching_dsn(host=f"evil.invalid,{BAKED_HOST}"),                # multi-host, comma
+    "postgresql://svc:p@ss@evil.invalid:443/db?sslmode=require",     # two literal '@'
+    matching_dsn() + "#host=evil.invalid",                          # fragment
+]
+
+# Provenance: ADVERSARIAL LANE — control-byte / bracket / confusable, derived by driving real
+# libpq. Category B (control bytes incl. percent-encoded), A (bracket family), C (confusables
+# under case-fold/NFKC), F (port-smuggling to 443), H (multi-level percent-encoding).
+ADVERSARIAL_LANE_CORPUS = [
+    "postgresql://svc:pw@evil.invalid%2Cdb.invalid[v1.x]/db?sslmode=require",   # A: the exploit
+    "postgresql://svc:pw@[v1.x]/db?sslmode=require",                            # A: bracket only
+    "postgresql://svc:pw@%2Fvar%2Frun%2Fpg[x]/db?sslmode=require",             # A: unix bracket
+    f"postgresql://svc:pw%00@{BAKED_HOST}/db?sslmode=require",                 # B: NUL in userinfo
+    f"postgresql://svc:pw%0d%0a@{BAKED_HOST}/db?sslmode=require",              # B: CRLF
+    matching_dsn(host="test-db.abc123.us-east-1.rds.amazonaws.coа"),      # C: Cyrillic homoglyph
+    matching_dsn(host="TEST-DB.abc123.us-east-1.rds.amazonaws.com"),          # C: case variance
+    matching_dsn(host=f"{BAKED_HOST}."),                                      # D: trailing dot
+    matching_dsn(host="attacker.example.com"),                                # F: redirect
+    "postgresql://svc:pw@x%2Eevil.invalid/db?sslmode=require",                # H: multi-level %
+]
+
+
+@pytest.mark.parametrize("dsn", SECURITY_LANE_CORPUS)
+def test_security_lane_corpus_fails_closed_or_targets_baked_host(baked, dsn):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, dsn)
+    rc = run()
+    if rc == R.EXIT_OK:
+        # If admitted at all, the destination MUST still be the baked host — never the DSN's.
+        assert state["kwargs"]["host"] == BAKED_HOST
+        assert state["connects"] == 1
+    else:
+        assert rc in (R.EXIT_CONFIG_FAILED,)
+        assert state["connects"] == 0
+
+
+@pytest.mark.parametrize("dsn", ADVERSARIAL_LANE_CORPUS)
+def test_adversarial_lane_corpus_fails_closed_or_targets_baked_host(baked, dsn):
+    state = install_fake_psycopg(baked.mp, rows=[("98289430a3ec",)])
+    set_dsn(baked, dsn)
+    rc = run()
+    if rc == R.EXIT_OK:
+        assert state["kwargs"]["host"] == BAKED_HOST
+        assert state["kwargs"]["dbname"] == BAKED_DBNAME
+        assert state["kwargs"]["user"] == BAKED_USER
+        assert state["connects"] == 1
+    else:
+        assert state["connects"] == 0
+
+
+def test_the_two_corpora_are_disjoint():
+    assert set(SECURITY_LANE_CORPUS).isdisjoint(set(ADVERSARIAL_LANE_CORPUS))

@@ -240,19 +240,31 @@ was superseded, because that image has no `ENTRYPOINT`, contains a shell, and
 contains `app.db.migrate` (upgrade *and* downgrade). See
 `apps/revision-reader/README.md` for the whole program and its honest limits.
 
+**Destination authenticity (Gate 4J.1).** The reader does not trust the DSN's host or the
+network path to decide which database it reads — both are caller-supplied and
+un-constrainable by IAM. The expected host, database and role are **baked into the image**
+(from `EXPECTED_DB_HOST`/`_NAME`/`_USER` build args supplied by the protected
+`staging-reader-publish` environment), and the reader connects with `sslmode=verify-full`
+against a committed, checksum-pinned AWS RDS CA bundle, taking only the password from the
+injected secret. The publish workflow therefore requires those three build-arg variables in
+addition to the role/account variables. See `infra/aws/modules/revision_reader/README.md` §9.
+
 **Identity and permission delta** — three purpose-built identities, none of
 them an existing role (`infra/aws/modules/revision_reader/iam.tf`):
 
 * **Execution role** — pulls the reader repository *only*, injects exactly the
   `DATABASE_URL` secret, decrypts via `kms:ViaService` scoped to Secrets
   Manager, and writes only the dedicated reader log group. No
-  `logs:CreateLogGroup`.
+  `logs:CreateLogGroup`. Also an explicit **`Deny` on `s3:GetObject`** (Gate
+  4J.1), which unconditionally closes the caller-supplied `environmentFiles`
+  channel that would otherwise fetch env from S3 using this role.
 * **Runner role** — `ecs:RunTask` on the **exact task-definition revision ARN**,
   not `ArnLike` on the family: a family-scoped grant widens silently the moment
   anyone registers revision N+1. Plus `ecs:DescribeTasks` (cluster-conditioned,
-  since task ARNs are generated per run and cannot be pinned) and
-  `logs:DescribeLogStreams`/`GetLogEvents` on the reader's own group. It is
-  explicitly denied `ecs:StopTask`, ECS Exec at launch and connect,
+  since task ARNs are generated per run and cannot be pinned) and **`logs:GetLogEvents`
+  alone** on the reader's own group — `logs:DescribeLogStreams` is deliberately **not**
+  granted, because the workflow derives the stream name from the task ARN rather than
+  enumerating. It is explicitly denied `ecs:StopTask`, ECS Exec at launch and connect,
   `ecs:TagResource`, and `cloudtrail:LookupEvents`.
 * **Publisher role** — a separate identity with a different OIDC subject claim,
   scoped to pushing the reader repository. Publish and invoke are not

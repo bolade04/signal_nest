@@ -932,6 +932,22 @@ Composition remains configuration only: nothing is provisioned, no reader image 
 published, and no reader task has ever run. Publishing, enabling and invoking are three
 separate later authorizations.
 
+**Gate 4J.1 (2026-07-29) — destination authenticity.** The reader's earlier "port pin ∘
+security-group" redirect defence was retired: RunTask network configuration (subnets,
+`securityGroups`, `assignPublicIp`) is caller-supplied with no IAM condition key, so the SG
+half was never an authorization control against a RunTask holder. Which database the reader
+reads is now decided by values **baked into the digest-pinned image** — expected host,
+database and role from `EXPECTED_DB_HOST`/`_NAME`/`_USER` build args (supplied by the
+protected `staging-reader-publish` environment), plus `sslmode=verify-full` against a
+committed, checksum-pinned AWS RDS CA bundle; the reader connects to the baked host and takes
+only the password from the injected DSN. This introduces an **RDS-first build ordering** (the
+endpoint must be known at image-build time — an out-of-band dependency riding the same path
+as the image digest, **not** a Terraform cycle) and makes the reader image
+**environment-specific**. Both base images are now digest-pinned. The execution role gains an
+explicit `Deny` on `s3:GetObject` (closes `environmentFiles`). `apps/api` is unchanged and no
+new secret is provisioned; a dedicated `SELECT`-only reader credential remains a documented
+later improvement. See `infra/aws/modules/revision_reader/README.md` §9.
+
 ## 22. Exact future gates
 
 Nothing below is authorized by merging this plan. Each is a separate review + authorization:

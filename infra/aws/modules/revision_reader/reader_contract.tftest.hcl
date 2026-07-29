@@ -205,6 +205,17 @@ run "execution_role_scoping" {
     )) == 0
     error_message = "execution role holds an action outside starting the task"
   }
+
+  # Gate 4J.1: environmentFiles is a caller-supplied override that fetches from S3 using this
+  # role; an explicit Deny on s3:GetObject makes its closure unconditional rather than
+  # relying on the absence of an allow.
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.reader_execution[0].policy).Statement :
+      s.Effect == "Deny" && contains(flatten([s.Action]), "s3:GetObject")
+    ])
+    error_message = "execution role must explicitly Deny s3:GetObject (environmentFiles closure)"
+  }
 }
 
 # =====================================================================================

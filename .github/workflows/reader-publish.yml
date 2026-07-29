@@ -67,18 +67,35 @@ jobs:
 
       - name: Refuse to run off main
         if: github.ref != 'refs/heads/main'
+        # github.ref is routed through env, never interpolated into the shell string: a ref
+        # name can contain shell metacharacters, and inlining ${{ github.ref }} into run:
+        # would be a script-injection surface (GitHub security-hardening guidance).
+        env:
+          REF: ${{ github.ref }}
         run: |
-          echo "::error::Reader publish runs only from refs/heads/main (got ${{ github.ref }})." >&2
+          echo "::error::Reader publish runs only from refs/heads/main (got ${REF})." >&2
           exit 1
 
       - name: Fail closed while the reader prerequisites are absent
         env:
           ROLE_ARN: ${{ vars.AWS_STAGING_READER_PUBLISH_ROLE_ARN }}
           ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+          EXPECTED_DB_HOST: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+          EXPECTED_DB_NAME: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_NAME }}
+          EXPECTED_DB_USER: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_USER }}
         run: |
           if [ -z "${ROLE_ARN}" ] || [ -z "${ACCOUNT_ID}" ]; then
             echo "::error::AWS_STAGING_READER_PUBLISH_ROLE_ARN and/or AWS_STAGING_ACCOUNT_ID are not set on the staging-reader-publish environment." >&2
             echo "::error::They exist only after the revision_reader module has been applied under a separate authorization (enable_revision_reader = true), which creates the dedicated reader ECR repository and the reader publisher role. Publishing before that is neither possible nor authorized." >&2
+            exit 1
+          fi
+          # Gate 4J.1: the destination pins are baked into the image at build time and decide
+          # which database the reader authenticates and reads. They are non-secret (an RDS
+          # endpoint, a database name, a role name) and come from the protected
+          # staging-reader-publish environment, never from a workflow input. Empty values
+          # would make the Dockerfile build fail; this pre-check gives a clearer error.
+          if [ -z "${EXPECTED_DB_HOST}" ] || [ -z "${EXPECTED_DB_NAME}" ] || [ -z "${EXPECTED_DB_USER}" ]; then
+            echo "::error::AWS_STAGING_READER_EXPECTED_DB_HOST/_NAME/_USER must be set on the staging-reader-publish environment; they are baked into the reader image so it can only ever address the intended staging database." >&2
             exit 1
           fi
 
@@ -107,6 +124,9 @@ jobs:
           build-args: |
             GIT_REVISION=${{ github.sha }}
             IMAGE_CREATED=${{ steps.meta.outputs.created }}
+            EXPECTED_DB_HOST=${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+            EXPECTED_DB_NAME=${{ vars.AWS_STAGING_READER_EXPECTED_DB_NAME }}
+            EXPECTED_DB_USER=${{ vars.AWS_STAGING_READER_EXPECTED_DB_USER }}
 
       # ------------------------------------------------------------------
       # In-image verification. Everything below runs against the BUILT image

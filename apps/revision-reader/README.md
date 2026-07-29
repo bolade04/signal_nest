@@ -74,64 +74,47 @@ describe the reader as "read-only" without that qualification.
 
 A related question — whether a `containerOverrides` `environment` entry can *shadow* the
 `secrets`-injected `DATABASE_URL` — is **unverified** and cannot be settled offline. The
-port pin above makes it far less consequential (a shadowed DSN can now only address port
-5432 behind the RDS security group), but not irrelevant. It is written up in full, with
-its compensating controls and evidence classification, in
-`infra/aws/modules/revision_reader/README.md` §9. That one attacks the *verification*
-rather than the container, so read it before treating a reader result as authoritative.
+Gate 4J.1 design makes the answer **not matter**: the destination is baked into the image,
+so even a fully attacker-controlled `DATABASE_URL` cannot change which server/database/role
+is read. It is written up in full, with its compensating controls and evidence
+classification, in `infra/aws/modules/revision_reader/README.md` §9. That attack targets the
+*verification* rather than the container, so read it before treating a result as authoritative.
 
 ## Behaviour
 
-Reads `DATABASE_URL` from the environment and treats it as the one hostile input,
-because `containerOverrides.environment` is caller-settable at RunTask time. Before any
-socket is opened it requires all of:
+The destination is **baked into the image**, not taken from the DSN. Host, database name and
+role are generated into `revision_reader/_pinned.py` at build time from the
+`EXPECTED_DB_HOST`/`_NAME`/`_USER` build args (supplied from the protected
+`staging-reader-publish` environment), and the AWS RDS CA bundle is committed and baked at
+`/etc/ssl/rds/rds-global-bundle.pem`. A baked source constant is the only anchor no RunTask
+parameter can reach — an image `ENV` value would be overridable via
+`containerOverrides.environment`, a source constant is not.
 
-- a `postgresql`/`postgres` scheme, with SQLAlchemy's driver suffix stripped —
-  `bootstrap_app_role.py` writes `postgresql+psycopg://…`, which libpq does not accept, so
-  without this the reader could not address the live database at all;
-- a host;
-- **port 5432, or unspecified** (libpq's default). This is a security control, not tidiness.
-  The task security group must permit egress to `0.0.0.0/0` on 443 for ECR, Secrets Manager
-  and CloudWatch Logs, and PostgreSQL speaks on any port — so without the port pin a
-  redirected DSN naming `attacker:443` would be reachable and could feed the reader a
-  chosen revision with exit 0. Outbound 5432 reaches only the RDS security group, so the
-  pin and the security group together close that path; neither does alone;
-- `sslmode` present exactly once with an exact value of `require`, `verify-ca` or
-  `verify-full`. Parsed, not substring-matched: `sslmode=requireXXX` contains
-  `sslmode=require` and guarantees nothing;
-- **no other query parameter, and no fragment.** A libpq URI honours connection
-  *keywords* in its query string, so a port check that inspects only the positional slot
-  is not enough — `?host=evil&port=443` would satisfy it while libpq connected elsewhere.
-  `service=` and `passfile=` can pull a whole connection definition in from a file and
-  `options=` can push server settings, so the query string is an allowlist of exactly
-  `{sslmode}`. libpq's keyword/value form (`host=… port=…`, which carries no scheme) is
-  refused too;
-- **no `%` in the host.** `urlsplit` does not percent-decode the host but libpq decodes
-  URI components, so `evil.invalid%2Cdb.invalid` reads here as one comma-free hostname and
-  `db.invalid%3A443` as having no port — while libpq, decoding first, could see a
-  multi-host list and a redirected port. Which side of the split it decodes on is not
-  establishable offline, so the question is refused: a real RDS endpoint is plain ASCII and
-  never needs an escape. Credentials are unaffected — they live in the authority but not in
-  the host, so the secret's `quote(safe="")` encoding still passes;
-- **no `,` in the authority.** libpq accepts multi-host URIs and tries each host in turn,
-  but `urlsplit` knows nothing about that syntax: it reports the whole comma-joined string
-  as the hostname and parses a port from after the *last* colon. So `evil,db:5432` reads
-  as port 5432, and the portless `evil,db` reads as unspecified — both satisfying the port
-  pin while libpq would try the attacker's host first. The port pin alone never closed
-  this; rejecting `,` is what makes the single-destination guarantee total;
-- **exactly one literal `@`.** Two parsers decide where userinfo ends by locating an `@`,
-  and if this program and libpq ever picked a different one they would disagree about the
-  host — the DSN would be validated against one destination and connected to another.
-  Refusing the ambiguity removes the question rather than answering it, and cannot reject
-  a legitimate DSN: `compose_database_url` percent-encodes both credentials with
-  `quote(safe="")`, so a real `@` in a password arrives as `%40`.
+As its **first** action the reader scrubs every `PG*` variable **and `HOME`** (libpq reads
+`PGSSLMODE`, `PGSSLROOTCERT`, `PGHOST`, `PGSERVICE`, `PGSERVICEFILE`, `PGPASSFILE`, … and its
+default `sslrootcert`/`passfile` live under `~`), all settable through the override channel.
 
-Every rejection returns the same code and token, so a probing caller learns nothing about
-which constraint they tripped.
+It then connects with **discrete** `psycopg` keyword arguments — never a DSN string — to:
 
-It also scrubs every `PG*` variable before connecting — libpq reads `PGSSLMODE`,
-`PGOPTIONS`, `PGHOST` and friends, and those are settable through the same override
-channel; every connection parameter is passed explicitly instead.
+- `host` = the **baked** expected host (the DSN's host is never used to connect);
+- `port` = 5432, `dbname`/`user` = the baked values;
+- `sslmode="verify-full"` with `sslrootcert` = the baked CA path. The AWS RDS CA signs every
+  customer's instance, so verify-full alone proves only "some RDS server" — the baked host is
+  what says "ours", and the two together authenticate the intended server;
+- `password` = **the only value taken from the DSN**. It is percent-**decoded** and then
+  gated to printable ASCII (`[\x21-\x7e]`, ≤256): a percent-encoded NUL is invisible to a
+  raw-string check but truncates libpq's conninfo at the C boundary, silently dropping later
+  parameters including `sslmode`/`sslrootcert`. Gating the decoded value closes that.
+
+Because the authority is never parsed for a destination nor handed to libpq, the entire class
+of `urlsplit`-vs-libpq parser-divergence bugs (bracketed authority, multi-host, `%`-encoded
+delimiters, `@` ambiguity, keyword smuggling) is structurally eliminated. The reader still
+requires a `postgresql`/`postgres` scheme, exactly one `@`, and rejects bracketed authorities
+before extracting the password. The query is schema-qualified to `public.alembic_version` so a
+shadowed role's `search_path` cannot select a different schema. A tamper detector additionally
+fails closed (exact ASCII) if the DSN names a host other than the baked one — evidence quality,
+not the control. Every rejection returns the same code and token, so a probing caller learns
+nothing about which constraint they tripped.
 
 Prints exactly one line — the revision — to stdout on success. On any failure
 it prints one fixed classification token to stderr: never a driver message,
@@ -152,7 +135,7 @@ tool's (`migrate` 0–7, `bootstrap` 10–20, `revision_status` 30–36,
 | ---- | ------- |
 | 0  | Success; one revision printed to stdout |
 | 50 | **argv rejected** — an override `command` was supplied |
-| 51 | DSN refused (absent, bad scheme, no host, port != 5432, or TLS not required) |
+| 51 | Config refused (DSN absent/bad scheme/bad password/host-tamper, or unbaked/missing pins/CA) |
 | 52 | Connection failed |
 | 53 | `alembic_version` table missing |
 | 54 | No revision rows |
@@ -169,9 +152,11 @@ attempted override is a distinct, greppable fingerprint.
 python -m pytest apps/revision-reader/tests -q
 ```
 
-`tests/test_reader.py` covers the program (argv rejection before any connect,
-DSN admission — including the redirect DSNs themselves, each asserted refused with
-**zero** connection attempts — read-only enforcement, the `PG*` scrub, exactly one SQL
+`tests/test_reader.py` covers the program (argv rejection before any connect, the
+discrete-parameter contract — the raw DSN is never forwarded and host/db/role are the baked
+constants — the decoded-password gate, the confirmed redirect/bracket exploits each refused
+with **zero** connection attempts, and two independent (security-lane and adversarial-lane)
+DSN attack corpora asserted disjoint — read-only enforcement, the `PG*`+`HOME` scrub, one SQL
 statement, the frozen token set, the disjoint exit band, and an AST scan proving no
 forbidden import).
 `tests/test_dockerfile.py` covers the build contract — entrypoint form, empty

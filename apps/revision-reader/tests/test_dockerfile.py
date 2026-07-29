@@ -169,7 +169,9 @@ def test_only_the_reader_sources_are_copied(text, directives):
     assert external, "expected at least one source COPY"
     for arg in external:
         src = shlex.split(arg)[0]
-        assert src in {"pyproject.toml", "revision_reader"}, f"unexpected COPY source {src!r}"
+        assert src in {"pyproject.toml", "revision_reader", "assets"}, (
+            f"unexpected COPY source {src!r}"
+        )
 
 
 def test_runs_as_the_fleet_nonroot_uid(directives):
@@ -182,6 +184,55 @@ def test_final_stage_is_distroless_not_the_builder(directives):
     final would silently restore a shell and a package manager."""
     froms = [a for i, a in directives if i == "FROM"]
     assert froms[-1].startswith("gcr.io/distroless/"), froms
+
+
+# --- Gate 4J.1: base-image digest pinning ---------------------------------------------
+
+
+def test_both_base_images_are_digest_pinned(directives):
+    """A floating tag (python:3.11-slim) lets a registry retag change the bytes silently,
+    including the exact 3.11.x patch on whose urlsplit behaviour the DSN parser depends.
+    Both bases must be @sha256:-pinned."""
+    froms = [a for i, a in directives if i == "FROM"]
+    assert len(froms) == 2, froms
+    for f in froms:
+        assert "@sha256:" in f, f"base image not digest-pinned: {f}"
+
+
+def test_final_base_digest_is_the_reviewed_distroless(code):
+    assert (
+        "gcr.io/distroless/python3-debian12@sha256:"
+        "2fdb05402a2cf21cf78fdb3ba4c5db167241e9e498140f5bf689d7efb773731f"
+    ) in code
+
+
+# --- Gate 4J.1: baked destination pins and CA bundle ----------------------------------
+
+
+def test_destination_pins_are_baked_from_build_args_and_reject_empty(text):
+    """Host, database and role are baked from build args into a SOURCE constant (not ENV,
+    which is caller-overridable), and empty args must fail the build so no placeholder
+    image can ship."""
+    for arg in ("EXPECTED_DB_HOST", "EXPECTED_DB_NAME", "EXPECTED_DB_USER"):
+        assert f"ARG {arg}" in text
+    assert "revision_reader/_pinned.py" in text
+    assert "must be non-empty" in text
+
+
+def test_ca_bundle_is_copied_to_the_fixed_reader_path(code):
+    assert "/etc/ssl/rds/rds-global-bundle.pem" in code
+
+
+def test_ca_bundle_checksum_is_verified_during_build(code):
+    assert "sha256sum -c" in code
+    assert "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3" in code
+
+
+def test_reader_pinned_ca_path_matches_the_dockerfile(text):
+    from revision_reader import _pinned
+
+    assert _pinned.CA_BUNDLE_PATH == "/etc/ssl/rds/rds-global-bundle.pem"
+    assert _pinned.CA_BUNDLE_PATH in text
 
 
 # --- entry-point convergence ---------------------------------------------------------
