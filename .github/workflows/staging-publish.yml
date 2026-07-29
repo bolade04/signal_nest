@@ -96,7 +96,7 @@ jobs:
       # another (less trusted) workflow run may have written. Platform is
       # pinned to the ECS task-definition runtime (LINUX/X86_64, §26.2).
       - name: Build API image (linux/amd64, SHA-stamped)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/api
           file: apps/api/Dockerfile
@@ -110,7 +110,7 @@ jobs:
             IMAGE_CREATED=${{ steps.meta.outputs.created }}
 
       - name: Build worker image (linux/amd64, SHA-stamped)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/api
           file: apps/api/Dockerfile
