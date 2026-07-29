@@ -7,7 +7,12 @@ non-customer **SIGNALNEST_STAGING** (dark canary) environment. It is **staging-o
 **All twelve** modules — **`network`**, **`edge`**, **`alb`**, **`secrets`**, **`registry`**, **`storage`**, **`data_sql`**, **`data_cache`**, **`iam`**, **`ecs`**, **`observability`**, and **`cost`** —
 contain executable, **offline-validated** HCL resource bodies, and **all twelve
 are now wired into the root composition** (`main.tf`) per the locked acyclic
-§26.12 graph. Composition is **configuration only**: "root-composed" is still
+§26.12 graph. A **thirteenth** module, **`revision_reader`**, was added by Gate 4J.
+It is deliberately **outside** the §6 twelve and outside the §26.12 graph: it is a
+verification *instrument* for the schema state the workload apply depends on, gated by
+its own `enable_revision_reader` flag rather than by `deploy_workload`, because gating
+the check on the flag it exists to gate would be circular. It defaults to creating
+nothing. Composition is **configuration only**: "root-composed" is still
 distinct from "provisioned"/"deployed" — no live `tofu plan`/`apply` has run,
 no AWS API has been contacted, and nothing exists in AWS. "Implemented" (HCL exists and offline-validates),
 "root-composed" (referenced by `main.tf`), "provisioned", and "deployed" are distinct states
@@ -50,11 +55,11 @@ infra/aws/
   backend.hcl.example       # synthetic partial-backend-config template (real backend.hcl git-ignored)
   variables.tf              # typed root inputs (no secrets/ids)
   locals.tf                 # name prefix + the authoritative eight-tag set
-  main.tf                   # composition root: composes ALL TWELVE modules (no root resource/data)
+  main.tf                   # composition root: composes the twelve §26.12 modules + revision_reader (no root resource/data)
   outputs.tf                # non-sensitive metadata + composed-module reference outputs
   terraform.tfvars.example  # synthetic example inputs
   bootstrap/                # one-time remote-state backend root (§7; config only, never auto-applied)
-  modules/                  # 12 modules: all twelve implemented (offline-validated); no doc-only stub remains
+  modules/                  # 13 modules: the twelve §26.12 modules + revision_reader (Gate 4J); all implemented (offline-validated); no doc-only stub remains
 ```
 
 ## 4. Compatibility constraints and dependency lock
@@ -68,13 +73,18 @@ The `versions.tf` constraints are bounded ranges; the committed
 - AWS provider constraint: `>= 6.55.0, < 6.56.0`; **locked to `6.55.0`** in
   `.terraform.lock.hcl`.
 
-## 5. Module inventory (exactly 12)
+## 5. Module inventory (the twelve §26.12 modules, plus `revision_reader`)
 
 The twelve reusable modules are fixed by the authoritative design
 (`aws-staging-iac-plan.md` §6). **All twelve** are implemented (HCL authored and
 offline-validated only — **not** provisioned or deployed); **no**
 documentation-only stub remains, and **all twelve are root-composed** (wired in
 `main.tf` per the locked §26.12 graph; composition is configuration only).
+
+`revision_reader` is listed last and is **not** one of the §6 twelve. It was added by
+Gate 4J as a verification instrument, sits outside the §26.12 graph, and is gated by its
+own flag (default `false`) rather than by `deploy_workload` — see its own README for why
+that independence is load-bearing.
 
 | Module | Status |
 | --- | --- |
@@ -90,8 +100,10 @@ documentation-only stub remains, and **all twelve are root-composed** (wired in
 | `secrets` | **Implemented** (offline-validated, **root-composed**) — four empty Secrets Manager containers + one customer-managed KMS key/alias; no secret value populated |
 | `observability` | **Implemented** (offline-validated, **root-composed**) — metric filters + alarms + audit trail per §6/§14/§26.9: 3 error metric filters over the ecs-owned log groups (evidence-backed `{ $.severity = "ERROR" }` pattern) **plus 3 INFRA-7 capability filters** (gate-failed, override-driven enable, override set/clear — API log group, no tenant identifier in any pattern), **15 alarms** (12 caller-thresholded ECS/log/RDS/Redis + 3 INFRA-7 fixed-threshold(1) capability signals), **one INFRA-7 canary observability dashboard** (a disclosed supersede of the module's earlier no-dashboard exclusion), and a single-region management-events CloudTrail with log-file validation delivered to a dedicated private TLS-only audit bucket; creates NO log group (ecs owns them) and no SNS/budget resource; nothing exists in AWS |
 | `cost` | **Implemented** (offline-validated, **root-composed**) — one monthly AWS Budget (`COST`/USD) with ACTUAL-spend notifications at the fixed 50/75/90/100% thresholds to a caller-supplied email (§15); `monthly_budget_limit` statically validated ≤ the $200 ADR-§M hard ceiling; **observational only** — no budget action, remediation, SNS topic, or IAM resource; independent (no sibling dependency); no budget exists in AWS |
+| `revision_reader` | **Implemented** (offline-validated, **root-composed**, **creates nothing by default**) — Gate 4J dedicated live-revision reader, outside the §6 twelve and the §26.12 graph: its own private ECR repository (immutable tags), its own `/ecs/<name_prefix>-revision-reader` log group, an **egress-only** task SG (5432 to the RDS SG, 443 for pull/secrets/logs; **no ingress**, no Redis), three purpose-built IAM roles (execution / GitHub-OIDC publisher / GitHub-OIDC runner, the latter two pinned to **different** OIDC subject claims), and one task definition that exists **only** once an image digest is pinned. **No task role at all**, `DATABASE_URL` as the only injected secret, and neither `entryPoint` nor `command` set — the image's fixed exec-form ENTRYPOINT is the control, and `ContainerOverride` has no `entryPoint` member to shadow it. Gated by `enable_revision_reader` (default `false`), **never** by `deploy_workload`; nothing exists in AWS |
 
-The root composition (`main.tf`) wires **all twelve** modules. The `alb` module owns
+The root composition (`main.tf`) wires **all twelve** §26.12 modules, plus
+`revision_reader`. The `alb` module owns
 the ALB security group and the public HTTPS ingress and exposes six outputs
 (`alb_arn`, `alb_dns_name`, `alb_canonical_hosted_zone_id`, `https_listener_arn`,
 `api_target_group_arn`, `alb_security_group_id`); it also owns the dedicated private
@@ -264,8 +276,9 @@ spending; no budget action, SNS topic, or IAM resource is created), and the
 - `backend.tf` — empty S3 backend declaration; **no** values.
 - `variables.tf` — typed inputs; no secret/account/ARN/CIDR variables.
 - `locals.tf` — deterministic name prefix + the eight-tag set (§A).
-- `main.tf` — composition root; composes **all twelve** modules per the locked
-  §26.12 graph; no root-level `resource`/`data` block.
+- `main.tf` — composition root; composes **all twelve** §26.12 modules per the
+  locked graph, plus `revision_reader` (Gate 4J, outside that graph by design); no
+  root-level `resource`/`data` block.
 - `outputs.tf` — non-sensitive metadata echoes only.
 - `terraform.tfvars.example` — synthetic example inputs; never real values.
 - `backend.hcl.example` — synthetic partial-backend-config template; the real
@@ -306,8 +319,9 @@ committed.
 
 ## 10. Current validation status
 
-**Offline validation only.** All twelve implemented modules (each in its own
-tranche), the root composition, and the `bootstrap/` root have been checked
+**Offline validation only.** All twelve §26.12 modules (each in its own tranche)
+and `revision_reader` (which additionally carries an offline `tofu test` contract suite
+run in CI against a fully mocked provider), the root composition, and the `bootstrap/` root have been checked
 with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
@@ -330,7 +344,8 @@ tranche.
 **INFRA-4 repository-only scope is complete**; **INFRA-5 is unstarted.** Done:
 tool-assisted validation + `.terraform.lock.hcl` (cross-platform provider
 checksums), **all twelve module bodies**, the **full root composition** (all
-twelve modules wired in `main.tf` per the locked §26.12 graph), the resolved
+twelve modules wired in `main.tf` per the locked §26.12 graph, plus the Gate 4J
+`revision_reader` module wired alongside it), the resolved
 pre-live-apply gates (ALB **access + connection logging**; the §25
 rate-limiting-behind-proxy fix — uvicorn trusted-proxy resolution, VPC-CIDR-only
 trust, pinned by `apps/api/app/tests/test_rate_limit.py`; API graceful shutdown

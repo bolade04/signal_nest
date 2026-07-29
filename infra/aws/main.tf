@@ -1,6 +1,9 @@
 # main.tf — composition root (INFRA-4)
 #
-# Wires ALL TWELVE reusable modules under `infra/aws/modules/`. Every module body
+# Wires ALL THIRTEEN reusable modules under `infra/aws/modules/`. The thirteenth,
+# `revision_reader`, was added by Gate 4J and is NOT part of the §26.12 locked graph: it
+# is a verification instrument gated by its own flag, deliberately outside the workload
+# stage it exists to gate. The twelve §26.12 modules are unchanged. Every module body
 # is implemented and offline-validated; this file composes them per the locked
 # acyclic producer -> consumer graph (aws-staging-iac-plan.md §26.12/§26.15).
 # No `resource`, `data`, `import`, or `moved` block is declared at the root; all
@@ -19,6 +22,9 @@
 #   iam -> ecs (execution + api/worker/migration task-role ARNs)
 #   alb -> ecs (alb_security_group_id, api_target_group_arn)
 #   ecs -> observability (log groups + service names)   [observability is a sink]
+#   network, data_sql, secrets, ecs(cluster id only) -> revision_reader
+#       [Gate 4J; consumes NOTHING gated by deploy_workload, so the reader can run
+#        before the workload plan it exists to gate — see the module header]
 #   cost     : independent (budgets)
 #
 # The eight-tag common set is applied to every taggable resource automatically by
@@ -226,4 +232,28 @@ module "cost" {
   name_prefix          = local.name_prefix
   monthly_budget_limit = var.monthly_budget_limit
   notification_target  = var.budget_notification_email
+}
+
+# Dedicated live database revision-reader (Gate 4J). A verification INSTRUMENT for the
+# schema state the workload apply depends on: its own minimal image (no Alembic, no
+# application package, fixed non-shell ENTRYPOINT), its own ECR repository, its own
+# execution/publisher/runner roles, and NO task role at all.
+#
+# GATED BY ITS OWN FLAG, NEVER BY deploy_workload — gating the check on the flag it
+# exists to gate would be circular. It consumes the cluster ARN (ungated, exists in the
+# foundation stage) and nothing the workload stage creates. Both inputs default to the
+# inert value, so this composition provisions nothing until a later authorized gate.
+module "revision_reader" {
+  source = "./modules/revision_reader"
+
+  enabled                      = var.enable_revision_reader
+  name_prefix                  = local.name_prefix
+  aws_region                   = var.aws_region
+  vpc_id                       = module.network.vpc_id
+  rds_security_group_id        = module.data_sql.rds_security_group_id
+  database_url_secret_arn      = module.secrets.secret_arns["DATABASE_URL"]
+  secrets_kms_key_arn          = module.secrets.kms_key_arn
+  ecs_cluster_arn              = module.ecs.cluster_id
+  github_oidc_provider_arn     = var.github_oidc_provider_arn
+  revision_reader_image_digest = var.revision_reader_image_digest
 }

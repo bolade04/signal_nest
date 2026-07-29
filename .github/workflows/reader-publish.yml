@@ -1,0 +1,425 @@
+name: Revision reader publish
+
+# Gate 4J: builds, verifies and publishes the DEDICATED revision-reader image.
+#
+# WHY THIS IS A SEPARATE WORKFLOW FROM `staging-publish`. The reader is the instrument
+# that measures the schema state the workload apply depends on. An instrument that shares
+# a build and publication path with the thing it measures is not an independent check: a
+# defect in the shared path corrupts the measurement and the measured object identically.
+# It also pushes to its OWN ECR repository under its OWN OIDC role, so a defect in this
+# NEW, less-exercised path cannot reach the api/worker repositories that back the
+# currently-pinned staging digests.
+#
+# WHAT IT NEVER DOES: no ECS call, no RunTask, no task-definition or service mutation, no
+# secret retrieval, no migration, no production access. Publishing a reader image is inert
+# — the image does nothing until a separately authorized gate pins its digest in tfvars
+# and a separately authorized run invokes it.
+#
+# THE IN-IMAGE VERIFICATION BAND BELOW IS THE POINT OF THIS FILE. The reader's safety is a
+# set of ABSENCES (no Alembic, no application package, no shell, no argv acceptance), and
+# absences do not announce themselves when they stop holding. Every one is asserted
+# against the BUILT ARTEFACT here, before any credential exists in the job.
+
+on:
+  # Manual dispatch ONLY. A push trigger would publish on every merge; a pull_request
+  # trigger would let fork code reach an OIDC-credentialed job.
+  workflow_dispatch:
+
+concurrency:
+  group: reader-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  build-publish-reader:
+    name: Build, verify, and publish the revision-reader image
+    runs-on: ubuntu-latest
+    # Its OWN protected environment, distinct from `staging` and from the reader's
+    # invocation environment. The IAM trust policy pins this exact subject claim with
+    # StringEquals, so a job declaring a different environment cannot assume the role.
+    environment: staging-reader-publish
+    permissions:
+      contents: read
+      id-token: write # OIDC federation for this single job only
+    steps:
+      # FIRST STEP, before anything can print. `vars` values render verbatim in this
+      # public repository's logs, and the account id appears in the registry host, in
+      # ECR-login output, and in ordinary `docker push` progress lines. Registering the
+      # mask up front redacts every later occurrence structurally rather than relying on
+      # each future step remembering not to print it.
+      - name: Mask the staging account id and RDS endpoint in all subsequent logs
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+          EXPECTED_DB_HOST: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+        run: |
+          if [ -n "${ACCOUNT_ID}" ]; then
+            echo "::add-mask::${ACCOUNT_ID}"
+          fi
+          # The baked RDS endpoint is non-secret but need not appear in a public log; it is
+          # rendered by the build-args and the in-image positive control below, so mask it too.
+          if [ -n "${EXPECTED_DB_HOST}" ]; then
+            echo "::add-mask::${EXPECTED_DB_HOST}"
+          fi
+          echo "ok: account id and RDS endpoint registered as log masks (or absent, which the guard below rejects)"
+
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        # github.ref is routed through env, never interpolated into the shell string: a ref
+        # name can contain shell metacharacters, and inlining ${{ github.ref }} into run:
+        # would be a script-injection surface (GitHub security-hardening guidance).
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Reader publish runs only from refs/heads/main (got ${REF})." >&2
+          exit 1
+
+      - name: Fail closed while the reader prerequisites are absent
+        env:
+          ROLE_ARN: ${{ vars.AWS_STAGING_READER_PUBLISH_ROLE_ARN }}
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+          EXPECTED_DB_HOST: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+          EXPECTED_DB_NAME: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_NAME }}
+          EXPECTED_DB_USER: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_USER }}
+        run: |
+          if [ -z "${ROLE_ARN}" ] || [ -z "${ACCOUNT_ID}" ]; then
+            echo "::error::AWS_STAGING_READER_PUBLISH_ROLE_ARN and/or AWS_STAGING_ACCOUNT_ID are not set on the staging-reader-publish environment." >&2
+            echo "::error::They exist only after the revision_reader module has been applied under a separate authorization (enable_revision_reader = true), which creates the dedicated reader ECR repository and the reader publisher role. Publishing before that is neither possible nor authorized." >&2
+            exit 1
+          fi
+          # Gate 4J.1: the destination pins are baked into the image at build time and decide
+          # which database the reader authenticates and reads. They are non-secret (an RDS
+          # endpoint, a database name, a role name) and come from the protected
+          # staging-reader-publish environment, never from a workflow input. Empty values
+          # would make the Dockerfile build fail; this pre-check gives a clearer error.
+          if [ -z "${EXPECTED_DB_HOST}" ] || [ -z "${EXPECTED_DB_NAME}" ] || [ -z "${EXPECTED_DB_USER}" ]; then
+            echo "::error::AWS_STAGING_READER_EXPECTED_DB_HOST/_NAME/_USER must be set on the staging-reader-publish environment; they are baked into the reader image so it can only ever address the intended staging database." >&2
+            exit 1
+          fi
+
+      - name: Check out the exact trusted revision
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute build metadata
+        id: meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # Cache-free: the publish path never consumes a layer cache a less trusted run may
+      # have written. Platform pinned to the task definition's runtime (LINUX/X86_64).
+      - name: Build the reader image (linux/amd64, SHA-stamped)
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/revision-reader
+          file: apps/revision-reader/Dockerfile
+          target: reader
+          platforms: linux/amd64
+          tags: signalnest-revision-reader:${{ github.sha }}
+          load: true
+          no-cache: true
+          build-args: |
+            GIT_REVISION=${{ github.sha }}
+            IMAGE_CREATED=${{ steps.meta.outputs.created }}
+            EXPECTED_DB_HOST=${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+            EXPECTED_DB_NAME=${{ vars.AWS_STAGING_READER_EXPECTED_DB_NAME }}
+            EXPECTED_DB_USER=${{ vars.AWS_STAGING_READER_EXPECTED_DB_USER }}
+
+      # ------------------------------------------------------------------
+      # In-image verification. Everything below runs against the BUILT image
+      # and before any AWS credential exists in this job.
+      # ------------------------------------------------------------------
+
+      - name: The image runs at all, and psycopg imports
+        # This is the check that catches an interpreter-minor mismatch between the builder
+        # and the distroless base: psycopg[binary] is an ABI-specific wheel, so a mismatch
+        # produces an image that builds perfectly and cannot import its only dependency.
+        # `--entrypoint` here is a DOCKER capability used for inspection; ECS RunTask has
+        # no equivalent (ContainerOverride carries no entryPoint member), so nothing in
+        # this step weakens the runtime control it is verifying.
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+            -c "import psycopg; print('psycopg import ok')"
+
+      - name: The image CANNOT migrate — Alembic and the application are absent
+        # The load-bearing absence. `alembic` is a BASE dependency of apps/api, so any
+        # install of that package would restore upgrade AND downgrade capability against
+        # a database-owner credential.
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          for mod in alembic sqlalchemy app app.db.migrate pydantic boto3 fastapi; do
+            if docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+                 -c "import ${mod}" 2>/dev/null; then
+              echo "::error::FORBIDDEN MODULE PRESENT: '${mod}' imports inside the reader image. The image can no longer be described as incapable of migrating." >&2
+              exit 1
+            fi
+            echo "ok: ${mod} is absent"
+          done
+
+      - name: The image carries no shell
+        # Defence in depth, NOT the primary control: with ENTRYPOINT pinned the shell is
+        # already unreachable from RunTask. Asserted so a base-image swap that reintroduces
+        # one is a visible decision rather than a silent regression.
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          for sh in /bin/sh /bin/bash /usr/bin/sh /bin/busybox; do
+            if docker run --rm --network none --entrypoint "$sh" "$image" -c "id" 2>/dev/null; then
+              echo "::error::A shell is present at ${sh} in the reader image." >&2
+              exit 1
+            fi
+          done
+          echo "ok: no shell interpreter is present"
+
+      - name: The entrypoint is the exact fixed exec form, with empty CMD and non-root user
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          entry="$(docker inspect --format '{{ json .Config.Entrypoint }}' "$image")"
+          cmd="$(docker inspect --format '{{ json .Config.Cmd }}' "$image")"
+          user="$(docker inspect --format '{{ .Config.User }}' "$image")"
+          expected='["/usr/bin/python3.11","-m","revision_reader.reader"]'
+          if [ "$entry" != "$expected" ]; then
+            echo "::error::Entrypoint is ${entry}, expected ${expected}. The override-prevention control depends on this exact value." >&2
+            exit 1
+          fi
+          case "$cmd" in
+            'null'|'[]') : ;;
+            *) echo "::error::CMD is ${cmd}, expected empty. A non-empty CMD is default argv, which this program rejects." >&2; exit 1 ;;
+          esac
+          if [ "$user" != "10001:10001" ]; then
+            echo "::error::Image user is '${user}', expected 10001:10001." >&2
+            exit 1
+          fi
+          echo "ok: fixed exec-form entrypoint, empty CMD, non-root uid"
+
+      - name: An override command becomes argv and is REJECTED (exit 50)
+        # THE CONTROL, demonstrated against the real artefact. ECS ContainerOverride can
+        # supply `command` but not `entryPoint`, so an override arrives appended to the
+        # fixed entrypoint — as argv to a program whose FIRST action is to reject all argv.
+        # `-c` is included deliberately: because `-m <module>` ends CPython's option
+        # parsing, it arrives as argv rather than as an interpreter flag that would run
+        # arbitrary code.
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          probe() {
+            rc=0
+            out="$(docker run --rm --network none -e DATABASE_URL='postgresql://u:p@h:5432/d?sslmode=require' "$image" "$@" 2>&1)" || rc=$?
+            if [ "$rc" -ne 50 ]; then
+              echo "::error::Override command [$*] exited ${rc}, expected 50 (argv rejected). Output: ${out}" >&2
+              exit 1
+            fi
+            echo "ok: override [$*] rejected with exit 50"
+          }
+          probe --help
+          probe -c 'import os; os.system("id")'
+          probe -m app.db.migrate
+          probe upgrade
+          probe downgrade base
+
+      - name: Destination is baked — any host but the baked one fails closed, nothing discloses
+        # Gate 4J.1/4J.2. The host/database/role are BAKED into the image (build args above);
+        # the reader connects to the baked host with discrete kwargs and takes ONLY the password
+        # from the DSN. The DSN's authority is never used to choose a destination, so every
+        # redirect shape fails closed at CONFIG (51) without dialling anything.
+        #
+        # The two exit-52 cases are the POSITIVE control: a DSN naming the baked host passes the
+        # config gate and a connection is ATTEMPTED, which fails under `--network none` (52).
+        # That proves the reader dials rather than blanket-rejecting. It does NOT prove WHICH
+        # host was dialled — under --network none every connect fails identically. Destination
+        # authenticity is proven in-process by tests/test_reader.py
+        # (test_connect_uses_discrete_kwargs_and_never_forwards_the_dsn), not by this band.
+        #
+        # BAKED_HOST is sourced through env, never inlined into the script text — inlining a
+        # `${{ vars… }}` would print the real staging endpoint to the public workflow log.
+        env:
+          BAKED_HOST: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          expect() {
+            want="$1"; shift
+            rc=0
+            out="$(docker run --rm --network none "$@" "$image" 2>&1)" || rc=$?
+            # Disclosure guard runs UNCONDITIONALLY, before the rc check, so a regression that
+            # both mis-exits and leaks cannot slip text into the public log via a mismatch path.
+            if printf '%s' "$out" | grep -Eq 'Traceback|password|secret|@[a-z0-9.-]+:5432'; then
+              echo "::error::Reader output disclosed a traceback or credential material." >&2
+              exit 1
+            fi
+            if [ "$rc" -ne "$want" ]; then
+              echo "::error::Expected exit ${want}, got ${rc}." >&2
+              exit 1
+            fi
+            echo "ok: exit ${want}, no disclosure"
+          }
+          expect 51                                                             # no DSN at all
+          # Arbitrary DNS host / IP -> tamper detector rejects at config, never dialled.
+          expect 51 -e DATABASE_URL='postgresql://u:pw@attacker.example.com:5432/d?sslmode=require'
+          expect 51 -e DATABASE_URL='postgresql://u:pw@203.0.113.9:5432/d?sslmode=require'
+          # The exact bracketed-authority bypass (Gate 4J).
+          expect 51 -e DATABASE_URL='postgresql://u:pw@evil.invalid%2Cdb.invalid[v1.x]/d?sslmode=require'
+          # A percent-encoded NUL in the password, rejected on the DECODED value before connect.
+          expect 51 -e DATABASE_URL="postgresql+psycopg://app_role:s3cr3t%00pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          # Wrong scheme, comma-joined multi-host, and userinfo '@' ambiguity all fail closed.
+          expect 51 -e DATABASE_URL="mysql://app_role:pw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 51 -e DATABASE_URL="postgresql://app_role:pw@evil.invalid,${BAKED_HOST}:5432/d?sslmode=require"
+          expect 51 -e DATABASE_URL='postgresql://u:p@ss@evil.invalid:443/d?sslmode=require'
+          # POSITIVE CONTROL: a DSN naming the BAKED host with a valid, decodable password passes
+          # the config gate and a connection is attempted -> fails under --network none (52).
+          expect 52 -e DATABASE_URL="postgresql+psycopg://app_role:s3cr3tpw@${BAKED_HOST}:5432/signalnest?sslmode=require"
+          expect 52 -e DATABASE_URL="postgresql://app_role:p%40ss@${BAKED_HOST}:5432/signalnest?sslmode=require"
+
+      - name: Baked pins and the CA bundle are present and consistent with the build args
+        # The workflow that SHIPS the image verifies its own bake: an empty pin is caught by
+        # the Dockerfile, but a wrong-but-non-empty one would ship silently green without this.
+        # The expected host is passed INTO the container as an env var (not inlined) so the real
+        # endpoint is never printed, and a mismatch message carries no value.
+        env:
+          BAKED_HOST: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          docker run --rm --network none -e BAKED_HOST --entrypoint /usr/bin/python3.11 "$image" -c "
+          import os
+          from revision_reader import _pinned
+          assert _pinned.EXPECTED_DB_HOST == os.environ['BAKED_HOST'], 'baked host does not match the build arg'
+          assert _pinned.EXPECTED_DB_NAME and _pinned.EXPECTED_DB_USER, 'baked db/user is empty'
+          assert os.path.isfile(_pinned.CA_BUNDLE_PATH), 'baked CA bundle is missing'
+          print('pins + CA present ok')"
+
+      - name: The baked CA bundle is byte-identical to the reviewed, pinned asset
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          import hashlib, pathlib
+          print(hashlib.sha256(pathlib.Path('/etc/ssl/rds/rds-global-bundle.pem').read_bytes()).hexdigest())")"
+          want="e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
+          test "$got" = "$want" || { echo "::error::baked CA sha256 mismatch" >&2; exit 1; }
+          echo "ok: baked CA bundle matches the pinned digest"
+
+      - name: Log the exact interpreter patch version (drift visible, not asserted)
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+            -c "import sys; print('reader interpreter:', sys.version)"
+
+      - name: Verify the OCI revision label matches the trusted checkout
+        run: |
+          image="signalnest-revision-reader:${{ github.sha }}"
+          rev="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+          if [ "$rev" != "${{ github.sha }}" ]; then
+            echo "::error::Image carries OCI revision '$rev', expected '${{ github.sha }}'." >&2
+            exit 1
+          fi
+          arch="$(docker inspect --format '{{ .Os }}/{{ .Architecture }}' "$image")"
+          if [ "$arch" != "linux/amd64" ]; then
+            echo "::error::Image platform is '$arch', expected linux/amd64." >&2
+            exit 1
+          fi
+          echo "ok: stamped with the trusted revision on linux/amd64"
+
+      - name: Vulnerability scan — fail on CRITICAL/HIGH
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: signalnest-revision-reader:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials. Nothing
+      # above this line has any AWS access, so a build or verification failure
+      # can never occur while a credential is live.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_STAGING_READER_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-reader-publish-${{ github.run_id }}
+          role-duration-seconds: 900
+
+      - name: Verify the assumed identity is the intended staging account
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "$actual" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured staging account. Refusing to publish." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured staging account (id not printed)"
+
+      - name: Log in to the staging ECR registry
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'true'
+
+      - name: Mask the account-bearing registry host in all subsequent logs
+        run: echo "::add-mask::${{ steps.ecr-login.outputs.registry }}"
+
+      - name: Push by immutable commit tag and read the registry digest back
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          NAME_PREFIX: ${{ vars.AWS_STAGING_NAME_PREFIX || 'signalnest-staging' }}
+        run: |
+          mkdir -p reader-evidence
+          repo="${NAME_PREFIX}/revision-reader"
+          uri="${REGISTRY}/${repo}:${{ github.sha }}"
+          docker tag "signalnest-revision-reader:${{ github.sha }}" "$uri"
+          docker push "$uri"
+          # The REGISTRY is authoritative for the digest that will be pinned in tfvars.
+          digest="$(aws ecr describe-images \
+            --repository-name "$repo" \
+            --image-ids imageTag="${{ github.sha }}" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+          case "$digest" in
+            sha256:*) : ;;
+            *) echo "::error::ECR returned no digest for ${repo}:${{ github.sha }}" >&2; exit 1 ;;
+          esac
+          # Advisory corroboration only; it can never substitute for the registry value.
+          local_digest="$(docker inspect --format '{{ range .RepoDigests }}{{ println . }}{{ end }}' "$uri" | grep -F "@" | head -1 | cut -d@ -f2 || true)"
+          if [ -n "$local_digest" ] && [ "$local_digest" != "$digest" ]; then
+            echo "::error::Local push digest and registry digest disagree." >&2
+            exit 1
+          fi
+          echo "$digest" > reader-evidence/digest.txt
+          echo "ok: reader image pushed; registry digest recorded (registry host masked in logs)"
+
+      # Logical repository name and digest only — never an account id or private registry
+      # URI. The operator composes the tfvars value privately.
+      - name: Write the reader digest manifest
+        run: |
+          digest="$(cat reader-evidence/digest.txt)"
+          cat > reader-evidence/reader-digest-manifest.json <<EOF
+          {
+            "source_commit": "${{ github.sha }}",
+            "platform": "linux/amd64",
+            "workflow_run_id": "${{ github.run_id }}",
+            "workflow_run_attempt": "${{ github.run_attempt }}",
+            "images": [
+              { "logical_repository": "revision-reader", "image_tag": "${{ github.sha }}", "registry_digest": "${digest}" }
+            ],
+            "consumers": {
+              "revision_reader_image_digest": "${digest}",
+              "note": "Supply via the git-ignored *.tfvars together with enable_revision_reader = true. Pinning this digest does NOT run the reader; invocation is a separate authorized gate."
+            }
+          }
+          EOF
+          cat reader-evidence/reader-digest-manifest.json
+
+      - name: Upload the reader digest manifest artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: reader-digest-manifest-${{ github.sha }}
+          path: reader-evidence/reader-digest-manifest.json
+          retention-days: 90

@@ -1,0 +1,62 @@
+[project]
+name = "signalnest-revision-reader"
+version = "1.0.0"
+description = "Dedicated live database revision reader. Reads alembic_version and prints one line."
+# The reader source is stdlib + psycopg only and runs on either minor; this floor exists
+# so the test suite can run on the repository's 3.12 toolchain. The minor that SHIPS is
+# pinned in the Dockerfile, not here: gcr.io/distroless/python3-debian12 provides Python
+# 3.11, psycopg[binary] resolves to an ABI-specific wheel, and building against a
+# different minor yields an image whose only dependency cannot import.
+# tests/test_dockerfile.py asserts builder minor == entrypoint minor == PYTHONPATH minor.
+requires-python = ">=3.11,<3.13"
+
+# EXACT pins, not floors. The application uses floors because it is an application; this is
+# a security artifact where build reproducibility and stable vulnerability-scan results
+# matter more than floating forward.
+#
+# DELIBERATELY ABSENT AND LOAD-BEARING:
+#   alembic     — can run upgrade/downgrade directly. Its ABSENCE is the control.
+#                 NOTE: alembic is a BASE dependency of apps/api (not an extra), so any
+#                 install of that package would bring it in. That is precisely why this
+#                 reader is a separate distribution and why the image never installs the
+#                 application package.
+#   sqlalchemy  — an ORM, dialect registry, pooling and event system, none of it needed.
+#   pydantic / pydantic-settings — not needed; the DSN is read from os.environ directly.
+#   boto3       — the reader makes no AWS call and has no task role.
+dependencies = [
+    "psycopg[binary]==3.2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.3",
+    "ruff==0.14.4",
+    # TEST-ONLY, and never installed into the image (the Dockerfile installs the base
+    # dependencies alone). tests/test_ecs_override_model.py reads botocore's bundled ECS
+    # service model to machine-check the "ContainerOverride has no entryPoint member"
+    # claim this entire gate rests on, instead of asserting it in prose.
+    "botocore>=1.34",
+]
+
+[project.scripts]
+# Convenience for local operator use only. The IMAGE deliberately does NOT use this
+# script: pip stamps it with the builder interpreter's shebang, which does not exist in
+# the distroless base. The image entrypoint is the `-m revision_reader.reader` module
+# form, which also guarantees that an override command cannot become an interpreter flag.
+revision-reader = "revision_reader.reader:_console_main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["revision_reader"]
+
+# Mirrors apps/api's lint contract so the reader is held to the same standard rather
+# than silently falling back to ruff's defaults (which do not even enable E501).
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]

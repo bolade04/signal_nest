@@ -1,0 +1,138 @@
+# =====================================================================================
+# Gate 4J — dedicated live database revision-reader prerequisite stack.
+#
+# WHY THIS MODULE EXISTS SEPARATELY FROM `registry`, `iam` AND `ecs`:
+#
+#   1. CIRCULARITY. The reader verifies the live schema revision BEFORE the workload plan
+#      is generated. If it lived in the workload plan it gates, it could never run first.
+#      It is gated by its own `enabled` flag, never by `deploy_workload`, and it consumes
+#      NOTHING that `deploy_workload` gates — no task definition, no service, neither
+#      workload image digest. It does consume `module.ecs.cluster_id`, and that is fine:
+#      `aws_ecs_cluster` is ungated and exists in the foundation stage today, so every
+#      prerequisite of this module can be satisfied while the workload stays dark.
+#
+#   2. BLAST RADIUS. The reader gets its OWN ECR repository and its OWN publisher role
+#      here, rather than a third entry in registry's fixed two-repository map. That map
+#      feeds `repository_arns`, which feeds BOTH the shared execution role's pull grant
+#      (iam/main.tf) and the ci_publisher push grant — so a third entry there would have
+#      silently widened two hardened identities with no diff in iam/main.tf at all.
+#      Keeping the reader self-contained means a defect in the NEW, untested reader
+#      publication path can never reach the api/worker repositories that run the
+#      production path. registry/main.tf and iam/main.tf are untouched by this gate.
+#
+#   3. LIFECYCLE. Repository, log group, security group, roles and task definition live
+#      together and are destroyable as a unit without touching registry/iam/ecs state.
+#
+# THE CONTROL THIS WHOLE STACK RESTS ON: ECS `ContainerOverride` exposes
+# {name, command, environment, environmentFiles, cpu, memory, memoryReservation,
+# resourceRequirements} — it has NO `entryPoint` member. The image pins a fixed exec-form
+# ENTRYPOINT, and this task definition deliberately sets NEITHER `entryPoint` NOR
+# `command`, so nothing shadows it. An override `command` therefore becomes argv to a
+# program that rejects all argv (exit 50). That makes override prevention real here,
+# where Gate 4I could only detect it after the fact.
+# =====================================================================================
+
+locals {
+  family      = "${var.name_prefix}-revision-reader"
+  repo_name   = "${var.name_prefix}/revision-reader"
+  log_group   = "/ecs/${var.name_prefix}-revision-reader"
+  container   = "revision-reader"
+  create      = var.enabled ? 1 : 0
+  create_oidc = var.enabled && var.github_oidc_provider_arn != null ? 1 : 0
+
+  # Comprehension over the repository rather than `[0]`, so that supplying a digest while
+  # the module is DISABLED yields null instead of erroring on an empty tuple. A plan that
+  # crashes on an inert flag combination is a configuration landmine, not a safety control.
+  image = one([
+    for r in aws_ecr_repository.reader :
+    "${r.repository_url}@${var.revision_reader_image_digest}"
+    if var.revision_reader_image_digest != null
+  ])
+}
+
+# --- dedicated ECR repository --------------------------------------------------------
+resource "aws_ecr_repository" "reader" {
+  count = local.create
+
+  name                 = local.repo_name
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = false
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  tags = merge(var.tags, { Name = local.repo_name })
+}
+
+resource "aws_ecr_lifecycle_policy" "reader" {
+  count = local.create
+
+  repository = aws_ecr_repository.reader[0].name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Expire untagged reader images beyond the 10 most recent."
+      # COUNT-based, where `registry`'s policy is DAYS-based, and the divergence is
+      # deliberate: reader images are published rarely and a digest may be pinned in tfvars
+      # for months, so an age rule could expire the very image the task definition
+      # references. A count rule cannot, because a pinned image is tagged.
+      selection = { tagStatus = "untagged", countType = "imageCountMoreThan", countNumber = 10 }
+      action    = { type = "expire" }
+    }]
+  })
+}
+
+# --- dedicated log group -------------------------------------------------------------
+# Its OWN group, not the shared migration group: the reader's stdout IS the verification
+# evidence, so it must not interleave with another workload's diagnostics, and the runner
+# role is then scoped to exactly this group rather than an /ecs/<prefix>-* prefix.
+resource "aws_cloudwatch_log_group" "reader" {
+  count = local.create
+
+  name              = local.log_group
+  retention_in_days = var.log_retention_days
+
+  tags = merge(var.tags, { Name = local.log_group })
+}
+
+# --- dedicated security group: egress only, no ingress at all ------------------------
+resource "aws_security_group" "reader" {
+  count = local.create
+
+  name        = "${var.name_prefix}-revision-reader"
+  description = "Revision reader task. Egress only: PostgreSQL to RDS, HTTPS for pull/secrets/logs."
+  vpc_id      = var.vpc_id
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-revision-reader" })
+}
+
+# No ingress rule exists, deliberately: nothing ever connects TO the reader.
+
+resource "aws_vpc_security_group_egress_rule" "reader_to_postgres" {
+  count = local.create
+
+  security_group_id            = aws_security_group.reader[0].id
+  referenced_security_group_id = var.rds_security_group_id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "Reader -> RDS PostgreSQL. The only data-plane egress."
+}
+
+resource "aws_vpc_security_group_egress_rule" "reader_https" {
+  count = local.create
+
+  security_group_id = aws_security_group.reader[0].id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "HTTPS for ECR pull, Secrets Manager injection and CloudWatch Logs (NAT baseline). VPC endpoints remain a separately authorized improvement."
+}
+
+# NOTE: no Redis egress. The reader has no cache dependency and must not acquire one.

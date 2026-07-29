@@ -378,3 +378,26 @@ variable "budget_notification_email" {
     error_message = "budget_notification_email must be a plausible email address (local@domain.tld)."
   }
 }
+
+# --- Gate 4J: dedicated live revision-reader ----------------------------------
+# The reader is a verification INSTRUMENT for the schema state that the workload
+# apply depends on, so its lifecycle is deliberately NOT tied to deploy_workload:
+# gating the check on the flag it exists to gate would be circular. Both variables
+# default to the inert value — Gate 4J authors this capability and provisions
+# nothing. Enabling it is a later, separately authorized gate.
+variable "enable_revision_reader" {
+  description = "Whether to create the dedicated revision-reader stack (its own ECR repository, log group, security group, execution/publisher/runner roles, and — once a digest exists — its task definition). Independent of deploy_workload by design. Default false creates nothing."
+  type        = bool
+  default     = false
+}
+
+variable "revision_reader_image_digest" {
+  description = "Immutable sha256 digest of the published revision-reader image. Null until the reader publication workflow has published one; while null no task definition exists and the runner role can therefore invoke nothing at all (fail-closed by construction). Supplied via a git-ignored *.tfvars."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.revision_reader_image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.revision_reader_image_digest))
+    error_message = "revision_reader_image_digest, when set, must be an immutable digest of the exact form sha256:<64 lowercase hex chars> (never a mutable tag)."
+  }
+}
