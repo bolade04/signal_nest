@@ -118,7 +118,7 @@ jobs:
       # Cache-free: the publish path never consumes a layer cache a less trusted run may
       # have written. Platform pinned to the task definition's runtime (LINUX/X86_64).
       - name: Build the reader image (linux/amd64, SHA-stamped)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/revision-reader
           file: apps/revision-reader/Dockerfile
