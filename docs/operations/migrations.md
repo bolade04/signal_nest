@@ -227,30 +227,45 @@ only at a real deployment. **No live verification has happened.** Live
 verification, image republication, and a fresh planning cycle each require
 separate authorization.
 
-## Future: dedicated read-only revision-reader ECS task (not yet authorized)
+## Dedicated revision-reader ECS task (authored, NOT provisioned)
 
-Nothing in this section is deployed or permitted today. The reader and
-comparator run inside the built image, locally and in CI only. Running the
-reader as an ECS task requires a separately authorized permission change.
+Nothing in this section is deployed or permitted today. The reader exists as
+code, IaC and reviewed workflows; `enable_revision_reader` defaults to `false`,
+no reader image has been published, and no reader task has ever run. Enabling,
+publishing and invoking are three separate later authorizations.
 
-**Identity and permission delta** — the reader task requires, beyond what any
-staging identity holds today:
+**It is a dedicated artefact, not the worker image.** The design this section
+originally sketched — reuse the worker image with a task-definition `command` —
+was superseded, because that image has no `ENTRYPOINT`, contains a shell, and
+contains `app.db.migrate` (upgrade *and* downgrade). See
+`apps/revision-reader/README.md` for the whole program and its honest limits.
 
-* `ecs:RunTask`, scoped by `ArnEquals ecs:cluster` to the staging cluster and
-  by `ArnLike ecs:task-definition` to the reader family. No identity in the
-  documented operator posture holds `RunTask` today; it is the substantive new
-  grant.
-* `iam:PassRole` for the execution role and an intentionally empty task role,
-  with `StringEquals iam:PassedToService = ecs-tasks.amazonaws.com` and exact
-  role ARNs in `Resource` — never a wildcard.
-* Read-after-create and completion polling: `ecs:DescribeTasks`,
-  `ecs:ListTasks` (cluster-scoped), and `logs:DescribeLogStreams` +
-  `logs:GetLogEvents` on the reader's log group. A `RunTask` grant without
-  these lets an operator start a task they cannot observe.
+**Identity and permission delta** — three purpose-built identities, none of
+them an existing role (`infra/aws/modules/revision_reader/iam.tf`):
 
-Grant these in a dedicated temporary policy with a `DateLessThan
-aws:CurrentTime` expiry and a written retirement step, and verify the live
-policy before relying on any of it.
+* **Execution role** — pulls the reader repository *only*, injects exactly the
+  `DATABASE_URL` secret, decrypts via `kms:ViaService` scoped to Secrets
+  Manager, and writes only the dedicated reader log group. No
+  `logs:CreateLogGroup`.
+* **Runner role** — `ecs:RunTask` on the **exact task-definition revision ARN**,
+  not `ArnLike` on the family: a family-scoped grant widens silently the moment
+  anyone registers revision N+1. Plus `ecs:DescribeTasks` (cluster-conditioned,
+  since task ARNs are generated per run and cannot be pinned) and
+  `logs:DescribeLogStreams`/`GetLogEvents` on the reader's own group. It is
+  explicitly denied `ecs:StopTask`, ECS Exec at launch and connect,
+  `ecs:TagResource`, and `cloudtrail:LookupEvents`.
+* **Publisher role** — a separate identity with a different OIDC subject claim,
+  scoped to pushing the reader repository. Publish and invoke are not
+  interchangeable at the trust boundary.
+* `iam:PassRole` names **one exact ARN**, the reader execution role. There is
+  **no reader task role at all** — not an empty one — which is what keeps that
+  list to a single entry.
+
+**No temporary human policy is involved.** The reader is invoked by a reviewed
+workflow under GitHub OIDC (`.github/workflows/reader-run.yml`), not by an
+operator holding a time-boxed `RunTask` grant. That workflow takes **zero
+inputs**: an operator-supplied task definition, cluster or command would be an
+override channel, which is the property the reader exists to remove.
 
 **Tags: omit them.** Invoke the reader with neither `--tags` nor
 `--propagate-tags`. When an ECS tag-on-create API (`RunTask`,
@@ -267,17 +282,29 @@ which occurs after the task record exists (`STOPPED` with
 `ResourceInitializationError`), still before application code runs.
 
 **What does not contain a `RunTask` holder** — never treat these as security
-boundaries:
+boundaries. This analysis is what forced the dedicated image; each bullet notes
+what changes for the reader specifically, and what does not change at all for
+the migration task.
 
-* **The container ENTRYPOINT/command.** `RunTask` accepts
+* **The task definition's `command`.** `RunTask` accepts
   `overrides.containerOverrides[].command`, so a `RunTask` holder replaces the
   command without needing `ecs:RegisterTaskDefinition`; a
-  `RegisterTaskDefinition` holder can additionally register any image.
+  `RegisterTaskDefinition` holder can additionally register any image. The
+  migration task definition's `command` is therefore **documentation, not a
+  control**, and remains so.
+  *For the reader only:* `ContainerOverride` exposes `{name, command,
+  environment, environmentFiles, cpu, memory, memoryReservation,
+  resourceRequirements}` — it has **no `entryPoint` member**. The reader image
+  pins a fixed exec-form `ENTRYPOINT` and its task definition sets neither
+  `entryPoint` nor `command`, so an override `command` arrives as argv to a
+  program that rejects all argv (exit 50). That is prevention, not detection —
+  and it is a property of *that image*, not of ECS.
 * **The empty migration task role.** `RunTask` accepts `overrides.taskRoleArn`
   *and* `overrides.executionRoleArn`; the override names a *different* role,
   so the emptiness of the definition's role is irrelevant. No ECS condition
   key constrains the overridden role or override contents — the only boundary
-  is the `iam:PassRole` resource list.
+  is the `iam:PassRole` resource list. The reader's answer is to make that list
+  exactly one ARN and to omit the task role entirely.
 * **Environment variables.** `containerOverrides[].environment` is settable at
   run time. Secret bindings cannot be re-pointed (container overrides have no
   `secrets` field) and values cannot be read back through the ECS API, but the

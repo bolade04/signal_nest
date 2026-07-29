@@ -897,6 +897,41 @@ fixed by the root-composition tranche. **No §26.1–§26.14 decision is changed
 remains configuration only: nothing is provisioned or deployed, and `apply` remains INFRA-9-gated
 (§22).
 
+### 26.17 Thirteenth module note — `revision_reader` (2026-07-29; documentation only)
+
+§26.16's inventory line ("all twelve modules are implemented and root-composed") reads as an
+inventory of `modules/`, which now holds **thirteen**: Gate 4J added `revision_reader`, a
+dedicated live database revision-reader (its own minimal image with a fixed non-shell
+ENTRYPOINT and no migration code, its own ECR repository, log group, egress-only security
+group, three purpose-built IAM roles, no task role, and a task definition that exists only
+once an image digest is pinned).
+
+**No §26.1–§26.14 decision is changed, and `revision_reader` is deliberately NOT folded into
+either the §6 twelve or the §26.12 graph.** Recording it as a thirteenth *outside* those
+decisions is the accurate framing, not a bookkeeping convenience:
+
+* §6 is explicitly a "proposed layout (illustrative, not created here)" whose rule is one
+  module per plane. It is not a closed-set declaration, and `revision_reader` satisfies that
+  rule, so a thirteenth module contradicts no locked decision.
+* §26.12 is a decision about the *edges among those modules*, not an exhaustiveness claim.
+  `revision_reader`'s only inbound edges come from foundation-stage modules (`network` for
+  `vpc_id`, `data_sql` for the RDS security group, `secrets` for the `DATABASE_URL` ARN and
+  CMK, and `ecs` for the ungated cluster id), so acyclicity is preserved.
+* The reader is a verification **instrument** for the schema state the workload apply depends
+  on. It is gated by its own `enable_revision_reader` flag (default `false`) and consumes
+  nothing that `deploy_workload` gates — gating the check on the flag it exists to gate would
+  be circular, which is the whole reason it sits outside the workload graph.
+
+It is not part of `registry`/`iam` because `registry`'s fixed two-repository map feeds
+`repository_arns`, which feeds **both** the shared execution role's ECR pull grant and the
+`ci_publisher` push grant: a third entry there would have widened two hardened identities
+through one variable with no diff in `iam/main.tf`. `registry/main.tf`, `iam/main.tf` and the
+`ecs` module are untouched.
+
+Composition remains configuration only: nothing is provisioned, no reader image has been
+published, and no reader task has ever run. Publishing, enabling and invoking are three
+separate later authorizations.
+
 ## 22. Exact future gates
 
 Nothing below is authorized by merging this plan. Each is a separate review + authorization:

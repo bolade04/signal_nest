@@ -1,0 +1,372 @@
+name: Revision reader run
+
+# Gate 4J: invokes the dedicated revision reader against the live staging database and
+# compares the result, OFFLINE, against this repository's single Alembic code head.
+#
+# AUTHORING ONLY AT GATE 4J. Every run of this workflow is a live execution against the
+# staging database and requires both a separate authorization and the protected
+# `staging-reader-run` environment's human approval.
+#
+# WHY THIS WORKFLOW HAS ZERO INPUTS. An operator-supplied input is an override channel: a
+# task definition, cluster, subnet or command taken from a dispatch form would let the
+# person triggering the run choose what actually executes, which is exactly the property
+# the reader exists to remove. Every parameter comes from the protected environment's
+# variables, which are changed through the same review path as this file.
+#
+# WHAT IT DOES NOT DO: it supplies NO overrides of any kind (no command, no environment,
+# no task role), it never migrates, it never retrieves a secret, it never touches
+# production, and it cannot stop the task it starts (the runner role withholds
+# ecs:StopTask, because that permission could only be cluster-scoped and would therefore
+# also permit stopping the API and worker service tasks).
+#
+# THE COMPARISON IS DELIBERATELY OFFLINE AND OUTSIDE THE CONTAINER. The expected head
+# never enters the reader, so the reader cannot be argued into agreeing with itself: it
+# reports what the database says, and this job decides whether that is acceptable.
+
+on:
+  # Manual dispatch only, and deliberately with NO `inputs:` block. See the header.
+  workflow_dispatch:
+
+concurrency:
+  group: reader-run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  run-reader:
+    name: Read the live schema revision and compare it offline
+    runs-on: ubuntu-latest
+    # A DIFFERENT protected environment from the publish workflow's. The two IAM roles pin
+    # different subject claims with StringEquals, so this job cannot assume the publisher
+    # role and a publish job cannot assume this one.
+    environment: staging-reader-run
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Mask the staging account id in all subsequent logs
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+        run: |
+          if [ -n "${ACCOUNT_ID}" ]; then
+            echo "::add-mask::${ACCOUNT_ID}"
+          fi
+          echo "ok: account id registered as a log mask"
+
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Reader run executes only from refs/heads/main (got ${{ github.ref }})." >&2
+          exit 1
+
+      - name: Fail closed while the reader prerequisites are absent
+        env:
+          ROLE_ARN: ${{ vars.AWS_STAGING_READER_RUN_ROLE_ARN }}
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+          CLUSTER_ARN: ${{ vars.AWS_STAGING_CLUSTER_ARN }}
+          TASK_DEFINITION_ARN: ${{ vars.AWS_STAGING_READER_TASK_DEFINITION_ARN }}
+          SUBNET_IDS: ${{ vars.AWS_STAGING_PRIVATE_SUBNET_IDS }}
+          SECURITY_GROUP_ID: ${{ vars.AWS_STAGING_READER_SECURITY_GROUP_ID }}
+          LOG_GROUP: ${{ vars.AWS_STAGING_READER_LOG_GROUP }}
+        run: |
+          missing=""
+          for v in ROLE_ARN ACCOUNT_ID CLUSTER_ARN TASK_DEFINITION_ARN SUBNET_IDS SECURITY_GROUP_ID LOG_GROUP; do
+            [ -n "${!v}" ] || missing="${missing} ${v}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing staging-reader-run environment variables:${missing}." >&2
+            echo "::error::They exist only after the revision_reader module has been applied and a reader image digest pinned, under a separate authorization." >&2
+            exit 1
+          fi
+          # The RunTask grant is scoped to an exact task-definition REVISION. A
+          # family-only reference would be denied by IAM, but failing here names the
+          # cause instead of surfacing an opaque AccessDenied.
+          case "${TASK_DEFINITION_ARN}" in
+            arn:aws:ecs:*:*:task-definition/*:[0-9]*) : ;;
+            *) echo "::error::AWS_STAGING_READER_TASK_DEFINITION_ARN must be a full ARN INCLUDING the revision suffix (…:task-definition/<family>:<n>)." >&2; exit 1 ;;
+          esac
+
+      - name: Check out the exact trusted revision
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # Installed BEFORE any credential exists, so a dependency failure can never happen
+      # while a live AWS session is held. The comparator is strictly offline: it opens no
+      # database connection and imports no engine construction.
+      - name: Install the offline comparator
+        # EDITABLE, and that is load-bearing rather than stylistic. `apps/api` packages
+        # only `app*` and there is no MANIFEST.in, so `alembic.ini` and the `alembic/`
+        # tree are NOT installed. `app.db.schema._api_root()` resolves the project root
+        # as `Path(__file__).resolve().parents[2]`, which under a COPY install is
+        # site-packages — where no alembic.ini exists — so `alembic_config()` raises and
+        # the code-head step below dies. Reproduced in a scratch venv: a copy install
+        # fails on the Gate 4F sentinel, an editable install resolves the single head.
+        # Every other workflow in this repository installs apps/api editable for the
+        # same reason (ci.yml).
+        run: python -m pip install --disable-pip-version-check -e ./apps/api
+
+      - name: Resolve this repository's single Alembic code head
+        id: head
+        # Resolved from the CHECKOUT, never from the database and never from the reader's
+        # output. Establishing it up front means a later "match" cannot be manufactured by
+        # anything the run itself produces.
+        run: |
+          head="$(python - <<'PY'
+          from alembic.script import ScriptDirectory
+          from app.db.schema import alembic_config
+          heads = ScriptDirectory.from_config(alembic_config()).get_heads()
+          if len(heads) != 1:
+              raise SystemExit(f"expected exactly one code head, found {len(heads)}: {heads}")
+          print(heads[0])
+          PY
+          )"
+          echo "code_head=${head}" >> "$GITHUB_OUTPUT"
+          echo "repository code head: ${head}"
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_STAGING_READER_RUN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-reader-run-${{ github.run_id }}
+          role-duration-seconds: 900
+
+      - name: Verify the assumed identity is the intended staging account
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_STAGING_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "$actual" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured staging account. Refusing to run." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured staging account (id not printed)"
+
+      - name: Run the reader task with NO overrides
+        id: runtask
+        env:
+          CLUSTER_ARN: ${{ vars.AWS_STAGING_CLUSTER_ARN }}
+          TASK_DEFINITION_ARN: ${{ vars.AWS_STAGING_READER_TASK_DEFINITION_ARN }}
+          SUBNET_IDS: ${{ vars.AWS_STAGING_PRIVATE_SUBNET_IDS }}
+          SECURITY_GROUP_ID: ${{ vars.AWS_STAGING_READER_SECURITY_GROUP_ID }}
+        run: |
+          # No --overrides flag appears anywhere in this command. IAM cannot constrain the
+          # contents of an override (no condition keys exist for command, environment,
+          # subnets, securityGroups or assignPublicIp), so the guarantee that none is sent
+          # comes from this reviewed file plus the image's fixed ENTRYPOINT — not from IAM.
+          aws ecs run-task \
+            --cluster "${CLUSTER_ARN}" \
+            --task-definition "${TASK_DEFINITION_ARN}" \
+            --launch-type FARGATE \
+            --platform-version 1.4.0 \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${SECURITY_GROUP_ID}],assignPublicIp=DISABLED}" \
+            --started-by "gha-${{ github.run_id }}" \
+            > run-task.json
+
+          failures="$(python -c "import json;d=json.load(open('run-task.json'));print(len(d.get('failures',[])))")"
+          if [ "${failures}" != "0" ]; then
+            echo "::error::RunTask reported failures; see the response below." >&2
+            python -c "import json;print(json.dumps(json.load(open('run-task.json')).get('failures'),indent=2))" >&2
+            exit 1
+          fi
+
+          task_arn="$(python -c "import json;print(json.load(open('run-task.json'))['tasks'][0]['taskArn'])")"
+          echo "task_arn=${task_arn}" >> "$GITHUB_OUTPUT"
+          echo "ok: reader task started"
+
+      - name: Assert the started task carries no override of any kind
+        # POSITIVE assertion on the WHOLE `overrides` object, not a spot-check for a
+        # `command` key. TaskOverride's members are {containerOverrides, cpu,
+        # ephemeralStorage, executionRoleArn, inferenceAcceleratorOverrides, memory,
+        # taskRoleArn}; only the two structural ones are expected in the echo, so any
+        # THIRD key, or a non-empty containerOverrides entry, means something was
+        # overridden. A check that only looked for `command` would pass while a
+        # taskRoleArn, executionRoleArn or environment override went through.
+        #
+        # DELIBERATELY STRICT. This has never run against live ECS, so it is possible the
+        # service echoes an additional benign key and the first real run fails here. That
+        # failure direction is the correct one: a false failure blocks a run that was fine,
+        # a false pass certifies a run that was not. If it fires, widen `allowed` only
+        # after confirming from the recorded response what the extra key was — never by
+        # loosening the check to "no command key".
+        run: |
+          python - <<'PY'
+          import json, sys
+
+          task = json.load(open("run-task.json"))["tasks"][0]
+          overrides = task.get("overrides", {})
+          allowed = {"containerOverrides", "inferenceAcceleratorOverrides"}
+          extra = set(overrides) - allowed
+          if extra:
+              print(f"::error::RunTask response carries unexpected override keys: {sorted(extra)}", file=sys.stderr)
+              raise SystemExit(1)
+          for container in overrides.get("containerOverrides", []):
+              # ECS echoes a bare {"name": …} entry; anything else is a real override.
+              surplus = set(container) - {"name"}
+              if surplus:
+                  print(f"::error::Container override present: {sorted(surplus)}", file=sys.stderr)
+                  raise SystemExit(1)
+          print("ok: no command, environment, or role override was sent")
+          PY
+
+      - name: Wait for the task to stop
+        env:
+          CLUSTER_ARN: ${{ vars.AWS_STAGING_CLUSTER_ARN }}
+          TASK_ARN: ${{ steps.runtask.outputs.task_arn }}
+        run: |
+          # Polls DescribeTasks. If this times out the job fails and the task is left to
+          # its own watchdog: this role deliberately holds no ecs:StopTask, since that
+          # permission could only be cluster-scoped and would also permit stopping the API
+          # and worker service tasks.
+          aws ecs wait tasks-stopped --cluster "${CLUSTER_ARN}" --tasks "${TASK_ARN}"
+          echo "ok: task reached STOPPED"
+
+      - name: Require a clean container exit
+        id: exit
+        env:
+          CLUSTER_ARN: ${{ vars.AWS_STAGING_CLUSTER_ARN }}
+          TASK_ARN: ${{ steps.runtask.outputs.task_arn }}
+        run: |
+          aws ecs describe-tasks --cluster "${CLUSTER_ARN}" --tasks "${TASK_ARN}" > describe-tasks.json
+          python - <<'PY'
+          import json, sys
+
+          task = json.load(open("describe-tasks.json"))["tasks"][0]
+          containers = task.get("containers", [])
+          if len(containers) != 1:
+              print(f"::error::BLOCKED: expected exactly one container, found {len(containers)}.", file=sys.stderr)
+              raise SystemExit(1)
+          code = containers[0].get("exitCode")
+          if code is None:
+              # PENDING is not PASS. An absent exit code means the container never ran to
+              # completion (image pull failure, stopped before start); there is no path
+              # from "could not establish" to "verified".
+              print(f"::error::BLOCKED: no container exit code. stoppedReason={task.get('stoppedReason')!r}", file=sys.stderr)
+              raise SystemExit(1)
+          if code != 0:
+              # The reader's exit codes are a disjoint 50-57 band; 50 specifically means an
+              # override command was appended and rejected.
+              tokens = {50: "argv rejected (an override command was supplied)",
+                        51: "configuration refused (missing DSN, or TLS not required)",
+                        52: "database connection failed", 53: "alembic_version table missing",
+                        54: "no revision rows", 55: "multiple revision rows",
+                        56: "malformed revision", 57: "unexpected failure"}
+              print(f"::error::Reader exited {code}: {tokens.get(code, 'unknown')}", file=sys.stderr)
+              raise SystemExit(1)
+          print("ok: reader exited 0")
+          PY
+
+      - name: Read the revision from THIS task's log stream
+        id: live
+        env:
+          LOG_GROUP: ${{ vars.AWS_STAGING_READER_LOG_GROUP }}
+          CONTAINER_NAME: ${{ vars.AWS_STAGING_READER_CONTAINER_NAME || 'revision-reader' }}
+          TASK_ARN: ${{ steps.runtask.outputs.task_arn }}
+        run: |
+          # The stream name is DERIVED from the task ARN we started, never discovered by
+          # listing or by taking "the most recent stream". A search could silently return a
+          # different (or older) run's output, and the whole point of this gate is that the
+          # answer belongs to this specific execution.
+          task_id="${TASK_ARN##*/}"
+          stream="reader/${CONTAINER_NAME}/${task_id}"
+          aws logs get-log-events \
+            --log-group-name "${LOG_GROUP}" \
+            --log-stream-name "${stream}" \
+            --start-from-head \
+            --no-cli-pager > log-events.json
+
+          revision="$(python - <<'PY'
+          import json, re, sys
+
+          events = json.load(open("log-events.json")).get("events", [])
+          lines = [m for m in (e.get("message", "").strip() for e in events) if m]
+          if not lines:
+              # Delivery is asynchronous; an empty stream means we could not establish the
+              # result, which is BLOCKED, never PASS.
+              print("::error::BLOCKED: the reader's log stream contained no events.", file=sys.stderr)
+              raise SystemExit(1)
+          if len(lines) != 1:
+              print(f"::error::BLOCKED: expected exactly one output line, got {len(lines)}.", file=sys.stderr)
+              raise SystemExit(1)
+          if not re.fullmatch(r"[0-9a-f]{12}", lines[0]):
+              print("::error::BLOCKED: the reader's output line is not a well-formed revision.", file=sys.stderr)
+              raise SystemExit(1)
+          print(lines[0])
+          PY
+          )"
+          echo "revision=${revision}" >> "$GITHUB_OUTPUT"
+          echo "live database revision: ${revision}"
+
+      - name: Compare offline against the repository code head
+        env:
+          LIVE_REVISION: ${{ steps.live.outputs.revision }}
+          CODE_HEAD: ${{ steps.head.outputs.code_head }}
+        run: |
+          # app.db.revision_compare resolves the code head independently from the migration
+          # script directory and exits 0 only on exact string equality. Running it here —
+          # on the runner, against the checkout — keeps the expected head outside the
+          # container for the whole of the run.
+          rc=0
+          printf '%s\n' "${LIVE_REVISION}" | python -m app.db.revision_compare || rc=$?
+          case "${rc}" in
+            0)  echo "PASS: the live schema revision equals this repository's code head (${CODE_HEAD})." ;;
+            43) echo "::error::MISMATCH: live revision ${LIVE_REVISION} != code head ${CODE_HEAD}. The workload apply must not proceed on this basis." >&2; exit 1 ;;
+            42) echo "::error::BLOCKED: the repository code head could not be resolved (zero or multiple heads)." >&2; exit 1 ;;
+            *)  echo "::error::BLOCKED: comparator exited ${rc}." >&2; exit 1 ;;
+          esac
+
+      - name: Record the verification evidence
+        if: always()
+        env:
+          LIVE_REVISION: ${{ steps.live.outputs.revision }}
+          CODE_HEAD: ${{ steps.head.outputs.code_head }}
+          TASK_ARN: ${{ steps.runtask.outputs.task_arn }}
+        run: |
+          mkdir -p reader-run-evidence
+          # Evidence labels are part of the record: "structurally derived" is what this
+          # workflow can establish about the absence of overrides from the API response.
+          # A CloudTrail-recorded confirmation is a SEPARATE principal's job — this role is
+          # denied cloudtrail:LookupEvents, because a principal that audits its own calls
+          # is not audited.
+          cat > reader-run-evidence/reader-run.json <<EOF
+          {
+            "source_commit": "${{ github.sha }}",
+            "workflow_run_id": "${{ github.run_id }}",
+            "workflow_run_attempt": "${{ github.run_attempt }}",
+            "task_arn_suffix": "${TASK_ARN##*/}",
+            "code_head": "${CODE_HEAD}",
+            "live_revision": "${LIVE_REVISION}",
+            "outcome": "${{ job.status }}",
+            "evidence_labels": {
+              "live_revision": "directly observed (this task's own log stream)",
+              "override_absence": "structurally derived (RunTask response overrides key set)",
+              "cloudtrail_confirmation": "unavailable (this principal is denied cloudtrail:LookupEvents by design)"
+            }
+          }
+          EOF
+          cat reader-run-evidence/reader-run.json
+
+      - name: Upload the verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reader-run-evidence-${{ github.run_id }}
+          path: reader-run-evidence/reader-run.json
+          retention-days: 90

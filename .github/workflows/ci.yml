@@ -414,3 +414,160 @@ jobs:
           name: smoke-logs
           path: api-smoke.log
           retention-days: 7
+
+  revision-reader:
+    name: Revision reader (unit, IaC contract, in-image)
+    runs-on: ubuntu-latest
+    # Gate 4J. The reader's safety is a set of ABSENCES — no Alembic, no application
+    # package, no shell, no argv acceptance, no entryPoint in the task definition. An
+    # absence does not fail loudly when it stops holding, so every one is asserted here at
+    # PR time. reader-publish.yml replays the in-image band at publish time as a
+    # fail-closed check against the artefact that is actually pushed.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/revision-reader/pyproject.toml
+
+      - name: Install the reader (editable) with its dev extra
+        # Editable, so the tests exercise the working tree rather than a copy in
+        # site-packages that could drift from what the image builds.
+        run: |
+          python -m venv .reader-venv
+          .reader-venv/bin/pip install --upgrade pip
+          .reader-venv/bin/pip install -e "apps/revision-reader[dev]"
+
+      - name: Ruff check
+        run: .reader-venv/bin/python -m ruff check apps/revision-reader
+
+      - name: Reader unit and build-contract tests
+        working-directory: apps/revision-reader
+        run: ../../.reader-venv/bin/python -m pytest tests -q
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_wrapper: false
+
+      - name: Reader IaC contract tests (offline, fully mocked provider)
+        working-directory: infra/aws/modules/revision_reader
+        run: |
+          tofu fmt -check -diff .
+          tofu init -backend=false -input=false
+          tofu test
+
+      - name: Build the reader image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/revision-reader
+          file: apps/revision-reader/Dockerfile
+          target: reader
+          platforms: linux/amd64
+          tags: signalnest-revision-reader:ci
+          load: true
+
+      - name: In-image verification band
+        run: |
+          image="signalnest-revision-reader:ci"
+
+          echo "== (1) the image runs and psycopg imports (catches a builder/base ABI mismatch) =="
+          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+            -c "import psycopg; print('psycopg import ok')"
+
+          echo "== (2) the image CANNOT migrate: Alembic and the application are absent =="
+          for mod in alembic sqlalchemy app app.db.migrate pydantic boto3 fastapi; do
+            if docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "import ${mod}" 2>/dev/null; then
+              echo "::error::FORBIDDEN MODULE PRESENT: ${mod} imports inside the reader image." >&2
+              exit 1
+            fi
+          done
+
+          echo "== (3) no shell interpreter is present (defence in depth) =="
+          for sh in /bin/sh /bin/bash /usr/bin/sh /bin/busybox; do
+            if docker run --rm --network none --entrypoint "$sh" "$image" -c "id" 2>/dev/null; then
+              echo "::error::A shell is present at ${sh}." >&2
+              exit 1
+            fi
+          done
+
+          echo "== (4) fixed exec-form entrypoint, empty CMD, non-root uid =="
+          entry="$(docker inspect --format '{{ json .Config.Entrypoint }}' "$image")"
+          test "$entry" = '["/usr/bin/python3.11","-m","revision_reader.reader"]'
+          cmd="$(docker inspect --format '{{ json .Config.Cmd }}' "$image")"
+          case "$cmd" in 'null'|'[]') : ;; *) echo "::error::CMD is ${cmd}, expected empty." >&2; exit 1 ;; esac
+          test "$(docker inspect --format '{{ .Config.User }}' "$image")" = "10001:10001"
+
+          echo "== (5) an override command becomes argv and is REJECTED (exit 50) =="
+          # This is the control itself: ECS ContainerOverride carries `command` but not
+          # `entryPoint`, so an override lands as argv to a program that refuses all argv.
+          # `-c` is probed deliberately — `-m <module>` ends CPython option parsing, so it
+          # arrives as argv rather than as a flag that would execute arbitrary code.
+          for probe in "--help" "-c|import os; os.system('id')" "-m|app.db.migrate" "upgrade" "downgrade|base"; do
+            IFS='|' read -r -a argv <<< "$probe"
+            rc=0
+            docker run --rm --network none -e DATABASE_URL='postgresql://u:p@h:5432/d?sslmode=require' \
+              "$image" "${argv[@]}" >/dev/null 2>&1 || rc=$?
+            if [ "$rc" -ne 50 ]; then
+              echo "::error::Override [${argv[*]}] exited ${rc}, expected 50 (argv rejected)." >&2
+              exit 1
+            fi
+          done
+
+          echo "== (6) configuration failures are fail-closed and disclose nothing =="
+          expect() {
+            want="$1"; shift
+            rc=0
+            out="$(docker run --rm --network none "$@" "$image" 2>&1)" || rc=$?
+            if [ "$rc" -ne "$want" ]; then
+              echo "::error::Expected exit ${want}, got ${rc}. Output: ${out}" >&2
+              exit 1
+            fi
+            if printf '%s' "$out" | grep -Eq 'Traceback|password|secret|@[a-z0-9.-]+:5432'; then
+              echo "::error::Reader output disclosed a traceback or credential material." >&2
+              exit 1
+            fi
+          }
+          expect 51                                                             # no DSN at all
+          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d'        # TLS not required
+          # The redirect attack: caller-settable environment + 443 egress to 0.0.0.0/0 +
+          # PostgreSQL-on-any-port would otherwise let a RunTask caller feed the reader a
+          # revision of their choosing with exit 0. The port pin closes it.
+          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid:443/d?sslmode=require'
+          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=requireXXX'
+          # Parser divergence: libpq honours connection keywords in the query string, so
+          # a positional port check alone is insufficient. Query keys are allowlisted to
+          # exactly {sslmode}; multi-host URIs are refused outright.
+          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=require&port=443'
+          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=require&host=evil.invalid'
+          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid:443,db.invalid:5432/d?sslmode=require'
+          # These two slipped the port pin: urlsplit reports the whole comma-joined string
+          # as the hostname and takes everything after the FIRST colon as the port, so `evil,db:5432`
+          # reads as port 5432 and the portless `evil,db` reads as unspecified — while
+          # libpq would try the attacker's host first. Rejecting ',' in the authority is
+          # what makes the single-destination guarantee total rather than accidental.
+          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid,db.invalid:5432/d?sslmode=require'
+          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid,db.invalid/d?sslmode=require'
+          # The same ambiguity one decoding stage later: urlsplit does not decode the host,
+          # libpq does. If libpq decodes before splitting on ',', these become a multi-host
+          # list and a redirected port respectively.
+          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid%2Cdb.invalid:5432/d?sslmode=require'
+          expect 51 -e DATABASE_URL='postgresql://u:p@db.invalid%3A443/d?sslmode=require'
+          # Delimiter ambiguity: two parsers locate the end of userinfo by finding an '@'.
+          # Rather than reason about whose convention wins, more than one literal '@' is
+          # refused outright — a real '@' in a credential arrives percent-encoded.
+          expect 51 -e DATABASE_URL='postgresql://u:p@ss@evil.invalid:443/d?sslmode=require'
+          expect 51 -e DATABASE_URL='postgresql://u:p@evil.invalid:443@db.invalid:5432/d?sslmode=require'
+          # The percent-encoded form IS legitimate (compose_database_url quotes both
+          # credentials), so it must reach connect — 52, not 51.
+          expect 52 -e DATABASE_URL='postgresql://u:p%40ss@db.invalid:5432/d?sslmode=require'
+          # The REAL secret's scheme (bootstrap_app_role.py writes postgresql+psycopg://):
+          # reaching 52 rather than 51 proves the driver suffix is normalised for libpq.
+          expect 52 -e DATABASE_URL='postgresql+psycopg://u:p@db.invalid:5432/d?sslmode=require'
+          expect 52 -e DATABASE_URL='postgresql://u:p@db.invalid:5432/d?sslmode=require'
+
+          echo "revision-reader in-image verification: PASS"

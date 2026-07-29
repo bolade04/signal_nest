@@ -191,3 +191,53 @@ output "budget_name" {
   description = "Name of the monthly staging cost budget (from the cost module; observational only)."
   value       = module.cost.budget_name
 }
+
+# --- Gate 4J: dedicated live revision-reader ----------------------------------
+# Every value below is null while `enable_revision_reader` is false. These are the
+# exact references the reader publication and invocation workflows consume; no
+# secret ARN, DSN, or credential is re-exported here.
+
+output "revision_reader_repository_url" {
+  description = "ECR repository URL for the dedicated reader image (publication target). Null when the reader is disabled."
+  value       = module.revision_reader.repository_url
+}
+
+output "revision_reader_log_group_name" {
+  description = "Dedicated reader CloudWatch log group. The invocation workflow reads the run's stream from here; it is deliberately NOT the shared migration group, so reader output cannot interleave with another workload's diagnostics."
+  value       = module.revision_reader.log_group_name
+}
+
+output "revision_reader_security_group_id" {
+  description = "Reader task security group (egress only: 5432 to the RDS SG, 443 for pull/secrets/logs; no ingress, no Redis)."
+  value       = module.revision_reader.security_group_id
+}
+
+output "revision_reader_execution_role_arn" {
+  description = "Reader task execution role — the ONLY role the runner may pass. There is no reader task role."
+  value       = module.revision_reader.execution_role_arn
+}
+
+output "revision_reader_publisher_role_arn" {
+  description = "CI role permitted to push the reader image (reader repository only). Null unless a GitHub OIDC provider ARN is supplied."
+  value       = module.revision_reader.publisher_role_arn
+}
+
+output "revision_reader_runner_role_arn" {
+  description = "CI role permitted to invoke the reader task. Null unless a GitHub OIDC provider ARN is supplied."
+  value       = module.revision_reader.runner_role_arn
+}
+
+output "revision_reader_task_definition_arn" {
+  description = "Reader task definition ARN INCLUDING the revision suffix. The invocation workflow must pass this exact value: the runner's ecs:RunTask grant is scoped to this revision, so a family-only reference is denied rather than silently running a different revision. Null until a reader image digest is pinned."
+  value       = module.revision_reader.task_definition_arn
+}
+
+output "revision_reader_task_definition_family" {
+  description = "Reader task definition family. Needed for CloudTrail assertions, which record the SHORT form (family:revision) rather than the ARN."
+  value       = module.revision_reader.task_definition_family
+}
+
+output "revision_reader_container_name" {
+  description = "Reader container name, needed to locate the run's log stream (<prefix>/<container>/<task-id>)."
+  value       = module.revision_reader.container_name
+}
