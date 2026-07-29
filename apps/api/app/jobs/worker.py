@@ -31,7 +31,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from logging import WARNING
+from logging import ERROR, WARNING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -510,11 +510,16 @@ class Worker:
             # The worker-fleet registry table must exist too; the worker writes to
             # it at startup and on every heartbeat.
             self._registry.status_counts(db)
-        except Exception as exc:  # pragma: no cover - surfaced as a clear message
+        except Exception as exc:
+            # Only the exception *class name* is safe to surface; the driver
+            # message may embed the DSN. ``from None`` keeps the raw exception
+            # out of the default-excepthook traceback (no __cause__ chain).
+            error_class = type(exc).__name__
             raise RuntimeError(
-                "Durable job schema is not initialized. Run migrations first "
+                "Durable job schema validation failed "
+                f"(error_class={error_class}). Run migrations first "
                 "(npm run migrate)."
-            ) from exc
+            ) from None
         finally:
             db.close()
 
@@ -557,7 +562,20 @@ class Worker:
                     time.sleep(delay)
             finally:
                 db.close()
-        raise WorkerRegistrationFailedError() from last_exc
+        # Fixed, secret-free classification of the exhausted retry budget: the
+        # exception *class name* only, never its message or traceback, and
+        # ``from None`` so the raw final exception cannot resurface through the
+        # default excepthook as a chained cause.
+        log_event(
+            logger,
+            "worker.registration.exhausted",
+            level=ERROR,
+            component="jobs",
+            outcome="failure",
+            attempts=attempts,
+            error_class=type(last_exc).__name__ if last_exc is not None else None,
+        )
+        raise WorkerRegistrationFailedError() from None
 
     def _set_registry_status(self, target: WorkerStatus) -> None:
         """Best-effort registry status transition (never fatal to the worker)."""
@@ -624,8 +642,19 @@ class Worker:
         while not self._stop.is_set():
             try:
                 did_work = self._runner.poll_once(worker_id=self.worker_id)
-            except Exception:  # pragma: no cover - never let one job kill the loop
-                logger.exception("worker.poll_error")
+            except Exception as exc:  # never let one poll failure kill the loop
+                # Fixed event + exception class only: a driver message can embed
+                # the DSN and a traceback bypasses redaction entirely, so neither
+                # is ever emitted here. Deliberately ``except Exception`` (not
+                # BaseException) so shutdown signals still propagate.
+                log_event(
+                    logger,
+                    "worker.poll_error",
+                    level=ERROR,
+                    component="jobs",
+                    outcome="failure",
+                    error_class=type(exc).__name__,
+                )
                 did_work = False
             if not did_work:
                 # Sleep between empty polls; wakes immediately on shutdown.

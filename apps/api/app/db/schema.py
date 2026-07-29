@@ -51,10 +51,29 @@ def alembic_config() -> Config:
     ``script_location`` is pinned to an absolute path so the config resolves from
     any working directory (a container runs from ``/app``); ``env.py`` still injects
     the database URL from :class:`~app.core.config.Settings`.
+
+    The returned config carries every ini-derived option but has
+    ``config_file_name`` cleared, so ``env.py`` skips ``fileConfig()`` and the
+    application's structured logging (handler, level, redacting formatter)
+    survives ``alembic.command`` operations. Ordering is load-bearing:
+    ``Config.file_config`` is a memoized property keyed off the filename at
+    first access, so the ini must be parsed *before* the filename is cleared or
+    every ini-derived option (``prepend_sys_path``, ``path_separator``,
+    ``file_template``, ``[post_write_hooks]``) is silently lost. The direct
+    ``alembic`` CLI builds its own config and is unaffected.
     """
     root = _api_root()
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "alembic"))
+    # Force the lazy ini parse now, then verify an ini-derived sentinel so a
+    # future reordering of this function cannot silently strip the ini.
+    if cfg.get_main_option("prepend_sys_path") != ".":
+        raise RuntimeError(
+            "alembic.ini options were not loaded before clearing "
+            "config_file_name (prepend_sys_path sentinel missing); refusing "
+            "to run migrations with a partial configuration"
+        )
+    cfg.config_file_name = None
     return cfg
 
 
@@ -95,15 +114,42 @@ class SchemaCompatibility:
         return self.state in _STARTUP_SAFE
 
 
-def check_schema_compatibility(engine: Engine) -> SchemaCompatibility:
-    """Classify the live schema against the code head. Read-only; never mutates."""
-    code_head = code_head_revision()
-    insp = inspect(engine)
-    if "alembic_version" not in insp.get_table_names():
-        return SchemaCompatibility(SchemaState.UNINITIALIZED, None, code_head)
+class SchemaVerificationError(RuntimeError):
+    """The live schema state could not be read (connection/driver failure).
 
-    with engine.connect() as conn:
-        db_revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    Deliberately carries only a fixed message plus the exception *class name* —
+    never the driver's message, which may embed the DSN (host, port, user,
+    database, password). Raised ``from None`` so no traceback chain can
+    resurface the original exception through Uvicorn or a default excepthook.
+    """
+
+
+def check_schema_compatibility(engine: Engine) -> SchemaCompatibility:
+    """Classify the live schema against the code head. Read-only; never mutates.
+
+    Fail-closed containment boundary: every schema probe in the codebase does
+    its database I/O here, so a driver failure surfaces as a fixed, secret-free
+    :class:`SchemaVerificationError` instead of a raw driver exception.
+    """
+    code_head = code_head_revision()
+    try:
+        insp = inspect(engine)
+        if "alembic_version" not in insp.get_table_names():
+            return SchemaCompatibility(SchemaState.UNINITIALIZED, None, code_head)
+
+        with engine.connect() as conn:
+            db_revision = conn.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar()
+    except Exception as exc:
+        error_class = type(exc).__name__
+        raise SchemaVerificationError(
+            "Database schema state could not be read "
+            f"(error_class={error_class}). The database may be unreachable or "
+            "misconfigured; startup fails closed. Verify connectivity and "
+            "configuration, then run the single migration actor if needed:\n"
+            "  python -m app.db.migrate"
+        ) from None
 
     if not db_revision:
         return SchemaCompatibility(SchemaState.UNINITIALIZED, None, code_head)

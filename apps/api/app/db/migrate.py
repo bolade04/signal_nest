@@ -21,7 +21,10 @@ Invocation:
 Exit codes for the default upgrade-and-verify path: ``0`` success (db at head);
 ``3`` code graph has zero or multiple heads; ``4`` Alembic upgrade failed; ``5``
 post-upgrade revision read-back failed; ``6`` database has zero or multiple
-Alembic revisions; ``7`` database revision does not match the code head.
+Alembic revisions; ``7`` database revision does not match the code head. The
+explicit ``upgrade``/``downgrade`` subcommands also fail closed to ``4`` (fixed
+classification, never a re-raised driver traceback); ``check`` exits ``1`` when
+the schema state cannot be read at all.
 
 Structured, secret-free logs describe each step; the database URL, credentials and
 raw driver exceptions are never logged.
@@ -80,10 +83,14 @@ def upgrade_and_verify() -> int:
     log_event(logger, "migrate.upgrade.start", component="migrate", target=code_head)
     try:
         command.upgrade(alembic_config(), code_head)
-    except Exception:
+    except Exception as exc:
         _record("upgrade_verify", "failure")
         log_event(
-            logger, "migrate.upgrade.failed", component="migrate", outcome="failure"
+            logger,
+            "migrate.upgrade.failed",
+            component="migrate",
+            outcome="failure",
+            error_class=type(exc).__name__,
         )
         return EXIT_UPGRADE_FAILED
 
@@ -98,10 +105,14 @@ def upgrade_and_verify() -> int:
                 .scalars()
                 .all()
             )
-    except Exception:
+    except Exception as exc:
         _record("upgrade_verify", "failure")
         log_event(
-            logger, "migrate.verify.readback_failed", component="migrate", outcome="failure"
+            logger,
+            "migrate.verify.readback_failed",
+            component="migrate",
+            outcome="failure",
+            error_class=type(exc).__name__,
         )
         return EXIT_READBACK_FAILED
     finally:
@@ -130,6 +141,12 @@ def upgrade_and_verify() -> int:
         )
         return EXIT_REVISION_MISMATCH
 
+    # Success-event provenance: ``code_head`` comes from the repository script
+    # directory (resolved above) and ``db_revision`` from the version-table
+    # read-back — two independent sources, both computed into plain locals
+    # before logging so a field-computation failure can never convert a
+    # successful migration into an unhandled exit.
+    db_revision = db_revisions[0]
     _record("upgrade_verify", "success")
     log_event(
         logger,
@@ -137,6 +154,8 @@ def upgrade_and_verify() -> int:
         component="migrate",
         outcome="success",
         head=code_head,
+        code_head=code_head,
+        db_revision=db_revision,
     )
     return EXIT_OK
 
@@ -148,44 +167,88 @@ def _record(operation: str, outcome: str) -> None:
 
 
 def upgrade(target: str = "head") -> int:
-    """Apply migrations up to ``target``. The single-actor write path."""
+    """Apply migrations up to ``target``. The single-actor write path.
+
+    Fails closed to :data:`EXIT_UPGRADE_FAILED` with a fixed, secret-free
+    classification — never a re-raise: a raw driver exception reaching the
+    default excepthook would print an unredacted traceback (DSN and all).
+    """
     log_event(logger, "migrate.upgrade.start", component="migrate", target=target)
     try:
         command.upgrade(alembic_config(), target)
-    except Exception:
+    except Exception as exc:
         _record("upgrade", "failure")
-        log_event(logger, "migrate.upgrade.failed", component="migrate", outcome="failure")
-        raise
+        log_event(
+            logger,
+            "migrate.upgrade.failed",
+            component="migrate",
+            outcome="failure",
+            error_class=type(exc).__name__,
+        )
+        return EXIT_UPGRADE_FAILED
+    # Guarded field computation: a post-success helper failure must never turn
+    # a completed upgrade into an unhandled exit (it is a logging field only).
+    try:
+        head = code_head_revision()
+    except Exception:
+        head = None
     _record("upgrade", "success")
     log_event(
         logger,
         "migrate.upgrade.done",
         component="migrate",
         outcome="success",
-        head=code_head_revision(),
+        head=head,
     )
-    return 0
+    return EXIT_OK
 
 
 def downgrade(target: str) -> int:
-    """Step the schema down to an explicit revision (never a bare ``head``)."""
+    """Step the schema down to an explicit revision (never a bare ``head``).
+
+    Fails closed to :data:`EXIT_UPGRADE_FAILED` (the shared "Alembic operation
+    failed" band) with a fixed classification instead of re-raising the raw
+    driver exception into the default excepthook.
+    """
     log_event(logger, "migrate.downgrade.start", component="migrate", target=target)
     try:
         command.downgrade(alembic_config(), target)
-    except Exception:
+    except Exception as exc:
         _record("downgrade", "failure")
-        log_event(logger, "migrate.downgrade.failed", component="migrate", outcome="failure")
-        raise
+        log_event(
+            logger,
+            "migrate.downgrade.failed",
+            component="migrate",
+            outcome="failure",
+            error_class=type(exc).__name__,
+        )
+        return EXIT_UPGRADE_FAILED
     _record("downgrade", "success")
     log_event(logger, "migrate.downgrade.done", component="migrate", outcome="success")
-    return 0
+    return EXIT_OK
 
 
 def check() -> int:
-    """Report compatibility without mutating. Exit 0 if startup-safe, else 1."""
+    """Report compatibility without mutating. Exit 0 if startup-safe, else 1.
+
+    A connection/driver failure is contained by ``check_schema_compatibility``
+    into a fixed :class:`~app.db.schema.SchemaVerificationError`; it is treated
+    as not-startup-safe (exit 1) with a fixed event, never a traceback.
+    """
+    from app.db.schema import SchemaVerificationError
     from app.db.session import engine
 
-    compat = check_schema_compatibility(engine)
+    try:
+        compat = check_schema_compatibility(engine)
+    except SchemaVerificationError:
+        _record("check", "unverifiable")
+        log_event(
+            logger,
+            "migrate.check.unverifiable",
+            component="migrate",
+            outcome="failure",
+        )
+        return 1
     _record("check", compat.state.value)
     log_event(
         logger,

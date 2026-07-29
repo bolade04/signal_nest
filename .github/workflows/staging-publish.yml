@@ -301,6 +301,28 @@ jobs:
               _fail("dependency-missing")
           print("migration import safety: PASS")
 
+          # Caller-controlled Alembic logging contract (Gate 4F): the shared
+          # helper must return a Config with config_file_name cleared (so
+          # env.py skips fileConfig and the application's structured logging
+          # survives) while ini-derived options are preserved — both halves are
+          # required, because clearing BEFORE the lazy ini parse silently loses
+          # every ini option while migrations still appear to work.
+          try:
+              from app.db.schema import alembic_config as _real_alembic_config
+
+              _cfg = _real_alembic_config()
+              if _cfg.config_file_name is not None:
+                  _fail("config-file-name-not-cleared")
+              if _cfg.get_main_option("prepend_sys_path") != ".":
+                  _fail("ini-options-lost")
+          except _Deny:
+              _fail("alembic-config-network")
+          except SystemExit:
+              raise
+          except BaseException:
+              _fail("alembic-config-error")
+          print("alembic config ordering contract: PASS")
+
           # Bare-command contract via monkeypatch (no DB, no network).
           def _patch(code_head=None, upgrade_raises=False, db_rows=None, engine_raises=False):
               state = {"upgraded": None}
@@ -440,6 +462,34 @@ jobs:
           docker run --rm -e DATABASE_URL=sqlite:////tmp/publish-ci.db --entrypoint sh "signalnest-worker:${{ github.sha }}" -c '
             python -m app.db.migrate upgrade &&
             python -m app.db.migrate check
+          '
+
+      - name: Bare migration actor command (exact ECS shape) in the worker image
+        # ECS runs command = ["python","-m","app.db.migrate"] with NO subcommand
+        # (infra/aws/modules/ecs/main.tf) — a different dispatch (upgrade +
+        # read-back verification) from the explicit subcommands above. Execute
+        # the real bare command against controlled SQLite, assert the positive
+        # verification event with its independently sourced provenance fields,
+        # and assert no secret-bearing output. (The full failure-band matrix is
+        # PR-gated in ci.yml; this is the publish-time fail-closed replay.)
+        run: |
+          docker run --rm --network none -e LOG_FORMAT=json --entrypoint sh "signalnest-worker:${{ github.sha }}" -c '
+            set -eu
+            export DATABASE_URL=sqlite:////tmp/bare-publish.db
+            python -m app.db.migrate > /tmp/bare_out.json 2> /tmp/bare_err.log
+            grep -q "\"event\": \"migrate.upgrade_verify.done\"" /tmp/bare_out.json
+            grep -q "\"code_head\"" /tmp/bare_out.json
+            grep -q "\"db_revision\"" /tmp/bare_out.json
+            test ! -s /tmp/bare_err.log
+            ! grep -q "Traceback" /tmp/bare_out.json
+            ! grep -q "sqlite:" /tmp/bare_out.json
+            python -m app.db.revision_status | python -m app.db.revision_compare
+            # Provenance: at a NON-head revision the pipe must MISMATCH (43) — a
+            # reader printing the code head would make the line above tautological.
+            python -c "import sqlite3; c=sqlite3.connect(\"/tmp/bare-publish.db\"); c.execute(\"DELETE FROM alembic_version\"); c.execute(\"INSERT INTO alembic_version VALUES (\x27aaaaaaaaaaaa\x27)\"); c.commit()"
+            rc=0; python -m app.db.revision_status | python -m app.db.revision_compare >/dev/null 2>&1 || rc=$?
+            test "$rc" -eq 43
+            echo "bare-command publish verification: PASS"
           '
 
       - name: Verify OCI revision labels match the trusted checkout

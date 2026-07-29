@@ -28,15 +28,25 @@ python -m app.db.migrate check      # verify compatibility, mutate nothing
 python -m app.db.migrate downgrade <revision>   # explicit, targeted downgrade
 ```
 
+* The **bare invocation** (no subcommand) is the fail-closed staging path and
+  the exact shape the ECS one-shot migration task runs: upgrade to the single
+  code head, read the database revision back, and exit `0` only on an exact
+  match (exit codes `3`–`7` classify every failure band).
 * `upgrade` applies every pending migration up to the current head. This is the
-  **only** write path and must be run by a single actor.
+  **only** write path and must be run by a single actor. A driver/Alembic
+  failure exits `4` with a fixed classification — never a re-raised traceback.
 * `check` reports the schema state and exits `0` when the schema is startup-safe,
-  `1` otherwise. It performs no DDL and is safe to run anywhere.
+  `1` otherwise (including when the schema state cannot be read at all — a
+  connection failure is contained to a fixed `migrate.check.unverifiable`
+  event). It performs no DDL and is safe to run anywhere.
 * `downgrade` requires an explicit target revision — a bare `head` is rejected —
-  so a downgrade is always a deliberate, named step.
+  so a downgrade is always a deliberate, named step. Failures exit `4` with a
+  fixed classification.
 
-All three emit structured, secret-free logs (the database URL is never logged)
-and increment the bounded `migration_runs_total` metric (`operation`, `outcome`).
+All paths emit structured, secret-free logs (the database URL, driver messages
+and tracebacks are never logged; failures carry only the exception *class*
+name) and increment the bounded `migration_runs_total` metric
+(`operation`, `outcome`).
 
 The container images expose the same commands; run the migration actor as a
 one-shot container/job that shares the API's configuration:
@@ -104,3 +114,219 @@ This is why the current migration head is reached purely by additive migrations
 * Do **not** downgrade with a bare `head`; always name the target revision.
 * Do **not** make a column non-nullable and start reading it in the same release
   that adds it — that breaks the rolling-deploy `ahead` guarantee.
+
+## Caller-controlled Alembic logging (Gate 4F)
+
+The application-controlled migration paths (everything under
+`python -m app.db.migrate`) build their Alembic `Config` through the shared
+helper `app.db.schema.alembic_config()`, which:
+
+1. constructs the `Config` from the real `alembic.ini`,
+2. forces the **lazy** ini parse and verifies an ini-derived sentinel
+   (`prepend_sys_path = .`) is present, and
+3. only then clears `config_file_name`, so `alembic/env.py`'s existing
+   conditional skips `logging.config.fileConfig()`.
+
+The ordering is load-bearing: Alembic's `Config.file_config` is memoized off
+the filename at first access, so clearing the filename *before* the parse
+silently loses every ini-derived option while migrations still appear to work.
+Tests pin both halves (`config_file_name is None` **and** the sentinel
+surviving), and the staging-publish in-image gate re-asserts them.
+
+Behavior delta (measured, not assumed):
+
+* **Before:** `fileConfig()` replaced the root handler with the ini's
+  plain-format stderr handler at `WARNING` and disabled the application's
+  migrate logger — Alembic INFO went to stderr in plain text, and **every
+  application event after the first `command.upgrade()` (including all
+  verification failure classifications and the success event) was silently
+  dropped** while exit codes still worked.
+* **After:** the application's structured stdout handler, level, and redacting
+  formatter survive the whole run. Application lifecycle and verification
+  events emit as before-and-after-upgrade structured JSON; Alembic's own INFO
+  records flow through the same structured handler onto stdout; stderr is
+  empty. SQLAlchemy engine/SQL logging remains suppressed (SQLAlchemy pins its
+  own logger to `WARN` when unset; a regression test asserts no
+  `sqlalchemy.engine` records even at root `DEBUG`). No bound SQL parameters
+  or connection details become newly visible.
+
+The direct `alembic` CLI (`python -m alembic ...`) builds its own config and
+is unchanged.
+
+The bare-command success event `migrate.upgrade_verify.done` carries two
+**independently sourced** provenance fields: `code_head` (repository script
+directory) and `db_revision` (raw `alembic_version` read-back). An exact match
+is required for exit `0` — which also means that *on the success path the two
+values are necessarily equal*, so independent revision evidence comes from the
+failure classifications (where the values genuinely differ and both are
+emitted) and from the reader → comparator pipeline; tests pin the
+`db_revision` field's read-back provenance mechanically rather than by value.
+
+Note a deliberate format coupling: the reader and comparator validate
+revisions as **12 lowercase hex characters** (this repository's Alembic
+default). A future revision created with an explicit non-conforming
+`--rev-id` would fail closed (reader exit `35`, comparator exit `41`) rather
+than pass — keep revision ids on the default format.
+
+## Raw live-revision reader
+
+```bash
+python -m app.db.revision_status     # prints exactly one line: the DB revision
+```
+
+A one-shot diagnostic that reads the live database's Alembic revision through
+the application configuration path (`DATABASE_URL`; the staging one-shot task
+also sets `SN_MIGRATION_MODE=1`) and prints **exactly one raw revision line**
+to stdout on success. It makes no policy decision, mutates nothing, uses a
+short-lived `NullPool` engine (disposed on exit), applies a bounded
+`connect_timeout` for PostgreSQL only (never passed to SQLite), and emits no
+logging, no tracebacks, and no exception text — failures are fixed stderr
+tokens with dedicated exit codes:
+
+| Exit | Classification |
+| --- | --- |
+| `0` | success — exactly one well-formed revision printed |
+| `30` | configuration failure (arguments, settings, engine construction) |
+| `31` | connection failure |
+| `32` | `alembic_version` table missing |
+| `33` | zero revision rows |
+| `34` | multiple revision rows |
+| `35` | malformed revision value |
+| `36` | unexpected safe failure |
+
+## Offline strict revision comparator
+
+```bash
+python -m app.db.revision_status | python -m app.db.revision_compare
+```
+
+Reads the live revision (exactly one line) from stdin, resolves the single
+repository code head, and exits `0` only on **exact equality**. It is strictly
+offline (never imports engine construction, never connects), reads the
+complete input (extra or truncated lines reject), and is deliberately stricter
+than the replica startup gate, which admits `ahead` for rolling deploys. Exit
+band: `40` bad arguments, `41` invalid input, `42` code head unresolved
+(zero/multiple heads), `43` mismatch, `44` unexpected safe failure.
+
+## Verification boundaries (Part A / Part B)
+
+**Part A — repository and in-image (delivered, PR-gated):** unit and
+integration tests run the real `command.upgrade()` through the real `env.py`
+and the production formatter; CI's container job and the staging-publish gate
+execute the **bare** actor command (the exact ECS `command` shape,
+`["python","-m","app.db.migrate"]`) inside the built worker image against
+controlled SQLite with no network, asserting positive verification events,
+fail-closed failure bands, reader/comparator behavior, and no secret-bearing
+output.
+
+**Part B — live execution (NOT yet performed or authorized):** none of the
+above proves behavior against a live/staging PostgreSQL database, an actual
+ECS task execution, or CloudWatch delivery of the events. SQLite differs from
+PostgreSQL (e.g. non-transactional DDL), and the ECS log wiring is exercised
+only at a real deployment. **No live verification has happened.** Live
+verification, image republication, and a fresh planning cycle each require
+separate authorization.
+
+## Future: dedicated read-only revision-reader ECS task (not yet authorized)
+
+Nothing in this section is deployed or permitted today. The reader and
+comparator run inside the built image, locally and in CI only. Running the
+reader as an ECS task requires a separately authorized permission change.
+
+**Identity and permission delta** — the reader task requires, beyond what any
+staging identity holds today:
+
+* `ecs:RunTask`, scoped by `ArnEquals ecs:cluster` to the staging cluster and
+  by `ArnLike ecs:task-definition` to the reader family. No identity in the
+  documented operator posture holds `RunTask` today; it is the substantive new
+  grant.
+* `iam:PassRole` for the execution role and an intentionally empty task role,
+  with `StringEquals iam:PassedToService = ecs-tasks.amazonaws.com` and exact
+  role ARNs in `Resource` — never a wildcard.
+* Read-after-create and completion polling: `ecs:DescribeTasks`,
+  `ecs:ListTasks` (cluster-scoped), and `logs:DescribeLogStreams` +
+  `logs:GetLogEvents` on the reader's log group. A `RunTask` grant without
+  these lets an operator start a task they cannot observe.
+
+Grant these in a dedicated temporary policy with a `DateLessThan
+aws:CurrentTime` expiry and a written retirement step, and verify the live
+policy before relying on any of it.
+
+**Tags: omit them.** Invoke the reader with neither `--tags` nor
+`--propagate-tags`. When an ECS tag-on-create API (`RunTask`,
+`RegisterTaskDefinition`, `CreateService`) receives tags, ECS performs an
+additional authorization check on `ecs:TagResource`; omitting tags removes
+that dependency and an entire failure mode. If tags are ever wanted, grant
+`ecs:TagResource` explicitly and narrowly in the reader's own temporary policy
+(with the `ecs:CreateAction` condition key) and record it here — never rely on
+a tagging grant inherited from a broader permission set, and never leave a
+required permission undocumented. A tagging denial is fail-closed *before*
+execution (the API returns `AccessDeniedException`; no task, no image pull, no
+secret injection, no DB connection) — distinct from an execution-role failure,
+which occurs after the task record exists (`STOPPED` with
+`ResourceInitializationError`), still before application code runs.
+
+**What does not contain a `RunTask` holder** — never treat these as security
+boundaries:
+
+* **The container ENTRYPOINT/command.** `RunTask` accepts
+  `overrides.containerOverrides[].command`, so a `RunTask` holder replaces the
+  command without needing `ecs:RegisterTaskDefinition`; a
+  `RegisterTaskDefinition` holder can additionally register any image.
+* **The empty migration task role.** `RunTask` accepts `overrides.taskRoleArn`
+  *and* `overrides.executionRoleArn`; the override names a *different* role,
+  so the emptiness of the definition's role is irrelevant. No ECS condition
+  key constrains the overridden role or override contents — the only boundary
+  is the `iam:PassRole` resource list.
+* **Environment variables.** `containerOverrides[].environment` is settable at
+  run time. Secret bindings cannot be re-pointed (container overrides have no
+  `secrets` field) and values cannot be read back through the ECS API, but the
+  injected `DATABASE_URL` is present in a container whose command the caller
+  controls, and the task security groups permit TCP 443 egress — the
+  credential can be exfiltrated. Redirecting the *connection* is harder (the
+  only non-443 egress is TCP 5432 scoped to the RDS security group), but
+  exfiltration needs no redirection.
+
+The operative control is **who holds `ecs:RunTask`**, and nothing else.
+
+**CloudTrail is corroborating recorded evidence, not a control.** The staging
+trail records management events only (single-region, no data events, no
+CloudWatch Logs delivery): it is detective, never preventive; delivery is
+delayed (typically within ~15 minutes); no alarm fires on trail events today;
+and `RunTask`/`RegisterTaskDefinition` are recorded but the container's own
+behavior (connections, reads) is not. Never cite CloudTrail as a reason a
+permission grant is safe.
+
+## Deployment prerequisites after this remediation
+
+* All previously generated workload plan artifacts remain **retired and
+  ineligible**; no repository content references any saved plan.
+* Both the **API and worker images must be republished** from a merge that
+  contains this remediation before any deployment planning resumes: the
+  previously published digests do not contain these fixes and are ineligible
+  for the workload stage.
+* The secured (git-ignored) tfvars must receive the **new** digests, the
+  operator-held source SHA must move to the merge commit, and a **fresh
+  planning cycle** is mandatory — all under separate authorization. Phase 4 is
+  **not** apply-ready on the strength of this PR.
+
+## Remaining architectural residuals (known, not addressed here)
+
+* **Worker startup gate is a table-existence probe, not a revision gate**: the
+  worker's `validate()` checks that the jobs/registry tables exist; unlike the
+  API it does not compare Alembic revisions, so a worker can start against a
+  schema that is behind the code as long as its tables exist. Adopting the
+  revision gate for the worker is a separate decision.
+* **Catch-all correlation**: FastAPI's generic `Exception` handler runs in
+  Starlette's outermost error middleware — above the correlation middleware,
+  whose context resets during unwind — so the 500 envelope/event on that path
+  has no request id (pre-existing; pinned by test). Starlette also re-raises
+  the exception to the server after the handler responds; Uvicorn's own logger
+  (outside the application logging stack) may render that traceback.
+* **`sanitize_exception().error_message` is not safe for driver errors**: its
+  redaction only strips URL-shaped credentials; non-URL driver prose
+  (host/IP/port/user, SQL, parameters) passes through. Only `error_class` may
+  be emitted for database exceptions; no caller emits the message field today.
+* **Exit code `3` is overloaded across actors**: Uvicorn exits `3` on startup
+  failure (API container) and the migration actor exits `3` on ambiguous code
+  heads — different task definitions, same number; keep dashboards per-actor.

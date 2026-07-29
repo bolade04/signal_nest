@@ -18,12 +18,23 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import sys
 import urllib.parse
 
 import pytest
 
 import app.db.bootstrap_app_role as bar
+
+
+@pytest.fixture(autouse=True)
+def _undo_process_global_logging_disable():
+    # ``bar.main()`` engages ``logging.disable(logging.CRITICAL)`` by design (the
+    # bootstrap process must emit only fixed lines). That switch is PROCESS
+    # GLOBAL and would silence every log record in tests that run after this
+    # file (e.g. the Gate 4F real-Alembic emission tests), so it is reset here.
+    yield
+    logging.disable(logging.NOTSET)
 
 # --- Fabricated, non-real fixtures --------------------------------------------
 
@@ -356,12 +367,24 @@ def _ok_secrets_plan() -> dict[str, object]:
 
 def test_import_does_not_pull_app_config_or_session() -> None:
     # Import (or re-import) the module in isolation and assert none of the
-    # prohibited app.* modules were dragged in as a side effect.
-    for forbidden in ("app.core.config", "app.db.session", "app.db.migrate"):
-        sys.modules.pop(forbidden, None)
-    importlib.reload(bar)
-    for forbidden in ("app.core.config", "app.db.session", "app.db.migrate"):
-        assert forbidden not in sys.modules, forbidden
+    # prohibited app.* modules were dragged in as a side effect. The popped
+    # modules are RESTORED afterwards: leaving them out of sys.modules would
+    # split later re-imports into fresh module objects (a second
+    # ``get_settings`` with its own lru cache), silently breaking any
+    # subsequent test that runs a real Alembic upgrade through env.py.
+    saved = {
+        name: sys.modules.pop(name, None)
+        for name in ("app.core.config", "app.db.session", "app.db.migrate")
+    }
+    try:
+        importlib.reload(bar)
+        for forbidden in saved:
+            assert forbidden not in sys.modules, forbidden
+    finally:
+        for name, module in saved.items():
+            sys.modules.pop(name, None)
+            if module is not None:
+                sys.modules[name] = module
 
 
 def test_no_bootstrap_runs_on_import() -> None:

@@ -439,9 +439,16 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
                 normalized_signal_ids=[m.id for m in members],
             )
         except Exception as exc:  # pragma: no cover - link failure must not break run
+            # Class name only: a driver StatementError's str() carries the full
+            # SQL and bound parameters, which redaction does not strip.
             logger.warning(
                 "intelligence_record_link_failed",
-                extra={"extra_fields": {"err": str(exc), "opportunity": opp.id}},
+                extra={
+                    "extra_fields": {
+                        "error_class": type(exc).__name__,
+                        "opportunity": opp.id,
+                    }
+                },
             )
 
         db.add(
@@ -529,9 +536,16 @@ def _persist_intelligence_record(db, request, norm, candidate: OpportunityCandid
             enricher_name=get_enricher().name,
         )
     except Exception as exc:  # pragma: no cover - persistence must never break ingest
+        # Class name only: a driver StatementError's str() carries the full SQL
+        # and bound parameters, which redaction does not strip.
         logger.warning(
             "intelligence_record_persist_failed",
-            extra={"extra_fields": {"err": str(exc), "signal": norm.id}},
+            extra={
+                "extra_fields": {
+                    "error_class": type(exc).__name__,
+                    "signal": norm.id,
+                }
+            },
         )
 
 
