@@ -1,0 +1,810 @@
+{
+ "_authority": "Authored from the executed remediation record of gates 4N-I27L, I27M, I27O and I27R. It is NOT generated from the tests directory; a guard in tests/test_i27r_rejection_remediation.py asserts that independence structurally.",
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_purpose": "The INDEPENDENT registry of remediation regression pins (Gate 4N-I27R).",
+ "_why_this_file_exists": [
+  "Gate 4N-I27Q's architect lane showed that tests/fixtures/package-requirements.json did not",
+  "list tests/test_i27o_blocker_remediations.py, and that scripts/package_requirements.py",
+  "checked only required-subset-of-present. Deleting that single file from the index and the",
+  "worktree left package_requirements, commit_package_coherence, leak_scan,",
+  "ci_invocation_model, allow_model and protected_inventory ALL green while the sole",
+  "regression pin for four High remediations vanished. A one-directional check over a list",
+  "that nobody updates when the package grows cannot notice its own incompleteness.",
+  "This registry names, per remediation family, the source that was fixed, the test that pins",
+  "it, the canary that reproduces the original defect, and the control that must refuse. It is",
+  "compared with the tree in BOTH directions, and every named path must exist."
+ ],
+ "remediations": [
+  {
+   "canary": "a real repository failure with a passing mechanism probe must exit non-zero",
+   "expected_control": "conjunction: success requires detected AND result['clean']",
+   "family": "TIER1_RESULT_PROPAGATION",
+   "gate": "4N-I27L",
+   "source_paths": [
+    "scripts/trust_validator.py",
+    "scripts/external_anchor.py"
+   ],
+   "test_path": "tests/test_tier1_result_propagation.py"
+  },
+  {
+   "canary": "an unreviewed aws:TagKeys entry must be refused before any policy is emitted",
+   "expected_control": "validation against trust_policies.trust_manifest()",
+   "family": "TAG_KEY_INDEPENDENT_DOMAIN",
+   "gate": "4N-I27M",
+   "source_paths": [
+    "scripts/gen_role_bootstrap_policy.py"
+   ],
+   "test_path": "tests/test_tag_key_domain.py"
+  },
+  {
+   "canary": "echo substitution, budgets:*, a self-supplied digest, and a broadened account allow-list must each refuse",
+   "expected_control": "executable position, closure contract, self-attestation detection, approved-account registry",
+   "family": "HIGH_BLOCKER_REMEDIATIONS",
+   "gate": "4N-I27O",
+   "source_paths": [
+    "scripts/ci_invocation_model.py",
+    "scripts/allow_model.py",
+    "scripts/protected_inventory.py",
+    "scripts/leak_scan.py"
+   ],
+   "test_path": "tests/test_i27o_blocker_remediations.py"
+  },
+  {
+   "canary": "a predicted commit tree that is not the index tree, and a package whose referenced paths do not exist",
+   "expected_control": "index-tree binding and referenced-path existence",
+   "family": "PACKAGE_AND_LINEAGE",
+   "gate": "4N-I23",
+   "source_paths": [
+    "scripts/commit_package_coherence.py",
+    "scripts/tracked_state.py"
+   ],
+   "test_path": "tests/test_i23_package_and_lineage.py"
+  },
+  {
+   "canary": "a graded step replaced by an echo of its own command text",
+   "expected_control": "invocation model plus the authored package requirement",
+   "family": "CI_INVOCATION_THIRTEEN_FINDINGS",
+   "gate": "4N-I24C",
+   "source_paths": [
+    "scripts/ci_invocation_model.py",
+    "scripts/package_requirements.py"
+   ],
+   "test_path": "tests/test_i24c_thirteen_findings.py"
+  },
+  {
+   "canary": "a discovered site absent from the coverage matrix",
+   "expected_control": "discovered-minus-covered comparison",
+   "family": "SITE_COVERAGE",
+   "gate": "4N-I24D",
+   "source_paths": [
+    "scripts/site_coverage.py",
+    "scripts/mutation_discovery.py"
+   ],
+   "test_path": "tests/test_i24d_site_coverage.py"
+  },
+  {
+   "canary": "trailing '&', 'set +o errexit', 'python3 --version <script>', a '.example' file carrying an identifier, a nested self-digest, and an account id inside a non-digest hex run must each refuse",
+   "expected_control": "fail-closed propagation, executable-position invocation, suffix-independent scanning, recursive self-attestation, digest-width-bounded tokenisation",
+   "family": "REJECTION_REMEDIATION",
+   "gate": "4N-I27R",
+   "source_paths": [
+    "scripts/failure_propagation.py",
+    "scripts/ci_invocation_model.py",
+    "scripts/leak_scan.py",
+    "scripts/protected_inventory.py"
+   ],
+   "test_path": "tests/test_i27r_rejection_remediation.py"
+  },
+  {
+   "canary": "a workflow shell without -e, a masking line whose quoted prose contains 'false' or 'exit 1', `builtin set +e`, `eval \"set +e\"`, a dynamic `eval`, a quoted `<<` that would open a false heredoc, and an unterminated heredoc must EACH refuse; and a real `<<'PY'` heredoc, a here-string, and the clean workflow must each still be accepted",
+   "expected_control": "the effective errexit state is derived from the shell that actually runs the step and carried across the command sequence; quoted text and comments are inert; builtin/command prefixes and static eval are recognised while dynamic eval fails closed; heredoc openers are syntactic and analysis resumes after the terminator",
+   "family": "SHELL_SEMANTICS_REMEDIATION",
+   "gate": "4N-I27U",
+   "source_paths": [
+    "scripts/failure_propagation.py"
+   ],
+   "test_path": "tests/test_i27u_failure_propagation.py"
+  },
+  {
+   "canary": "`cmd; true` must classify PROPAGATES under errexit and MASKED without it; a compound or conditional keyword in COMMAND POSITION must yield UNKNOWN while the same word as an argument must not; a `;` inside quotes, a comment or a static eval must not split the line",
+   "expected_control": "trailing-command classification consults the effective errexit state instead of asserting one behaviour for both, contexts where bash suspends errexit refuse rather than guess, and every executable expectation is checked against bash independently of the analyser",
+   "family": "SEQUENCE_STATE_SEMANTICS",
+   "gate": "4N-I27W",
+   "source_paths": [
+    "scripts/failure_propagation.py"
+   ],
+   "test_path": "tests/test_i27w_sequence_semantics.py"
+  },
+  {
+   "canary": "only an explicit `exit 0` in a trap that binds the PARENT shell may be called absorbing; bare exit, `:`, `true`, a subshell-local trap and a dynamic body must not be, and a `{ \u2026; }` group trap must be",
+   "expected_control": "compound-context recognition runs first and independently of any separator; ERR/EXIT trap state is carried through the step with unprovable bodies failing closed; and control words are resolved after quote removal so a quoted spelling of `set` is still the builtin while prose stays inert",
+   "family": "SHELL_CONTEXT_AND_TRAP_SEMANTICS",
+   "gate": "4N-I27Z + 4N-I28B",
+   "source_paths": [
+    "scripts/failure_propagation.py"
+   ],
+   "test_path": "tests/test_i27z_shell_context_semantics.py"
+  },
+  {
+   "canary": "a hosted-zone-shaped literal with no declared provenance must be refused in ANY tracked text file \u2014 policy generator, unrelated script, extensionless file, compound suffix, documentation or unmarked fixture \u2014 while an explicitly synthetic value and a protected-input placeholder stay clean",
+   "expected_control": "leak_scan.scan_text over every tracked text file; no named-file list",
+   "family": "IDENTIFIER_PROVENANCE",
+   "gate": "4N-I27Z + 4N-I28B",
+   "source_paths": [
+    "scripts/gen_operator_policies.py",
+    "scripts/leak_scan.py",
+    "scripts/signalnest_identity.py",
+    "scripts/verify_closure.py"
+   ],
+   "test_path": "tests/test_operator_policies.py"
+  },
+  {
+   "canary": "a canonical-object digest placed in the raw-file field, a missing required field, a changed canonicalisation version, or a single altered byte must each refuse",
+   "expected_control": "raw-file and canonical-object digests are recorded separately with serialization, encoding, newline and canonicalisation-version metadata, and both are recomputable from the distributed file",
+   "family": "REVIEW_PACKET_DIGEST_CONTRACT",
+   "gate": "4N-I27Z",
+   "source_paths": [
+    "scripts/review_packet_digest.py"
+   ],
+   "test_path": "tests/test_i27z_packet_digest_contract.py"
+  },
+  {
+   "canary": "a lane that terminated unsuccessfully with no artifact must classify FAILED, never COMPLETED_NO_ARTIFACT; a valid artifact must outrank a non-zero process exit",
+   "expected_control": "precedence: artifact, then process completion, then transport",
+   "family": "REVIEWER_RETRIEVAL_STATES",
+   "gate": "4N-I28B",
+   "source_paths": [
+    "scripts/reviewer_retrieval_state.py"
+   ],
+   "test_path": "tests/test_i28b_trap_scope_and_route53_domain.py"
+  },
+  {
+   "canary": "excluding a security-relevant DIRECTORY component from is_scannable, adding one to EXCLUDED_PATH_PARTS, making the hosted-zone rule case-insensitive, or deleting the analyser's trap-replacement clause must each fail a pinned test",
+   "expected_control": "repository-relative path probes, a stated exclusion set, discriminating case probes, and an analyser-state axis",
+   "family": "SCAN_DOMAIN_AND_STATE_PINS",
+   "gate": "4N-I28D",
+   "source_paths": [
+    "scripts/leak_scan.py",
+    "scripts/failure_propagation.py"
+   ],
+   "test_path": "tests/test_i28d_scan_domain_and_state_pins.py"
+  },
+  {
+   "canary": "grading a live enforcing constant as non-security, or a dead constant as security-critical, must fail \u2014 classification follows the call graph, not the name",
+   "expected_control": "enforcement_path.enforcement_inventory() compared against the contract",
+   "family": "ENFORCEMENT_PATH_CLASSIFICATION",
+   "gate": "4N-I28I (RC-3)",
+   "source_paths": [
+    "scripts/enforcement_path.py",
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28i_enforcement_path_classification.py"
+  },
+  {
+   "canary": "a discovered path that leaves the scan without a categorized reason must fail; discovered == scanned + categorized skips + errors must reconcile",
+   "expected_control": "leak_scan.scan_decision() and scan_accounting()",
+   "family": "SCAN_DECISION_ACCOUNTING",
+   "gate": "4N-I28I (RC-2)",
+   "source_paths": [
+    "scripts/leak_scan.py"
+   ],
+   "test_path": "tests/test_i28i_scan_accounting.py"
+  },
+  {
+   "canary": "a trap or set beginning a later command on the same line must be recognised; the corpus domain must contain composed forms, and every frozen I28G disagreement must stay closed",
+   "expected_control": "command_segments() applied by both recognisers, with a shared scope model",
+   "family": "COMPOSED_INSTALL_CORPUS",
+   "gate": "4N-I28I (RC-1, RC-5)",
+   "source_paths": [
+    "scripts/failure_propagation.py"
+   ],
+   "test_path": "tests/test_i28i_composed_install_corpus.py"
+  },
+  {
+   "canary": "renaming a live control must not remove it from the site universe, and a never-called function with a decisive-looking name must not enter it",
+   "expected_control": "production/control site membership is derived from reachability from a workflow-invoked entry point plus the ability to change an outcome; no suffix, keyword or per-module allowlist participates, and an unresolved call fails the derivation closed",
+   "family": "ENFORCEMENT_PATH_SITE_TAXONOMY",
+   "gate": "4N-I28K",
+   "source_paths": [
+    "scripts/site_taxonomy.py",
+    "scripts/mutation_discovery.py"
+   ],
+   "test_path": "tests/test_i28k_site_taxonomy.py"
+  },
+  {
+   "canary": "constructing a class must not admit a member nothing reaches, and a subcommand the workflow never invokes must not contribute production/control sites",
+   "expected_control": "class members enter through explicit attribute access, dispatch, callback, bounded getattr or construction reaching __init__, with inheritance followed; reachability roots are commands with their arguments, so dispatch begins at the selected handler and unresolved selection fails closed",
+   "family": "MEMBER_AND_COMMAND_REACHABILITY",
+   "gate": "4N-I28M",
+   "source_paths": [
+    "scripts/site_taxonomy.py"
+   ],
+   "test_path": "tests/test_i28m_member_and_command_reachability.py"
+  },
+  {
+   "canary": "a contracted assertion moved into a statically unreachable region - `if False:`, after a return or raise, or inside a never-called nested function - must fail the assertion-contract control even though every required token, class and count is syntactically preserved",
+   "expected_control": "bounded Python control-flow analysis decides whether each contracted assertion can execute; only REACHABLE assertions satisfy a required class, CONDITIONAL ones require a named reachable guard, and UNRESOLVED fails closed. A separate layer-2 meta contract protects the control itself, pins the mandatory tests by collection, and pins the authored registry against unexplained weakening.",
+   "family": "ASSERTION_REACHABILITY_AND_INVENTORY_COMPLETENESS",
+   "gate": "4N-I28W",
+   "source_paths": [
+    "scripts/assertion_contracts.py",
+    "tests/fixtures/assertion-meta-contract.json",
+    "tests/fixtures/assertion-registry-baseline.json"
+   ],
+   "test_path": "tests/test_i28w_assertion_reachability.py"
+  },
+  {
+   "canary": "replacing a contracted load-bearing test's body with `assert True` must fail the assertion-contract control, from a baseline that is green on every other control including package coherence",
+   "expected_control": "an AUTHORED contract registry states which assertion classes each load-bearing test must contain and which stable tokens they must reference; an AST validator checks the test against that contract and never derives the requirement from the test it audits; trivial, missing, self-comparing, truthiness-weakened and unresolved-helper assertions all fail closed",
+   "family": "LOAD_BEARING_ASSERTION_SELF_PROTECTION",
+   "gate": "4N-I28U",
+   "source_paths": [
+    "scripts/assertion_contracts.py",
+    "tests/fixtures/assertion-contract-registry.json"
+   ],
+   "test_path": "tests/test_i28u_assertion_self_protection.py"
+  },
+  {
+   "canary": "a comment-only edit to ci.yml that names or unnames a scripts/*.py must not change the command-root set, the site count or the site identity hash, while a real executable edit still must",
+   "expected_control": "a root is derived from executable semantics only - a command in a step, a bounded Python heredoc, or a bounded shell script the step runs; inert text creates no root, an occurrence provable neither executable nor inert fails closed, and release role is derived from the aggregator predicate rather than stamped",
+   "family": "EXECUTABLE_COMMAND_ROOTS",
+   "gate": "4N-I28S",
+   "source_paths": [
+    "scripts/shell_command_model.py",
+    "scripts/site_taxonomy.py"
+   ],
+   "test_path": "tests/test_i28s_command_roots.py"
+  },
+  {
+   "canary": "a framework-dispatched override on a function-local class that executes under a graded command must be categorised, and a subcommand a graded step invokes through a heredoc must contribute its handler",
+   "expected_control": "classes are indexed by lexical path; a DRIVEN visitor's protocol overrides are candidates and observation decides exercise; roots are the commands graded steps actually run, including bounded subprocess invocations",
+   "family": "DYNAMIC_EDGES_AND_REAL_CI_ROOTS",
+   "gate": "4N-I28O",
+   "source_paths": [
+    "scripts/site_taxonomy.py",
+    "scripts/execution_trace.py"
+   ],
+   "test_path": "tests/test_i28o_dynamic_edges.py"
+  },
+  {
+   "canary": "a mandatory assurance control that is de-collected by conftest, skipped by a module-level marker, deselected on the graded command, narrowed out by a positional path, xfailed, or never entered in its call phase must fail the session rather than pass silently",
+   "expected_control": "an independently located pytest plugin observes the AUTHORITATIVE graded session \u2014 its real collected node ids and its real collect/setup/call/teardown reports \u2014 and requires every node in the authored registry to be collected, not deselected, not skipped, not xfailed, entered in its required phase and passed; the graded command contract independently requires the plugin and forbids selection-altering options",
+   "family": "MANDATORY_PYTEST_SESSION_EXECUTION",
+   "gate": "4N-I28Y",
+   "source_paths": [
+    "scripts/pytest_session_guard.py",
+    "scripts/pytest_config_contract.py",
+    "scripts/ci_invocation_model.py"
+   ],
+   "test_path": "tests/test_i28y_mandatory_session.py"
+  },
+  {
+   "canary": "an object that claims the guard's plugin name \u2014 naive, faithful, duck-typed, proxied or subclassed \u2014 must not be able to make the genuine guard decline protection, and must not satisfy the anti-circularity control",
+   "expected_control": "plugin identity is established by exact type from the genuine module, pinned implementation provenance (resolved path, source hash, spec origin, loader class) and evidence that the genuine lifecycle hooks executed; a name collision with a non-genuine object raises GuardIdentityError instead of returning silently",
+   "family": "SESSION_GUARD_IMPLEMENTATION_IDENTITY",
+   "gate": "4N-I28AB",
+   "source_paths": [
+    "scripts/pytest_session_guard.py",
+    "tests/fixtures/mandatory-session-baseline.json"
+   ],
+   "test_path": "tests/test_i28ab_guard_identity.py"
+  },
+  {
+   "canary": "code substituted into sys.modules before pytest starts must not be able to execute while every disk-reading check reports the legitimate staged file",
+   "expected_control": "executed-code identity is derived from the code objects resident in the running module and compared against a plain compile of the pinned bytes, with authored critical callables required to be present and matching; an independently implemented oracle using an ast parse and a disassembled opcode stream must agree",
+   "family": "EXECUTED_CODE_PROVENANCE",
+   "gate": "4N-I28AE",
+   "source_paths": [
+    "scripts/signalnest_bootstrap.py",
+    "scripts/executed_code_provenance.py",
+    "tests/fixtures/protected-module-set.json"
+   ],
+   "test_path": "tests/test_i28ae_executed_provenance.py"
+  },
+  {
+   "canary": "code that is byte-identical to its pinned bytes must not be able to change behaviour by rebinding the state it reads, and a startup mechanism must not be able to influence the graded run merely because nothing adjudicates it",
+   "expected_control": "executed-STATE provenance binds the load-bearing state reachable from each critical callable \u2014 module globals, the module-level callables reached through co_names, keyword defaults, module bindings and the CONTENT of every file those values name \u2014 with the required name set DERIVED from co_names so the contract cannot omit a name, and both an uncovered reachable name and a pin that binds nothing fail closed; an authored startup policy classifies every mechanism REQUIRED_AND_BOUND / ALLOWED_AND_BOUND / PROHIBITED / NOT_APPLICABLE, refuses any observed mechanism it does not classify, content-binds every allowed startup file, and requires a NOT_APPLICABLE disposition to name an executable proof test; both layers re-run at session finish",
+   "family": "EXECUTED_STATE_PROVENANCE_AND_STARTUP_POLICY",
+   "gate": "4N-I28AG",
+   "source_paths": [
+    "scripts/executed_state_provenance.py",
+    "scripts/startup_policy.py",
+    "scripts/signalnest_bootstrap.py",
+    "tests/fixtures/executed-state-contract.json",
+    "tests/fixtures/startup-policy.json"
+   ],
+   "test_path": "tests/test_i28ag_executed_state_and_startup.py"
+  },
+  {
+   "canary": "the registry the guard ACTUALLY consumes must be the one that is bound, and a required external executable must not be substitutable by placing a fake earlier on PATH",
+   "expected_control": "registry_authority resolves the effective registry to exactly one legal location with no override, reads it ONCE and derives digest, parsed set and enforcement from that single read, pins path, content and parsed node set against the baseline, and requires the staged blob to match the worktree file; external_executable_trust resolves every required executable against an authored approved path set on the RESOLVED target, refuses a shadow earlier on PATH, content-identifies it, refuses environment that can change what a read-only command reports, and re-compares a snapshot at session finish so a mid-run substitution is caught",
+   "family": "EFFECTIVE_REGISTRY_AND_EXTERNAL_EXECUTABLE_TRUST",
+   "gate": "4N-I28AI",
+   "source_paths": [
+    "scripts/registry_authority.py",
+    "scripts/external_executable_trust.py",
+    "scripts/pytest_session_guard.py",
+    "scripts/signalnest_bootstrap.py",
+    "tests/fixtures/executable-trust-policy.json"
+   ],
+   "test_path": "tests/test_i28ai_registry_and_executable_trust.py"
+  },
+  {
+   "canary": "an external executable the assurance path can invoke must not be trusted merely because nobody remembered to name it in the policy",
+   "expected_control": "executable_inventory DERIVES the executable set from reachable behaviour with module-qualified attribution, over-approximating reachability so a new bare-name executable fails closed until classified; heredoc bodies, shell functions, builtins, inert comments and docstrings and unrelated local functions named run/main/verify/materialize are excluded; unresolved dynamic argv must be explicitly declared; a REACHABLE_NOT_EXERCISED disposition contradicted by runtime observation fails; tar is APPROVED_PATH_SET_AND_CONTENT_BOUND and commit_package_coherence invokes the validated absolute path; python3 is CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "family": "DERIVED_EXTERNAL_EXECUTABLE_INVENTORY",
+   "gate": "4N-I28AK",
+   "source_paths": [
+    "scripts/executable_inventory.py",
+    "scripts/external_executable_trust.py",
+    "scripts/commit_package_coherence.py",
+    "tests/fixtures/executable-trust-policy.json"
+   ],
+   "test_path": "tests/test_i28ak_executable_inventory.py"
+  },
+  {
+   "canary": "the final verifier must not be replaceable with constant success; an executable must be trusted before it can run, not after someone attaches a trace; and an assurance fixture that never executes must not count as proof",
+   "expected_control": "reverify, pytest_sessionfinish and executed_code_provenance are critical callables so stubbing any of them is refused; REACHABLE_NOT_EXERCISED_IN_GRADED_PATH is retired and actively refused, with five executables bound before graded work and npm carrying an UNREACHABLE_FROM_GRADED_ROOTS precondition re-derived from the command-root universe on every check; a valid attacker sitecustomize with five per-stage sentinels proves the meta_path attack executes under plain Python and is refused by the graded session, and the invalid historical fixture is preserved byte-exact but demoted in an authored disposition",
+   "family": "SESSION_FINISH_PREEXECUTION_AND_METAPATH",
+   "gate": "4N-I28AM",
+   "source_paths": [
+    "scripts/external_executable_trust.py",
+    "tests/fixtures/executable-trust-policy.json",
+    "tests/fixtures/protected-module-set.json",
+    "tests/fixtures/valid-meta-path-fixture.py",
+    "tests/fixtures/historical-fixture-disposition.json"
+   ],
+   "test_path": "tests/test_i28am_session_finish_and_metapath.py"
+  },
+  {
+   "canary": "a command after an assignment, in a pipeline, or inside $( ) must be discovered and must carry a policy disposition",
+   "expected_control": "shell_positions command-position model consumed by executable_inventory; an undeclared or stale unresolved site fails",
+   "family": "SHELL_COMMAND_POSITION_DERIVATION",
+   "gate": "4N-I28AO",
+   "source_paths": [
+    "scripts/shell_positions.py",
+    "scripts/executable_inventory.py"
+   ],
+   "test_path": "tests/test_i28ao_shell_positions_and_local_imports.py"
+  },
+  {
+   "canary": "replacing site_taxonomy.release_roots with a function returning [] must be detected before npm may execute",
+   "expected_control": "executed_state_provenance.local_import_tokens binds the imported module by content and the imported callable by code identity",
+   "family": "FUNCTION_LOCAL_IMPORT_BINDING",
+   "gate": "4N-I28AO",
+   "source_paths": [
+    "scripts/executed_state_provenance.py",
+    "scripts/external_executable_trust.py"
+   ],
+   "test_path": "tests/test_i28ao_shell_positions_and_local_imports.py"
+  },
+  {
+   "canary": "emptying site_taxonomy._DERIVED['resolved_roots'], or mutating a list nested inside it, must be refused before any reachability adjudication consumes the poisoned root set",
+   "expected_control": "cache_authority.verify() recomputes roots and sites from staged source with every classified cache suspended and refuses on disagreement; site_taxonomy._store() freezes every value entering the cache so the nested in-place shape cannot be staged at all",
+   "family": "TRUST_CACHE_AUTHORITY",
+   "gate": "4N-I28AR",
+   "source_paths": [
+    "scripts/cache_authority.py",
+    "scripts/site_taxonomy.py",
+    "scripts/signalnest_bootstrap.py",
+    "scripts/executed_state_provenance.py"
+   ],
+   "test_path": "tests/test_i28ar_cache_authority.py"
+  },
+  {
+   "canary": "planting an executable npm inside an approved installation root \u2014 including a fully self-consistent attacker Node distribution \u2014 must be refused before any graded npm command runs",
+   "expected_control": "npm_authority.verify() resolves the whole npm -> symlink -> CLI -> Node -> package-root -> package.json chain, requires the installation to satisfy its family's provenance evidence and to be referenced by the version manager's own metadata, and external_executable_trust no longer implements approved_path_prefixes at all",
+   "family": "NPM_TOOLCHAIN_IDENTITY",
+   "gate": "4N-I28AS",
+   "source_paths": [
+    "scripts/npm_authority.py",
+    "scripts/external_executable_trust.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28as_npm_authority.py"
+  },
+  {
+   "canary": "setting DOCKER_HOST, DOCKER_CONTEXT or DOCKER_CONFIG, defining a Docker context, or placing currentContext/credsStore/credHelpers in config.json must be refused before any graded docker command runs",
+   "expected_control": "docker_boundary.verify() adjudicates every DOCKER_*/BUILDKIT_*/COMPOSE_* variable present (unclassified ones fail closed), every top-level config.json field, the context store, steering flags on all 50 derived call sites, and the machine-enforced external-CI assumption",
+   "family": "DOCKER_EXECUTION_BOUNDARY",
+   "gate": "4N-I28AT",
+   "source_paths": [
+    "scripts/docker_boundary.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28at_docker_boundary.py"
+  },
+  {
+   "canary": "an external executable placed after a `case ... esac` in a graded shell source, or any parse that does not consume the source to EOF, must be detected rather than silently omitted",
+   "expected_control": "shell_positions clears the case-pattern skip on `esac`/`fi`/`done` and reports a measured completeness contract (status, consumed position, EOF, unconsumed ranges, open frames, parse errors); executable_inventory refuses any scan whose result is not trustworthy",
+   "family": "SHELL_PARSER_COMPLETENESS",
+   "gate": "4N-I28AV",
+   "source_paths": [
+    "scripts/shell_positions.py",
+    "scripts/executable_inventory.py"
+   ],
+   "test_path": "tests/test_i28av_shell_parser_completeness.py"
+  },
+  {
+   "canary": "a command word following `exec` \u2014 static, dynamic, or option-shaped \u2014 must be discovered, declared unresolved, or fail closed; it must never be silently absent while the parse reports COMPLETE and trustworthy, and two independent derivations must never agree by both omitting it",
+   "expected_control": "shell_positions models exec as a command-position transfer with an explicit arity-bearing option table and records a TransferSite for every occurrence; docker_boundary._command_words is exec-aware; npm_authority.derive_call_sites reconciles two ways; exec_transfer_oracle derives the same transfers WITHOUT the production parser and every comparison carries an expected-presence condition; coproc is UNSUPPORTED_AND_FAIL_CLOSED",
+   "family": "EXEC_COMMAND_POSITION_TRANSFER",
+   "gate": "4N-I28BB",
+   "source_paths": [
+    "scripts/shell_positions.py",
+    "scripts/exec_transfer_oracle.py",
+    "scripts/docker_boundary.py",
+    "scripts/npm_authority.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bb_exec_transfer.py"
+  },
+  {
+   "canary": "an authored per-site Docker steering field that no decision reads, a duplicated or deleted site identity, an unclassifiable site, or a graded step declaring Docker steering in its own env, must each fail the Docker aggregate",
+   "expected_control": "docker_boundary.enforce_per_site adjudicates every site, consumes every authored field, reconciles the authored universe against the derived one both directions, consumes env_keys from the derived records, and fails on UNSUPPORTED/UNRESOLVED whatever the classification; verify() carries the result into the Docker aggregate",
+   "family": "DOCKER_PER_SITE_STEERING_ENFORCEMENT",
+   "gate": "4N-I28BE",
+   "source_paths": [
+    "scripts/docker_boundary.py"
+   ],
+   "test_path": "tests/test_i28be_docker_per_site_enforcement.py"
+  },
+  {
+   "canary": "unrelated prose containing a steering keyword must resolve to nothing, and a Docker per-site mutation after a clean baseline must fail session finish",
+   "expected_control": "docker_boundary.resolve_steering_entry uses an exact table with outer-whitespace-only normalization and a bound digest; signalnest_bootstrap binds per_site_state at establish and reverify re-derives it freshly and compares",
+   "family": "DOCKER_CATEGORY_AND_SESSION_FINISH",
+   "gate": "4N-I28BF-A",
+   "source_paths": [
+    "scripts/docker_boundary.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bfa_category_and_session_finish.py"
+  },
+  {
+   "family": "I28BF_A4_GRADED_SESSION_ATTACKS",
+   "gate": "4N-I28BF-A4",
+   "canary": "a Docker aggregate forced PASS, an ignored reverify comparison, or a forced-clean final aggregator must each fail a real isolated graded session end to end",
+   "expected_control": "tests/test_i28bf_a4_graded_sessions.py drives real pytest subprocess graded sessions whose pytest_sessionfinish reverify sets exitstatus=3 on Docker per-site drift, comparison drift, or a genuine assurance failure; A-F battery included",
+   "source_paths": [
+    "scripts/docker_boundary.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_a4_graded_sessions.py"
+  },
+  {
+   "family": "I28BF_A4_ASSERTION_MUTATIONS",
+   "gate": "4N-I28BF-A4",
+   "canary": "each of the ten assertion-mutation classes against a live load-bearing contract must be caught, and the mandatory assertion control must fail the graded session on a gutted live assertion",
+   "expected_control": "tests/test_i28bf_a4_assertion_mutations.py exercises assertion_contracts.validate over the ten classes plus an end-to-end graded session; inert changes stay inert",
+   "source_paths": [
+    "scripts/assertion_contracts.py"
+   ],
+   "test_path": "tests/test_i28bf_a4_assertion_mutations.py"
+  },
+  {
+   "family": "I28BF_A4_REVERIFY_RESULT_SHAPE",
+   "gate": "4N-I28BF-A4",
+   "canary": "the production reverify result shape (flattened booleans incl. docker_per_site) must be bound so a differently-shaped object hiding a Docker failure is refused",
+   "expected_control": "tests/test_i28bf_a4_result_shape.py invokes the real reverify path and refuses ten shape violations under a bound schema version",
+   "source_paths": [
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_a4_result_shape.py"
+  },
+  {
+   "family": "I28BF_A4_AC23_HONESTY",
+   "gate": "4N-I28BF-A4",
+   "canary": "AC-23 must honestly match its target's protected property, classes, proving mutation, minimum, owner callables, and consumers; eight retarget/overstate attacks must be refused",
+   "expected_control": "tests/test_i28bf_a4_ac23_honesty.py validates AC-23 metadata against the live target via assertion_contracts and the live docker_boundary callables",
+   "source_paths": [
+    "scripts/assertion_contracts.py",
+    "scripts/docker_boundary.py"
+   ],
+   "test_path": "tests/test_i28bf_a4_ac23_honesty.py"
+  },
+  {
+   "family": "I28BF_A4_STRUCTURAL_SELF_PROTECTION",
+   "gate": "4N-I28BF-A4",
+   "canary": "structural controls must inspect executable AST/reachability, not text presence: comments, docstrings, strings, dead code, unreachable branches, stale aliases, and renamed callables must not satisfy a control",
+   "expected_control": "tests/test_i28bf_a4_structural_self_protection.py drives eight text-only attacks against assertion_contracts.validate and an AST-based session-finish check; inert text stays inert",
+   "source_paths": [
+    "scripts/assertion_contracts.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_a4_structural_self_protection.py"
+  },
+  {
+   "family": "I28BF_B1_DOCKER_ASSURANCE_STATE",
+   "gate": "4N-I28BF-B1",
+   "canary": "the authoritative Docker assurance state must be complete, deterministic, digest-bound, and fail-closed",
+   "expected_control": "docker_assurance_state.validate_state/state_digest bind and validate the state; a stale/forced state is refused",
+   "source_paths": [
+    "scripts/docker_assurance_state.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_b1_docker_assurance_state.py"
+  },
+  {
+   "family": "I28BF_B1_GOVERNED_CACHE",
+   "gate": "4N-I28BF-B1",
+   "canary": "the dedicated Docker assurance cache must be governed, complete-keyed, value-validated, and deep-frozen",
+   "expected_control": "cache_authority governs docker_assurance_state._STATE_CACHE; key/value validation refuses cross-identity or malformed entries",
+   "source_paths": [
+    "scripts/docker_assurance_state.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_b1_governed_cache.py"
+  },
+  {
+   "family": "I28BF_B1_POISONING",
+   "gate": "4N-I28BF-B1",
+   "canary": "the thirty cache/state poisons must each be refused by the intended detector",
+   "expected_control": "validate_state/validate_cache_key/validate_cache_value and deep-freeze refuse all thirty",
+   "source_paths": [
+    "scripts/docker_assurance_state.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_b1_poisoning.py"
+  },
+  {
+   "family": "I28BF_B1_INTEGRATION",
+   "gate": "4N-I28BF-B1",
+   "canary": "establish binds and reverify freshly re-derives the authoritative state; cache never substitutes for fresh finish",
+   "expected_control": "signalnest_bootstrap.establish/reverify integrate docker_assurance_state; focused graded sessions prove propagation",
+   "source_paths": [
+    "scripts/docker_assurance_state.py",
+    "scripts/signalnest_bootstrap.py"
+   ],
+   "test_path": "tests/test_i28bf_b1_integration.py"
+  },
+  {
+   "family": "I28BF_B2_FALSIFICATION_BATTERY",
+   "gate": "4N-I28BF-B2",
+   "canary": "the 37-arm isolated falsification battery must keep every load-bearing B1 mutant ACTIVATED_REFUSED; B2-FIND-01 (per-site/universe reconciliation) must stay closed",
+   "expected_control": "tests/test_i28bf_b2_falsification.py drives real graded sessions and production detectors; docker_assurance_state.validate_state reconciles per-site ids against the universe",
+   "source_paths": [
+    "scripts/docker_assurance_state.py"
+   ],
+   "test_path": "tests/test_i28bf_b2_falsification.py"
+  },
+  {
+   "family": "I28BF_B3_ENVIRONMENT_MATRIX",
+   "gate": "4N-I28BF-B3",
+   "canary": "the environment matrix must keep state_digest seed/process/env-independent, hostile Docker env/config fail-closed, and cross-tree/cross-authorization cache rejected across all 20 conditions + hash seeds + fresh processes + graded A-H",
+   "expected_control": "tests/test_i28bf_b3_environment.py runs the full environment matrix in isolated subprocesses/clones with EXPECTED_PASS/EXPECTED_FAIL_CLOSED classification and a real-repo-unchanged guard",
+   "source_paths": [
+    "scripts/docker_assurance_state.py",
+    "scripts/docker_boundary.py"
+   ],
+   "test_path": "tests/test_i28bf_b3_environment.py"
+  },
+  {
+   "family": "I28BG_B1_WORKFLOW_VERIFIER",
+   "gate": "4N-I28BG-B1",
+   "canary": "the reusable publish-workflow verifier must bind the built image digest, resolved immutable tags, and freshly re-derived source identity, and fail closed on source drift, image/tag substitution, authorization change, or manifest replay",
+   "expected_control": "workflow_assurance.establish/pre_build_verify/post_build_image_bind/pre_push_verify bind and re-derive identity across the four phases; a drifted, substituted, mutable-tagged, or replayed record does not authorize the push",
+   "source_paths": [
+    "scripts/workflow_assurance.py"
+   ],
+   "test_path": "tests/test_i28bg_b1_workflow_assurance.py"
+  },
+  {
+   "family": "I28BG_B1_GRAPH_VALIDATOR",
+   "gate": "4N-I28BG-B1",
+   "canary": "the static graph validator must enforce checkout<establish<pre-build<build<image-bind<pre-push<push ordering, refuse continue-on-error on assurance steps and always()/failure() on downstream Docker steps, detect alternate push paths, and leave the two real publication workflows NOT_YET_INTEGRATED",
+   "expected_control": "workflow_graph_validator.validate_workflow/_validate_job_ordering derive the job/step graph and fail a broken integration; integration_status reports reader-publish and staging-publish NOT_YET_INTEGRATED",
+   "source_paths": [
+    "scripts/workflow_graph_validator.py"
+   ],
+   "test_path": "tests/test_i28bg_b1_graph_validator.py"
+  },
+  {
+   "family": "I28BG_B1_ARCHITECTURE_ATTACKS",
+   "gate": "4N-I28BG-B1",
+   "canary": "the thirty-arm architecture attack battery must activate each mutation, execute the live target, fire the intended detector, and fail closed \u2014 with no generic syntax or fixture failure substituting for a detector",
+   "expected_control": "tests/test_i28bg_b1_attacks.py runs the workflow-identity, source, Dockerfile, context, generated-input, symlink, authorization, image-digest, tag, metadata, cache, platform, replay, ordering, bypass, and forced-PASS attacks against the B1 components",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py"
+   ],
+   "test_path": "tests/test_i28bg_b1_attacks.py"
+  },
+  {
+   "family": "I28BG_B1_SYNTHETIC_WORKFLOWS",
+   "gate": "4N-I28BG-B1",
+   "canary": "the isolated synthetic-workflow fixtures must exercise valid integration and every structural defect (missing checkout, assurance-after-Docker, missing image-bind/pre-push, continue-on-error, always(), alternate push, one-of-two builds unprotected, matrix arm unprotected, source mutation, cache-after-verify, checkout-after-verify, mutable action, ignored output)",
+   "expected_control": "tests/test_i28bg_b1_synthetic_workflows.py builds minimal but realistic workflow YAML fixtures and asserts the graph validator PASSes the valid one and FAILs each defective one",
+   "source_paths": [
+    "scripts/workflow_graph_validator.py"
+   ],
+   "test_path": "tests/test_i28bg_b1_synthetic_workflows.py"
+  },
+  {
+   "family": "I28BG_B2_READER_INTEGRATION",
+   "gate": "4N-I28BG-B2",
+   "canary": "reader-publish.yml must run the four workflow-assurance phases (establish, pre-build, image-bind, pre-push) in order with a final aggregate, the graph validator must report reader PASS while staging stays NOT_YET_INTEGRATED, and the runtime reader workflow content must be bound by the enforcement path",
+   "expected_control": "reader-publish.yml invokes scripts/workflow_assurance.py in each phase; workflow_graph_validator.validate_workflow enforces the ordering/coverage/no-bypass and reports reader PASS; source_content_manifest binds the reader workflow content",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py",
+    ".github/workflows/reader-publish.yml"
+   ],
+   "test_path": "tests/test_i28bg_b2_reader_integration.py"
+  },
+  {
+   "family": "I28BG_B2_READER_ADVERSARIAL",
+   "gate": "4N-I28BG-B2",
+   "canary": "the thirty-two-arm reader adversarial battery must activate each mutation, drive the reader graph or verifier, fire the intended detector, fail closed, and block the push in simulation \u2014 no generic YAML parse failure substituting for a detector",
+   "expected_control": "tests/test_i28bg_b2_reader_attacks.py mutates the integrated reader workflow and verifier inputs and asserts the reader graph FAILs or the executed verifier refuses and blocks the push",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py",
+    ".github/workflows/reader-publish.yml"
+   ],
+   "test_path": "tests/test_i28bg_b2_reader_attacks.py"
+  },
+  {
+   "family": "I28BG_B3_STAGING_INTEGRATION",
+   "gate": "4N-I28BG-B3",
+   "canary": "staging-publish.yml must run the dual-image (API + worker) workflow-assurance sequence \u2014 one establishment, independent per-image pre-build/bind/pre-push, a final aggregate requiring both images \u2014 with the graph validator reporting staging PASS and reader remaining PASS, and the API and worker manifests non-interchangeable",
+   "expected_control": "staging-publish.yml invokes scripts/workflow_assurance.py per image; workflow_graph_validator.validate_workflow enforces per-build gating, dual pre-push, ordering and coverage and reports staging PASS; API and worker manifests bind distinct target/tag/digest",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py",
+    ".github/workflows/staging-publish.yml"
+   ],
+   "test_path": "tests/test_i28bg_b3_staging_integration.py"
+  },
+  {
+   "family": "I28BG_B3_STAGING_ADVERSARIAL",
+   "gate": "4N-I28BG-B3",
+   "canary": "the forty-eight-arm staging dual-image adversarial battery must activate each mutation, drive the staging graph or the per-image verifier, fire the intended detector, fail closed, and make push eligibility false \u2014 with no API/worker swap, replay, one-image-only, or third-image publication surviving",
+   "expected_control": "tests/test_i28bg_b3_staging_attacks.py mutates the integrated staging workflow and per-image verifier inputs and asserts the staging graph FAILs or the executed verifier refuses and blocks the dual-image push",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py",
+    ".github/workflows/staging-publish.yml"
+   ],
+   "test_path": "tests/test_i28bg_b3_staging_attacks.py"
+  },
+  {
+   "family": "I28BG_B4_CROSS_WORKFLOW",
+   "gate": "4N-I28BG-B4",
+   "canary": "the cross-workflow 32-arm scored falsification battery must keep both publication workflows at graph PASS on a clean baseline, run exactly 32 unique arms, and prove every arm activates, hits its intended detector, and blocks push eligibility \u2014 with zero escaped, void, or wrong-detector arms and the real repository unchanged",
+   "expected_control": "tests/test_i28bg_b4_cross_workflow.py mutates temp copies of reader-publish.yml and staging-publish.yml and their verifier inputs and asserts the intended detector fires and push eligibility is blocked for all 32 arms",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py",
+    ".github/workflows/reader-publish.yml",
+    ".github/workflows/staging-publish.yml"
+   ],
+   "test_path": "tests/test_i28bg_b4_cross_workflow.py"
+  },
+  {
+   "family": "I28BG_B4_TOCTOU_AND_BATTERIES",
+   "gate": "4N-I28BG-B4",
+   "canary": "the TOCTOU, job-graph bypass, workflow-content binding, cross-workflow replay, image/tag substitution, aggregate-consistency, site-universe, static/executed-consistency, and failure-propagation batteries must all fail closed \u2014 no mutation window reaches push, no replay or substitution survives, the 50-site universe reconciles, and either staging image failing blocks the dual publication",
+   "expected_control": "tests/test_i28bg_b4_batteries.py runs the TOCTOU/graph/replay/substitution/aggregate/site-universe/consistency/failure-propagation batteries against the runtime verifier and static graph validator, offline",
+   "source_paths": [
+    "scripts/workflow_assurance.py",
+    "scripts/workflow_graph_validator.py",
+    "scripts/docker_assurance_state.py"
+   ],
+   "test_path": "tests/test_i28bg_b4_batteries.py"
+  },
+  {
+   "canary": "up-classifying an authoritative deny/allow policy-generation source to security-critical and then dropping its emitted-policy oracle design, marking a policy source non-security or schema, aliasing expected/observed authority, or a new generator collection escaping A1a adjudication, must each fail",
+   "expected_control": "validate_a1a() over critical-list-contract::a1a_adjudication compared BOTH directions against the six-generator discovery, plus real emitted-policy and independent-ceiling falsification arms",
+   "family": "A1A_POLICY_SOURCE_ADJUDICATION",
+   "gate": "4N-I28BH-A1a",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a1a_policy_source_adjudication.py"
+  },
+  {
+   "canary": "up-classifying an IAM-evaluation/trust/ARN/resource-identity collection to security-critical and then dropping its non-circular oracle design, downgrading a semantic source, aliasing expected/observed authority, or a new evaluator/trust collection escaping A1b adjudication, must each fail; and the evaluator/ARN/trust detectors (unsupported-semantics fail-closed, dead-grant, placeholder rejection, one-char ARN mismatch, resource-key universe) must fire",
+   "expected_control": "validate_a1b() over critical-list-contract::a1b_adjudication compared both directions against the adjudicated ids, plus real iam_eval/arn_model/trust_validator/policy_inventory/resource_oracle falsification arms",
+   "family": "A1B_IAM_TRUST_RESOURCE_ADJUDICATION",
+   "gate": "4N-I28BH-A1b",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a1b_iam_trust_resource_adjudication.py"
+  },
+  {
+   "canary": "up-classifying a deny-requirement/triangulation authority or lifecycle collection to security-critical and then dropping its oracle design, mistaking a test scaffold for production authority, aliasing the triangulation authority to the generated denies, or a deny-requirement/mutation/probe collection escaping A1c adjudication must each fail; and the A1a->A1c triangulation dependency (an independent required-deny authority that detects a boundary deny going short) must hold with no module-level generator import",
+   "expected_control": "validate_a1c() over critical-list-contract::a1c_adjudication with authority-domain separation, plus the deny_requirements independence / A1a-deny-short-detection / consolidated-A1-union-79 checks",
+   "family": "A1C_BOUNDARY_LIFECYCLE_ADJUDICATION",
+   "gate": "4N-I28BH-A1c",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a1c_boundary_lifecycle_adjudication.py"
+  },
+  {
+   "canary": "classifying a docker_boundary discovery/steering/trust collection as anything but security-critical, dropping its oracle design, aliasing expected/observed authority, mistaking a generic-shell (A3) collection for Docker-specific authority, or a docker_boundary collection escaping A2a adjudication must each fail; and the real docker_boundary detectors (closed-enum == defined constants, category_table_problems structural check, LOAD_BEARING \u2286 SITE_CLASSIFICATIONS, steering-flag/release-subcommand positive presence) must fire",
+   "expected_control": "validate_a2a() over critical-list-contract::a2a_adjudication both directions against the docker_boundary discovery, plus real docker_boundary consistency/category-table falsification arms",
+   "family": "A2A_DOCKER_BOUNDARY_ADJUDICATION",
+   "gate": "4N-I28BH-A2a",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a2a_docker_boundary_adjudication.py"
+  },
+  {
+   "canary": "up/mis-classifying a workflow site-universe collection, dropping its oracle design, aliasing expected/observed authority, downgrading a site-discovery source without a proving exclusion argument, seeding dynamic site discovery from the expected list, or a site collection escaping A2b adjudication must each fail; and the site-discovery independence (site_taxonomy/site_coverage import no docker_boundary A2a list) + site_behavior EVIDENCE_ONLY isolation + COVERING site-universe-reconciliation (not a hardcoded 16/16/32/50 count) must hold",
+   "expected_control": "validate_a2b() over critical-list-contract::a2b_adjudication both directions against the site_taxonomy/site_behavior/site_coverage discovery, plus real independence / evidence-tool-isolation / reconciliation falsification arms",
+   "family": "A2B_WORKFLOW_SITE_UNIVERSE_ADJUDICATION",
+   "gate": "4N-I28BH-A2b",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a2b_workflow_site_universe_adjudication.py"
+  },
+  {
+   "canary": "mis/under-classifying a Docker assurance-state, governed-cache, workflow-verifier field-schema, or workflow-graph role collection, dropping its oracle design, aliasing expected/observed authority, falsely downgrading a security field-set to schema/config, or an A2c collection escaping adjudication must each fail; and the real detectors (validate_state two-sided refusal, CACHE_KEY_FIELDS identity dimensions, _ASSURANCE_ROLES == role-by-mode map values, _MUTABLE_TAG_TOKENS denylist) must fire; consolidated A2a\u222aA2b\u222aA2c must equal 43 with zero overlap and no A2 collection unclassified",
+   "expected_control": "validate_a2c() over critical-list-contract::a2c_adjudication both directions against the docker_assurance_state/workflow_assurance/workflow_graph_validator discovery, plus real production detectors and the consolidated-A2 reconciliation",
+   "family": "A2C_WORKFLOW_STATE_GRAPH_ADJUDICATION",
+   "gate": "4N-I28BH-A2c",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a2c_workflow_state_graph_adjudication.py"
+  },
+  {
+   "canary": "mis/under-classifying a generic shell-tokenization, exec/coproc transfer, failure-propagation, command-position, or npm-identity collection, dropping its oracle strategy, aliasing expected/observed authority, marking a SECURITY_CRITICAL_SOURCE universe VALID_EMPTY, presenting an observed authority copied from the authored list, downgrading a PRE_A3_SECURITY_CRITICAL id without a downgrade_proof, or an A3 collection escaping adjudication must each fail; and the real detectors (INTERPRETERS target harvest, the DATA_CONSUMERS emptied-set canary, MASKING authority in failure_propagation, exec `-a` executor selection, parser/executor agreement, TRANSFER_WORDS==_ACTIVE-alternation binding, eval unresolved marking, `|| true` and no-pipefail MASKED verdicts, keyword-position command detection, npm call-site reconciliation, NATIVE_MAGIC duplicate) must fire; remaining unclassified must be exactly the 8 A4/A5 ids",
+   "expected_control": "validate_a3() over critical-list-contract::a3_adjudication both directions against the ci_invocation_model/exec_transfer_oracle/failure_propagation/shell_positions/npm_authority discovery, plus real production detectors, the two DATA_CONSUMERS/MASKING downgrade proofs, and the BH-A3-FIND-01 TRANSFER_WORDS binding",
+   "family": "A3_SHELL_EXEC_COLLECTION_ADJUDICATION",
+   "gate": "4N-I28BH-A3",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a3_shell_exec_adjudication.py"
+  },
+  {
+   "canary": "mis/under-classifying a review-packet-digest or reviewer-retrieval-state collection, dropping its oracle strategy, aliasing expected/observed authority, marking a SECURITY_CRITICAL_SOURCE universe VALID_EMPTY, presenting an observed authority copied from the authored list, leaking a non-NONE oracle onto a DOCUMENTATION_ONLY row, or an A4 collection escaping adjudication must each fail; and the real detectors (REQUIRED_FIELDS missing-field fail-closed, digest==function-keys-minus-bytecount, tampered-byte digest mismatch, canonicalization no-collision, reordered-packet canonical-collapse/raw-distinct, wrong-candidate rejection, classify cross-product within STATES, unknown-state fail-closed, only-COMPLETED_NO_ARTIFACT lost-verdict, missing-exit fail-closed, artifact precedence, NEVER_RELAUNCH protects completed+running, DEFINITIONS keys==STATES, TRANSITIONS structural shape + emitted-only A4-FIND-01) must fire; remaining unclassified must be exactly the 3 A5 ids",
+   "expected_control": "validate_a4() over critical-list-contract::a4_adjudication both directions against the review_packet_digest/reviewer_retrieval_state discovery, plus real production detectors and the A4-FIND-01 TRANSITIONS unenforced-table evidence",
+   "family": "A4_REVIEW_STATE_ADJUDICATION",
+   "gate": "4N-I28BH-A4",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a4_review_state_adjudication.py"
+  },
+  {
+   "canary": "mis/under-classifying the cache-authority classification enum, the leak-scan non-live suppression enum, or the _PINS runtime registry; promoting _PINS to a security class; aliasing expected/observed authority; a copied/self-referential oracle; a bogus positive_presence; a non-NONE oracle on the NON_SECURITY _PINS row; or an A5 collection escaping adjudication must each fail; the real detectors (CLASSIFICATIONS empty/remove -> load_policy fail-closed, classification_obligations non-circular binding, _PINS empty-at-rest + assert_pinned strictness + verify-independence, NON_LIVE remove -> account refused, NON_LIVE add -> live-shaped id suppressed fail-open) must fire; AND the consolidated BH-A reconciliation must hold: A1 79 + A2 43 + A3 25 + A4 5 + A5 3 = 155 with zero pairwise overlap + 101 pre-BH-A = 256, repository UNCLASSIFIED = 0, prior findings preserved",
+   "expected_control": "validate_a5() over critical-list-contract::a5_adjudication both directions against the cache_authority/leak_scan discovery, plus real production detectors and the full 256-collection BH-A consolidation (155 adjudicated + 101 pre-classified, overlap 0, unclassified 0)",
+   "family": "A5_CACHE_LEAK_ADJUDICATION_AND_BH_A_CLOSEOUT",
+   "gate": "4N-I28BH-A5",
+   "source_paths": [
+    "tests/fixtures/critical-list-contract.json"
+   ],
+   "test_path": "tests/test_i28bh_a5_cache_leak_adjudication.py"
+  },
+  {
+   "canary": "any SECURITY_CRITICAL collection left without an assurance ASSIGNMENT (SECURITY_UNGOVERNED>0); an assignment naming a kind outside the closed enum; a review pin that drifts, is copied, self-derives, or cites a superseded/unknown review record yet still ACCEPTs; an exclusion set that widens past its independent ceiling or into the must-not set, or a D1 member with no reviewed justification; a cross-domain mirror, generated closure, or runtime invariant that diverges from its independent source yet ACCEPTs; a tampered assurance/pin registry that passes root-of-trust; or an unknown assurance_kind reaching a default (non-fail-closed) branch \u2014 each must be refused.",
+   "expected_control": "conjunction: critical_list_inventory SECURITY_UNGOVERNED==0 AND security_collection_assurance assess() clean (every one of the closed {kind:handler} controls ACCEPTs at baseline and REFUSES on its class mutation) AND review_pin/root-of-trust fail closed",
+   "family": "SECURITY_COLLECTION_PROPERTY_ASSURANCE",
+   "gate": "4N-I28BH-B",
+   "source_paths": [
+    "scripts/security_collection_assurance.py",
+    "scripts/review_pin_control.py",
+    "scripts/critical_list_inventory.py"
+   ],
+   "test_path": "tests/test_i28bh_b_arch_assurance.py"
+  },
+  {
+   "canary": "any BH-C-confirmed false-pass reopening: GENERATED REFRESH_CLOSURE closure injection, PARTITION deny-drop, delegated wrong-consumer, DISPUTED list-empty, canonicalization container-type erasure or nested-code collision, an ungoverned governance map (ceiling/contract/registry/pin-registry) tamper passing root-of-trust, a malformed assurance_kind crashing instead of refusing, or a derived SECURITY collection escaping discovery.",
+   "expected_control": "conjunction: sca.assess clean AND cli.check clean AND each BH-C regression arm REFUSES its mutation AND every governance map is root-of-trust pinned AND every runtime predicate is load-bearing",
+   "family": "BH_C_INDEPENDENT_FALSIFICATION",
+   "gate": "4N-I28BH-C",
+   "source_paths": [
+    "scripts/security_collection_assurance.py",
+    "scripts/review_pin_control.py",
+    "scripts/critical_list_inventory.py"
+   ],
+   "test_path": "tests/test_i28bh_c_falsification.py"
+  }
+ ]
+}

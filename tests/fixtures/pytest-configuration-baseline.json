@@ -1,0 +1,14 @@
+{
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_purpose": "Approved pytest configuration sources for the graded session (Gate 4N-I28Y).",
+ "_why_this_file_exists": [
+  "Gate 4N-I28X bypass 1 needed no command-line change at all: `collect_ignore` in",
+  "tests/conftest.py removed both assertion-control modules from the graded run. Selection",
+  "can be altered from configuration as easily as from argv, so constraining argv alone",
+  "would have closed one door and left the other open."
+ ],
+ "approved_sources": {
+  "tests/conftest.py": "951c4005c4c395f0e907e561612ca0572289993f447f3c1cd9ee666e8deb6a3d"
+ },
+ "_note": "This repository deliberately carries NO pytest.ini, pyproject.toml, tox.ini or setup.cfg. Adding one is a collection-affecting change and must be approved here."
+}

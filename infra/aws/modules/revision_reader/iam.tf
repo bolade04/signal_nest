@@ -1,3 +1,83 @@
+
+# THE derivation. Every role in this module reads local.effective_permissions_boundary, so a
+# role cannot bypass the mode by consuming the ARN directly — and the boundary cannot vanish
+# because an ARN happened to be null: in "required" mode a null ARN fails the precondition
+# below instead of silently producing an unbounded role.
+locals {
+  boundary_enforced = var.role_boundary_mode == "required"
+
+  effective_permissions_boundary = (
+    local.boundary_enforced ? var.role_permissions_boundary_arn : null
+  )
+
+  # GATE 4N-I16 PHASE B. ONE authoritative state model. Every boundary guard in this module
+  # classifies through this local, so no guard can key off a signal the resources do not read.
+  #
+  #   UNBOUNDED_DARK_STATE       mode "disabled" + ARN null. Legitimate ONLY while nothing
+  #                              creates or updates a protected role.
+  #   BOUNDARY_ENFORCED          mode "required" + non-null ARN. The only state in which a
+  #                              protected-role bootstrap may run.
+  #   INVALID_PARTIAL_BOOTSTRAP  every remaining combination. Named, not tolerated: an ARN
+  #                              present under "disabled" mode is the exact shape that made
+  #                              the Gate 4N-I15 guard report safety it was not measuring.
+  boundary_state = (
+    var.role_boundary_mode == "required" && var.role_permissions_boundary_arn != null
+    ? "BOUNDARY_ENFORCED"
+    : (var.role_boundary_mode == "disabled" && var.role_permissions_boundary_arn == null
+      ? "UNBOUNDED_DARK_STATE"
+    : "INVALID_PARTIAL_BOOTSTRAP")
+  )
+
+  # Stage A creates the publisher role and updates protected role state.
+  protected_role_bootstrap = var.publication_bootstrap_enabled
+}
+
+# Fail at PLAN time, before any resource is touched. Gate 4N-I7 showed that a null ARN
+# against bounded deployed roles plans REMOVAL with no error at all.
+# GATE 4N-I16. THE THREE AXES ARE SEPARATE RESOURCES, not three preconditions on one.
+#
+# WHY. `expect_failures` names a RESOURCE, not a precondition. With all three axes on one
+# resource, a test asserting "this configuration is rejected" passes when ANY axis fires —
+# so a corrupted state classifier stayed green because the ceiling-identity axis happened to
+# fail on the same input for an unrelated reason. The Phase E mutation harness caught exactly
+# that. Separate resources make each failure attributable, which is what lets a mutation of
+# one axis be distinguished from a mutation of another.
+
+# AXIS 1 — the state itself must be coherent. This is the check Gate 4N-I15 lacked: it
+# rejects mode "disabled" WITH a non-null ARN, which previously passed every guard.
+resource "terraform_data" "boundary_state_coherence" {
+  lifecycle {
+    precondition {
+      condition     = local.boundary_state != "INVALID_PARTIAL_BOOTSTRAP"
+      error_message = "Incoherent boundary state. role_boundary_mode = \"required\" requires a non-null role_permissions_boundary_arn — a null ARN in required mode plans REMOVAL of the boundary from every deployed role. role_boundary_mode = \"disabled\" requires role_permissions_boundary_arn = null — a non-null ARN under disabled mode is NOT a boundary, because the roles consume the mode-derived value and would be created UNBOUNDED while the configuration reads as protected."
+    }
+  }
+}
+
+# AXIS 2 — identity of the ceiling.
+#
+# NOTE ON WHAT IS *NOT* HERE. An earlier draft of this gate added a third resource axis
+# asserting "bootstrap requires BOUNDARY_ENFORCED". It was removed: the
+# publication_bootstrap_enabled variable validation already encodes exactly that rule, and
+# the Phase E harness proved the consequence — with the rule encoded twice, deleting either
+# copy left the suite green, so neither copy could be shown to be load-bearing. A guard that
+# cannot be falsified is not a second line of defence, it is unmeasured surface. The rule is
+# now stated once, in the variable validation, where the mutation harness can reach it. A syntactically valid ARN naming some OTHER policy would
+# attach the wrong ceiling, which is not distinguishable from the right one by shape.
+resource "terraform_data" "boundary_mode_precondition" {
+  lifecycle {
+    # GATE 4N-I16: this axis owns the IDENTITY of the ceiling, not its PRESENCE. The
+    # null case is deliberately excused here because it belongs to the coherence axis —
+    # without the excusal, regex() on a null returns false and this axis fires for a
+    # required+null configuration, making the two axes indistinguishable to expect_failures
+    # and letting a corrupted state classifier hide behind this one.
+    precondition {
+      condition     = !local.boundary_enforced || var.role_permissions_boundary_arn == null || can(regex("policy/signalnest-staging-role-boundary$", var.role_permissions_boundary_arn))
+      error_message = "role_permissions_boundary_arn must name the reviewed boundary policy signalnest-staging-role-boundary."
+    }
+  }
+}
+
 # =====================================================================================
 # Gate 4J — reader IAM. Three purpose-built identities, none of them an existing role.
 #
@@ -40,10 +120,11 @@ locals {
 resource "aws_iam_role" "reader_execution" {
   count = local.create_runtime
 
-  name               = "${var.name_prefix}-revision-reader-execution"
-  description        = "Starts the revision-reader task: pull the reader image, inject DATABASE_URL, write reader logs. Nothing else."
-  assume_role_policy = local.ecs_tasks_trust
-  tags               = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-execution" })
+  permissions_boundary = local.effective_permissions_boundary
+  name                 = "${var.name_prefix}-revision-reader-execution"
+  description          = "Starts the revision-reader task: pull the reader image, inject DATABASE_URL, write reader logs. Nothing else."
+  assume_role_policy   = local.ecs_tasks_trust
+  tags                 = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-execution" })
 }
 
 resource "aws_iam_role_policy" "reader_execution" {
@@ -156,10 +237,11 @@ locals {
 resource "aws_iam_role" "reader_publisher" {
   count = local.create_oidc_publisher
 
-  name               = "${var.name_prefix}-revision-reader-publisher"
-  description        = "CI identity that publishes the reader image. Scoped to the reader ECR repository; cannot reach the api or worker repositories."
-  assume_role_policy = local.oidc_trust["publisher"]
-  tags               = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-publisher" })
+  permissions_boundary = local.effective_permissions_boundary
+  name                 = "${var.name_prefix}-revision-reader-publisher"
+  description          = "CI identity that publishes the reader image. Scoped to the reader ECR repository; cannot reach the api or worker repositories."
+  assume_role_policy   = local.oidc_trust["publisher"]
+  tags                 = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-publisher" })
 }
 
 resource "aws_iam_role_policy" "reader_publisher" {
@@ -211,10 +293,11 @@ resource "aws_iam_role_policy" "reader_publisher" {
 resource "aws_iam_role" "reader_runner" {
   count = local.create_oidc_runner
 
-  name               = "${var.name_prefix}-revision-reader-runner"
-  description        = "CI identity that invokes the reader task and reads its log stream. Cannot register task definitions, create services, push images, or read secrets."
-  assume_role_policy = local.oidc_trust["runner"]
-  tags               = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-runner" })
+  permissions_boundary = local.effective_permissions_boundary
+  name                 = "${var.name_prefix}-revision-reader-runner"
+  description          = "CI identity that invokes the reader task and reads its log stream. Cannot register task definitions, create services, push images, or read secrets."
+  assume_role_policy   = local.oidc_trust["runner"]
+  tags                 = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-runner" })
 }
 
 resource "aws_iam_role_policy" "reader_runner" {

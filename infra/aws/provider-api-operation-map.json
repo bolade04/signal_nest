@@ -1,0 +1,368 @@
+{
+  "_source": "SOURCE 2 \u2014 resource type to AWS API action mapping, authored from hashicorp/aws v6.55.0 provider behaviour and AWS action metadata. INDEPENDENT of scripts/gen_operator_policies.py and of infra/aws/operator-closure-contract.json: it is keyed by OPENTOFU RESOURCE TYPE, not by policy statement, and carries no ARNs at all.",
+  "_why": "Gate 4N-I4's two closure sources were set-identical hand-authored action lists sharing every resource ARN, so a shared omission was undetectable. Joining THIS against the parsed repository graph makes the .tf source the authority.",
+  "_dark_note": "Entries marked dark:true belong to resources gated off today (deploy_workload / reader runtime). Their reads are NOT required by the current closure but become required when the stage is enabled \u2014 recorded so the omission is deliberate and visible.",
+  "_separate_root_note": "Entries marked separate_root:true are owned by infra/aws/bootstrap, applied by a different permission set. Not part of the W0 closure.",
+  "mappings": {
+    "aws_vpc": {
+      "read": [
+        "ec2:DescribeNetworkAcls",
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeVpcs"
+      ],
+      "unit": "network"
+    },
+    "aws_subnet": {
+      "read": [
+        "ec2:DescribeSubnets"
+      ],
+      "unit": "network"
+    },
+    "aws_internet_gateway": {
+      "read": [
+        "ec2:DescribeInternetGateways"
+      ],
+      "unit": "network"
+    },
+    "aws_nat_gateway": {
+      "read": [
+        "ec2:DescribeNatGateways"
+      ],
+      "unit": "network"
+    },
+    "aws_eip": {
+      "read": [
+        "ec2:DescribeAddresses",
+        "ec2:DescribeAddressesAttribute"
+      ],
+      "unit": "network"
+    },
+    "aws_route_table": {
+      "read": [
+        "ec2:DescribeRouteTables"
+      ],
+      "unit": "network"
+    },
+    "aws_route": {
+      "read": [
+        "ec2:DescribeRouteTables"
+      ],
+      "unit": "network"
+    },
+    "aws_route_table_association": {
+      "read": [
+        "ec2:DescribeRouteTables"
+      ],
+      "unit": "network"
+    },
+    "aws_security_group": {
+      "read": [
+        "ec2:DescribeSecurityGroups"
+      ],
+      "unit": "network"
+    },
+    "aws_vpc_security_group_egress_rule": {
+      "read": [
+        "ec2:DescribeSecurityGroupRules"
+      ],
+      "unit": "network"
+    },
+    "aws_vpc_security_group_ingress_rule": {
+      "read": [
+        "ec2:DescribeSecurityGroupRules"
+      ],
+      "unit": "network"
+    },
+    "aws_lb": {
+      "read": [
+        "elasticloadbalancing:DescribeCapacityReservation",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTags"
+      ],
+      "unit": "alb"
+    },
+    "aws_lb_listener": {
+      "read": [
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeListenerAttributes"
+      ],
+      "unit": "alb"
+    },
+    "aws_lb_target_group": {
+      "read": [
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetGroupAttributes"
+      ],
+      "unit": "alb"
+    },
+    "aws_db_instance": {
+      "read": [
+        "rds:DescribeDBInstances",
+        "rds:ListTagsForResource"
+      ],
+      "unit": "data_sql"
+    },
+    "aws_db_parameter_group": {
+      "read": [
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeDBParameters",
+        "rds:ListTagsForResource"
+      ],
+      "unit": "data_sql"
+    },
+    "aws_db_subnet_group": {
+      "read": [
+        "rds:DescribeDBSubnetGroups",
+        "rds:ListTagsForResource"
+      ],
+      "unit": "data_sql"
+    },
+    "aws_elasticache_replication_group": {
+      "read": [
+        "elasticache:DescribeCacheClusters",
+        "elasticache:DescribeReplicationGroups",
+        "elasticache:ListTagsForResource"
+      ],
+      "unit": "data_cache"
+    },
+    "aws_elasticache_parameter_group": {
+      "read": [
+        "elasticache:DescribeCacheParameterGroups",
+        "elasticache:DescribeCacheParameters"
+      ],
+      "unit": "data_cache"
+    },
+    "aws_elasticache_subnet_group": {
+      "read": [
+        "elasticache:DescribeCacheSubnetGroups"
+      ],
+      "unit": "data_cache"
+    },
+    "aws_ecs_cluster": {
+      "read": [
+        "ecs:DescribeClusters",
+        "ecs:ListTagsForResource"
+      ],
+      "unit": "ecs"
+    },
+    "aws_ecs_service": {
+      "read": [
+        "ecs:DescribeServices"
+      ],
+      "unit": "ecs",
+      "dark": true
+    },
+    "aws_ecs_task_definition": {
+      "read": [
+        "ecs:DescribeTaskDefinition"
+      ],
+      "unit": "ecs",
+      "dark": true
+    },
+    "aws_ecr_repository": {
+      "read": [
+        "ecr:DescribeRepositories",
+        "ecr:ListTagsForResource"
+      ],
+      "create": [
+        "ecr:CreateRepository",
+        "ecr:TagResource",
+        "ecr:PutImageScanningConfiguration",
+        "ecr:PutImageTagMutability"
+      ],
+      "unit": "registry"
+    },
+    "aws_ecr_lifecycle_policy": {
+      "read": [
+        "ecr:GetLifecyclePolicy"
+      ],
+      "create": [
+        "ecr:PutLifecyclePolicy"
+      ],
+      "unit": "registry"
+    },
+    "aws_cloudwatch_log_group": {
+      "read": [
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource"
+      ],
+      "unit": "ecs"
+    },
+    "aws_cloudwatch_log_metric_filter": {
+      "read": [
+        "logs:DescribeMetricFilters"
+      ],
+      "unit": "observability"
+    },
+    "aws_cloudwatch_metric_alarm": {
+      "read": [
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "unit": "observability"
+    },
+    "aws_cloudwatch_dashboard": {
+      "read": [
+        "cloudwatch:GetDashboard"
+      ],
+      "unit": "observability"
+    },
+    "aws_cloudtrail": {
+      "read": [
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:GetTrailStatus",
+        "cloudtrail:ListTags"
+      ],
+      "unit": "observability"
+    },
+    "aws_s3_bucket": {
+      "read": [
+        "s3:ListBucket",
+        "s3:GetBucketAcl",
+        "s3:GetBucketTagging",
+        "s3:GetBucketRequestPayment",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketLogging",
+        "s3:GetBucketWebsite",
+        "s3:GetBucketCORS",
+        "s3:GetReplicationConfiguration",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:ListTagsForResource"
+      ],
+      "unit": "storage"
+    },
+    "aws_s3_bucket_policy": {
+      "read": [
+        "s3:GetBucketPolicy"
+      ],
+      "unit": "storage"
+    },
+    "aws_s3_bucket_public_access_block": {
+      "read": [
+        "s3:GetBucketPublicAccessBlock"
+      ],
+      "unit": "storage"
+    },
+    "aws_s3_bucket_versioning": {
+      "read": [
+        "s3:GetBucketVersioning"
+      ],
+      "unit": "storage"
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+      "read": [
+        "s3:GetEncryptionConfiguration"
+      ],
+      "unit": "storage"
+    },
+    "aws_s3_bucket_ownership_controls": {
+      "read": [
+        "s3:GetBucketOwnershipControls"
+      ],
+      "unit": "storage"
+    },
+    "aws_s3_bucket_lifecycle_configuration": {
+      "read": [
+        "s3:GetLifecycleConfiguration"
+      ],
+      "unit": "edge"
+    },
+    "aws_kms_key": {
+      "read": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListResourceTags"
+      ],
+      "unit": "secrets"
+    },
+    "aws_kms_alias": {
+      "read": [
+        "kms:ListAliases"
+      ],
+      "unit": "secrets"
+    },
+    "aws_secretsmanager_secret": {
+      "read": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetResourcePolicy"
+      ],
+      "unit": "secrets"
+    },
+    "aws_iam_role": {
+      "read": [
+        "iam:GetRole",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "create": [
+        "iam:CreateRole",
+        "iam:TagRole"
+      ],
+      "read_after_create": [
+        "iam:ListRoleTags"
+      ],
+      "unit": "iam"
+    },
+    "aws_iam_role_policy": {
+      "read": [
+        "iam:GetRolePolicy"
+      ],
+      "create": [
+        "iam:PutRolePolicy"
+      ],
+      "unit": "iam"
+    },
+    "aws_cloudfront_distribution": {
+      "read": [
+        "cloudfront:GetDistribution",
+        "cloudfront:ListTagsForResource"
+      ],
+      "unit": "edge"
+    },
+    "aws_cloudfront_origin_access_control": {
+      "read": [
+        "cloudfront:GetOriginAccessControl"
+      ],
+      "unit": "edge"
+    },
+    "aws_route53_record": {
+      "read": [
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets"
+      ],
+      "unit": "edge"
+    },
+    "aws_budgets_budget": {
+      "read": [
+        "budgets:ViewBudget",
+        "budgets:ListTagsForResource"
+      ],
+      "unit": "cost"
+    },
+    "aws_dynamodb_table": {
+      "read": [
+        "dynamodb:DescribeTable"
+      ],
+      "unit": "bootstrap",
+      "separate_root": true
+    },
+    "terraform_data": {
+      "_note": "GATE 4N-I14. terraform_data is a PLAN-TIME ONLY resource used to host the boundary-mode preconditions. It has no AWS API surface: it creates nothing, reads nothing and needs no operator permission. Mapped explicitly so the closure JOIN does not report it as unmapped \u2014 an unmapped type is a real finding and must not be silenced by a wildcard.",
+      "create": [],
+      "read": [],
+      "update": [],
+      "delete": []
+    }
+  },
+  "_data_source_mappings": {
+    "aws_caller_identity": {
+      "read": [
+        "sts:GetCallerIdentity"
+      ],
+      "note": "a DATA SOURCE, not a resource \u2014 declared in modules/iam, observability, alb and revision_reader. Gate 4N-I5 discarded data sources entirely, which is why sts:GetCallerIdentity was invisible to the join."
+    }
+  },
+  "_i6_completion": "Gate 4N-I5 SOURCE 2 omitted four actions the empirical closure carried. Added here: ec2:DescribeNetworkAcls (aws_vpc read resolves default_network_acl_id), elasticache:DescribeCacheClusters, elasticloadbalancing:DescribeCapacityReservation, and sts:GetCallerIdentity via a new data-source mapping."
+}

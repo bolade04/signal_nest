@@ -1,0 +1,441 @@
+{
+ "_purpose": "GATE 4N-I28BB. Expectations derived from BASH exec/coproc semantics, not from this implementation's output. RC-5 discipline: where bash and the parser disagreed, the parser was changed.",
+ "_oracle": "real /bin/bash -n for syntactic validity; bash manual for exec option semantics",
+ "cases": [
+  {
+   "id": "A01",
+   "source": "exec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec replaces the shell with kubectl"
+  },
+  {
+   "id": "A02",
+   "source": "exec kubectl apply -f x",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: arguments follow the child"
+  },
+  {
+   "id": "A03",
+   "source": "exec -- kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: -- ends option parsing"
+  },
+  {
+   "id": "A04",
+   "source": "exec -a name kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: -a takes a NAME; the child follows it"
+  },
+  {
+   "id": "A05",
+   "source": "exec -c kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: -c clears the environment"
+  },
+  {
+   "id": "A06",
+   "source": "exec -l kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: -l places a dash in argv[0]"
+  },
+  {
+   "id": "A07",
+   "source": "exec -cl kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: value-less flags combine"
+  },
+  {
+   "id": "A08",
+   "source": "FOO=1 exec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: assignments precede the command word"
+  },
+  {
+   "id": "A09",
+   "source": "exec kubectl > /tmp/log",
+   "expected_status": "COMPLETE",
+   "expected_child": "kubectl",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: redirections may follow the child"
+  },
+  {
+   "id": "A10",
+   "source": "exec /usr/local/bin/tool",
+   "expected_status": "COMPLETE",
+   "expected_child": "/usr/local/bin/tool",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "/usr/local/bin/tool"
+   ],
+   "derived_from": "bash: an absolute path is a valid command word"
+  },
+  {
+   "id": "A11",
+   "source": "exec -- -weird-tool",
+   "expected_status": "COMPLETE",
+   "expected_child": "-weird-tool",
+   "expected_classification": "STATIC_CHILD_DISCOVERED",
+   "expected_executables": [
+    "-weird-tool"
+   ],
+   "derived_from": "bash: after -- an option-shaped word IS the child"
+  },
+  {
+   "id": "B01",
+   "source": "exec \"$VENV_PY\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "$VENV_PY",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B02",
+   "source": "exec \"$CMD\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "$CMD",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B03",
+   "source": "exec \"${CMD}\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "${CMD}",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B04",
+   "source": "exec \"$DIR/tool\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "$DIR/tool",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B05",
+   "source": "exec \"${PREFIX}tool\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "${PREFIX}tool",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B06",
+   "source": "exec \"$@\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "$@",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B07",
+   "source": "exec ${ARRAY[@]}",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": "${ARRAY[@]}",
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [],
+   "derived_from": "bash: the command word is an expansion resolved at runtime, so it cannot be named statically"
+  },
+  {
+   "id": "B08",
+   "source": "exec \"$(resolve)\"",
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_child": null,
+   "expected_classification": "DYNAMIC_CHILD_UNRESOLVED",
+   "expected_executables": [
+    "resolve"
+   ],
+   "derived_from": "bash: the child is a command substitution; its own command runs, the target is unresolved"
+  },
+  {
+   "id": "C01",
+   "source": "exec kubectl\ncase \"$x\" in a) echo a ;; esac",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C02",
+   "source": "case \"$x\" in a) exec kubectl ;; esac",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C03",
+   "source": "case \"$x\" in a) echo a ;; esac\nexec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C04",
+   "source": "f() { exec kubectl; }",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C05",
+   "source": "for i in 1 2; do exec kubectl; done",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C06",
+   "source": "if true; then exec kubectl; fi",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C07",
+   "source": "echo hi | exec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C08",
+   "source": "true && exec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C09",
+   "source": "false || exec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C10",
+   "source": "( exec kubectl )",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "C11",
+   "source": "x=\"$(exec kubectl)\"",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "kubectl"
+   ],
+   "derived_from": "bash: exec is valid in every command position"
+  },
+  {
+   "id": "D01",
+   "source": "exec -Z kubectl",
+   "expected_status": "UNSUPPORTED",
+   "expected_child": null,
+   "expected_classification": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "expected_executables": [],
+   "derived_from": "not a bash exec option this model implements; an unmodelled option must not be skipped"
+  },
+  {
+   "id": "D02",
+   "source": "exec -a",
+   "expected_status": "UNSUPPORTED",
+   "expected_child": null,
+   "expected_classification": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "expected_executables": [],
+   "derived_from": "bash: -a requires a NAME; none follows"
+  },
+  {
+   "id": "D03",
+   "source": "exec 3< /tmp/f",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": "EXEC_WITHOUT_CHILD",
+   "expected_executables": [],
+   "derived_from": "bash: exec with redirections only replaces no process"
+  },
+  {
+   "id": "D04",
+   "source": "exec > /tmp/log 2>&1",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": "EXEC_WITHOUT_CHILD",
+   "expected_executables": [],
+   "derived_from": "bash: same, redirecting the current shell"
+  },
+  {
+   "id": "D05",
+   "source": "exec \"kubectl",
+   "expected_status": "MALFORMED",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [],
+   "derived_from": "bash -n rejects an unterminated quote"
+  },
+  {
+   "id": "D06",
+   "source": "coproc kubectl",
+   "expected_status": "UNSUPPORTED",
+   "expected_child": null,
+   "expected_classification": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "expected_executables": [],
+   "derived_from": "bash: coproc transfers command position; this model declines to implement it"
+  },
+  {
+   "id": "D07",
+   "source": "coproc CO kubectl",
+   "expected_status": "UNSUPPORTED",
+   "expected_child": null,
+   "expected_classification": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "expected_executables": [],
+   "derived_from": "bash: named coprocess, same treatment"
+  },
+  {
+   "id": "D08",
+   "source": "coproc { kubectl; }",
+   "expected_status": "UNSUPPORTED",
+   "expected_child": null,
+   "expected_classification": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "expected_executables": [],
+   "derived_from": "bash: compound coprocess body"
+  },
+  {
+   "id": "E01",
+   "source": "# exec kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [],
+   "derived_from": "bash: a comment is not a command position"
+  },
+  {
+   "id": "E02",
+   "source": "echo \"exec kubectl\"",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [],
+   "derived_from": "bash: quoted text is an argument of echo"
+  },
+  {
+   "id": "E03",
+   "source": "cat <<'EOF'\nexec kubectl\nEOF",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [
+    "cat"
+   ],
+   "derived_from": "bash: heredoc bodies are data"
+  },
+  {
+   "id": "E04",
+   "source": "echo exec docker run",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [],
+   "derived_from": "bash: exec here is an ARGUMENT of echo"
+  },
+  {
+   "id": "E05",
+   "source": "# coproc kubectl",
+   "expected_status": "COMPLETE",
+   "expected_child": null,
+   "expected_classification": null,
+   "expected_executables": [],
+   "derived_from": "bash: a comment is not a command position"
+  }
+ ]
+}

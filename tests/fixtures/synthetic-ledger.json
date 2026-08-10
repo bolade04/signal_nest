@@ -1,0 +1,237 @@
+{
+  "_what_this_is": "SOURCE 1 of the Deny requirement triangulation: the INCIDENT LEDGER. Every entry is an escalation path a prior gate established by evidence, not a restatement of what the policies happen to deny.",
+  "_why_it_is_outside_the_repository": "Gate 4N-I7 Defect 2. scripts/must_not_contract.py both DEFINED the forbidden set and supplied the expectation the tests measured, so deleting one line shrank the policy and the expectation together and the suite stayed green while two principals silently dropped from EXPLICIT_DENY to IMPLICIT_DENY. Across 135 Deny actions, ~80 were individually removable. A requirement source inside the repository cannot fix that.",
+  "ledger_version": "1",
+  "created_utc": "2026-07-31T16:45:53Z",
+  "entry_count": 32,
+  "entries": [
+    {
+      "action": "iam:PassRole",
+      "established_by_gate": "4N-H4",
+      "consequence": "The ECS path: PassRole is checked at RegisterTaskDefinition/RunTask, so a principal holding it can run a task AS a more privileged role. Closed at 4N-H4; the Gate 4N-I6 suite then stayed green with the Deny removed, which is how the regression was found.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "0f562b7e8ac9383d73e7c572579894fb05ac40988ac2b6a9a685deaf6918b717",
+      "evidence_written_utc": "2026-07-31T04:16:01Z"
+    },
+    {
+      "action": "iam:CreateRole",
+      "established_by_gate": "4N-H4",
+      "consequence": "BR-2: CreateRole takes an arbitrary trust document and needs no boundary unless one is required by condition, so the holder can mint a successor with permissions it lacks.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "7498619e7911b9bba53861eaa4c0946c2034d041eadfb5bf7b0c1f51bc5a7f2a",
+      "evidence_written_utc": "2026-07-31T04:12:16Z"
+    },
+    {
+      "action": "iam:PutRolePolicy",
+      "established_by_gate": "4N-H4",
+      "consequence": "Writes an arbitrary identity policy onto an existing role.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "7498619e7911b9bba53861eaa4c0946c2034d041eadfb5bf7b0c1f51bc5a7f2a",
+      "evidence_written_utc": "2026-07-31T04:12:16Z"
+    },
+    {
+      "action": "iam:AttachRolePolicy",
+      "established_by_gate": "4N-H4",
+      "consequence": "Attaches AdministratorAccess to a role.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "7498619e7911b9bba53861eaa4c0946c2034d041eadfb5bf7b0c1f51bc5a7f2a",
+      "evidence_written_utc": "2026-07-31T04:12:16Z"
+    },
+    {
+      "action": "iam:UpdateAssumeRolePolicy",
+      "established_by_gate": "4N-H4",
+      "consequence": "Redirects an existing role's trust to an outside principal.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "7498619e7911b9bba53861eaa4c0946c2034d041eadfb5bf7b0c1f51bc5a7f2a",
+      "evidence_written_utc": "2026-07-31T04:12:16Z"
+    },
+    {
+      "action": "iam:CreateAccessKey",
+      "established_by_gate": "4N-H2",
+      "consequence": "Mints long-lived credentials that outlive every session control.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a",
+      "evidence_written_utc": "2026-07-31T02:18:12Z"
+    },
+    {
+      "action": "iam:CreateUser",
+      "established_by_gate": "4N-H2",
+      "consequence": "Creates a principal outside Identity Center, invisible to permission-set retirement.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a",
+      "evidence_written_utc": "2026-07-31T02:18:12Z"
+    },
+    {
+      "action": "cloudtrail:StopLogging",
+      "established_by_gate": "4N-I2",
+      "consequence": "Stops recording the actions that would show every other escalation.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "cloudtrail:DeleteTrail",
+      "established_by_gate": "4N-I2",
+      "consequence": "Destroys the audit trail and everything it would have shown.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "cloudtrail:UpdateTrail",
+      "established_by_gate": "4N-I2",
+      "consequence": "Redirects the trail to a bucket nobody reads.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "cloudtrail:PutEventSelectors",
+      "established_by_gate": "4N-I2",
+      "consequence": "Silences the event classes that matter while the trail still appears healthy.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "s3:PutObject",
+      "established_by_gate": "4N-C",
+      "consequence": "Rewrites Terraform state, or plants an object in the audit bucket. 4N-C proved plan does NOT need it, so granting it permanently was never justified.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "e02478930999caa9d1c3a4c24d3a28bbb8f6b03af50133b389774ca00dd0ffcf",
+      "evidence_written_utc": "2026-07-30T20:41:08Z"
+    },
+    {
+      "action": "s3:GetObject",
+      "established_by_gate": "4N-C",
+      "consequence": "Reads Terraform state, which carries resource identifiers and recorded attributes.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "e02478930999caa9d1c3a4c24d3a28bbb8f6b03af50133b389774ca00dd0ffcf",
+      "evidence_written_utc": "2026-07-30T20:41:08Z"
+    },
+    {
+      "action": "s3:DeleteObject",
+      "established_by_gate": "4N-I2",
+      "consequence": "Deletes state or delivered audit logs.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "s3:DeleteObjectVersion",
+      "established_by_gate": "4N-I2",
+      "consequence": "Erases delivered log objects under versioning \u2014 the S3-side bypass of StopLogging.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "s3:PutBucketPolicy",
+      "established_by_gate": "4N-H4",
+      "consequence": "BR-1: reaches the state and audit buckets and can grant the world access.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "7498619e7911b9bba53861eaa4c0946c2034d041eadfb5bf7b0c1f51bc5a7f2a",
+      "evidence_written_utc": "2026-07-31T04:12:16Z"
+    },
+    {
+      "action": "dynamodb:PutItem",
+      "established_by_gate": "4N-C",
+      "consequence": "Forges or steals the Terraform state lock.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "e02478930999caa9d1c3a4c24d3a28bbb8f6b03af50133b389774ca00dd0ffcf",
+      "evidence_written_utc": "2026-07-30T20:41:08Z"
+    },
+    {
+      "action": "dynamodb:DeleteItem",
+      "established_by_gate": "4N-C",
+      "consequence": "Releases another operator's lock mid-apply.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "e02478930999caa9d1c3a4c24d3a28bbb8f6b03af50133b389774ca00dd0ffcf",
+      "evidence_written_utc": "2026-07-30T20:41:08Z"
+    },
+    {
+      "action": "secretsmanager:GetSecretValue",
+      "established_by_gate": "4N-H1",
+      "consequence": "Reads the database credential and every other secret the workload holds.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "secretsmanager:PutSecretValue",
+      "established_by_gate": "4N-H1",
+      "consequence": "Overwrites a credential the workload will then use.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "kms:Decrypt",
+      "established_by_gate": "4N-H1",
+      "consequence": "Decrypts state or secret material protected by the CMK.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "kms:ScheduleKeyDeletion",
+      "established_by_gate": "4N-H1",
+      "consequence": "Destroys the key protecting state and secrets; a 7-day window then destroys the data.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "kms:CreateGrant",
+      "established_by_gate": "4N-H1",
+      "consequence": "Delegates CMK use without changing the key policy, so key-policy review misses it.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "sso:PutInlinePolicyToPermissionSet",
+      "established_by_gate": "4N-H2",
+      "consequence": "ICPermAdmin holds this standing on Resource:* \u2014 rewriting any permission set's policy.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a",
+      "evidence_written_utc": "2026-07-31T02:18:12Z"
+    },
+    {
+      "action": "sso:ProvisionPermissionSet",
+      "established_by_gate": "4N-H2",
+      "consequence": "Materialises a rewritten permission set onto its reserved role.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a",
+      "evidence_written_utc": "2026-07-31T02:18:12Z"
+    },
+    {
+      "action": "sts:AssumeRole",
+      "established_by_gate": "4N-I7",
+      "consequence": "Chains into a role in another account.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "ecs:RegisterTaskDefinition",
+      "established_by_gate": "4N-H4",
+      "consequence": "Defines a task that runs an attacker image as a role.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "0f562b7e8ac9383d73e7c572579894fb05ac40988ac2b6a9a685deaf6918b717",
+      "evidence_written_utc": "2026-07-31T04:16:01Z"
+    },
+    {
+      "action": "ecs:RunTask",
+      "established_by_gate": "4N-H4",
+      "consequence": "Launches that task definition.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "0f562b7e8ac9383d73e7c572579894fb05ac40988ac2b6a9a685deaf6918b717",
+      "evidence_written_utc": "2026-07-31T04:16:01Z"
+    },
+    {
+      "action": "ecs:CreateService",
+      "established_by_gate": "4N-H4",
+      "consequence": "Launches it continuously as a service.",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "0f562b7e8ac9383d73e7c572579894fb05ac40988ac2b6a9a685deaf6918b717",
+      "evidence_written_utc": "2026-07-31T04:16:01Z"
+    },
+    {
+      "action": "iam:CreatePolicyVersion",
+      "established_by_gate": "4N-I7",
+      "consequence": "FOUND BY THE 4N-I7 ARCHITECT LANE: the bootstrap operator could rewrite the reviewed boundary to Allow * and set it default, defeating the entire design.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "iam:SetDefaultPolicyVersion",
+      "established_by_gate": "4N-I7",
+      "consequence": "The second half of the boundary-rewrite path. Absent from the 4N-I7 contract.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    },
+    {
+      "action": "iam:DeletePolicy",
+      "established_by_gate": "4N-I7",
+      "consequence": "Deletes the boundary outright. Absent from the 4N-I7 contract.",
+      "evidence_status": "gate finding recorded in the gate ledger, no single artifact"
+    }
+  ],
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_note": "Tier-1 synthetic copy of the retained external source. Same STRUCTURE and the same requirement rows, with the real account replaced by the AWS documentation placeholder and evidence paths redacted. Ordinary CI runs against this; it certifies mechanics, never production identity."
+}

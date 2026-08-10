@@ -1,0 +1,26 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_why": "Tracked fixture so ordinary CI exercises the candidate-discovery MECHANISM with no real candidate present. certifies_production is false and candidate_manifest.load refuses a SYNTHETIC id that claims otherwise.",
+  "candidate_id": "SYNTHETIC-FIXTURE-1",
+  "artifact_root": "candidate",
+  "prefreeze_manifest": "synthetic-prefreeze.txt",
+  "certifies_production": false,
+  "artifacts": {
+    "synthetic-policy.json": {
+      "sha256": "1ac2e35f307661fa709854ae9b0207e600c31659cfcd12d53c80646d5013b1d2",
+      "role": "policy"
+    },
+    "synthetic-lifecycle.json": {
+      "sha256": "30a3b3d8fc9543d69b129b7a319c146ad5106fc5b770d3cf92dfe5334bf1e4ab",
+      "role": "lifecycle"
+    },
+    "synthetic-provenance.json": {
+      "sha256": "b565a96eb0c5822641d97cf9089759c8f73f24f021fe728e95d57a1b4da11b1e",
+      "role": "provenance"
+    },
+    "synthetic-prefreeze.txt": {
+      "sha256": "da41e568ae0db2cc37cac8ac6fee014ced664ea4d855177242b5b311a56597d0",
+      "role": "manifest"
+    }
+  }
+}

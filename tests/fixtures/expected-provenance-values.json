@@ -1,0 +1,28 @@
+{
+  "_purpose": "Independently authored EXPECTED provenance digests (Gate 4N-I17, Defect 5).\nThe OBSERVED side reads infra/aws/live-resource-inventory.json and scripts/signalnest_identity.py. The EXPECTED side reads THIS file. Gate 4N-I16 read both sides from the inventory, so rewriting the inventory to attacker values left provenance reporting clean.",
+  "_why_digests_not_values": "storing the literal values would put the real account id and live ARNs into version control. Digests give the same independence \u2014 a changed observed value produces a different digest \u2014 while keeping no identifier in the tracked tree. Phase C forbids tracking production anchor material; this satisfies both constraints.",
+  "_authority": "transcribed once from the retained pre-branch capture and the single identity source, then TRACKED. Changing an expected digest is a reviewable diff.",
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "algorithm": "sha256(utf8(value))",
+  "expected_digests": {
+    "trail_arn": "7a4cc81b54a7cfcdcff06a6abc5200003db2975840f5940d7c61e3319a956406",
+    "db_arn": "9b9c857079af12634871bd8ce01e844ef62c723e601560a5abc7c123042c4f34",
+    "state_bucket_name": "d2dae8b2a14b52f3efd7133cf6676052570d25ff2920a9643f91b95604edbd9a",
+    "audit_bucket_name": "63dac7b56c87a7994207419d1af85fe482513134d4c868c0a517bf1ad732a4e8",
+    "secrets_cmk_key_id": "36ab3ca1070db49ef64bdbcc17287ca3cb4ff710f166f14d3c18869a6e7247a1",
+    "lock_table_name": "392e6f409bc8df5cc4e00f81cf18d9062c10657c4a8d648190db5f17561da737",
+    "approved_account_id": "bb99f662c08d885317d83a06dea0be2c7cadab69931f73806a75f3f0bba8d128",
+    "boundary_policy_arn": "a42b0ee6a0dcffa4eaec08def736427582fb491989d0458930e55f982071dc76"
+  },
+  "expected_digests_synthetic": {
+    "trail_arn": "fa7b6b1aa2c14fe90c4762bf457d3fb3f08146039d565aa3e590758d6cc817fe",
+    "db_arn": "8ac0cff3228a933ec50bf0ecdf4c64c6bf090cf202a999b63f816a1a3e18afc8",
+    "state_bucket_name": "a60d63dd57bda0496d69cbf21da51c274896618c9e6167260641d1b0f0869c15",
+    "audit_bucket_name": "e0fcd8995143e01e300d6ad8800f7015c31365efc11c45aff1500cb083d9a8fe",
+    "secrets_cmk_key_id": "dad5fab89ebfa0f0eae593e1bc7da3170890ebf728d3c4ca02cf817c6c6551bf",
+    "lock_table_name": "47257ff113f114fa64de6c5ca72bd681bec106c9146c88c18ad43d4990832f06",
+    "approved_account_id": "aeb221660ff09134bb3a46b295554820f5cdcaae8971d75d9ffa62468c850dca",
+    "boundary_policy_arn": "d9d20916b6f782e4c83a8de070e05189b81271e086c3c6b487b585067d39a266"
+  },
+  "_tier_note": "GATE 4N-I18, SEC-1. `expected_digests` anchors the REAL values and is selected only under TIER_2_PROTECTED. `expected_digests_synthetic` anchors the tracked synthetic inventory and is selected under TIER_1_SYNTHETIC, so ordinary CI exercises the full comparison path end-to-end after the live inventory left the repository. Neither set is derived from the observed side; both are tracked and a change to either is a reviewable diff."
+}

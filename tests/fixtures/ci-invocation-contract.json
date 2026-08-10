@@ -1,0 +1,350 @@
+{
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_purpose": "Authored contract stating what each graded CI step MUST ACTUALLY EXECUTE (Gate 4N-I24C, findings I24C-06 and I24C-07).",
+ "_why_this_file_exists": [
+  "I23 asserted CI wiring with `assert \"scripts/x.py\" in block` plus an echo guard that",
+  "inspected block.split('run:',1)[-1].split(chr(10))[0]. Under `run: |` that expression is",
+  "' |', so the echo guard CANNOT FAIL, and the command assertion is a bare substring",
+  "satisfied by the echo's own argument. The adversarial lane replaced two graded step bodies",
+  "with `echo NO-OP scripts/<name>.py` and obtained 1988 passed / 83 skipped \u2014 the frozen",
+  "candidate's exact claimed result \u2014 with all guards at 0.",
+  "Separately, `policy_tests` \u2014 the ONLY step that runs pytest \u2014 appeared in ZERO tests, so",
+  "every 'the suite catches it' mitigation terminated at an unguarded step."
+ ],
+ "_authority": [
+  "This contract is AUTHORED and thereafter FROZEN. Its independence property is precise and",
+  "worth stating honestly rather than overclaiming: the initial enumeration was seeded by",
+  "inspecting the workflow, exactly as tests/fixtures/expected-writable-roles.json was",
+  "originally seeded by reading the composition. What makes it an oracle is that it is NEVER",
+  "RE-DERIVED AT CHECK TIME. scripts/ci_invocation_model.py reads this file and the workflow",
+  "and requires the workflow to satisfy it; it never regenerates this file from the workflow.",
+  "So removing or neutering an invocation moves the OBSERVED side only, and is detected.",
+  "Changing this file is a reviewable diff and must be treated as one.",
+  "It does NOT claim to be derived from an independent specification of CI intent."
+ ],
+ "_contract": [
+  "must_invoke lists targets that must be classified INVOKED by the shell analyser.",
+  "ECHOED, COMMENTED, ASSIGNED_NEVER_RUN, DEAD_BRANCH, AFTER_UNCONDITIONAL_EXIT, MASKED,",
+  "DEFINED_NEVER_CALLED, HEREDOC_DATA and UNKNOWN all fail. UNKNOWN fails closed on purpose.",
+  "Every graded id present in the workflow must appear here: a NEW graded step with no",
+  "invocation assertion is finding I24C-07's shape and is refused.",
+  "GATE 4N-I28Y. must_invoke alone is not a contract over a TEST command: Gate 4N-I28X added",
+  "`--deselect <node id>` to the graded pytest step, satisfied must_invoke perfectly, and",
+  "removed the whole assertion-control system from the run. required_options states what the",
+  "command MUST carry (the session-guard plugin); forbidden_options states the selection-",
+  "altering options it may never carry. Equivalent ordering and joined forms are handled.",
+  "This is a necessary condition only \u2014 the final authority on what ran is the session guard."
+ ],
+ "graded_steps": {
+  "allow_axis": {
+   "must_invoke": [
+    "scripts/allow_model.py"
+   ],
+   "run_form": "single"
+  },
+  "anchor": {
+   "must_invoke": [
+    "scripts/external_anchor.py"
+   ],
+   "run_form": "single"
+  },
+  "anchor_tier": {
+   "must_invoke": [
+    "scripts/anchor_loader.py"
+   ],
+   "run_form": "block"
+  },
+  "arn_model": {
+   "must_invoke": [
+    "scripts/arn_model.py"
+   ],
+   "run_form": "single"
+  },
+  "boundaries": {
+   "must_invoke": [
+    "scripts/check-iam-role-boundaries.py"
+   ],
+   "run_form": "single"
+  },
+  "candidate_discovery": {
+   "must_invoke": [
+    "scripts/candidate_manifest.py"
+   ],
+   "run_form": "single"
+  },
+  "certification": {
+   "must_invoke": [
+    "scripts/production_certification.py"
+   ],
+   "run_form": "single"
+  },
+  "certification_gate": {
+   "must_invoke": [
+    "PYTHON_INLINE"
+   ],
+   "run_form": "block"
+  },
+  "closure": {
+   "must_invoke": [
+    "scripts/verify_closure.py"
+   ],
+   "run_form": "single"
+  },
+  "containment": {
+   "must_invoke": [
+    "scripts/leak_scan.py",
+    "scripts/protected_inventory.py"
+   ],
+   "run_form": "block"
+  },
+  "deny_probes": {
+   "must_invoke": [
+    "scripts/resource_deny_probes.py"
+   ],
+   "run_form": "single"
+  },
+  "deny_requirements": {
+   "must_invoke": [
+    "scripts/deny_requirements.py"
+   ],
+   "run_form": "single"
+  },
+  "exhaustion": {
+   "must_invoke": [
+    "scripts/deny_exhaustion.py"
+   ],
+   "run_form": "single"
+  },
+  "expressions": {
+   "must_invoke": [
+    "scripts/hcl_expressions.py"
+   ],
+   "run_form": "single"
+  },
+  "iam_module_tests": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
+  },
+  "lifecycle": {
+   "must_invoke": [
+    "scripts/role_bootstrap_lifecycle.py"
+   ],
+   "run_form": "single"
+  },
+  "module_tests": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
+  },
+  "oracle": {
+   "must_invoke": [
+    "scripts/resource_oracle.py"
+   ],
+   "run_form": "single"
+  },
+  "package_coherence": {
+   "must_invoke": [
+    "scripts/commit_package_coherence.py"
+   ],
+   "run_form": "single"
+  },
+  "policy_tests": {
+   "must_invoke": [
+    "PYTEST",
+    "tests/"
+   ],
+   "run_form": "block",
+   "required_options": [
+    [
+     "-p",
+     "signalnest_bootstrap"
+    ],
+    [
+     "-p",
+     "pytest_session_guard"
+    ]
+   ],
+   "forbidden_options": [
+    "--deselect",
+    "-k",
+    "-m",
+    "--ignore",
+    "--ignore-glob",
+    "--collect-only",
+    "--co",
+    "--confcutdir",
+    "--pyargs",
+    "--last-failed",
+    "--lf",
+    "--failed-first",
+    "--ff",
+    "--stepwise",
+    "--sw",
+    "--exitfirst",
+    "-x",
+    "--maxfail"
+   ],
+   "why_options_are_contracted": "Gate 4N-I28X: `--deselect` on this step removed every mandatory assurance control while the step still invoked pytest and the contract still passed.",
+   "why_bootstrap_is_required": "Gate 4N-I28AE closing ACC-I28AC-01: the bootstrap must establish executed-code provenance for the protected modules, and it must load BEFORE the session guard it protects."
+  },
+  "policy_validation": {
+   "must_invoke": [
+    "scripts/policy_inventory.py"
+   ],
+   "run_form": "single"
+  },
+  "provenance": {
+   "must_invoke": [
+    "scripts/provenance.py"
+   ],
+   "run_form": "single"
+  },
+  "provenance_coverage": {
+   "must_invoke": [
+    "scripts/provenance.py"
+   ],
+   "run_form": "single"
+  },
+  "putrolepolicy": {
+   "must_invoke": [
+    "scripts/putrolepolicy_classification.py"
+   ],
+   "run_form": "single"
+  },
+  "role_inventory": {
+   "must_invoke": [
+    "scripts/terraform_role_inventory.py"
+   ],
+   "run_form": "single"
+  },
+  "rollout": {
+   "must_invoke": [
+    "scripts/gen_boundary_rollout.py"
+   ],
+   "run_form": "single"
+  },
+  "toolchain_post": {
+   "must_invoke": [
+    "scripts/check_toolchain_integrity.py"
+   ],
+   "run_form": "single"
+  },
+  "toolchain_pre": {
+   "must_invoke": [
+    "scripts/check_toolchain_integrity.py"
+   ],
+   "run_form": "single"
+  },
+  "tracked_state": {
+   "must_invoke": [
+    "scripts/tracked_state.py"
+   ],
+   "run_form": "single"
+  },
+  "triangulation": {
+   "must_invoke": [
+    "scripts/deny_triangulation.py"
+   ],
+   "run_form": "single"
+  },
+  "trust": {
+   "must_invoke": [
+    "scripts/trust_validator.py"
+   ],
+   "run_form": "single"
+  },
+  "verifier_ceiling": {
+   "must_invoke": [
+    "scripts/verifier_ceiling.py"
+   ],
+   "run_form": "single"
+  },
+  "verifier_policy": {
+   "must_invoke": [
+    "scripts/expiry_authorization.py",
+    "scripts/gen_readonly_verifier_policy.py"
+   ],
+   "run_form": "block"
+  },
+  "ci_invocation": {
+   "must_invoke": [
+    "scripts/ci_invocation_model.py"
+   ],
+   "run_form": "single"
+  },
+  "package_requirements": {
+   "must_invoke": [
+    "scripts/package_requirements.py"
+   ],
+   "run_form": "single"
+  },
+  "evidence_binding": {
+   "must_invoke": [
+    "scripts/evidence_binding.py"
+   ],
+   "run_form": "single"
+  },
+  "mutation_discovery": {
+   "must_invoke": [
+    "scripts/mutation_discovery.py"
+   ],
+   "run_form": "single"
+  },
+  "site_coverage": {
+   "must_invoke": [
+    "scripts/site_coverage.py"
+   ],
+   "run_form": "single"
+  },
+  "gate_dependencies": {
+   "must_invoke": [
+    "scripts/check_gate_dependencies.py"
+   ],
+   "run_form": "single"
+  },
+  "env_dataflow": {
+   "must_invoke": [
+    "scripts/ci_env_dataflow.py"
+   ],
+   "run_form": "single"
+  },
+  "failure_propagation": {
+   "must_invoke": [
+    "scripts/failure_propagation.py"
+   ],
+   "run_form": "single"
+  },
+  "ci_harness": {
+   "must_invoke": [
+    "scripts/ci_harness.py"
+   ],
+   "run_form": "single"
+  },
+  "critical_lists": {
+   "must_invoke": [
+    "scripts/critical_list_inventory.py"
+   ],
+   "run_form": "single"
+  },
+  "collection_completeness": {
+   "must_invoke": [
+    "scripts/collection_completeness.py"
+   ],
+   "run_form": "single"
+  },
+  "security_collection_assurance": {
+   "must_invoke": [
+    "scripts/security_collection_assurance.py"
+   ],
+   "run_form": "single"
+  }
+ },
+ "totals": {
+  "graded_steps": 45,
+  "multiline_run_blocks": 7,
+  "single_line_run": 38
+ }
+}

@@ -1,0 +1,2060 @@
+{
+ "_authority": [
+  "AUTHORED and independent of the tests it governs. scripts/assertion_contracts.py reads THIS",
+  "file for the requirement and checks the test's AST against it; it never derives a requirement",
+  "from the AST it audits. Deriving the expectation from the current test body would ratify",
+  "whatever that body says, including `assert True` \u2014 the self-authored-oracle defect this whole",
+  "gate chain keeps finding.",
+  "Changing this file is a reviewable diff. Weakening a contract is as visible as weakening a",
+  "test, which is the point."
+ ],
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_membership_rule": [
+  "A test is load-bearing here only if a REAL mutation exists that it catches, and that mutation",
+  "is named in the entry. Nothing qualifies because its filename contains 'security', because its",
+  "function name contains 'critical', because it appears in a manifest, because it is new, or",
+  "because it has many assertions.",
+  "Every proving_mutation below was executed against a proven-green baseline in the Gate 4N-I28S",
+  "and 4N-I28T falsification runs."
+ ],
+ "_purpose": "Authored contract stating what each LOAD-BEARING test must actually assert (Gate 4N-I28U, closing the I28T finding LOAD_BEARING_TEST_ASSERTION_SELF_PROTECTION_MISSING).",
+ "_stable_tokens": [
+  "must_reference names STABLE tokens \u2014 dictionary keys, string literals, attribute names \u2014 not",
+  "local variable names, so renaming a local with equivalent dataflow does not break a contract",
+  "while weakening the assertion does."
+ ],
+ "_why_this_file_exists": [
+  "Gate 4N-I28T proved on a git-bearing clone with a green clean baseline that the body of a",
+  "load-bearing test could be replaced with a single `assert True` and nothing noticed: seven",
+  "real assertions became one trivial one, the gutted test passed, the surrounding pins passed,",
+  "the site-universe pin passed and package coherence stayed green.",
+  "One gate earlier, at 4N-I28R, two tests were found that had kept their NAMES while losing",
+  "their MEANING. A test that still runs and still passes while asserting nothing is that same",
+  "failure in better clothes."
+ ],
+ "contracts": [
+  {
+   "contract_id": "AC-01-SMOKE-HTTP-REAL-CHAIN",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "scripts/site_taxonomy.py::_shell_indirection and scripts/shell_command_model.py::python_invocations",
+   "minimum_meaningful_assertions": 4,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert 1",
+    "assert x == x",
+    "assert v is v",
+    "existence-only check where equality is required"
+   ],
+   "protected_invariant": "smoke_http.py enters the command-root universe through its REAL shell chain (bash scripts/ci-smoke.sh -> ci-smoke.sh:63) and not through any textual fallback",
+   "proving_mutation": "q05_delete_fallback_without_shell_indirection \u2014 replacing _shell_indirection with an empty iterable drops smoke_http.py and this test fails",
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "shell_script",
+      "scripts/ci-smoke.sh"
+     ]
+    },
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "shell_source_line",
+      "63"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "step_has_id"
+     ]
+    }
+   ],
+   "test": "test_rc_s1_smoke_http_is_derived_through_the_real_shell_chain",
+   "why_load_bearing": "this is the single assertion set that proves the I28Q defect was fixed by modelling the real invocation rather than by deleting the fallback; without it smoke_http.py could silently leave the universe"
+  },
+  {
+   "contract_id": "AC-02-COMMENT-CANNOT-MOVE-UNIVERSE",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "scripts/site_taxonomy.py::_resolved_roots and workflow_script_mentions",
+   "minimum_meaningful_assertions": 5,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert after",
+    "membership instead of equality"
+   ],
+   "protected_invariant": "an edit to non-executing comment text in ci.yml cannot change the command-root set, the site count or the site identity hash",
+   "proving_mutation": "q01_comment_creates_root \u2014 re-promoting the whole-file ci.yml regex to an authoritative root producer makes this test fail",
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "roots",
+      "after",
+      "baseline"
+     ]
+    },
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "sites",
+      "after",
+      "baseline"
+     ]
+    },
+    {
+     "class": "HASH_EQUALITY",
+     "must_reference": [
+      "hash",
+      "after",
+      "baseline"
+     ]
+    }
+   ],
+   "test": "test_rc_s5_a_comment_only_mutation_cannot_move_the_site_universe",
+   "why_load_bearing": "this is the direct pin of the defect that rejected candidate 4N-I28Q-CANDIDATE-1 (457 -> 454 on a comment deletion, 457 -> 465 on a comment addition)"
+  },
+  {
+   "contract_id": "AC-03-MUTATION-HARNESS-CAN-REPORT-MOVEMENT",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "the green-when-clean discipline; a harness that cannot go red proves nothing when it is green",
+   "minimum_meaningful_assertions": 2,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "asserting equality where inequality is required"
+   ],
+   "protected_invariant": "the harness that proves comment edits are inert must itself be able to report movement, so its 'no movement' results are not vacuous",
+   "proving_mutation": "q01_comment_creates_root \u2014 with the regex re-promoted a real executable edit no longer moves the root set and this control fails",
+   "required_assertions": [
+    {
+     "class": "MUTATION_CHANGES_RESULT",
+     "must_reference": [
+      "roots",
+      "after",
+      "baseline"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "bash scripts/ci-smoke.sh"
+     ]
+    }
+   ],
+   "test": "test_rc_s5_the_mutation_harness_can_still_report_movement",
+   "why_load_bearing": "without it AC-02 could pass on a harness that measures nothing at all"
+  },
+  {
+   "contract_id": "AC-04-NO-TEXTUAL-ROOT",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "scripts/site_taxonomy.py::release_roots resolution vocabulary",
+   "minimum_meaningful_assertions": 3,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert root"
+   ],
+   "protected_invariant": "no command root carries the synthetic UNSTEPPED step id, and every root resolves through an executable derivation",
+   "proving_mutation": "q07_special_case_smoke_http \u2014 injecting a synthetic root makes this test fail",
+   "required_assertions": [
+    {
+     "allow_conditional": true,
+     "class": "INEQUALITY",
+     "conditional_proof": "the assertions run inside a loop over the derived root set; the reachable guard `len(roots) == 41` proves the loop is not vacuous",
+     "must_reference": [
+      "release_entry_points",
+      "UNSTEPPED"
+     ]
+    },
+    {
+     "allow_conditional": true,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "same loop, same reachable guard",
+     "must_reference": [
+      "DIRECT_COMMAND",
+      "SHELL_INDIRECTION",
+      "PYTHON_HEREDOC_SUBPROCESS"
+     ]
+    }
+   ],
+   "test": "test_rc_s3_no_root_is_created_by_textual_matching",
+   "why_load_bearing": "it is the structural guarantee that a root can only come from executable semantics"
+  },
+  {
+   "contract_id": "AC-05-SITE-ROLE-EQUALS-ROOT-ROLE",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "scripts/site_taxonomy.py release_role derivation from the aggregator predicate",
+   "minimum_meaningful_assertions": 3,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert site['release_role']"
+   ],
+   "protected_invariant": "each site's release role equals the role derived for its own command root, so a stamped constant in the derived SHAPE cannot pass",
+   "proving_mutation": "q13_unconditional_release_role \u2014 stamping a constant role dict makes this test fail",
+   "required_assertions": [
+    {
+     "allow_conditional": true,
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "conditional_proof": "the comparisons run inside a loop over discovered sites; the reachable guards `assert sites` and `assert checked > 100` prove the loop compared a real population",
+     "must_reference": [
+      "release_role",
+      "primary"
+     ]
+    },
+    {
+     "allow_conditional": true,
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "conditional_proof": "same loop, same reachable guards",
+     "must_reference": [
+      "blocks_release"
+     ]
+    }
+   ],
+   "test": "test_h04b_every_site_role_equals_the_derived_role_of_its_own_root",
+   "why_load_bearing": "the earlier pin only rejected the literal string GRADED_CI_STEP, so any stamped dict sailed through; this is the assertion that closed that gap"
+  },
+  {
+   "contract_id": "AC-06-UNGRADED-SMOKE-DOES-NOT-BLOCK-RELEASE",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "scripts/site_taxonomy.py::_release_role against scripts/failure_propagation.py's grading predicate",
+   "minimum_meaningful_assertions": 2,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert role"
+   ],
+   "protected_invariant": "a step with no id whose outcome the mandatory aggregator does not read must not be recorded as blocking release",
+   "proving_mutation": "q14_every_smoke_step_blocks_release and q15_no_step_blocks_release \u2014 both make this test fail",
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "primary",
+      "UNGRADED_JOB_STEP"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "blocks_release"
+     ]
+    }
+   ],
+   "test": "test_h03_the_ungraded_smoke_step_does_not_claim_to_block_release",
+   "why_load_bearing": "this is the false grading attribution raised by the I28Q architect lane as ARC-I28Q-01"
+  },
+  {
+   "contract_id": "AC-07-SITE-BEHAVIOR-DISPOSITION",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "the RC-S6 disposition recorded in the module docstring",
+   "minimum_meaningful_assertions": 3,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert text"
+   ],
+   "protected_invariant": "scripts/site_behavior.py carries a recorded EVIDENCE_ONLY disposition and contributes no control sites to either universe",
+   "proving_mutation": "q21_leave_site_behavior_unresolved \u2014 removing the recorded disposition makes this test fail",
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "DISPOSITION (Gate 4N-I28S, RC-S6)"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "EVIDENCE_ONLY"
+     ]
+    }
+   ],
+   "test": "test_rc_s6_site_behavior_has_an_explicit_recorded_disposition",
+   "why_load_bearing": "it closes ARC-I28Q-02; without it the module reverts to an unreviewable 547-line orphan holding security-critical scope"
+  },
+  {
+   "contract_id": "AC-08-COMMENT-PINS-REMAIN",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "the MUTATIONS table driving AC-02",
+   "minimum_meaningful_assertions": 4,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert MUTATIONS"
+   ],
+   "protected_invariant": "both I28Q comment-only mutations remain present in the falsification suite, so deleting a pin is not a silent way to make the suite green",
+   "proving_mutation": "q19_remove_first_comment_mutation and q20_remove_second_comment_mutation",
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "i28q_removal",
+      "MUTATIONS"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "i28q_injection",
+      "MUTATIONS"
+     ]
+    }
+   ],
+   "test": "test_both_i28q_comment_mutations_are_still_pinned",
+   "why_load_bearing": "q19 and q20 were MISSED before this test existed: either pin could be deleted with nothing noticing"
+  },
+  {
+   "contract_id": "AC-09-SITE-UNIVERSE-PIN",
+   "file": "tests/test_i27r_rejection_remediation.py",
+   "linked_behaviour": "scripts/mutation_discovery.py::discover_sites and the site categorisation",
+   "minimum_meaningful_assertions": 1,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert production",
+    "membership instead of count equality"
+   ],
+   "protected_invariant": "the production/control site universe holds at its independently reconciled size, so a truncation or a forced count is visible",
+   "proving_mutation": "q17_force_root_count and q18_force_site_count \u2014 both make this test fail",
+   "required_assertions": [
+    {
+     "class": "COUNT_EQUALITY",
+     "must_reference": [
+      "production",
+      "EXPECTED_PRODUCTION_CONTROL_SITES"
+     ]
+    }
+   ],
+   "test": "test_the_production_control_site_universe_holds_at_its_reconciled_size",
+   "why_load_bearing": "it is the single pin that makes a silent site-universe truncation fail"
+  },
+  {
+   "contract_id": "AC-11-SCAN-ACCOUNTING-DECISION-SET",
+   "file": "tests/test_i28i_scan_accounting.py",
+   "linked_behaviour": "scripts/leak_scan.py DECISIONS and scan_accounting",
+   "minimum_meaningful_assertions": 1,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert ls.DECISIONS",
+    "membership instead of set equality"
+   ],
+   "protected_invariant": "the scan decision vocabulary is a closed set; an unlisted decision cannot be silently introduced, which is what makes the 36060 = 692 + 35368 + 0 accounting meaningful",
+   "proving_mutation": "gutting it leaves the qualified suite green and the assertion validator clean, proven in the I28W Phase B reproduction",
+   "required_assertions": [
+    {
+     "class": "SET_EQUALITY",
+     "must_reference": [
+      "DECISIONS",
+      "EXPECTED_DECISIONS"
+     ]
+    }
+   ],
+   "test": "test_the_decision_set_is_closed_and_is_what_it_is_supposed_to_be",
+   "why_load_bearing": "Gate 4N-I28G root cause RC-2 was silent scan exclusion; this set equality is the control that keeps the accounting closed"
+  },
+  {
+   "contract_id": "AC-12-PACKET-DIGESTS-ARE-DISTINCT",
+   "file": "tests/test_i27z_packet_digest_contract.py",
+   "linked_behaviour": "scripts/review_packet_digest.py digests and verify",
+   "minimum_meaningful_assertions": 1,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "equality instead of inequality",
+    "existence-only check"
+   ],
+   "protected_invariant": "the raw-file and canonical-object packet digests are DIFFERENT values, so a single digest cannot be presented as both",
+   "proving_mutation": "gutting it leaves the qualified suite green and the assertion validator clean, proven in the I28W Phase B reproduction",
+   "required_assertions": [
+    {
+     "class": "INEQUALITY",
+     "must_reference": [
+      "review_packet_raw_file_sha256",
+      "review_packet_canonical_object_sha256"
+     ]
+    }
+   ],
+   "test": "test_the_two_digests_are_different_values",
+   "why_load_bearing": "Gate 4N-I27Y shipped a packet whose raw field held a canonical digest; this inequality is the control that makes that mislabelling visible"
+  },
+  {
+   "contract_id": "AC-13-TRAP-SCOPE-SEMANTICS",
+   "file": "tests/test_i28b_trap_scope_and_route53_domain.py",
+   "linked_behaviour": "scripts/failure_propagation.py trap_effect against executed Bash",
+   "minimum_meaningful_assertions": 2,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "analyzer-only assertion with no executed Bash comparison"
+   ],
+   "protected_invariant": "a trap set inside a brace group binds the parent shell and absorbs the failure, and the analyzer agrees with real Bash",
+   "proving_mutation": "gutting it leaves the qualified suite green and the assertion validator clean, proven in the I28W Phase B reproduction",
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "trap_effect",
+      "TRAP_ABSORBS"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "bash_ends_successfully"
+     ]
+    }
+   ],
+   "test": "test_a_brace_group_trap_binds_the_parent_shell",
+   "why_load_bearing": "Gate 4N-I28G root cause RC-1 and RC-5: analyzer-versus-Bash agreement on composed trap scope"
+  },
+  {
+   "contract_id": "AC-14-PREDICTED-TREE-INCOHERENCE-DETECTED",
+   "file": "tests/test_i23_package_and_lineage.py",
+   "linked_behaviour": "scripts/commit_package_coherence.py",
+   "minimum_meaningful_assertions": 2,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "asserting coherence without exercising the incoherent case"
+   ],
+   "protected_invariant": "a predicted commit tree missing committed test files is REJECTED as incoherent, so candidate/tree binding cannot silently accept an incomplete package",
+   "proving_mutation": "gutting it leaves the qualified suite green and the assertion validator clean, proven in the I28W Phase B reproduction",
+   "required_assertions": [
+    {
+     "class": "MEANINGFUL_TRUTHINESS",
+     "must_reference": [
+      "result",
+      "coherent"
+     ]
+    },
+    {
+     "allow_conditional": true,
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "conditional_proof": "the comparison runs inside a generator over result['findings']; the reachable guards `not result['coherent']` and `len(unresolved) >= 20` prove the incoherent case was actually produced",
+     "must_reference": [
+      "check",
+      "test_file_committed"
+     ]
+    }
+   ],
+   "test": "test_the_i22_predicted_tree_is_rejected_as_incoherent",
+   "why_load_bearing": "it is the control that makes candidate/tree binding falsifiable; without it an incoherent predicted tree passes"
+  },
+  {
+   "contract_id": "AC-10-UNRESOLVED-MENTION-FAILS-CLOSED",
+   "file": "tests/test_i28s_command_roots.py",
+   "linked_behaviour": "scripts/site_taxonomy.py::check unresolved-mention problem loop",
+   "minimum_meaningful_assertions": 3,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "asserting the count is zero without exercising the path"
+   ],
+   "protected_invariant": "an UNRESOLVED_MENTION actually makes check() dirty; the guarantee is exercised on a real population rather than asserted over an empty one",
+   "proving_mutation": "q08_every_mention_is_execution \u2014 disabling the fail-closed loop makes this test fail",
+   "required_assertions": [
+    {
+     "class": "MEANINGFUL_TRUTHINESS",
+     "must_reference": [
+      "result",
+      "clean"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "UNRESOLVED_MENTION fails closed"
+     ]
+    }
+   ],
+   "test": "test_rc_s2_the_fail_closed_path_actually_fires_when_given_an_unresolved_mention",
+   "why_load_bearing": "q08 disabled that loop and every test still passed, because the real workflow currently has zero unresolved mentions"
+  },
+  {
+   "contract_id": "AC-15-NPM-SELF-CONSISTENT-INSTALLATION-REFUSED",
+   "file": "tests/test_i28as_npm_authority.py",
+   "linked_behaviour": "scripts/npm_authority.py::manager_selected_versions and ::_verify_version_manager_tree",
+   "minimum_meaningful_assertions": 2,
+   "protected_invariant": "an attacker installation that satisfies every INTERNAL consistency check \u2014 correct layout, correct symlink, plausible package.json, a copied genuine node binary, a semver directory name and a node_version.h agreeing with that name \u2014 is still refused, because the version manager's own metadata references no such installation",
+   "proving_mutation": "f15 installation-family classifier forced to accept, and the Gate 4N-I28AS attack-matrix arm F7; either makes this test fail",
+   "required_assertions": [
+    {
+     "allow_conditional": false,
+     "class": "MEANINGFUL_TRUTHINESS",
+     "conditional_proof": "the assertion runs unconditionally on the verify() result",
+     "must_reference": [
+      "clean"
+     ]
+    },
+    {
+     "allow_conditional": false,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "the refusal must NAME the reason, or a refusal for an unrelated cause would satisfy the control",
+     "must_reference": [
+      "metadata references none of it",
+      "problems"
+     ]
+    }
+   ],
+   "test": "test_n14_a_fully_self_consistent_attacker_installation_is_still_refused",
+   "why_load_bearing": "this is the assertion that separates 'looks like a genuine installation' from 'is the installation this host actually selected'. It was an ESCAPE in the first implementation of this gate \u2014 internal consistency is forgeable, because an attacker only has to be consistent with themselves \u2014 and without it ADV-I28AP-02 returns in a more careful form."
+  },
+  {
+   "contract_id": "AC-16-NPM-PREFIX-MECHANISM-ABSENT",
+   "file": "tests/test_i28as_npm_authority.py",
+   "linked_behaviour": "scripts/external_executable_trust.py::resolve and ::check",
+   "minimum_meaningful_assertions": 1,
+   "protected_invariant": "external_executable_trust contains no code that ACTS on approved_path_prefixes and no assignment emptying the approved path set; the mechanism behind ADV-I28AP-02 is deleted rather than merely unused",
+   "proving_mutation": "f03-style reintroduction: restoring the prefix branch in resolve() makes this test fail on the emptied-approved-set assertion",
+   "required_assertions": [
+    {
+     "allow_conditional": false,
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "conditional_proof": "the equality is asserted unconditionally on an AST-derived summary; both facts are keyed by stable names so weakening either one changes the compared value",
+     "must_reference": [
+      "approved_path_prefixes_reads",
+      "approved_emptied_assignments"
+     ]
+    }
+   ],
+   "test": "test_n01_the_prefix_mechanism_is_absent_from_the_code",
+   "why_load_bearing": "a prefix allowance skipped the approved-path membership test entirely, so any file beneath an approved installation root was accepted with the attacker's digest recorded as the bound identity. This assertion is what stops the single line `approved = []` from returning."
+  },
+  {
+   "contract_id": "AC-17-DOCKER-UNCLASSIFIED-STEERING-FAILS-CLOSED",
+   "file": "tests/test_i28at_docker_boundary.py",
+   "linked_behaviour": "scripts/docker_boundary.py::steering_state and ::steering_problems",
+   "minimum_meaningful_assertions": 2,
+   "protected_invariant": "a DOCKER_*/BUILDKIT_*/COMPOSE_* variable that no disposition classifies is REFUSED, and the refusal names the variable",
+   "proving_mutation": "f-steering-empty: replacing steering_state() so it returns an empty environment makes this test fail, and restores ADV-I28AP-01 entirely",
+   "required_assertions": [
+    {
+     "allow_conditional": false,
+     "class": "MEANINGFUL_TRUTHINESS",
+     "conditional_proof": "asserted unconditionally on the verify() result",
+     "must_reference": [
+      "clean"
+     ]
+    },
+    {
+     "allow_conditional": false,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "the refusal must NAME the unclassified variable, or a refusal for an unrelated cause would satisfy the control",
+     "must_reference": [
+      "no disposition classifies it",
+      "problems"
+     ]
+    }
+   ],
+   "test": "test_d12_an_unclassified_steering_variable_fails_closed",
+   "why_load_bearing": "this is the assertion that separates 'we adjudicate the steering we thought of' from 'we adjudicate the steering that exists'. The first implementation collected only variables the policy already named, so the fail-closed branch was UNREACHABLE CODE and DOCKER_MYSTERY_KNOB sailed through with the layer clean. Docker gains environment variables over time; the one this gate never heard of is exactly the one worth refusing."
+  },
+  {
+   "contract_id": "AC-18-DOCKER-CONTEXT-REFUSED",
+   "file": "tests/test_i28at_docker_boundary.py",
+   "linked_behaviour": "scripts/docker_boundary.py::steering_state and ::config_problems",
+   "minimum_meaningful_assertions": 2,
+   "protected_invariant": "a Docker context defined in the context store is refused, and the refusal names the remote endpoint it would have selected",
+   "proving_mutation": "f-context-default: replacing the context reader so it returns no contexts makes this test fail while the hostile store remains in place",
+   "required_assertions": [
+    {
+     "allow_conditional": false,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "asserted unconditionally on the problem list",
+     "must_reference": [
+      "CONTEXT is defined",
+      "problems"
+     ]
+    },
+    {
+     "allow_conditional": false,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "the endpoint must appear in the refusal, so a generic complaint cannot satisfy the contract",
+     "must_reference": [
+      "tcp://attacker.example:2375"
+     ]
+    }
+   ],
+   "test": "test_d21_a_defined_context_is_refused",
+   "why_load_bearing": "a context selects the daemon endpoint WITHOUT any environment variable being set, so it is the redirection that survives an environment-only control. Under the external-CI assumption the daemon is not verified at all, which makes 'nothing may point Docker elsewhere' the entire security claim."
+  },
+  {
+   "contract_id": "AC-19-SHELL-COMMAND-AFTER-CASE-DISCOVERED",
+   "file": "tests/test_i28av_shell_parser_completeness.py",
+   "linked_behaviour": "scripts/shell_positions.py::scan case-pattern disarm on esac/fi/done",
+   "minimum_meaningful_assertions": 2,
+   "protected_invariant": "a command following a `case ... esac` is discovered by the parser, and the scan result is trustworthy",
+   "proving_mutation": "restoring the `esac` branch without the disarm makes every parametrised case fail",
+   "required_assertions": [
+    {
+     "allow_conditional": false,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "asserted unconditionally on the scan result for each parametrised source",
+     "must_reference": [
+      "commands",
+      "word"
+     ]
+    },
+    {
+     "allow_conditional": false,
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "conditional_proof": "the result must be COMPLETE, not merely contain the word \u2014 a partial parse that happens to include it is still not coverage",
+     "must_reference": [
+      "status",
+      "COMPLETE"
+     ]
+    }
+   ],
+   "test": "test_v01_a_command_after_case_is_discovered",
+   "why_load_bearing": "this is the assertion that separates 'the parser ran' from 'the parser saw'. ADV-I28AT-01 let kubectl, helm and curl|sh sit in a graded release-blocking workflow step discovered by nothing, with 0 unresolved and 0 unsupported."
+  },
+  {
+   "contract_id": "AC-20-INVENTORY-REFUSES-INCOMPLETE-PARSE",
+   "file": "tests/test_i28av_shell_parser_completeness.py",
+   "linked_behaviour": "scripts/executable_inventory.py::static_inventory and ::check",
+   "minimum_meaningful_assertions": 2,
+   "protected_invariant": "the executable inventory refuses a parse result that is not complete, rather than enumerating whatever subset it received",
+   "proving_mutation": "removing the is_trustworthy() guard makes this test fail while the tree stays green",
+   "required_assertions": [
+    {
+     "allow_conditional": false,
+     "class": "MEANINGFUL_TRUTHINESS",
+     "conditional_proof": "asserted unconditionally on the inventory outcome",
+     "must_reference": [
+      "clean"
+     ]
+    },
+    {
+     "allow_conditional": false,
+     "class": "MEMBERSHIP",
+     "conditional_proof": "the refusal must NAME incompleteness, or an unrelated refusal would satisfy it",
+     "must_reference": [
+      "not complete",
+      "problems"
+     ]
+    }
+   ],
+   "test": "test_v16_the_executable_inventory_refuses_an_incomplete_parse",
+   "why_load_bearing": "this is the consumer Gate 4N-I28AU found had NO independent superset. A clean result computed from incomplete input is indistinguishable from coverage, which is precisely how the blocker stayed invisible."
+  },
+  {
+   "contract_id": "AC-21-EXEC-COMMAND-POSITION-TRANSFER",
+   "file": "tests/test_i28bb_exec_transfer.py",
+   "test": "test_the_adv_i28ax_01_finding_is_closed",
+   "linked_behaviour": "scripts/shell_positions.py::scan exec handling and scripts/exec_transfer_oracle.py::compare",
+   "minimum_meaningful_assertions": 2,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert 1",
+    "assert x == x",
+    "assert v is v",
+    "existence-only check where identity and classification are required",
+    "comparing two derivations without an expected-presence condition"
+   ],
+   "protected_invariant": "a command word following `exec` is discovered when static, declared unresolved when dynamic, or fails closed \u2014 and is never silently absent while the parse reports COMPLETE and trustworthy",
+   "proving_mutation": "f01 static exec child omitted \u2014 restoring idx=j+1 with expecting=False makes `exec kubectl` derive nothing again, exactly the ADV-I28AX-01 shape, and this test fails",
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "kubectl",
+      "bare"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "kubectl",
+      "prefixed"
+     ]
+    }
+   ],
+   "why_load_bearing": "this is the assertion set that proves ADV-I28AX-01 is closed by MODELLING the transfer rather than by special-casing an observed file; without it `exec` could silently stop handing command position to its child and every downstream inventory would shrink with no control objecting"
+  },
+  {
+   "contract_id": "AC-22-DOCKER-PER-SITE-ENFORCEMENT",
+   "file": "tests/test_i28be_docker_per_site_enforcement.py",
+   "test": "test_every_required_field_is_consumed_by_the_decision",
+   "linked_behaviour": "scripts/docker_boundary.py::adjudicate_site and ::enforce_per_site",
+   "minimum_meaningful_assertions": 1,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert 1",
+    "assert x == x",
+    "assert v is v",
+    "existence-only check where field consumption is required",
+    "asserting a field is serialised rather than that a decision reads it"
+   ],
+   "protected_invariant": "every authored per-site Docker steering field is READ by the per-site decision; a field that is only derived, stored, logged or serialised is not enforcement",
+   "proving_mutation": "remove a field from adjudicate_site's consumed set \u2014 the consumed_fields superset assertion fails, which is the ADV-I28AX-ARCH-01 shape (8 of 10 record mutations previously produced no final failure)",
+   "required_assertions": [
+    {
+     "class": "SET_EQUALITY",
+     "must_reference": [
+      "consumed_fields",
+      "PER_SITE_REQUIRED_FIELDS"
+     ]
+    }
+   ],
+   "why_load_bearing": "this is the assertion set proving ADV-I28AX-ARCH-01 part A is closed by CONSUMPTION rather than by richer evidence; without it the per-site records could silently revert to evidence-only"
+  },
+  {
+   "contract_id": "AC-23-DOCKER-CATEGORY-AND-SESSION-FINISH",
+   "file": "tests/test_i28bfa_category_and_session_finish.py",
+   "test": "test_every_measured_widening_input_now_fails_closed",
+   "linked_behaviour": "scripts/docker_boundary.py::resolve_steering_entry and ::per_site_differences",
+   "minimum_meaningful_assertions": 2,
+   "prohibited_trivial_forms": [
+    "assert True",
+    "assert 1",
+    "assert x == x",
+    "assert v is v",
+    "asserting a category resolves without asserting that unrelated text does NOT"
+   ],
+   "protected_invariant": "Docker steering categories resolve by EXACT lookup only; unrelated prose containing a keyword substring resolves to nothing",
+   "proving_mutation": "restore substring containment in resolve_steering_entry \u2014 each of the fifteen measured widening inputs resolves to real mechanisms again, so classification is no longer CATEGORY_INVALID and this parametrised test fails",
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "CATEGORY_INVALID"
+     ]
+    }
+   ],
+   "why_load_bearing": "this is the assertion set proving I28BE-CAT-01 is closed by an EXACT table rather than by a narrower substring rule; without it the mapping could silently widen again"
+  },
+  {
+   "contract_id": "AC-B1-STATE-AUTH-BINDING",
+   "file": "tests/test_i28bf_b1_docker_assurance_state.py",
+   "test": "test_state_binds_the_authorization_pair_the_prior_per_site_state_did_not",
+   "linked_behaviour": "scripts/docker_assurance_state.py::fresh_state and ::validate_state",
+   "protected_invariant": "the authoritative Docker state binds the active authorization pair by a digest over issuance/expiry/duration, which the prior per-site state did not",
+   "proving_mutation": "drop the authorization identity from fresh_state or stop digesting it; the pair_digest equality no longer holds and this test fails",
+   "why_load_bearing": "without it a warm cache carrying a retired authorization pair could be served under the active window",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "pair_digest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-B1-STATE-DIGEST-SENSITIVITY",
+   "file": "tests/test_i28bf_b1_docker_assurance_state.py",
+   "test": "test_a_semantic_change_moves_the_digest",
+   "linked_behaviour": "scripts/docker_assurance_state.py::state_digest",
+   "protected_invariant": "a semantic change to the authoritative state moves its canonical digest",
+   "proving_mutation": "make state_digest ignore per_site decisions; a forced FAIL no longer moves the digest and this test fails",
+   "why_load_bearing": "the digest is the identity a cache and the session-finish comparison rely on; a digest blind to a change is a cache that blesses it",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MUTATION_CHANGES_RESULT",
+     "must_reference": [
+      "state_digest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-B1-CACHE-KEY-COMPLETENESS",
+   "file": "tests/test_i28bf_b1_governed_cache.py",
+   "test": "test_key_binds_the_complete_identity_set",
+   "linked_behaviour": "scripts/docker_assurance_state.py::cache_key and ::CACHE_KEY_FIELDS",
+   "protected_invariant": "the governed cache key binds exactly the complete identity set (tree, policy, category, normalization, parser, position schema, both universes, state schema, assertion contract, and authorization)",
+   "proving_mutation": "drop a component from cache_key; the set equality against CACHE_KEY_FIELDS fails",
+   "why_load_bearing": "a partial key admits a cross-tree, cross-policy, or retired-authorization value",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "SET_EQUALITY",
+     "must_reference": [
+      "CACHE_KEY_FIELDS"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-B1-POISON-FORCED-AGGREGATE",
+   "file": "tests/test_i28bf_b1_poisoning.py",
+   "test": "test_p10_force_aggregate_pass",
+   "linked_behaviour": "scripts/docker_assurance_state.py::validate_state",
+   "protected_invariant": "a forced-clean Docker aggregate over a non-PASS site is refused by validate_state",
+   "proving_mutation": "remove the aggregate/per-site cross-check in validate_state; forcing the aggregate clean over a FAIL is accepted and this test fails",
+   "why_load_bearing": "it is the poison-10 control proving the aggregate cannot be forced clean over a failing site",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "validate_state"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-B3-HASHSEED-DETERMINISM",
+   "file": "tests/test_i28bf_b3_environment.py",
+   "test": "test_hash_seed_determinism",
+   "linked_behaviour": "scripts/docker_assurance_state.py::state_digest (canonical, seed-independent)",
+   "protected_invariant": "the authoritative state digest is identical across PYTHONHASHSEED values",
+   "proving_mutation": "make state_digest depend on hash-seed-ordered set repr; a seed changes the digest and this test fails",
+   "why_load_bearing": "a seed-sensitive digest would make the cache key and session-finish comparison nondeterministic",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "REFERENCE_DIGEST",
+      "state_digest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-B3-HOSTILE-DOCKER-ENV",
+   "file": "tests/test_i28bf_b3_environment.py",
+   "test": "test_hostile_docker_env_variable",
+   "linked_behaviour": "scripts/docker_boundary.py::adjudicate_site FATAL steering + docker_assurance_state.validate_state",
+   "protected_invariant": "a hostile Docker env var prohibited by a load-bearing site fails the authoritative state closed",
+   "proving_mutation": "stop consuming prohibited steering in adjudicate_site; a hostile DOCKER_HOST no longer fails closed and this test fails",
+   "why_load_bearing": "a hostile Docker steering variable must not pass into a clean assurance state",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "docker_env"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-B3-CROSS-TREE-CACHE",
+   "file": "tests/test_i28bf_b3_environment.py",
+   "test": "test_cross_tree_cache_value_is_rejected",
+   "linked_behaviour": "scripts/docker_assurance_state.py::lookup / validate_cache_value",
+   "protected_invariant": "a cryptographically valid cache value from another staged tree is rejected",
+   "proving_mutation": "stop binding staged_tree in the cache value's key digest; a cross-tree value is served and this test fails",
+   "why_load_bearing": "a cross-tree cache value must never become a warm hit",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEANINGFUL_TRUTHINESS",
+     "must_reference": [
+      "REJECTED"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-SOURCE-SENSITIVITY",
+   "file": "tests/test_i28bg_b1_workflow_assurance.py",
+   "test": "test_a_changed_source_file_moves_the_digest",
+   "linked_behaviour": "scripts/workflow_assurance.py::source_content_manifest and ::source_content_digest",
+   "protected_invariant": "the source-content manifest binds file CONTENT, so a post-checkout mutation of a bound file moves the source_content_digest even when the commit sha is unchanged",
+   "proving_mutation": "digest the commit sha instead of the file content, or stop including files in the digest; a mutated bound file no longer moves the digest and this test fails",
+   "why_load_bearing": "commit-sha binding alone cannot see a working-tree mutation after checkout; the content digest is what makes the bound source meaningful",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MUTATION_CHANGES_RESULT",
+     "must_reference": [
+      "source_content_digest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-WORKFLOW-IDENTITY-BINDING",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm01_workflow_path_changed",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_push_verify (workflow replay refusal)",
+   "protected_invariant": "an image manifest bound to one workflow path does not authorize a push run under a different workflow identity",
+   "proving_mutation": "stop comparing the bound workflow identity in pre_push_verify; a manifest replayed from another workflow passes and this test fails",
+   "why_load_bearing": "without workflow binding a manifest built by a less-trusted workflow could authorize a publish in the protected one",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "replay",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-JOB-IDENTITY-BINDING",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm02_job_id_changed",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_push_verify (job replay refusal)",
+   "protected_invariant": "an image manifest bound to one job does not authorize a push run under a different job identity",
+   "proving_mutation": "drop the job identity from the bound workflow comparison; a cross-job replay passes and this test fails",
+   "why_load_bearing": "a different job may hold different credentials or run less-trusted steps; the manifest must not cross job boundaries",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "replay",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-STEP-IDENTITY-BINDING",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm03_step_identity_changed",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_push_verify (step replay refusal)",
+   "protected_invariant": "an image manifest bound to one intended Docker step does not authorize a push under a different step identity",
+   "proving_mutation": "stop binding the docker_step_identity in the workflow comparison; a step-swapped replay passes and this test fails",
+   "why_load_bearing": "the intended step identity ties the manifest to the exact build/push site it was produced for",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "replay",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-IMAGE-DIGEST-BINDING",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm13_image_digest_substituted",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_push_verify (image substitution refusal)",
+   "protected_invariant": "the digest intended for push must equal the built, bound image digest; a substituted image is refused",
+   "proving_mutation": "stop comparing intended_image_digest against the bound build output; a substituted image passes and this test fails",
+   "why_load_bearing": "binding the built image digest is the ONLY thing that stops an arbitrary image being pushed under the verified identity",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "image substitution",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-IMMUTABLE-TAG-BINDING",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm15_mutable_only_tag",
+   "linked_behaviour": "scripts/workflow_assurance.py::post_build_image_bind / validate_image_manifest (mutable-tag refusal)",
+   "protected_invariant": "a build offering only a mutable tag (latest/branch/env) is refused; a publishable image needs an immutable, commit-bound tag identity",
+   "proving_mutation": "remove the mutable-tag check from the tag validation; a latest-only image passes and this test fails",
+   "why_load_bearing": "an image bound only to a moving tag is not an image identity; a later push could resolve it to a different image",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "mutable-only tag",
+      "validate_image_manifest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-AUTHORIZATION-BINDING",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm09_authorization_pair_changed",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_push_verify (authorization-window replay refusal)",
+   "protected_invariant": "an image manifest bound to one authorization window does not authorize a push under a different (e.g. retired) window",
+   "proving_mutation": "stop comparing the bound authorization pair_digest; a manifest from another window passes and this test fails",
+   "why_load_bearing": "a retired authorization must not be able to publish; the manifest is bound to the window it was produced under",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "authorization",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-PRE-BUILD-FRESH-VERIFY",
+   "file": "tests/test_i28bg_b1_workflow_assurance.py",
+   "test": "test_source_drift_after_establishment_is_refused_pre_build",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_build_verify (source drift refusal)",
+   "protected_invariant": "pre_build_verify freshly re-derives the source identity and refuses any drift from the establishment before the build runs",
+   "proving_mutation": "stop comparing the fresh source_content_digest against the establishment; a post-establishment source mutation passes and this test fails",
+   "why_load_bearing": "the pre-build check is the last point before the build reads the tree; a stale comparison would build unverified content",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-PRE-PUSH-FRESH-VERIFY",
+   "file": "tests/test_i28bg_b1_workflow_assurance.py",
+   "test": "test_image_substitution_is_refused_pre_push",
+   "linked_behaviour": "scripts/workflow_assurance.py::pre_push_verify (fresh pre-push refusal)",
+   "protected_invariant": "pre_push_verify freshly re-derives identity and refuses an image substitution before the push runs",
+   "proving_mutation": "make pre_push_verify return PASS regardless; a substituted image reaches the push and this test fails",
+   "why_load_bearing": "the pre-push check is the last gate before the registry receives the image; it must fail closed on substitution",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "image substitution",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-GRAPH-ORDERING",
+   "file": "tests/test_i28bg_b1_synthetic_workflows.py",
+   "test": "test_assurance_after_docker_fails",
+   "linked_behaviour": "scripts/workflow_graph_validator.py::validate_workflow / _validate_job_ordering (ordering enforcement)",
+   "protected_invariant": "the static graph validator FAILs an integrated workflow whose assurance runs after the Docker build",
+   "proving_mutation": "stop enforcing the checkout<establish<pre-build<build ordering; an assurance-after-build workflow reports PASS and this test fails",
+   "why_load_bearing": "a verifier that runs after the build it is meant to gate protects nothing; ordering is the property that makes it load-bearing",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-NO-BYPASS",
+   "file": "tests/test_i28bg_b1_synthetic_workflows.py",
+   "test": "test_alternate_push_path_fails",
+   "linked_behaviour": "scripts/workflow_graph_validator.py::_validate_job_ordering (alternate-push-path detection)",
+   "protected_invariant": "the static graph validator FAILs a workflow with a push that is not preceded by the pre-push verify (an unprotected alternate push path)",
+   "proving_mutation": "stop checking that every push follows the pre-push verify; an alternate push path reports PASS and this test fails",
+   "why_load_bearing": "a single unguarded push path defeats every verified path; the no-bypass property is what makes assurance whole",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "alternate push path",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG1-FAILURE-PROPAGATION",
+   "file": "tests/test_i28bg_b1_attacks.py",
+   "test": "test_arm30_final_assurance_aggregate_forced_pass",
+   "linked_behaviour": "scripts/workflow_assurance.py::record_passes / validate_pre_push (forced-PASS refusal)",
+   "protected_invariant": "a record claiming PASS while carrying a problem does not pass, and a record whose token no longer matches its tampered content is refused",
+   "proving_mutation": "make record_passes ignore the problems list, or stop recomputing the token in validate_pre_push; a forced-PASS or tampered record is accepted and this test fails",
+   "why_load_bearing": "the final aggregate is what a workflow trusts to gate the push; a forced PASS would publish an unverified image",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "record_passes",
+      "False"
+     ]
+    },
+    {
+     "class": "INEQUALITY",
+     "must_reference": [
+      "validate_pre_push"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-ESTABLISHMENT-PRESENCE",
+   "file": "tests/test_i28bg_b2_reader_integration.py",
+   "test": "test_all_four_assurance_phases_present_in_order",
+   "linked_behaviour": "reader-publish.yml establish/pre_build/image_bind/pre_push steps in order",
+   "protected_invariant": "the integrated reader workflow runs all four assurance phases in the order checkout<establish<pre_build<build<image_bind<pre_push<push",
+   "proving_mutation": "remove or reorder an assurance step in reader-publish.yml; the ordering assertion fails",
+   "why_load_bearing": "an out-of-order or missing phase leaves the build or push unbracketed by assurance",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "MEANINGFUL_TRUTHINESS",
+     "must_reference": [
+      "establish",
+      "pre_build_verify"
+     ]
+    },
+    {
+     "class": "MEANINGFUL_TRUTHINESS",
+     "must_reference": [
+      "post_build_image_bind",
+      "pre_push_verify"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-WORKFLOW-CONTENT-BINDING",
+   "file": "tests/test_i28bg_b2_reader_integration.py",
+   "test": "test_a_workflow_file_mutation_fails_pre_push",
+   "linked_behaviour": "workflow_assurance.source_content_manifest binds the reader workflow file content",
+   "protected_invariant": "a mutation of the reader workflow file content after the image was bound fails pre-push (the runtime workflow content is bound by the enforcement path, not by a stale integration_status)",
+   "proving_mutation": "stop binding the workflow file in the source manifest, or stop comparing source_content_digest at pre-push; a workflow mutation stops failing and this test fails",
+   "why_load_bearing": "B1 deliberately did not FILE-pin the workflow content; B2 must prove the runtime content is bound by the real enforcement path",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-PRE-BUILD-FRESH",
+   "file": "tests/test_i28bg_b2_reader_integration.py",
+   "test": "test_sim_B_source_drift_before_build",
+   "linked_behaviour": "workflow_assurance.pre_build_verify in the reader build path",
+   "protected_invariant": "reader source drift before the build fails pre-build and makes the build/push ineligible",
+   "proving_mutation": "make pre_build_verify pass regardless; a source-drifted build becomes eligible and this test fails",
+   "why_load_bearing": "the pre-build check is the last gate before the reader build reads the tree",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "False",
+      "push_eligible"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-IMAGE-DIGEST-BINDING",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm13_image_digest_substituted",
+   "linked_behaviour": "workflow_assurance.pre_push_verify image substitution refusal in the reader path",
+   "protected_invariant": "a substituted image digest is refused at reader pre-push and the push is blocked",
+   "proving_mutation": "stop comparing the intended reader push digest against the bound built digest; the substitution passes and this test fails",
+   "why_load_bearing": "binding the built reader image digest is the only thing stopping an arbitrary image being published",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "image substitution",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-IMMUTABLE-TAG",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm15_mutable_only_tag",
+   "linked_behaviour": "workflow_assurance.post_build_image_bind mutable-tag refusal in the reader path",
+   "protected_invariant": "a reader image offering only a mutable tag is refused and the push is blocked",
+   "proving_mutation": "remove the mutable-tag check; a latest-only reader image is publishable and this test fails",
+   "why_load_bearing": "an image bound only to a moving tag is not an image identity",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "mutable-only tag",
+      "validate_image_manifest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-PRE-PUSH-FRESH",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm29_source_mutation_before_push",
+   "linked_behaviour": "workflow_assurance.pre_push_verify source-drift refusal in the reader path",
+   "protected_invariant": "a reader source mutation before push fails pre-push",
+   "proving_mutation": "stop re-deriving the source at reader pre-push; a late mutation stops failing and this test fails",
+   "why_load_bearing": "the reader pre-push check is the last gate before the registry receives the image",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-PUSH-BINDING",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm23_push_uses_different_digest",
+   "linked_behaviour": "reader push uses exactly the verified digest (pre_push_verify)",
+   "protected_invariant": "a reader push intending a different digest than the bound one is refused and blocked",
+   "proving_mutation": "let the reader push recompute its own digest independent of the manifest; the mismatch stops failing and this test fails",
+   "why_load_bearing": "the push must use exactly the image the assurance chain verified",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "True",
+      "push_blocked"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-SIXTEEN-SITE-COVERAGE",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm32_new_docker_site_without_coverage",
+   "linked_behaviour": "workflow_graph_validator envelope coverage: establishment precedes the first Docker command",
+   "protected_invariant": "a Docker command inserted before establishment (an uncovered site) fails the reader graph",
+   "proving_mutation": "remove the envelope-coverage check; a Docker site before establishment stops failing and this test fails",
+   "why_load_bearing": "a Docker site outside the assurance envelope runs unverified",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "envelope",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-NO-BYPASS",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm28_alternate_reader_push_path",
+   "linked_behaviour": "workflow_graph_validator alternate-push-path detection in the reader graph",
+   "protected_invariant": "a second reader push not preceded by pre-push fails the reader graph",
+   "proving_mutation": "stop checking that every push follows pre-push; an alternate reader push path stops failing and this test fails",
+   "why_load_bearing": "a single unguarded reader push path defeats every verified path",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-FAILURE-PROPAGATION",
+   "file": "tests/test_i28bg_b2_reader_attacks.py",
+   "test": "test_arm27_push_step_always",
+   "linked_behaviour": "workflow_graph_validator always()-on-Docker refusal in the reader graph",
+   "protected_invariant": "a reader Docker step under always() (running past an assurance failure) fails the reader graph",
+   "proving_mutation": "stop refusing always() on Docker steps; a reader build/push that runs past failure stops failing and this test fails",
+   "why_load_bearing": "always() on a Docker step defeats fail-closed propagation",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "always()",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG2-READER-AGGREGATE-CONSISTENCY",
+   "file": "tests/test_i28bg_b2_reader_integration.py",
+   "test": "test_sim_H_aggregate_forced_clean_is_refused",
+   "linked_behaviour": "reader final aggregate re-validates records (record_passes / validate_pre_push)",
+   "protected_invariant": "the reader final aggregate refuses a forged-PASS record and a tampered record whose token no longer matches",
+   "proving_mutation": "make the aggregate accept a record without re-validating; a forced-clean aggregate passes and this test fails",
+   "why_load_bearing": "the final aggregate is what the reader workflow trusts as the whole-chain verdict",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "record_passes",
+      "False"
+     ]
+    },
+    {
+     "class": "INEQUALITY",
+     "must_reference": [
+      "validate_pre_push"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-STAGING-ESTABLISHMENT",
+   "file": "tests/test_i28bg_b3_staging_integration.py",
+   "test": "test_staging_publish_is_pass_after_integration",
+   "linked_behaviour": "staging-publish.yml establish + graph validator PASS",
+   "protected_invariant": "the integrated staging workflow reports PASS with assurance present",
+   "proving_mutation": "remove an assurance step from staging-publish.yml; the graph validator no longer reports PASS",
+   "why_load_bearing": "staging establishment is the root every downstream image binding descends from",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_PASS",
+      "status"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "True",
+      "assurance_present"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-STAGING-WORKFLOW-CONTENT-BINDING",
+   "file": "tests/test_i28bg_b3_staging_integration.py",
+   "test": "test_a_staging_workflow_mutation_fails_pre_push",
+   "linked_behaviour": "workflow_assurance.source_content_manifest binds the staging workflow file",
+   "protected_invariant": "a mutation of the staging workflow file content after the image was bound fails pre-push",
+   "proving_mutation": "stop binding the workflow file in the source manifest; a staging workflow mutation stops failing",
+   "why_load_bearing": "the runtime staging workflow content must be bound by the enforcement path",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-API-PRE-BUILD-FRESH",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm08_source_mutation_between_establishment_and_api_build",
+   "linked_behaviour": "workflow_assurance.pre_build_verify for the API image",
+   "protected_invariant": "API source drift after establishment fails the API pre-build",
+   "proving_mutation": "make pre_build_verify pass regardless; a source-drifted API build becomes eligible",
+   "why_load_bearing": "the API pre-build is the last gate before the API build reads the tree",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-WORKER-PRE-BUILD-FRESH",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm09_source_mutation_between_api_and_worker_build",
+   "linked_behaviour": "workflow_assurance.pre_build_verify for the worker image",
+   "protected_invariant": "source drift between the API and worker builds fails the worker pre-build",
+   "proving_mutation": "make pre_build_verify pass regardless; a source-drifted worker build becomes eligible",
+   "why_load_bearing": "the worker pre-build independently guards the worker build",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-API-IMAGE-BINDING",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm18_malformed_api_digest",
+   "linked_behaviour": "workflow_assurance.post_build_image_bind for the API image",
+   "protected_invariant": "a malformed API image digest is refused at bind",
+   "proving_mutation": "stop validating the digest format; a malformed API digest binds and this test fails",
+   "why_load_bearing": "the API image binding refuses an unpublishable digest",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "malformed",
+      "validate_image_manifest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-WORKER-IMAGE-BINDING",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm19_malformed_worker_digest",
+   "linked_behaviour": "workflow_assurance.post_build_image_bind for the worker image",
+   "protected_invariant": "a malformed worker image digest is refused at bind",
+   "proving_mutation": "stop validating the digest format; a malformed worker digest binds and this test fails",
+   "why_load_bearing": "the worker image binding refuses an unpublishable digest",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "malformed",
+      "validate_image_manifest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-API-WORKER-NON-INTERCHANGEABILITY",
+   "file": "tests/test_i28bg_b3_staging_integration.py",
+   "test": "test_api_manifest_cannot_satisfy_worker_push",
+   "linked_behaviour": "workflow_assurance.pre_push_verify image/tag substitution refusal",
+   "protected_invariant": "the API executed-image manifest cannot satisfy a worker push",
+   "proving_mutation": "stop binding the built digest/tags in the manifest; the API manifest satisfies a worker push",
+   "why_load_bearing": "one image's manifest must never authorize another image's publication",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "substitution",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-API-IMMUTABLE-TAG",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm31_api_push_uses_worker_tag",
+   "linked_behaviour": "workflow_assurance.pre_push_verify tag binding (API)",
+   "protected_invariant": "an API push using the worker tag is refused",
+   "proving_mutation": "stop comparing intended tags to the bound API tags; an API push with a worker tag passes",
+   "why_load_bearing": "the API image must publish only under its own immutable tag",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-WORKER-IMMUTABLE-TAG",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm32_worker_push_uses_api_tag",
+   "linked_behaviour": "workflow_assurance.pre_push_verify tag binding (worker)",
+   "protected_invariant": "a worker push using the API tag is refused",
+   "proving_mutation": "stop comparing intended tags to the bound worker tags; a worker push with an API tag passes",
+   "why_load_bearing": "the worker image must publish only under its own immutable tag",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-API-PRE-PUSH-FRESH",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm40_source_mutation_immediately_before_push",
+   "linked_behaviour": "workflow_assurance.pre_push_verify source-drift refusal (API)",
+   "protected_invariant": "an API source mutation immediately before push fails pre-push",
+   "proving_mutation": "stop re-deriving the source at API pre-push; a late mutation stops failing",
+   "why_load_bearing": "the API pre-push is the last gate before the registry receives the API image",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "source content changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-WORKER-PRE-PUSH-FRESH",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm30_worker_push_uses_different_digest",
+   "linked_behaviour": "workflow_assurance.pre_push_verify image substitution refusal (worker)",
+   "protected_invariant": "a worker push intending a different digest than the bound one is refused",
+   "proving_mutation": "stop comparing the intended worker digest to the bound one; the substitution passes",
+   "why_load_bearing": "the worker push must use exactly the verified worker image",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-DUAL-IMAGE-PUSH-COMPLETENESS",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm33_only_api_verifier_pass",
+   "linked_behaviour": "the staging push requires BOTH image pre-push verifications to pass",
+   "protected_invariant": "the push is not eligible when only one image's pre-push passes",
+   "proving_mutation": "let the push proceed on a single image's PASS; a one-image-only publication becomes eligible",
+   "why_load_bearing": "one passing image may never hide one failing image",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "False",
+      "both"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-SIXTEEN-SITE-COVERAGE",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm43_new_docker_site_without_coverage",
+   "linked_behaviour": "workflow_graph_validator envelope coverage for staging",
+   "protected_invariant": "a Docker command inserted before establishment (an uncovered site) fails the staging graph",
+   "proving_mutation": "remove the envelope-coverage check; a Docker site before establishment stops failing",
+   "why_load_bearing": "a staging Docker site outside the assurance envelope runs unverified",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "envelope",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-NO-BYPASS",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm39_alternate_staging_push_path",
+   "linked_behaviour": "workflow_graph_validator alternate-push-path detection for staging",
+   "protected_invariant": "an alternate staging push not preceded by pre-push fails the staging graph",
+   "proving_mutation": "stop checking that every push follows pre-push; an alternate staging push path stops failing",
+   "why_load_bearing": "a single unguarded staging push path defeats every verified path",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-FAILURE-PROPAGATION",
+   "file": "tests/test_i28bg_b3_staging_attacks.py",
+   "test": "test_arm38_push_step_always",
+   "linked_behaviour": "workflow_graph_validator always()-on-Docker refusal for staging",
+   "protected_invariant": "a staging Docker step under always() fails the staging graph",
+   "proving_mutation": "stop refusing always() on Docker steps; a staging build/push that runs past failure stops failing",
+   "why_load_bearing": "always() on a staging Docker step defeats fail-closed propagation",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "always()",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG3-AGGREGATE-CONSISTENCY",
+   "file": "tests/test_i28bg_b3_staging_integration.py",
+   "test": "test_sim_J_aggregate_forced_clean_refused",
+   "linked_behaviour": "staging final aggregate re-validates records",
+   "protected_invariant": "the staging aggregate refuses a forged-PASS record and a tampered record whose token no longer matches",
+   "proving_mutation": "make the aggregate accept a record without re-validating; a forced-clean staging aggregate passes",
+   "why_load_bearing": "the staging aggregate is the whole-chain verdict for both images",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "record_passes",
+      "False"
+     ]
+    },
+    {
+     "class": "INEQUALITY",
+     "must_reference": [
+      "validate_pre_push"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-BOTH-WORKFLOWS-PASS",
+   "file": "tests/test_i28bg_b4_cross_workflow.py",
+   "test": "test_the_battery_baseline_is_clean",
+   "linked_behaviour": "workflow_graph_validator over reader + staging",
+   "protected_invariant": "the cross-workflow battery baseline has both real publication workflows at graph PASS",
+   "proving_mutation": "break either integrated workflow; the baseline is no longer both-PASS",
+   "why_load_bearing": "the whole battery is meaningless if the baseline is not clean",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_PASS",
+      "status"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-HARNESS-32-ARMS",
+   "file": "tests/test_i28bg_b4_cross_workflow.py",
+   "test": "test_exactly_32_unique_scored_arms",
+   "linked_behaviour": "the cross-workflow harness exposes exactly 32 unique scored arms",
+   "protected_invariant": "the scored battery has exactly 32 unique arm IDs 1..32",
+   "proving_mutation": "drop or duplicate an arm; the count/uniqueness assertion fails",
+   "why_load_bearing": "a battery that silently loses an arm proves less than it claims",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "COUNT_EQUALITY",
+     "must_reference": [
+      "ARM_IDS",
+      "len"
+     ]
+    },
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "ARM_IDS"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-HARNESS-NO-ESCAPE",
+   "file": "tests/test_i28bg_b4_cross_workflow.py",
+   "test": "test_every_arm_activates_and_hits_a_detector",
+   "linked_behaviour": "every scored arm activates and reaches its intended detector",
+   "protected_invariant": "no arm escapes (push unblocked) and no arm is void (no detector fired)",
+   "proving_mutation": "let an arm pass without blocking the push or firing a detector; escaped/void becomes non-empty",
+   "why_load_bearing": "an escaped or void arm is an unproven attack",
+   "minimum_meaningful_assertions": 3,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "escaped"
+     ]
+    },
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "void"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-32-SITE-COMPLETENESS",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_reader_and_staging_have_16_semantic_sites_each",
+   "linked_behaviour": "docker_boundary.derive_call_sites over both publish workflows",
+   "protected_invariant": "reader and staging each derive exactly 16 semantic Docker sites",
+   "proving_mutation": "add or drop a site; the per-workflow count is no longer 16",
+   "why_load_bearing": "the 32-site universe must stay complete",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "COUNT_EQUALITY",
+     "must_reference": [
+      "reader",
+      "staging"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-GLOBAL-50-SITE",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_global_docker_universe_reconciles_at_50",
+   "linked_behaviour": "docker_assurance_state.fresh_state universe",
+   "protected_invariant": "the global Docker universe reconciles (AGREE) at 50 sites",
+   "proving_mutation": "desync the authored and derived universes; reconciliation is no longer AGREE at 50",
+   "why_load_bearing": "a non-reconciling universe hides an added or moved site",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "AGREE",
+      "reconciliation"
+     ]
+    },
+    {
+     "class": "COUNT_EQUALITY",
+     "must_reference": [
+      "site_count"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-WORKFLOW-CONTENT-BINDING",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_workflow_content_binding_reader_and_staging_are_bound",
+   "linked_behaviour": "workflow_assurance.source_content_manifest binds both workflow files",
+   "protected_invariant": "a mutation of either workflow file content moves the source_content_digest; the workflow file is bound",
+   "proving_mutation": "stop binding the workflow file; a mutation stops moving the digest",
+   "why_load_bearing": "workflow files are load-bearing content, not just paths",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "INEQUALITY",
+     "must_reference": [
+      "source_content_digest"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "workflow",
+      "files"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-CROSS-WORKFLOW-REPLAY",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_replay_battery_all_refused",
+   "linked_behaviour": "workflow_assurance.pre_push_verify identity/replay refusal across workflows",
+   "protected_invariant": "every cross-workflow / cross-tree / retired-authorization replay is refused",
+   "proving_mutation": "stop binding workflow/tree/authorization identity; a replay succeeds",
+   "why_load_bearing": "a replay across workflows or trees would publish an unverified image",
+   "minimum_meaningful_assertions": 6,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "tree identity changed",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-DUAL-IMAGE-NON-INTERCHANGEABILITY",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_aggregate_requires_both_staging_images_distinct",
+   "linked_behaviour": "the API and worker executed-image manifests are distinct",
+   "protected_invariant": "the staging API and worker manifests have distinct manifest digests",
+   "proving_mutation": "bind both images to one identity; the manifests stop being distinct",
+   "why_load_bearing": "one image's manifest must never satisfy the other's",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "INEQUALITY",
+     "must_reference": [
+      "manifest_digest"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-PRE-BUILD-FRESH",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_staging_toctou_S_T2_source_between_api_and_worker",
+   "linked_behaviour": "workflow_assurance.pre_build_verify fresh-source refusal (worker)",
+   "protected_invariant": "a source mutation between the API and worker builds fails the worker pre-build",
+   "proving_mutation": "stop re-deriving the source at pre-build; the mutation stops failing",
+   "why_load_bearing": "the pre-build check is the last gate before a build reads the tree",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-PRE-PUSH-FRESH",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_reader_toctou_R_T1_source_after_establishment",
+   "linked_behaviour": "workflow_assurance.pre_push_verify fresh-source refusal",
+   "protected_invariant": "a source mutation after establishment fails the pre-push",
+   "proving_mutation": "stop re-deriving the source at pre-push; the mutation stops failing",
+   "why_load_bearing": "the pre-push check is the last gate before the registry",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-TOCTOU-CLOSURE",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_staging_toctou_S_T7_source_before_push",
+   "linked_behaviour": "workflow_assurance.pre_push_verify TOCTOU window closure",
+   "protected_invariant": "a source mutation in the window before push is refused",
+   "proving_mutation": "leave an unverified window before push; the mutation reaches push",
+   "why_load_bearing": "no mutation window may reach the push",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-IMAGE-TAG-SUBSTITUTION",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_staging_image_tag_substitution_battery",
+   "linked_behaviour": "workflow_assurance.pre_push_verify image/tag substitution refusal",
+   "protected_invariant": "every staging image/tag substitution and swap is refused",
+   "proving_mutation": "stop comparing intended digest/tags to the bound ones; a substitution succeeds",
+   "why_load_bearing": "an image or tag substitution would publish the wrong image",
+   "minimum_meaningful_assertions": 5,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "FAIL",
+      "result"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-NO-BYPASS",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_a_decoy_verifier_step_with_the_same_name_does_not_count",
+   "linked_behaviour": "workflow_graph_validator: a decoy verifier name is not an assurance step",
+   "protected_invariant": "a step named like a verifier but running no real invocation fails the graph (pre-push missing)",
+   "proving_mutation": "accept a display name as an assurance step; the decoy stops failing",
+   "why_load_bearing": "path/name/string presence cannot satisfy assurance binding",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "EXACT_IDENTITY_EQUALITY",
+     "must_reference": [
+      "STATUS_FAIL",
+      "status"
+     ]
+    },
+    {
+     "class": "MEMBERSHIP",
+     "must_reference": [
+      "pre-push",
+      "problems"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-AGGREGATE-CONSISTENCY",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_aggregate_forced_pass_is_refused",
+   "linked_behaviour": "workflow_assurance.record_passes forced-PASS refusal",
+   "protected_invariant": "a record claiming PASS while carrying a problem does not pass",
+   "proving_mutation": "make record_passes ignore the problems list; the forced record passes",
+   "why_load_bearing": "the aggregate is the whole-chain verdict",
+   "minimum_meaningful_assertions": 1,
+   "required_assertions": [
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "record_passes",
+      "False"
+     ]
+    }
+   ]
+  },
+  {
+   "contract_id": "AC-BG4-FAILURE-PROPAGATION",
+   "file": "tests/test_i28bg_b4_batteries.py",
+   "test": "test_staging_either_image_failure_blocks_the_dual_publication",
+   "linked_behaviour": "either API or worker failure blocks the dual-image publication",
+   "protected_invariant": "a single image's pre-push failure makes the dual publication ineligible",
+   "proving_mutation": "let the push proceed on one image's PASS; a partial publication becomes eligible",
+   "why_load_bearing": "no partial publication may be represented as full success",
+   "minimum_meaningful_assertions": 2,
+   "required_assertions": [
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "False",
+      "worker_ok"
+     ]
+    },
+    {
+     "class": "IDENTITY_COMPARISON",
+     "must_reference": [
+      "False",
+      "api_ok"
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -174,6 +174,11 @@ module "iam" {
   bucket_arn      = module.storage.bucket_arn
   repository_arns = module.registry.repository_arns
 
+  # Gate 4N-I3: permissions boundary for every role this module creates. Null by
+  # default, so composition remains byte-identical in effect until separately applied.
+  role_boundary_mode            = var.role_boundary_mode
+  role_permissions_boundary_arn = var.role_permissions_boundary_arn
+
   # CI image-publisher role: created only when the GitHub OIDC provider ARN is
   # supplied (consumed, never created here). Reuses repository_arns to scope ECR
   # push to exactly the two repos. Null (default) leaves it uncreated.
@@ -258,4 +263,9 @@ module "revision_reader" {
   github_oidc_provider_arn      = var.github_oidc_provider_arn
   github_repository             = var.github_repository
   revision_reader_image_digest  = var.revision_reader_image_digest
+
+  # Gate 4N-I3: same boundary as module.iam — the reader roles are created in a later
+  # stage, so wiring it now means no further repository change is needed at that point.
+  role_boundary_mode            = var.role_boundary_mode
+  role_permissions_boundary_arn = var.role_permissions_boundary_arn
 }

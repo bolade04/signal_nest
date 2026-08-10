@@ -1,0 +1,21 @@
+{
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_purpose": "Record which historical assurance fixtures are no longer accepted as CURRENT proof, and why, without altering their bytes.",
+ "_rule": "Preserved historical evidence remains byte-exact. Demotion changes what it PROVES, never what it IS.",
+ "_why_this_file_exists": "Gate 4N-I28AL finding ADV-I28AL-01: a historical fixture that never executed was still being read as evidence. Demotion must be explicit and machine-readable so a future gate cannot mistake preservation for endorsement.",
+ "dispositions": {
+  "SYS_META_PATH_VARIANT": {
+   "accepted_as_current_proof": false,
+   "failure": "the generated sitecustomize.py raises SyntaxError (unexpected indent, line 2), so it is never imported, the finder is never installed, and no substitution occurs",
+   "historical_bytes_modified": false,
+   "historical_verdicts_reused": false,
+   "location": "tests/test_i28ae_executed_provenance.py",
+   "note": "The valid control shows the attack DOES work under plain Python and that the graded session refuses it because sitecustomize is PROHIBITED \u2014 a different mechanism from the displacement the historical disposition named. That distinction is recorded rather than smoothed over.",
+   "origin_gate": "4N-I28AE",
+   "superseded_by": "tests/fixtures/valid-meta-path-fixture.py",
+   "superseding_control": "tests/test_i28am_session_finish_and_metapath.py::test_m03_the_attack_actually_executes_under_plain_python and ::test_m04_the_protected_session_refuses_the_valid_attack",
+   "syntactically_valid": false,
+   "what_the_historical_test_actually_measured": "a session in which the attack did not exist; loader=AssertionRewritingHook, exitstatus_refs=2 and returncode 0 are all trivially true of that"
+  }
+ }
+}

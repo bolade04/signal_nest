@@ -1,0 +1,964 @@
+{
+ "_classification": "SECURITY_CRITICAL \u2014 assurance assignment registry; governs which property is proven for every SECURITY collection. Governed by review-pin (its own digest) -> review-record ledger.",
+ "assurance": {
+  "action_classifier.py::PERMITTED_READ_CATEGORIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "allow_model.py::EXEMPTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "bootstrap_operator::iam:CreatePolicy": "creates the reviewed boundary policy ONCE; holds no version/delete capability so cannot revise the ceiling",
+    "bootstrap_operator::iam:DeleteRolePermissionsBoundary": "rollback path; Gate 4N-I10 removed the condition so an unpopulated key cannot deaden rollback",
+    "bootstrap_operator::iam:PutRolePermissionsBoundary": "its only job; conditioned on iam:PermissionsBoundary == the reviewed boundary so cannot attach a permissive one",
+    "boundary::ecs:RunTask": "the revision-reader runner's only job is to run exactly one task definition family",
+    "boundary::iam:PassRole": "the runner passes exactly the reader execution role",
+    "boundary::kms:Decrypt": "the same roles decrypt those secrets under the SECRETS CMK; STATE CMK stays denied",
+    "boundary::s3:GetObject": "api/worker task roles read the application bucket",
+    "boundary::secretsmanager:GetSecretValue": "ecs-execution/reader-execution roles read the secrets their task defs reference; blanket deny breaks startup (in_scope bounds to those roles)",
+    "role_bootstrap_operator::iam:CreateRole": "creating exactly the three reader roles is its only purpose; trust bytes controlled by read-back not IAM",
+    "role_bootstrap_operator::iam:DeleteRole": "reverts a role whose trust document fails read-back; detect-without-revert is an alert not a control",
+    "temporary_operator::dynamodb:DeleteItem": "releases the state lock it acquired",
+    "temporary_operator::dynamodb:GetItem": "inspects the state lock before acquiring it",
+    "temporary_operator::dynamodb:PutItem": "acquires the Terraform state lock",
+    "temporary_operator::iam:PutRolePolicy": "writes the inline policies the composition declares for its own roles; Gate 4N-I16 Defect 3 REQUIRED_TEMPORARILY",
+    "temporary_operator::kms:Decrypt": "decrypts the state object under the STATE CMK (SECRETS CMK stays fenced off by in_scope predicate)",
+    "temporary_operator::s3:GetObject": "reads the encrypted state object; state_backend_closure.read",
+    "temporary_operator::s3:PutObject": "writes the new Terraform state object on apply; state_backend_closure.write_apply_only"
+   },
+   "member_expansion": "dict_items",
+   "subtype": "D1"
+  },
+  "allow_model.py::EXTRA_REQUIRED_SOURCES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "allow_model.py::PERMITTED_WILDCARDS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "sts:GetCallerIdentity": "returns only the caller's own identity, touches no resource and grants no access, so a '*' resource is meaningless/safe; the comment notes it is 'not a wildcard; listed for symmetry with the audit output'"
+   },
+   "subtype": "D1"
+  },
+  "allow_model.py::TARGETS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "anchor_loader.py::REQUIRED_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "arn_model.py::_COLON_SEPARATED": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "arn_model.py::_TYPELESS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "assertion_contracts.py::ASSERTION_CLASSES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "assertion_contracts.py::BUILTINS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "abs": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "all": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "any": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "bool": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "dict": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "enumerate": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "float": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "frozenset": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "getattr": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "hasattr": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "int": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "isinstance": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "iter": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "len": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "list": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "max": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "min": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "next": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "open": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "print": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "range": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "repr": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "round": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "set": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "sorted": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "str": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "sum": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "tuple": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "type": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct",
+    "zip": "genuine CPython builtin (not a project helper), so excluding it from the unregistered-helper check is correct"
+   },
+   "subtype": "D1"
+  },
+  "assertion_contracts.py::KNOWN_PREDICATE_METHODS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "assertion_contracts.py::REGISTERED_HELPERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "assertion_contracts.py::_TERMINATORS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "cache_authority.py::CLASSIFICATIONS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "cache_authority.py::CLASSIFICATIONS",
+   "control": "collection_completeness"
+  },
+  "candidate_manifest.py::REQUIRED_KEYS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "candidate_manifest.py::REVIEW_FILE_SUFFIXES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "infra/aws": "the root Terraform/OpenTofu module directory that legitimately initialises providers",
+    "infra/aws/modules/iam": "a real child module that is init'd and thus has its own provider cache",
+    "infra/aws/modules/revision_reader": "a real child module that is init'd and thus has its own provider cache"
+   },
+   "subtype": "D1"
+  },
+  "check_toolchain_integrity.py::FORBIDDEN_ENV": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "set each FORBIDDEN_ENV var (e.g. AWS_SHARED_CREDENTIALS_FILE=/tmp/evil) in the toolchain env and assert check_toolchain_integrity aborts/neutralizes before any provider/state operation; a pass-through fails closed",
+   "subtype": "D3"
+  },
+  "check_toolchain_integrity.py::FORBIDDEN_ENV_PREFIXES": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "set a var under each prefix (e.g. TF_CLI_ARGS_apply=-auto-approve, TF_VAR_x=y) and assert the integrity check aborts/neutralizes; pass-through fails closed",
+   "subtype": "D3"
+  },
+  "ci_invocation_model.py::INTERPRETERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "ci_invocation_model.py::_NON_EXECUTING_FLAGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "ci_invocation_model.py::_VALUE_TAKING_FLAGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "collection_completeness.py::RESOLVERS": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "RESOLVERS_DISPATCH_LIVENESS"
+  },
+  "deny_requirements.py::ARCHITECTURE_INVARIANTS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "drop/weaken any required deny row (e.g. remove iam:PassRole from permanent_w0_must_not_mutate_iam in the generated policy) and assert deny_triangulation reports MISSING/CONFLICTING_SCOPE/IMPLICIT_DENY for it, failing closed",
+   "subtype": "D3"
+  },
+  "deny_requirements.py::AWS_SERVICE_SAFETY": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "for a denied action, grant one of its listed siblings in the generated policy (e.g. add dynamodb:BatchWriteItem where PutItem is denied) and assert triangulation flags the equivalent path, failing closed",
+   "subtype": "D3"
+  },
+  "deny_requirements.py::_KINDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "deny_requirements.py::_PRINCIPAL_SCOPES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "deny_triangulation.py::PASSING": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "deny_triangulation.py::PROTECTED_RESOURCE": {
+   "assurance_kind": "CROSS_DOMAIN_CONSISTENCY",
+   "control": "cross_domain",
+   "owner": "deny_requirements.py::required_denies()",
+   "relation": "SUBSET_OF_OWNER"
+  },
+  "docker_assurance_state.py::CACHE_KEY_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_assurance_state.py::_CACHE_VALUE_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_assurance_state.py::_PROVENANCE_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "docker_assurance_state.py::_PROVENANCE_FIELDS",
+   "control": "collection_completeness"
+  },
+  "docker_assurance_state.py::_STATE_TOP_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::DISPOSITIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::DOCKER_STEERING_CATEGORIES": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "docker_boundary.py::DOCKER_STEERING_CATEGORIES",
+   "control": "collection_completeness"
+  },
+  "docker_boundary.py::DOCKER_WORDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::LOAD_BEARING_CLASSIFICATIONS": {
+   "assurance_kind": "CROSS_DOMAIN_CONSISTENCY",
+   "control": "cross_domain",
+   "owner": "docker_boundary.py::SITE_CLASSIFICATIONS",
+   "relation": "SUBSET_OF_OWNER"
+  },
+  "docker_boundary.py::PER_SITE_REQUIRED_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::SITE_CLASSIFICATIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::SITE_DECISIONS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "docker_boundary.py::SITE_DECISIONS",
+   "control": "collection_completeness"
+  },
+  "docker_boundary.py::STEERING_FLAGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::TRUST_BOUNDARIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "docker_boundary.py::_RELEASE_SUBCOMMANDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "enforcement_path.py::ENTRY_POINTS": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "ENTRY_POINTS_LIVE_CALLABLE"
+  },
+  "enforcement_path.py::SCAN_DOMAIN_GATES": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "SCAN_GATES_LIVE_CALLABLE"
+  },
+  "evidence_binding.py::BINDING_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "exec_transfer_oracle.py::TRANSFER_WORDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "exec_transfer_oracle.py::_FLAG_OPTS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "exec_transfer_oracle.py::_VALUE_OPTS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "executable_inventory.py::SHELL_BUILTINS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "executable_inventory.py::SUBPROCESS_CALLS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "executed_state_provenance.py::DYNAMIC_ACCESS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "executed_state_provenance.py::IGNORED_NAMES": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "__dict__": "the namespace container itself; its members are digested individually, digesting the container would be circular",
+    "__doc__": "module docstring, inert text carrying no security state",
+    "__file__": "loader-supplied path metadata, not executed program state",
+    "__loader__": "import machinery loader object, not executed state",
+    "__name__": "import-system module identity, not executed state",
+    "__spec__": "import machinery ModuleSpec metadata, not executed state"
+   },
+   "subtype": "D1"
+  },
+  "executed_state_provenance.py::VOLATILE_CACHES": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "cache_authority::_PINS": "runtime memoisation registry populated from the authoritative pins; the pins themselves are digested at source",
+    "docker_assurance_state::_STATE_CACHE": "lazily-populated per-run docker assurance memo cache, recomputed from disk state each run",
+    "site_taxonomy::_DERIVED,_INDEX": "lazily-built derived taxonomy index/cache rebuilt from pinned source data on demand; not an independent authority"
+   },
+   "member_expansion": "dict_items",
+   "subtype": "D1"
+  },
+  "expiry_authorization.py::PURPOSES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "external_executable_trust.py::CLASSIFICATIONS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "external_executable_trust.py::CLASSIFICATIONS",
+   "control": "collection_completeness"
+  },
+  "external_executable_trust.py::FATAL_STEERING_VARIABLES": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "invoke the trusted-executable boundary with e.g. GIT_EXTERNAL_DIFF=/tmp/evil or BASH_ENV=/tmp/evil set and assert it aborts (fail-closed) before running the external tool",
+   "subtype": "D3"
+  },
+  "external_executable_trust.py::NEUTRALIZED_STEERING_VARIABLES": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "set e.g. GIT_SSH_COMMAND=/tmp/evil or GIT_ASKPASS=/tmp/evil, run the boundary, and assert the child git process does NOT see the attacker value (env is neutralized); leakage fails closed",
+   "subtype": "D3"
+  },
+  "failure_propagation.py::_COMPOUND_KEYWORDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "failure_propagation.py::_ERRMODE_WRAPPERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "failure_propagation.py::_TRAP_SIGNALS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_bootstrap_operator_policy.py::BOUNDARY_ATTACH_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "gen_bootstrap_operator_policy.py::BOUNDARY_REMOVE_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "iam:CreatePolicy": "required to create the reviewed boundary policy exactly once; no version/delete capability accompanies it, so the ceiling cannot be revised",
+    "iam:DeleteRolePermissionsBoundary": "the reviewed rollback path for a mis-attached boundary",
+    "iam:PutRolePermissionsBoundary": "the operator's sole purpose; conditioned on the reviewed boundary ARN so it cannot attach a permissive boundary"
+   },
+   "subtype": "D1"
+  },
+  "gen_bootstrap_operator_policy.py::POLICY_LIFECYCLE_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "gen_bootstrap_operator_policy.py::ROLE_READ_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "gen_boundary_policy.py::ACCOUNT_ADMIN_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::ACCOUNT_ADMIN_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_boundary_policy.py::CLOUDTRAIL_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::CLOUDTRAIL_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_boundary_policy.py::ECS_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::ECS_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_boundary_policy.py::IAM_ADMIN_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::IAM_ADMIN_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_boundary_policy.py::LOGS_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::LOGS_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_boundary_policy.py::S3_ACL_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::S3_ACL_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_boundary_policy.py::S3_DELIVERY_DENIED": {
+   "assurance_kind": "PARTITION_RELATION_ASSURANCE",
+   "consumer_ref": "gen_boundary_policy.py::S3_DELIVERY_DENIED",
+   "control": "collection_completeness"
+  },
+  "gen_operator_policies.py::PERMANENT_DENY": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::REFRESH_CLOSURE": {
+   "assurance_kind": "GENERATED_CONTRACT_ASSURANCE",
+   "control": "generated",
+   "generator": "gen_operator_policies.py::permanent_w0_policy",
+   "mode": "FLATTEN_EQUALS_POLICY_ALLOW"
+  },
+  "gen_operator_policies.py::TEMP_SCOPED_CAPABILITIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_readonly_verifier_policy.py::AUDIT_READS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "readonly-verifier-ceiling.json#/permitted_actions",
+   "ceiling_relation": "SUBSET_OF_CEILING",
+   "control": "exclusion",
+   "subtype": "D2"
+  },
+  "gen_readonly_verifier_policy.py::CALLER_READS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "readonly-verifier-ceiling.json#/permitted_actions",
+   "ceiling_relation": "SUBSET_OF_CEILING",
+   "control": "exclusion",
+   "subtype": "D2"
+  },
+  "gen_readonly_verifier_policy.py::IAM_READS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "readonly-verifier-ceiling.json#/permitted_actions",
+   "ceiling_relation": "SUBSET_OF_CEILING",
+   "control": "exclusion",
+   "subtype": "D2"
+  },
+  "gen_readonly_verifier_policy.py::IAM_STAR_READS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "readonly-verifier-ceiling.json#/permitted_actions",
+   "ceiling_relation": "SUBSET_OF_CEILING",
+   "control": "exclusion",
+   "subtype": "D2"
+  },
+  "gen_readonly_verifier_policy.py::IDENTITY_CENTRE_READS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "readonly-verifier-ceiling.json#/permitted_actions",
+   "ceiling_relation": "SUBSET_OF_CEILING",
+   "control": "exclusion",
+   "subtype": "D2"
+  },
+  "gen_role_bootstrap_policy.py::ALLOWED_TAG_KEYS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "gen_role_bootstrap_policy.py::ALLOWED_TAG_KEYS",
+   "control": "collection_completeness"
+  },
+  "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "iam:CreateRole": "forbidden-but-excepted: creating exactly the three reader roles is its only job; trust bytes gated by read-back",
+    "iam:DeleteRole": "forbidden-but-excepted: reverts a role that fails trust read-back (revert, not just alert)",
+    "iam:TagRole": "NOTE not present in FORBIDDEN_CAPABILITIES, so this is a harmless (no-op) over-exception, not a security gap; justified as tagging the created roles for inventory"
+   },
+   "subtype": "D1"
+  },
+  "gen_role_bootstrap_policy.py::CREATE_ROLE_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "gen_role_bootstrap_policy.py::READ_BACK_ACTIONS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "gen_role_bootstrap_policy.py::READ_BACK_ACTIONS",
+   "control": "collection_completeness"
+  },
+  "gen_role_bootstrap_policy.py::ROLLBACK_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "gen_role_bootstrap_policy.py::TAG_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "ceiling_owner": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ceiling_relation": "DISJOINT_FROM_MUSTNOT",
+   "control": "exclusion",
+   "exceptions_ref": "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS",
+   "subtype": "D2"
+  },
+  "iam_eval.py::ACTION_CONDITION_KEYS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "iam_eval.py::DATE_OPERATORS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "iam_eval.py::DATE_OPERATORS",
+   "control": "collection_completeness"
+  },
+  "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "DISPUTED_CONTEXT_DECIDES"
+  },
+  "iam_eval.py::SUPPORTED_SEMANTICS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "iam_eval.py::_GLOBAL_KEYS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "iam_eval.py::_NEGATED": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "iam_eval.py::_PLACEHOLDER_MARKERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "iam_eval.py::_SET_OPERATORS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "leak_scan.py::ALLOWED_ACCOUNTS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "leak_scan.py::ALLOWED_ACCOUNTS",
+   "control": "collection_completeness"
+  },
+  "leak_scan.py::BINARY_SUFFIXES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "leak_scan.py::DECISIONS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "leak_scan.py::DECISIONS",
+   "control": "collection_completeness"
+  },
+  "leak_scan.py::EXCLUDED_PATH_PARTS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    ".mypy_cache": "generated mypy cache, no authored source",
+    ".pytest_cache": "generated pytest cache, no authored source",
+    ".terraform": "downloaded provider/module cache, not authored source",
+    "__pycache__": "compiled bytecode cache, derived from scanned source",
+    "node_modules": "third-party installed dependencies, not first-party source",
+    "vendor": "vendored third-party dependencies, not first-party source"
+   },
+   "subtype": "D1"
+  },
+  "leak_scan.py::NON_LIVE_CLASSIFICATIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "AWS_DOCUMENTATION_PLACEHOLDER": "the well-known AWS docs example account/value (e.g. 123456789012), non-live by construction",
+    "NOT_APPLICABLE_SENTINEL": "an explicit not-applicable marker, carries no credential material",
+    "REPOSITORY_SYNTHETIC_ANCHOR": "the repo's own TIER_1 synthetic anchor identifier, never a live credential",
+    "SYNTHETIC_FOREIGN_ACCOUNT": "a deliberately synthetic foreign account id used in fixtures, not a real account"
+   },
+   "subtype": "D1"
+  },
+  "leak_scan.py::SCAN_DECISIONS": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "SCAN_DECISION_VALUES_IN_DOMAIN"
+  },
+  "leak_scan.py::SKIPPED_WITH_REASON": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "MAPPING_VALUES_ALL_NONEMPTY"
+  },
+  "leak_scan.py::SKIP_DIRS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    ".git": "VCS internal object store, not authored source",
+    ".mypy_cache": "generated mypy cache",
+    ".pytest_cache": "generated pytest cache",
+    ".reader-venv": "generated Python virtualenv for the reader, third-party bytes",
+    ".terraform": "downloaded provider/module cache",
+    ".venv": "generated Python virtualenv, third-party bytes",
+    "__pycache__": "compiled bytecode cache",
+    "build": "generated build output",
+    "dist": "generated distribution output",
+    "node_modules": "third-party installed dependencies",
+    "venv": "generated Python virtualenv, third-party bytes"
+   },
+   "subtype": "D1"
+  },
+  "leak_scan.py::_DIGEST_WIDTHS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "leak_scan.py::_DIRECTORY_CATEGORY": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "must_not_contract.py::FORBIDDEN_CAPABILITIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "mutation_discovery.py::DISCOVERERS": {
+   "assurance_kind": "RUNTIME_INVARIANT_ASSURANCE",
+   "control": "runtime",
+   "invariant": "DISCOVERERS_EMIT_LIVENESS"
+  },
+  "mutation_discovery.py::SET_COVERING_TESTS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "npm_authority.py::AUTHORITY_MODELS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "npm_authority.py::DISPOSITIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "npm_authority.py::NATIVE_MAGIC": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "npm_authority.py::NPM_WORDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "policy_inventory.py::BOUNDARY_KINDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "policy_inventory.py::NOT_A_POLICY": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "add a genuine policy identifier to NOT_A_POLICY and assert the policy inventory still subjects that policy to its authority/enforcement checks (i.e. exclusion cannot suppress a real policy); if it escapes, fail closed",
+   "subtype": "D3"
+  },
+  "production_certification.py::ALLOWED_TRANSITIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "production_certification.py::REQUIRED_ARTIFACT_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "production_certification.py::REQUIRED_FLAG": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "production_certification.py::SELF_ATTESTING_FIELDS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "submit a certification candidate whose only evidence for a check lives in a self-attesting field (e.g. expected_sha256 asserting its own hash with no independent recompute) and assert production_certification refuses to certify / fails closed",
+   "subtype": "D3"
+  },
+  "production_certification.py::STATES": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "production_certification.py::STATES",
+   "control": "collection_completeness"
+  },
+  "production_certification.py::VALIDATED_AUTHORIZATION_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "production_certification.py::VALIDATED_AUTHORIZATION_FIELDS",
+   "control": "collection_completeness"
+  },
+  "protected_inventory.py::REQUIRED_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "protected_inventory.py::SELF_ATTESTING_FIELDS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "present a protected-inventory record whose sha256/digest is self-declared but does not match an independent recompute, and assert protected_inventory flags a mismatch rather than trusting the self-attested field",
+   "subtype": "D3"
+  },
+  "provenance.py::ARN_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "provenance.py::NON_CERTIFYING": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "offer a certification whose provenance is e.g. CI_EQUIVALENT_LOCAL_REPRODUCTION or INFERRED and assert certifies_production stays false / the gate refuses, failing closed",
+   "subtype": "D3"
+  },
+  "provenance.py::REQUIRED_TWO_LINEAGE_ROWS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "pytest_config_contract.py::COLLECTION_REMOVERS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "introduce a collection-removing mechanism (e.g. a conftest defining one of these, or a novel remover) that drops a security test, and assert the config contract detects the shrunken collection / rejects the deselection, failing closed",
+   "subtype": "D3"
+  },
+  "pytest_config_contract.py::CONFIG_CANDIDATES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "pytest_config_contract.py::SELECTION_FLAGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "resource_oracle.py::GENERATED_KEYS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "resource_oracle.py::GENERATED_KEYS",
+   "control": "collection_completeness"
+  },
+  "review_packet_digest.py::REQUIRED_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "review_packet_digest.py::REQUIRED_FIELDS",
+   "control": "collection_completeness"
+  },
+  "review_pin_control.py::_DIGEST_SOURCES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "review_pin_control.py::_FORBIDDEN_PIN_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "reviewer_retrieval_state.py::NEVER_RELAUNCH": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "reviewer_retrieval_state.py::NEVER_RELAUNCH",
+   "control": "collection_completeness"
+  },
+  "reviewer_retrieval_state.py::STATES": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "reviewer_retrieval_state.py::STATES",
+   "control": "collection_completeness"
+  },
+  "role_bootstrap_executor.py::REQUIRED_MANIFEST_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "role_bootstrap_executor.py::REQUIRED_ROLE_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "role_bootstrap_lifecycle.py::ACTOR_RULES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "role_bootstrap_lifecycle.py::IDENTITY_CENTRE_ADMIN_ACTIONS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "construct a lifecycle step whose action is an Identity-Center admin action but owner != ROOT and assert the lifecycle rejects it; a non-ROOT-owned admin action passing fails closed",
+   "subtype": "D3"
+  },
+  "shell_command_model.py::COMMAND_PREFIXES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_command_model.py::DATA_CONSUMERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_command_model.py::PYTHON_BASENAMES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_command_model.py::SHELL_LAUNCHERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_command_model.py::_KEYWORDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::COMMAND_WRAPPERS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::EXEC_COMBINABLE": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::EXEC_OPTIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::FAIL_CLOSED_WORDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::KEYWORDS_INTRODUCING_A_COMMAND": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::NESTED_SHELL": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "shell_positions.py::SHELL_BUILTINS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_coverage.py::COVERING": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_taxonomy.py::FRAMEWORK_DISPATCH_NAMES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_taxonomy.py::FRAMEWORK_DISPATCH_PREFIXES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_taxonomy.py::FRAMEWORK_VISITOR_BASES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_taxonomy.py::MUTATING_METHODS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_taxonomy.py::TERMINAL_CALLS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "site_taxonomy.py::_DUNDER_AND_STDLIB_SAFE": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "__class__": "universal object type introspection, present on every object, carries no execution capability by itself",
+    "__dict__": "namespace-mapping introspection, not an executable call site",
+    "__doc__": "docstring text access, inert"
+   },
+   "subtype": "D1"
+  },
+  "smoke_http.py::EXPECTED_CITIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "startup_policy.py::DISPOSITIONS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "startup_policy.py::DISPOSITIONS",
+   "control": "collection_completeness"
+  },
+  "terraform_role_inventory.py::INLINE_POLICY_LIFECYCLE_ACTIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "tracked_state.py::STATES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "trust_policies.py::ROLE_TRUST": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "trust_policies.py::ROLE_TRUST",
+   "control": "collection_completeness"
+  },
+  "trust_validator.py::ALLOWED_SERVICE_PRINCIPALS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "trust_validator.py::ALLOWED_SERVICE_PRINCIPALS",
+   "control": "collection_completeness"
+  },
+  "trust_validator.py::ROLE_PURPOSE": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "verify_artifacts.py::UNLISTED_SUFFIXES": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "-review.txt": "human-authored free-text review notes, not a checksummed/manifest-bound build artifact",
+    "-verdict.txt": "human-authored verdict note, not a checksummed/manifest-bound build artifact"
+   },
+   "subtype": "D1"
+  },
+  "workflow_assurance.py::_AUTHORIZATION_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "workflow_assurance.py::_AUTHORIZATION_FIELDS",
+   "control": "collection_completeness"
+  },
+  "workflow_assurance.py::_BUILD_INPUT_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "workflow_assurance.py::_BUILD_OUTPUT_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "workflow_assurance.py::_BUILD_OUTPUT_FIELDS",
+   "control": "collection_completeness"
+  },
+  "workflow_assurance.py::_DOCKER_STATE_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "workflow_assurance.py::_ESTABLISH_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "workflow_assurance.py::_IMAGE_MANIFEST_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "workflow_assurance.py::_IMAGE_MANIFEST_FIELDS",
+   "control": "collection_completeness"
+  },
+  "workflow_assurance.py::_MUTABLE_TAG_TOKENS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "positive_control": "feed a workflow reference tagged with a mutable token (e.g. image:latest / @main) and assert workflow_assurance rejects it as non-immutable; acceptance fails closed",
+   "subtype": "D3"
+  },
+  "workflow_assurance.py::_PRE_BUILD_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "workflow_assurance.py::_PRE_PUSH_FIELDS": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "workflow_assurance.py::_PRE_PUSH_FIELDS",
+   "control": "collection_completeness"
+  },
+  "workflow_assurance.py::_SOURCE_IDENTITY_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "workflow_assurance.py::_WORKFLOW_IDENTITY_FIELDS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "workflow_graph_validator.py::_ASSURANCE_ROLES": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "workflow_graph_validator.py::_ASSURANCE_ROLES",
+   "control": "collection_completeness"
+  },
+  "workflow_graph_validator.py::_ASSURANCE_ROLE_BY_MODE": {
+   "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
+   "consumer_ref": "workflow_graph_validator.py::_ASSURANCE_ROLE_BY_MODE",
+   "control": "collection_completeness"
+  }
+ }
+}

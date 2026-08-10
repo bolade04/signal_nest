@@ -1,0 +1,69 @@
+{
+  "_purpose": "TIER 1 synthetic resource inventory (Gate 4N-I18, SEC-1). Mirrors the SCHEMA of the live inventory exactly, with wholly synthetic values, so every consumer's MECHANISM is exercised in ordinary CI without a single live AWS identifier entering version control.",
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_why_this_exists": "Gate 4N-I17's security lane blocked the commit because infra/aws/live-resource-inventory.json carried the real account id, live bucket names with AWS-assigned suffixes, CloudTrail/RDS ARNs, KMS key ids and the state lock-table name, none of which appear anywhere in git history. Committing it would have been first disclosure into permanent history. The live inventory now lives OUTSIDE the repository and is supplied explicitly for Tier 2; this fixture is what the repository ships.",
+  "_certifies_production": false,
+  "_account_note": "111122223333 is the AWS documentation placeholder account and matches tests/fixtures/synthetic-anchor.json. It is not a real account.",
+  "_captured_utc": "SYNTHETIC-NOT-A-CAPTURE",
+  "_profile": "synthetic, non-certifying",
+  "buckets": [
+    "signalnest-staging-alb-logs-synth0000000000000000000000",
+    "signalnest-staging-app-synth000",
+    "signalnest-staging-audit-synth00000000000000000000000",
+    "signalnest-staging-spa-synth000000000000000000000",
+    "signalnest-staging-tfstate-synth0"
+  ],
+  "buckets_by_role": {
+    "alb": "signalnest-staging-alb-logs-synth0000000000000000000000",
+    "app": "signalnest-staging-app-synth000",
+    "audit": "signalnest-staging-audit-synth00000000000000000000000",
+    "spa": "signalnest-staging-spa-synth000000000000000000000",
+    "tfstate": "signalnest-staging-tfstate-synth0"
+  },
+  "roles": [
+    "signalnest-staging-api-task",
+    "signalnest-staging-ci-publisher",
+    "signalnest-staging-ecs-execution",
+    "signalnest-staging-migration-task",
+    "signalnest-staging-worker-task"
+  ],
+  "trails": [
+    [
+      "signalnest-staging-audit",
+      "arn:aws:cloudtrail:us-east-1:111122223333:trail/signalnest-staging-audit"
+    ]
+  ],
+  "db": [
+    [
+      "signalnest-staging-postgres",
+      "arn:aws:rds:us-east-1:111122223333:db:signalnest-staging-postgres"
+    ]
+  ],
+  "aliases": [
+    [
+      "alias/signalnest-staging/secrets",
+      "00000000-0000-4000-8000-0000000c0000"
+    ],
+    [
+      "alias/signalnest-staging/state",
+      "00000000-0000-4000-8000-00000005ade0"
+    ]
+  ],
+  "ecr": [
+    "signalnest-staging/worker",
+    "signalnest-staging/api"
+  ],
+  "lock_table_name": "signalnest-staging-tf-lock-synth",
+  "_lock_table_provenance": "SYNTHETIC. The real lock-table name is supplied only through the Tier 2 protected inventory; it must never be re-derived from a naming convention and must never be tracked.",
+  "cloudfront": {
+    "distribution_id": "ESYNTH000000000",
+    "oac_id": "ESYNTHOAC000000",
+    "aliases": null,
+    "_aliases_note": "null means 'do not assert' \u2014 the alias set depends on var.web_fqdn, which arrives via a git-ignored tfvars and is not repository-derivable."
+  },
+  "route53": {
+    "hosted_zone_id": "ZSYNTH000000000000000",
+    "_synthetic": "This value is INVENTED. Gate 4N-I27Y's aws-permissions lane found a real-shaped hosted-zone id hardcoded in the generator, the verifier AND the test, so those three agreed only with each other \u2014 self-attestation, not provenance. The identifier is now tier-resolved like the CloudFront ids, and this fixture supplies the Tier-1 value.",
+    "_identifier_form": "Z followed by 20 uppercase alphanumerics, as AWS assigns"
+  }
+}

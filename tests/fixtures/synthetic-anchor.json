@@ -1,0 +1,45 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_what_this_is": "Tier 1 SYNTHETIC anchor for ordinary CI (Gate 4N-I13). Every value below is invented. It exists so an empty-HOME runner can validate the MECHANICS of anchor loading, requirement grounding and policy generation without any real environment evidence.",
+  "_it_cannot_certify_production": "scripts/anchor_loader.py sets certifies_production=False for this tier and REFUSES this file if it is presented to the protected tier. A synthetic fixture must never bless a real candidate.",
+  "_account_is_fake": "111122223333 is the AWS documentation placeholder account. It is not the SignalNest account and appears in no real ARN.",
+  "anchor_version": "synthetic-1",
+  "approved_account_id": "111122223333",
+  "partition": "aws",
+  "approved_region": "us-east-1",
+  "role_name_prefix": "signalnest-staging",
+  "identity_center": {
+    "instance_arn": null,
+    "status": "SYNTHETIC \u2014 not applicable"
+  },
+  "permission_sets": {
+    "W0Operator": {
+      "name": "SyntheticW0Operator",
+      "id": "ps-0000000000000001",
+      "confidence": "SYNTHETIC"
+    },
+    "ReadOnly": {
+      "name": "SyntheticReadOnly",
+      "id": "ps-0000000000000002",
+      "confidence": "SYNTHETIC"
+    },
+    "ICPermAdmin": {
+      "name": "SyntheticICPermAdmin",
+      "id": "ps-0000000000000003",
+      "confidence": "SYNTHETIC"
+    }
+  },
+  "provenance": {
+    "class": "SYNTHETIC_TEST_FIXTURE",
+    "all_witnesses_predate_branch": true,
+    "account_corroboration": {
+      "pre_branch_files_scanned": 0,
+      "twelve_digit_matches": 0,
+      "distinct_twelve_digit_values": [
+        "111122223333"
+      ],
+      "_reading": "synthetic; no corroboration is claimed or implied"
+    },
+    "witnesses": []
+  }
+}

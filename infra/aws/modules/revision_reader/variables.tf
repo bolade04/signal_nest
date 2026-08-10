@@ -20,6 +20,40 @@ variable "publication_bootstrap_enabled" {
 
     Default false: nothing is provisioned until a later authorized apply.
   EOT
+
+  # STAGE-A PRECONDITION (Gate 4N-I5, RE-KEYED at Gate 4N-I16 Defect 1).
+  #
+  # WHY THIS IS CODE AND NOT PROSE. The Stage-A graph creates the ECR repository and its
+  # lifecycle policy BEFORE the publisher role. The temporary operator's iam:CreateRole
+  # grant is conditioned on iam:PermissionsBoundary, so with no boundary ARN the provider
+  # sends no boundary, the condition cannot match, and the apply fails AFTER both ECR
+  # resources already exist — a partial apply. Gate 4N-I4 documented that requirement in
+  # a JSON artifact no tool consults, which is why it did not prevent anything.
+  #
+  # GATE 4N-I16 DEFECT 1. This validation used to read `role_permissions_boundary_arn != null`.
+  # That was the determinant BEFORE Gate 4N-I14 made the module consume a MODE. Since I14 the
+  # value actually sent to the provider is `local.effective_permissions_boundary`, which is
+  # null whenever the mode is not "required" — REGARDLESS of the ARN variable. So
+  # bootstrap-enabled + mode "disabled" + a syntactically valid ARN passed every guard and
+  # produced an UNBOUNDED publisher role: precisely the partial apply this message describes.
+  # The check now reads the SAME determinant the resources read. A validation keyed to a
+  # superseded signal is worse than none, because it reports safety it no longer measures.
+  validation {
+    condition     = !var.publication_bootstrap_enabled || var.role_boundary_mode == "required"
+    error_message = "revision_reader publication_bootstrap_enabled requires role_boundary_mode = \"required\". Stage A creates protected IAM roles, and the roles consume the MODE-DERIVED boundary (local.effective_permissions_boundary), which is null in \"disabled\" mode no matter what role_permissions_boundary_arn holds. An unbounded create fails AFTER the ECR resources exist."
+  }
+
+  validation {
+    condition     = !var.publication_bootstrap_enabled || var.role_permissions_boundary_arn != null
+    error_message = "revision_reader publication_bootstrap_enabled requires a non-null role_permissions_boundary_arn — the bootstrap operator's iam:CreateRole grant is conditioned on iam:PermissionsBoundary, so an unbounded create fails AFTER the ECR resources are created."
+  }
+
+  # NOTE: a second validation requiring github_oidc_provider_arn was considered and
+  # REJECTED. The module deliberately supports publication with the OIDC provider absent
+  # (it then skips only the federated roles — see the oidc_absent_skips_only_the_federated_roles
+  # test), so forbidding that configuration here would break a supported path. Asserting
+  # that Stage A produces exactly the four intended addresses is a PLAN-ACCEPTANCE concern
+  # and belongs in the execution contract, not in a module validation.
 }
 
 variable "runtime_enabled" {
@@ -148,4 +182,37 @@ variable "tags" {
   type        = map(string)
   default     = {}
   description = "Additional tags."
+}
+
+# Permissions boundary applied to EVERY IAM role this module creates (Gate 4N-I3).
+# The boundary caps a created role's effective permissions to the intersection of its
+# identity policy and the boundary, so a role minted here can never exceed it — closing
+# the transitive escalation recorded in Gate 4N-I1/I2.
+#
+# DARK BY DEFAULT: null means no boundary is set, which is exactly today's deployed
+# state, so this variable changes nothing until a later authorized gate creates the
+# boundary policy and supplies its ARN. Applying it is deliberately NOT part of this gate.
+variable "role_permissions_boundary_arn" {
+  description = "ARN of the permissions boundary applied to every IAM role created by this module. Null (default) leaves roles unbounded, preserving the currently deployed state."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.role_permissions_boundary_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:policy/", var.role_permissions_boundary_arn))
+    error_message = "role_permissions_boundary_arn must be null or a full IAM policy ARN (arn:aws:iam::<account>:policy/<name>)."
+  }
+}
+
+# GATE 4N-I14 DEFECT 2. `role_boundary_mode` existed only inside variable validation — the
+# resource expression consumed the ARN directly, so the mode changed no plan and was a
+# validation side channel. It is now a real graph input: the boundary a role receives is
+# DERIVED from the mode, not from the ARN's nullness.
+variable "role_boundary_mode" {
+  description = "Boundary enforcement mode. 'required' attaches the exact reviewed boundary to every role this module creates; 'disabled' is the pre-rollout dark state and MUST be stated deliberately."
+  type        = string
+
+  validation {
+    condition     = contains(["disabled", "required"], var.role_boundary_mode)
+    error_message = "role_boundary_mode must be exactly 'disabled' or 'required'."
+  }
 }

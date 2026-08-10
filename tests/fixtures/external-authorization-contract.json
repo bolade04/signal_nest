@@ -1,0 +1,34 @@
+{
+  "_comment": "GATE 4N-I26B, closing I26B-02. The INDEPENDENT authority for external-evidence expectations. Gate 4N-I25's security lane fabricated a PRODUCTION_CERTIFIED artifact and the shipping verify CLI PERMITTED it, because the 'expected' external values came from a file the CALLER supplied: invent a digest, echo the same digest into --external-binding, and the comparison agrees with itself. Two caller-supplied documents cross-checking each other is not verification.\n\nThe repository cannot re-derive Tier-2 evidence \u2014 it is protected and lives outside the tree \u2014 so it authenticates instead: the DIGEST of the authorized external-authorization document is pinned HERE, in a tracked file. Forging one now requires editing tracked repository content, which moves the index tree, which the repository binding already covers. The caller supplies the document; the repository decides which document counts.",
+  "contract_version": "1",
+  "required_fields": [
+    "authorization_version",
+    "protected_tier",
+    "approved_anchor_sha256",
+    "approved_inventory_sha256",
+    "approved_evidence_classification",
+    "non_synthetic_required",
+    "eligibility_lineage_sha256",
+    "required_production_checks",
+    "issued_utc",
+    "valid_until_utc",
+    "authorized_candidate_scope"
+  ],
+  "field_semantics": {
+    "authorization_version": "schema version of the authorization document",
+    "protected_tier": "the tier this authorization speaks for; only TIER_2_PROTECTED may certify production",
+    "approved_anchor_sha256": "digest of the identity anchor the artifact must name",
+    "approved_inventory_sha256": "digest of the external inventory the artifact must name",
+    "approved_evidence_classification": "the provenance label the evidence must carry",
+    "non_synthetic_required": "whether synthetic evidence is refused outright",
+    "eligibility_lineage_sha256": "digest binding the eligibility record the certification descends from",
+    "required_production_checks": "check ids that must all be present AND satisfied",
+    "issued_utc": "when this authorization was granted",
+    "valid_until_utc": "when it lapses; a lapsed authorization certifies nothing",
+    "authorized_candidate_scope": "the candidate id this authorization covers"
+  },
+  "pinned_authorization_digests": {
+    "TIER_1_SYNTHETIC": "57e30318d829d5df59e7ad2f1d0779e2697d25725ed18afc9fedc7d8e1749b06"
+  },
+  "pin_note": "TIER_2_PROTECTED has NO pin here on purpose. A real production authorization is supplied under separate protected authority and its digest is installed at that time. An absent pin means the verifier REFUSES, which is the correct behaviour for a repository that has never been shown the real document."
+}

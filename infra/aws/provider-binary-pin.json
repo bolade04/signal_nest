@@ -1,0 +1,13 @@
+{
+  "_comment": "Gate 4N-I4. Provenance for the extracted hashicorp/aws provider binary, per platform. `binaries` records a SHA-256 for platforms where we have independently verified the extracted file; this is the strongest assurance and protects a long-lived local cache against POST-init tampering, which the lockfile cannot detect (its zh:/h1: entries hash the release ZIP). `lockfile_verified_platforms` lists platforms where the only assurance is the verification `tofu init` itself performs against .terraform.lock.hcl \u2014 appropriate for ephemeral CI runners that download fresh each run. Listing a platform there is a deliberate, reviewable reduction in assurance, not a silent fallback: an UNLISTED platform is FORBIDDEN.",
+  "provider": "registry.opentofu.org/hashicorp/aws",
+  "version": "6.55.0",
+  "binaries": {
+    "darwin_arm64": "c4e6254291d61b558312e49af143d262234831b114c7187dd17d14579fad086e"
+  },
+  "lockfile_verified_platforms": [
+    "linux_amd64",
+    "linux_arm64"
+  ],
+  "_lockfile_verified_rationale": "GitHub-hosted runners are ephemeral and fetch the provider fresh each run; `tofu init` fails closed if the download does not match the lockfile hashes, so the release artifact is authenticated. What that does NOT cover is tampering with an already-extracted binary between init and use, which cannot occur meaningfully inside a single ephemeral job. Record a binary SHA-256 here instead if the runner ever becomes self-hosted or caches .terraform across jobs."
+}

@@ -108,6 +108,53 @@ jobs:
       - name: Check out the exact trusted revision
         uses: actions/checkout@v7
 
+      # ------------------------------------------------------------------
+      # Gate 4N-I28BG-B2: workflow-assurance ESTABLISH. Immediately after the
+      # trusted checkout, bind the source-content identity (workflow file,
+      # Dockerfile, build context, verifier scripts), the workflow/job/step
+      # identity, the active authorization pair, and the freshly derived
+      # authoritative Docker-state digest into a canonical establishment record.
+      # Nothing downstream (build, verification, push) is trusted that does not
+      # descend from this record. Runs offline: no Docker, registry, or network.
+      # ------------------------------------------------------------------
+      - name: Establish reader workflow assurance
+        id: assurance-establish
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p reader-assurance
+          python3 - <<'PY'
+          import json, os, subprocess
+          sha = os.environ["COMMIT_SHA"]
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          common = {
+            "workflow": {
+              "workflow_path": ".github/workflows/reader-publish.yml",
+              "workflow_identity": "Revision reader publish",
+              "job_identity": "build-publish-reader",
+              "docker_step_identity": "build-reader",
+            },
+            "source_spec": {
+              "workflow_path": ".github/workflows/reader-publish.yml",
+              "dockerfile_path": "apps/revision-reader/Dockerfile",
+              "context_path": "apps/revision-reader",
+              "script_paths": [
+                "scripts/workflow_assurance.py",
+                "scripts/workflow_graph_validator.py",
+              ],
+              "commit_sha": sha,
+            },
+            "commit_sha": sha,
+            "tree_identity": tree,
+          }
+          json.dump(common, open("reader-assurance/common.json", "w"))
+          json.dump({**common, "expected_phase": "reader-establish"},
+                    open("reader-assurance/establish-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py establish \
+            --params reader-assurance/establish-params.json \
+            --out reader-assurance/establishment.json
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -115,9 +162,59 @@ jobs:
         id: meta
         run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # Gate 4N-I28BG-B2: workflow-assurance PRE-BUILD verify. Immediately before the
+      # build, FRESHLY re-derive the source/workflow identity, refuse any drift from the
+      # establishment, and bind the build inputs (Dockerfile digest, context digest,
+      # build args, platform, immutable commit tag). A mutation of the workflow file, the
+      # Dockerfile, the context, or the tag since establishment fails this step, which
+      # fails the job before the build runs. Offline; no Docker.
+      - name: Fresh pre-build verification
+        id: assurance-pre-build
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          CREATED: ${{ steps.meta.outputs.created }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          from pathlib import Path
+          sha = os.environ["COMMIT_SHA"]
+          common = json.load(open("reader-assurance/common.json"))
+          src = w.source_content_manifest(Path(".").resolve(), common["source_spec"])
+          dockerfile_digest = src["files"]["dockerfile"]["sha256"]
+          context_digest = w._digest(src["context"])
+          build_inputs = {
+            "dockerfile_path": "apps/revision-reader/Dockerfile",
+            "dockerfile_digest": dockerfile_digest,
+            "context_path": "apps/revision-reader",
+            "context_digest": context_digest,
+            "build_args": {"GIT_REVISION": sha, "IMAGE_CREATED": os.environ.get("CREATED", ""),
+                           "EXPECTED_DB_HOST": "<env>", "EXPECTED_DB_NAME": "<env>",
+                           "EXPECTED_DB_USER": "<env>"},
+            "build_secret_names": [],
+            "cache_from": [], "cache_to": [],
+            "platforms": ["linux/amd64"],
+            "target_stage": "reader",
+            "labels": {},
+            "runtime_metadata": {"created": os.environ.get("CREATED", "")},
+            "resolved_tags": ["signalnest-revision-reader:" + sha],
+          }
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          params = {"establishment": json.load(open("reader-assurance/establishment.json")),
+                    "source_spec": common["source_spec"], "workflow": common["workflow"],
+                    "build_inputs": build_inputs, "commit_sha": sha, "tree_identity": tree}
+          json.dump(params, open("reader-assurance/pre-build-params.json", "w"))
+          json.dump(build_inputs, open("reader-assurance/build-inputs.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py pre_build_verify \
+            --params reader-assurance/pre-build-params.json \
+            --out reader-assurance/pre-build.json
+
       # Cache-free: the publish path never consumes a layer cache a less trusted run may
       # have written. Platform pinned to the task definition's runtime (LINUX/X86_64).
       - name: Build the reader image (linux/amd64, SHA-stamped)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: apps/revision-reader
@@ -133,6 +230,41 @@ jobs:
             EXPECTED_DB_HOST=${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
             EXPECTED_DB_NAME=${{ vars.AWS_STAGING_READER_EXPECTED_DB_NAME }}
             EXPECTED_DB_USER=${{ vars.AWS_STAGING_READER_EXPECTED_DB_USER }}
+
+      # Gate 4N-I28BG-B2: workflow-assurance POST-BUILD image bind. Consume the STRUCTURED
+      # buildx metadata (steps.build.outputs.metadata) — never scraped logs, never a live
+      # Docker call — validate the built image digest, refuse a missing/malformed/ambiguous
+      # digest or a mutable-only tag, and emit the canonical executed-image manifest that ties
+      # the built digest to the pre-build binding. The digest bound here is the SAME digest the
+      # in-image verification band below inspects and the push step pushes.
+      - name: Bind the built reader image digest
+        id: assurance-image-bind
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          sha = os.environ["COMMIT_SHA"]
+          meta = json.loads(os.environ.get("BUILD_METADATA") or "{}")
+          if os.environ.get("BUILD_DIGEST"):
+              meta.setdefault("containerimage.digest", os.environ["BUILD_DIGEST"])
+          src = w.source_content_manifest(w.REPO_ROOT, json.load(open("reader-assurance/common.json"))["source_spec"])
+          params = {
+            "pre_build_record": json.load(open("reader-assurance/pre-build.json")),
+            "build_metadata": meta,
+            "resolved_tags": ["signalnest-revision-reader:" + sha],
+            "dockerfile_digest": src["files"]["dockerfile"]["sha256"],
+            "build_context_digest": w._digest(src["context"]),
+          }
+          json.dump(params, open("reader-assurance/bind-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py post_build_image_bind \
+            --params reader-assurance/bind-params.json \
+            --out reader-assurance/image-manifest.json
 
       # ------------------------------------------------------------------
       # In-image verification. Everything below runs against the BUILT image
@@ -367,7 +499,39 @@ jobs:
       - name: Mask the account-bearing registry host in all subsequent logs
         run: echo "::add-mask::${{ steps.ecr-login.outputs.registry }}"
 
+      # Gate 4N-I28BG-B2: workflow-assurance PRE-PUSH verify. Immediately before the push,
+      # FRESHLY re-derive the source/workflow identity and refuse source drift, workflow drift,
+      # image substitution, tag substitution, authorization change, and manifest replay from
+      # another workflow/job/tree/window. The digest and tags intended for push are exactly the
+      # digest and immutable commit tag the image-bind manifest bound after the build. This step
+      # fails the job — and blocks the push below — on any drift. Offline; no Docker/registry.
+      - name: Fresh pre-push verification
+        id: assurance-pre-push
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          sha = os.environ["COMMIT_SHA"]
+          common = json.load(open("reader-assurance/common.json"))
+          manifest = json.load(open("reader-assurance/image-manifest.json"))
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          params = {
+            "image_manifest": manifest,
+            "source_spec": common["source_spec"],
+            "workflow": common["workflow"],
+            "intended_image_digest": manifest["build_output"]["image_digest"],
+            "intended_tags": manifest["build_output"]["resolved_tags"],
+            "commit_sha": sha, "tree_identity": tree,
+          }
+          json.dump(params, open("reader-assurance/pre-push-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py pre_push_verify \
+            --params reader-assurance/pre-push-params.json \
+            --out reader-assurance/pre-push.json
+
       - name: Push by immutable commit tag and read the registry digest back
+        id: push
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           NAME_PREFIX: ${{ vars.AWS_STAGING_NAME_PREFIX || 'signalnest-staging' }}
@@ -416,6 +580,52 @@ jobs:
           }
           EOF
           cat reader-evidence/reader-digest-manifest.json
+
+      # Gate 4N-I28BG-B2: FINAL reader assurance aggregate. Enforcement already happened in the
+      # pre-build and pre-push steps (each fails the job before the build/push it gates). This is
+      # the final consistency check: it is derived from the ACTUAL step outcomes (never a
+      # hand-entered PASS), fails if any load-bearing assurance step was not successful — including
+      # a skipped step, which `always()` lets it observe — and re-validates every emitted record.
+      # It runs after the push and cannot enable a failed push path; a non-success here fails the
+      # job, so the artifact upload below (default success()) is skipped.
+      - name: Final reader assurance aggregate
+        id: assurance-aggregate
+        if: always()
+        env:
+          O_ESTABLISH: ${{ steps.assurance-establish.outcome }}
+          O_PRE_BUILD: ${{ steps.assurance-pre-build.outcome }}
+          O_IMAGE_BIND: ${{ steps.assurance-image-bind.outcome }}
+          O_PRE_PUSH: ${{ steps.assurance-pre-push.outcome }}
+          O_BUILD: ${{ steps.build.outcome }}
+          O_PUSH: ${{ steps.push.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          outcomes = {k: os.environ.get(k) for k in
+                      ("O_ESTABLISH", "O_PRE_BUILD", "O_IMAGE_BIND", "O_PRE_PUSH", "O_BUILD", "O_PUSH")}
+          not_ok = {k: v for k, v in outcomes.items() if v != "success"}
+          if not_ok:
+              print("::error::final aggregate: assurance/build/push step(s) not successful:", not_ok)
+              sys.exit(1)
+          checks = (("establishment.json", w.validate_establishment),
+                    ("pre-build.json", w.validate_pre_build),
+                    ("image-manifest.json", w.validate_image_manifest),
+                    ("pre-push.json", w.validate_pre_push))
+          for name, validate in checks:
+              errs = validate(json.load(open("reader-assurance/" + name)))
+              if errs:
+                  print("::error::final aggregate: %s invalid: %s" % (name, errs))
+                  sys.exit(1)
+          # Cross-check: the digest the pre-push authorized is the digest the image-bind manifest bound.
+          man = json.load(open("reader-assurance/image-manifest.json"))
+          pp = json.load(open("reader-assurance/pre-push.json"))
+          if pp["intended_image_digest"] != man["build_output"]["image_digest"]:
+              print("::error::final aggregate: pushed digest is not the bound built digest")
+              sys.exit(1)
+          print("ok: reader assurance aggregate consistent across all four phases")
+          PY
 
       - name: Upload the reader digest manifest artifact
         uses: actions/upload-artifact@v7

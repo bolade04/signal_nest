@@ -1,3 +1,58 @@
+
+# THE derivation. Every role in this module reads local.effective_permissions_boundary, so a
+# role cannot bypass the mode by consuming the ARN directly — and the boundary cannot vanish
+# because an ARN happened to be null: in "required" mode a null ARN fails the precondition
+# below instead of silently producing an unbounded role.
+locals {
+  boundary_enforced = var.role_boundary_mode == "required"
+
+  effective_permissions_boundary = (
+    local.boundary_enforced ? var.role_permissions_boundary_arn : null
+  )
+
+  # GATE 4N-I16 PHASE B. The SAME authoritative state model the revision_reader module uses.
+  # Both modules classify identically so a reviewer reads one contract, not two.
+  boundary_state = (
+    var.role_boundary_mode == "required" && var.role_permissions_boundary_arn != null
+    ? "BOUNDARY_ENFORCED"
+    : (var.role_boundary_mode == "disabled" && var.role_permissions_boundary_arn == null
+      ? "UNBOUNDED_DARK_STATE"
+    : "INVALID_PARTIAL_BOOTSTRAP")
+  )
+}
+
+# Fail at PLAN time, before any resource is touched. Gate 4N-I7 showed that a null ARN
+# against bounded deployed roles plans REMOVAL with no error at all.
+# GATE 4N-I16. Separate resources per axis so `expect_failures` attributes the failure to the
+# axis under test. See the matching comment in modules/revision_reader/iam.tf.
+
+# AXIS 1 — coherent state. Subsumes the old required+null check AND adds the case Gate
+# 4N-I15 missed entirely: mode "disabled" carrying a non-null ARN, which reads as protected
+# and deploys unbounded.
+resource "terraform_data" "boundary_state_coherence" {
+  lifecycle {
+    precondition {
+      condition     = local.boundary_state != "INVALID_PARTIAL_BOOTSTRAP"
+      error_message = "Incoherent boundary state. role_boundary_mode = \"required\" requires a non-null role_permissions_boundary_arn — a null ARN in required mode plans REMOVAL of the boundary from every deployed role. role_boundary_mode = \"disabled\" requires role_permissions_boundary_arn = null — a non-null ARN under disabled mode is not a boundary, because the roles consume the mode-derived value."
+    }
+  }
+}
+
+# AXIS 2 — identity of the ceiling.
+resource "terraform_data" "boundary_mode_precondition" {
+  lifecycle {
+    # GATE 4N-I16: this axis owns the IDENTITY of the ceiling, not its PRESENCE. The
+    # null case is deliberately excused here because it belongs to the coherence axis —
+    # without the excusal, regex() on a null returns false and this axis fires for a
+    # required+null configuration, making the two axes indistinguishable to expect_failures
+    # and letting a corrupted state classifier hide behind this one.
+    precondition {
+      condition     = !local.boundary_enforced || var.role_permissions_boundary_arn == null || can(regex("policy/signalnest-staging-role-boundary$", var.role_permissions_boundary_arn))
+      error_message = "role_permissions_boundary_arn must name the reviewed boundary policy signalnest-staging-role-boundary."
+    }
+  }
+}
+
 # main.tf — staging IAM identity plane (INFRA-4 iam module)
 #
 # Owns the FOUR ECS-consumed IAM roles locked by aws-staging-iac-plan.md §26.8:
@@ -80,9 +135,10 @@ locals {
 
 # --- Shared ECS task execution role ----------------------------------------------
 resource "aws_iam_role" "execution" {
-  name               = "${var.name_prefix}-ecs-execution"
-  description        = "Shared ECS task execution role for ${var.name_prefix}: ECR pull, prefix-scoped log delivery, referenced-secret retrieval. Application containers never receive these credentials."
-  assume_role_policy = local.ecs_tasks_trust
+  name                 = "${var.name_prefix}-ecs-execution"
+  permissions_boundary = local.effective_permissions_boundary
+  description          = "Shared ECS task execution role for ${var.name_prefix}: ECR pull, prefix-scoped log delivery, referenced-secret retrieval. Application containers never receive these credentials."
+  assume_role_policy   = local.ecs_tasks_trust
 
   tags = {
     Name = "${var.name_prefix}-ecs-execution"
@@ -153,9 +209,10 @@ resource "aws_iam_role_policy" "execution" {
 
 # --- API task role ----------------------------------------------------------------
 resource "aws_iam_role" "api_task" {
-  name               = "${var.name_prefix}-api-task"
-  description        = "API application task role for ${var.name_prefix}: application-bucket S3 access only. No secret, ECR, logs-driver, RDS, or Redis IAM permission."
-  assume_role_policy = local.ecs_tasks_trust
+  permissions_boundary = local.effective_permissions_boundary
+  name                 = "${var.name_prefix}-api-task"
+  description          = "API application task role for ${var.name_prefix}: application-bucket S3 access only. No secret, ECR, logs-driver, RDS, or Redis IAM permission."
+  assume_role_policy   = local.ecs_tasks_trust
 
   tags = {
     Name = "${var.name_prefix}-api-task"
@@ -164,9 +221,10 @@ resource "aws_iam_role" "api_task" {
 
 # --- Worker task role -------------------------------------------------------------
 resource "aws_iam_role" "worker_task" {
-  name               = "${var.name_prefix}-worker-task"
-  description        = "Worker application task role for ${var.name_prefix}: application-bucket S3 access only. No secret, ECR, logs-driver, RDS, or Redis IAM permission."
-  assume_role_policy = local.ecs_tasks_trust
+  permissions_boundary = local.effective_permissions_boundary
+  name                 = "${var.name_prefix}-worker-task"
+  description          = "Worker application task role for ${var.name_prefix}: application-bucket S3 access only. No secret, ECR, logs-driver, RDS, or Redis IAM permission."
+  assume_role_policy   = local.ecs_tasks_trust
 
   tags = {
     Name = "${var.name_prefix}-worker-task"
@@ -179,9 +237,10 @@ resource "aws_iam_role" "worker_task" {
 # a task role per definition and the migration workload must not share the
 # API/worker S3 grant. No aws_iam_role_policy is attached.
 resource "aws_iam_role" "migration_task" {
-  name               = "${var.name_prefix}-migration-task"
-  description        = "Migration one-shot task role for ${var.name_prefix}: intentionally empty (no attached policy) - migration code calls no AWS API."
-  assume_role_policy = local.ecs_tasks_trust
+  permissions_boundary = local.effective_permissions_boundary
+  name                 = "${var.name_prefix}-migration-task"
+  description          = "Migration one-shot task role for ${var.name_prefix}: intentionally empty (no attached policy) - migration code calls no AWS API."
+  assume_role_policy   = local.ecs_tasks_trust
 
   tags = {
     Name = "${var.name_prefix}-migration-task"
@@ -235,7 +294,8 @@ resource "aws_iam_role_policy" "app_s3" {
 resource "aws_iam_role" "ci_publisher" {
   count = var.github_oidc_provider_arn == null ? 0 : 1
 
-  name = "${var.name_prefix}-ci-publisher"
+  name                 = "${var.name_prefix}-ci-publisher"
+  permissions_boundary = local.effective_permissions_boundary
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

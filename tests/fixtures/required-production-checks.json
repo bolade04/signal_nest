@@ -1,0 +1,70 @@
+{
+  "_purpose": "The INDEPENDENTLY AUTHORED set of production-only checks that must have run and passed before a candidate may be production-certified (Gate 4N-I20B, ruling item 3).",
+  "_why_this_exists": "Gate 4N-I20A found that an artifact carrying `checks: []` certified successfully: the field was required to be PRESENT but never required to be non-empty, complete, or passing. A certification that proves nothing ran is not a certification.",
+  "_authority": "Authored from what a production certification must actually establish. It is NOT derived from any artifact's own `checks` array, from the generator's current output, or from the candidate under validation — an artifact that could name its own required set would be certifying itself.",
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_contract_version": "4n-i20b.1",
+
+  "required_checks": [
+    {
+      "check_id": "external_anchor_hash_verified",
+      "purpose": "the protected Tier-2 anchor was read from an explicit external path and matched a separately supplied expected digest",
+      "source": "scripts/anchor_loader.py TIER_2_PROTECTED",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "external_inventory_hash_verified",
+      "purpose": "the protected resource inventory was read from an explicit external path and matched a separately supplied expected digest",
+      "source": "scripts/protected_inventory.py TIER_2_PROTECTED",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "no_synthetic_evidence",
+      "purpose": "no fixture marked NON_PRODUCTION_TEST_FIXTURE participated in the evidence chain",
+      "source": "anchor and inventory classification",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "candidate_manifest_bound",
+      "purpose": "the certification names the exact candidate id and manifest digest under review",
+      "source": "candidate manifest supplied to the eligibility command",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "repository_bindings_bound",
+      "purpose": "HEAD, index tree, predicted commit tree and repository diff match the repository at eligibility time",
+      "source": "scripts/tracked_state.py repository_state_record()",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "policy_generation_clean",
+      "purpose": "every generated policy reproduced and passed its own validators",
+      "source": "scripts/policy_inventory.py",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "role_scope_reconciled",
+      "purpose": "the emitted policy's writable role scope reconciles with the Terraform declarations",
+      "source": "scripts/terraform_role_inventory.py",
+      "required_status": "PASSED"
+    },
+    {
+      "check_id": "no_live_identifier_leak",
+      "purpose": "no live AWS identifier is present in any committable repository file",
+      "source": "scripts/leak_scan.py",
+      "required_status": "PASSED"
+    }
+  ],
+
+  "_rules": {
+    "set_must_be_non_empty": true,
+    "every_required_check_must_be_present": true,
+    "every_required_check_must_have_required_status": true,
+    "duplicate_check_ids_are_a_finding": true,
+    "unknown_status_is_a_finding": true,
+    "absence_never_implies_success": true,
+    "additional_checks_permitted": true,
+    "additional_checks_cannot_replace_required_checks": true,
+    "an_artifact_may_not_declare_its_own_required_set": true
+  }
+}

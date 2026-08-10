@@ -106,3 +106,21 @@ backend.hcl
 # Re-include the IaC `storage` module dir; the app-level `storage/` rule above
 # (local object storage) would otherwise ignore this documentation-only stub.
 !infra/aws/modules/storage/
+
+# Gate 4N-I18, SEC-1. A live AWS resource inventory carries exactly the identifier class
+# the backend.hcl rule above already refuses: account id, bucket names with AWS-assigned
+# suffixes, CloudTrail/RDS ARNs, KMS key ids and the state lock-table name. Gate 4N-I17
+# established (git log --all -S) that none of those values appears anywhere in history, so
+# committing one would be FIRST DISCLOSURE into permanent history — and deleting the file
+# later would not undo it. The live inventory lives outside the tree and is supplied
+# explicitly for Tier 2 (scripts/protected_inventory.py); the repository ships only the
+# synthetic fixture tests/fixtures/synthetic-inventory.json.
+infra/aws/live-resource-inventory.json
+infra/aws/cloudfront-expected.json
+
+# Gate 4N-I26B. Editor/agent LOCAL settings. Declared HERE, by the repository, rather than left
+# to each developer's personal ~/.config/git/ignore: scripts/leak_scan.py now pins
+# core.excludesFile to /dev/null so its scope is repository-defined and identical on a CI
+# runner, and a path this file does not name is a path the scanner will read. This one holds a
+# real account id on at least one machine.
+.claude/settings.local.json

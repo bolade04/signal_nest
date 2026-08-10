@@ -1,0 +1,965 @@
+{
+ "_classification": "SECURITY_CRITICAL \u2014 review-pin registry; governed by the review-record ledger (root of trust)",
+ "_note": "Each pin binds a collection identity to an independently-reviewed sha256 digest + an ACTIVE review record. Never a copy of the collection's members.",
+ "pins": {
+  "action_classifier.py::PERMITTED_READ_CATEGORIES": {
+   "collection_id": "action_classifier.py::PERMITTED_READ_CATEGORIES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:e0e49e6bad697f03aadce8051f20a02d6387931684f08636a79981170a207e6e",
+   "source": "live"
+  },
+  "allow_model.py::EXEMPTIONS": {
+   "collection_id": "allow_model.py::EXEMPTIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:060c6c8cc9a87d547a3b79d2fb6d15ec12e4e6914a996bfc3dc9ccd0a8f3e364",
+   "source": "live"
+  },
+  "allow_model.py::EXTRA_REQUIRED_SOURCES": {
+   "collection_id": "allow_model.py::EXTRA_REQUIRED_SOURCES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:b2b07ed254b31f5d7587104e160471151d037effa9d2fafecd66ecfcf8f4eecc",
+   "source": "live"
+  },
+  "allow_model.py::PERMITTED_WILDCARDS": {
+   "collection_id": "allow_model.py::PERMITTED_WILDCARDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:5b75eee1c7f4b369bf467ee4097f946099ec189a1180577edf22efa68a3245c0",
+   "source": "live"
+  },
+  "allow_model.py::TARGETS": {
+   "collection_id": "allow_model.py::TARGETS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:8817e53acfda9815563d5528502e54e5c8923a636f0e2782421ad80bcd987e32",
+   "source": "live"
+  },
+  "anchor_loader.py::REQUIRED_FIELDS": {
+   "collection_id": "anchor_loader.py::REQUIRED_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0b4ec3712126d9e2edc8a18cafc2c0ec530e87d6181092c3fb28e5fd5319f479",
+   "source": "live"
+  },
+  "arn_model.py::_COLON_SEPARATED": {
+   "collection_id": "arn_model.py::_COLON_SEPARATED",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:c418eef6ab48f462419437c3f81de06e20210498ac53d12a76e3e630f8db6f0d",
+   "source": "live"
+  },
+  "arn_model.py::_TYPELESS": {
+   "collection_id": "arn_model.py::_TYPELESS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0a802c1754e00f4fcdf7a6679da4f2e5bf77c70b231cf3e40b9c013ac3d5a980",
+   "source": "live"
+  },
+  "assertion_contracts.py::ASSERTION_CLASSES": {
+   "collection_id": "assertion_contracts.py::ASSERTION_CLASSES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0262cd57285933fd5c4fa7827005939167ad2cdc9215eeb68a4f24b36a53c31b",
+   "source": "live"
+  },
+  "assertion_contracts.py::BUILTINS": {
+   "collection_id": "assertion_contracts.py::BUILTINS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:563c6b26772f4cafd71252a4cfb10cc7b8ae8f53f781e5c4dc85d4a9e8e7e078",
+   "source": "live"
+  },
+  "assertion_contracts.py::KNOWN_PREDICATE_METHODS": {
+   "collection_id": "assertion_contracts.py::KNOWN_PREDICATE_METHODS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:eb3412418c77e82cc0956716a4974b176215e1b361f7842efd2417f9b968fcd8",
+   "source": "live"
+  },
+  "assertion_contracts.py::REGISTERED_HELPERS": {
+   "collection_id": "assertion_contracts.py::REGISTERED_HELPERS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:b093f403b5574603b307a31fbe6de031640fc50010f1af275a01caec3d187f74",
+   "source": "live"
+  },
+  "assertion_contracts.py::_TERMINATORS": {
+   "collection_id": "assertion_contracts.py::_TERMINATORS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:7628654b4223851c90d9d1d0a8d966dc99efc4725959aa358609ac777f8310d7",
+   "source": "live"
+  },
+  "candidate_manifest.py::REQUIRED_KEYS": {
+   "collection_id": "candidate_manifest.py::REQUIRED_KEYS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:2fab6dab3a885e0943172edf83763868aeea3d1267e02c2a3059affec19bfdfa",
+   "source": "live"
+  },
+  "candidate_manifest.py::REVIEW_FILE_SUFFIXES": {
+   "collection_id": "candidate_manifest.py::REVIEW_FILE_SUFFIXES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:f5af5188dabdd63f663534a8cebbb0ccd395fa5f401429168dddf79234f5607b",
+   "source": "live"
+  },
+  "check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS": {
+   "collection_id": "check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:ca6cffd87f2712fc967425e376f8c4cd6a48410184c5618f22fd42c3538c5fc9",
+   "source": "live"
+  },
+  "check_toolchain_integrity.py::FORBIDDEN_ENV": {
+   "collection_id": "check_toolchain_integrity.py::FORBIDDEN_ENV",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:9471a1fde1aaccaac1cc643c6fb8e2bad1067e3eef502a5dd5d85dc2ff403732",
+   "source": "live"
+  },
+  "check_toolchain_integrity.py::FORBIDDEN_ENV_PREFIXES": {
+   "collection_id": "check_toolchain_integrity.py::FORBIDDEN_ENV_PREFIXES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:f9d244d1daf1a0ac6c7036546220ca1765b1dfde874f77c2352aca4ba900e0f1",
+   "source": "live"
+  },
+  "ci_invocation_model.py::INTERPRETERS": {
+   "collection_id": "ci_invocation_model.py::INTERPRETERS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:2a92ae5faf326a58d0c9b12cf06ca4784c74e418cb9931f3e27e38e3a6cd66d4",
+   "source": "live"
+  },
+  "ci_invocation_model.py::_NON_EXECUTING_FLAGS": {
+   "collection_id": "ci_invocation_model.py::_NON_EXECUTING_FLAGS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:835a3fef4ec7380f02659140402187f3b8d3c8206ca649a41fd49125ffc36a8e",
+   "source": "live"
+  },
+  "ci_invocation_model.py::_VALUE_TAKING_FLAGS": {
+   "collection_id": "ci_invocation_model.py::_VALUE_TAKING_FLAGS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:db034baca7d0dc28125a933b77c2a37330776f19732001499972e586c8fa6427",
+   "source": "live"
+  },
+  "deny_requirements.py::ARCHITECTURE_INVARIANTS": {
+   "collection_id": "deny_requirements.py::ARCHITECTURE_INVARIANTS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:acd8fe46a1dcf1a023670976f9d35f968c39c41959ab42689a95024e6a107232",
+   "source": "live"
+  },
+  "deny_requirements.py::AWS_SERVICE_SAFETY": {
+   "collection_id": "deny_requirements.py::AWS_SERVICE_SAFETY",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4fe0d68bb43589c62f874faf824b70b716d87c406dc6cc0d45483ae239227f37",
+   "source": "live"
+  },
+  "deny_requirements.py::_KINDS": {
+   "collection_id": "deny_requirements.py::_KINDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0b2e2923640d55d4566a1270ddca4ebe37ae9ee0688b424d8de9b16f501b4b57",
+   "source": "live"
+  },
+  "deny_requirements.py::_PRINCIPAL_SCOPES": {
+   "collection_id": "deny_requirements.py::_PRINCIPAL_SCOPES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:44bbbb1a7137b77c60cf2f6bde9c25d70aecc9d524b7831dc1b78bb4d68a31cf",
+   "source": "live"
+  },
+  "deny_triangulation.py::PASSING": {
+   "collection_id": "deny_triangulation.py::PASSING",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:c27e2e3e8331fa5ee4ccdbe160dc09f8b6701c3468ce545308a063fc59c8e500",
+   "source": "live"
+  },
+  "deny_triangulation.py::PROTECTED_RESOURCE": {
+   "collection_id": "deny_triangulation.py::PROTECTED_RESOURCE",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:c8efb1a44d8de9189d58c9acef9358ca9b570ed2a3ed416c6921f81bb8ebbfb0",
+   "source": "live"
+  },
+  "docker_assurance_state.py::CACHE_KEY_FIELDS": {
+   "collection_id": "docker_assurance_state.py::CACHE_KEY_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0eba6d85b1ebce7c98bd658d5c6423538a45f3bb5ef0911a352a171405720eca",
+   "source": "live"
+  },
+  "docker_assurance_state.py::_CACHE_VALUE_FIELDS": {
+   "collection_id": "docker_assurance_state.py::_CACHE_VALUE_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:68b28b9e29457b08d7e9e9fcecf8085aee9049d13c2a8a313231c5206acd6301",
+   "source": "live"
+  },
+  "docker_assurance_state.py::_STATE_TOP_FIELDS": {
+   "collection_id": "docker_assurance_state.py::_STATE_TOP_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:08c47a30125ab38a7249f7dd58f36cf089e83cf1248564bfc2d93cdef05e565d",
+   "source": "live"
+  },
+  "docker_boundary.py::DISPOSITIONS": {
+   "collection_id": "docker_boundary.py::DISPOSITIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:1fd142a2e813dcb0f9b0a3d165f3f0c3da7ea097556febfd0196ceff50325e27",
+   "source": "live"
+  },
+  "docker_boundary.py::DOCKER_WORDS": {
+   "collection_id": "docker_boundary.py::DOCKER_WORDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:91c389aa2ed46a0293f6a82ffd1c8565b9fe968b7b51a0435eeba583d9a7cdc9",
+   "source": "live"
+  },
+  "docker_boundary.py::LOAD_BEARING_CLASSIFICATIONS": {
+   "collection_id": "docker_boundary.py::LOAD_BEARING_CLASSIFICATIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:2b95e4d9f65c70d55095d9ad09bedfd0a8cbf336e2ac1ff2e0095ec296246425",
+   "source": "live"
+  },
+  "docker_boundary.py::PER_SITE_REQUIRED_FIELDS": {
+   "collection_id": "docker_boundary.py::PER_SITE_REQUIRED_FIELDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:3878c1d82e0b546991572b3bc32346d84d40411e33e76714e45c222441681bb2",
+   "source": "live"
+  },
+  "docker_boundary.py::SITE_CLASSIFICATIONS": {
+   "collection_id": "docker_boundary.py::SITE_CLASSIFICATIONS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:eb1fcfea30ebc3433f9fce73506c746b62609d5a02807235617bc95c74831ca2",
+   "source": "live"
+  },
+  "docker_boundary.py::STEERING_FLAGS": {
+   "collection_id": "docker_boundary.py::STEERING_FLAGS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:146c5d3933eb09dd7c42424c92738b2b0b3e58ed3859e9aea478994c5ac0d511",
+   "source": "live"
+  },
+  "docker_boundary.py::TRUST_BOUNDARIES": {
+   "collection_id": "docker_boundary.py::TRUST_BOUNDARIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:486b9a05d77ae6ffc65292ba844ecd08049555bb1d1c05d95d8c29e4ddd57ac7",
+   "source": "live"
+  },
+  "docker_boundary.py::_RELEASE_SUBCOMMANDS": {
+   "collection_id": "docker_boundary.py::_RELEASE_SUBCOMMANDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:6582455fd59dac3d582909737d38eaa93dabb3ec202e600881ae318abef775cb",
+   "source": "live"
+  },
+  "enforcement_path.py::ENTRY_POINTS": {
+   "collection_id": "enforcement_path.py::ENTRY_POINTS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:fd4abe19d61774f3a1624ea1bdef4622d677de3c8dc1e63fd6d8738ff62541d1",
+   "source": "live"
+  },
+  "enforcement_path.py::SCAN_DOMAIN_GATES": {
+   "collection_id": "enforcement_path.py::SCAN_DOMAIN_GATES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:de2acb073018f06ade1cab99e0a256c1f82b98761db201990a8376a90d1060f5",
+   "source": "live"
+  },
+  "evidence_binding.py::BINDING_FIELDS": {
+   "collection_id": "evidence_binding.py::BINDING_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:8528530b8c5c35eeab37a37b186bdfbf08030f9a3e349d42c094129201604ceb",
+   "source": "live"
+  },
+  "exec_transfer_oracle.py::TRANSFER_WORDS": {
+   "collection_id": "exec_transfer_oracle.py::TRANSFER_WORDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:08b782f6c14251f70d15d17ec43d08a13d65323bd12709de0142d59ca7465a36",
+   "source": "live"
+  },
+  "exec_transfer_oracle.py::_FLAG_OPTS": {
+   "collection_id": "exec_transfer_oracle.py::_FLAG_OPTS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:d518921a96960cc10a8034bf06f8d583c34c2f48c634dbaba42495e840347f09",
+   "source": "live"
+  },
+  "exec_transfer_oracle.py::_VALUE_OPTS": {
+   "collection_id": "exec_transfer_oracle.py::_VALUE_OPTS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4ced92113fd35fcf67fc1d3c6343cafc97a64182ddd8c10498e1e0cf2bfea94b",
+   "source": "live"
+  },
+  "executable_inventory.py::SHELL_BUILTINS": {
+   "collection_id": "executable_inventory.py::SHELL_BUILTINS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:f9307e9925c2e268764ab0eeaa37c5e66c1349cc1d6cc5652a100c9208e8b6ef",
+   "source": "live"
+  },
+  "executable_inventory.py::SUBPROCESS_CALLS": {
+   "collection_id": "executable_inventory.py::SUBPROCESS_CALLS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:786f32ef744872b1a2271d635636d8c978b6413acc77cf85af7af9eedc73d1f3",
+   "source": "live"
+  },
+  "executed_state_provenance.py::DYNAMIC_ACCESS": {
+   "collection_id": "executed_state_provenance.py::DYNAMIC_ACCESS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:167e283ba48ed9fa6daef04254391212ae57002281da1bec390016ee2a9be796",
+   "source": "live"
+  },
+  "executed_state_provenance.py::IGNORED_NAMES": {
+   "collection_id": "executed_state_provenance.py::IGNORED_NAMES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:16ba7b0d9a2aa7aa560b27392ae0e080354cb5c1b64633f03280a425b0702638",
+   "source": "live"
+  },
+  "executed_state_provenance.py::VOLATILE_CACHES": {
+   "collection_id": "executed_state_provenance.py::VOLATILE_CACHES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:fef2ce141d5737b609a8e5799b5e6272384d57defd9aa8951ed8970e88674d75",
+   "source": "live"
+  },
+  "expiry_authorization.py::PURPOSES": {
+   "collection_id": "expiry_authorization.py::PURPOSES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:15b334c3aa2be66a364602c63cf2be4689bad7d729108253cfcd4894c50ae776",
+   "source": "live"
+  },
+  "external_executable_trust.py::FATAL_STEERING_VARIABLES": {
+   "collection_id": "external_executable_trust.py::FATAL_STEERING_VARIABLES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:6d5f12b9898616dab50d1574c2ab2103169756e3fc56124c00cc151ecec87d83",
+   "source": "live"
+  },
+  "external_executable_trust.py::NEUTRALIZED_STEERING_VARIABLES": {
+   "collection_id": "external_executable_trust.py::NEUTRALIZED_STEERING_VARIABLES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:5037172957960dc670ade1efe864f437464f692e2c0a8a11b06222f1e996d436",
+   "source": "live"
+  },
+  "failure_propagation.py::_COMPOUND_KEYWORDS": {
+   "collection_id": "failure_propagation.py::_COMPOUND_KEYWORDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:451a6aff174bdb5d9bcc0c3693069f0db2c1158c8760d80ade8a3114b46eab3e",
+   "source": "live"
+  },
+  "failure_propagation.py::_ERRMODE_WRAPPERS": {
+   "collection_id": "failure_propagation.py::_ERRMODE_WRAPPERS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:ab84fc16d64d3ee42f31751fbbcba06c536942b54947486a23711b6c7a5ef225",
+   "source": "live"
+  },
+  "failure_propagation.py::_TRAP_SIGNALS": {
+   "collection_id": "failure_propagation.py::_TRAP_SIGNALS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:fb5e4af6b9c713ad85c87cba3d380922ef0dc7d9c99489c24aa3acc4c213c372",
+   "source": "live"
+  },
+  "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS": {
+   "collection_id": "gen_bootstrap_operator_policy.py::CEILING_EXCEPTIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0cee2a5eedd95092775a29a246784235e182e670050e9bbaf5d5b911724ff5f0",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::ACCOUNT_ADMIN_DENIED": {
+   "collection_id": "gen_boundary_policy.py::ACCOUNT_ADMIN_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4aaaef997abebb98dd6d21a1abc52c5900f9087b068f0c3f16f1171729bc4671",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::CLOUDTRAIL_DENIED": {
+   "collection_id": "gen_boundary_policy.py::CLOUDTRAIL_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:02329d6a901bb1cd75af46d0135ca45be7dcdeba527b0d5b5bfb4218129038ba",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::ECS_DENIED": {
+   "collection_id": "gen_boundary_policy.py::ECS_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:8e7a25c7389a90fbf392a9e2391c741cc1c7794bc91413bce1602cb2d4b23f2c",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::IAM_ADMIN_DENIED": {
+   "collection_id": "gen_boundary_policy.py::IAM_ADMIN_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:9fc04681051943e4b90d2ce77a324a7cf57f19ba12c43d9d413b3b04483ebd7e",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::LOGS_DENIED": {
+   "collection_id": "gen_boundary_policy.py::LOGS_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:264bcc264e1c4191947e677ed47baf7e7f4553606d82a390893d878d87007603",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::S3_ACL_DENIED": {
+   "collection_id": "gen_boundary_policy.py::S3_ACL_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:99bc816efd1955c7a2dd147c3e47bacb52f97f5feadc8d26d84b69a0feedcd18",
+   "source": "live"
+  },
+  "gen_boundary_policy.py::S3_DELIVERY_DENIED": {
+   "collection_id": "gen_boundary_policy.py::S3_DELIVERY_DENIED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:844da612c7b9c42725b3e7e930af63bdfd4bb77075774c3eba473e6f5ff2d84a",
+   "source": "live"
+  },
+  "gen_operator_policies.py::PERMANENT_DENY": {
+   "collection_id": "gen_operator_policies.py::PERMANENT_DENY",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:d7a13f999d759772f719b7879ac3a869e538d7fe7713088704ca2f87e97c35dc",
+   "source": "live"
+  },
+  "gen_operator_policies.py::REFRESH_CLOSURE": {
+   "collection_id": "gen_operator_policies.py::REFRESH_CLOSURE",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:05fc8d9aab4725ffda18ded9c4998c662028de8a09a051c0564c33cebb73d594",
+   "source": "live"
+  },
+  "gen_operator_policies.py::TEMP_SCOPED_CAPABILITIES": {
+   "collection_id": "gen_operator_policies.py::TEMP_SCOPED_CAPABILITIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:d5a30da8bb2506334078e0180a72f47c5f77dcd1e4deb8496c95b0df6e392b2e",
+   "source": "live"
+  },
+  "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS": {
+   "collection_id": "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:5e23a14aa669d11c1b0b50311499bc629113da02682343f89ee30b5a701b19eb",
+   "source": "live"
+  },
+  "iam_eval.py::ACTION_CONDITION_KEYS": {
+   "collection_id": "iam_eval.py::ACTION_CONDITION_KEYS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:2cc02e882221af5ca580d3841ef1b99a2db717719c9d4d561bfff04a7134e1af",
+   "source": "live"
+  },
+  "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {
+   "collection_id": "iam_eval.py::DISPUTED_RUNTIME_CONTEXT",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:77549a3833c9c254decfc7dd01cd9da6770b432014cecea524aa4a22fe1c3e24",
+   "source": "live"
+  },
+  "iam_eval.py::SUPPORTED_SEMANTICS": {
+   "collection_id": "iam_eval.py::SUPPORTED_SEMANTICS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:037f23de596ab5c0acbcad3658290193e7a4815e292f46920f730fe1804a4a8a",
+   "source": "live"
+  },
+  "iam_eval.py::_GLOBAL_KEYS": {
+   "collection_id": "iam_eval.py::_GLOBAL_KEYS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:57ce944352b5da490de533063fa97f5bfd15bf963ff0fbdd9d1e7c463db5c60c",
+   "source": "live"
+  },
+  "iam_eval.py::_NEGATED": {
+   "collection_id": "iam_eval.py::_NEGATED",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:16ce07f331082aaa568c39dd200ba6cbf6de7c75273a5f1aec1b5bd1f28c45a3",
+   "source": "live"
+  },
+  "iam_eval.py::_PLACEHOLDER_MARKERS": {
+   "collection_id": "iam_eval.py::_PLACEHOLDER_MARKERS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:0e6fd0917304549012b379453d3dbda154813fdf1322d5c26baaed8ce67a872d",
+   "source": "live"
+  },
+  "iam_eval.py::_SET_OPERATORS": {
+   "collection_id": "iam_eval.py::_SET_OPERATORS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:9c0f406e6970b200098c571622d1bb818492afc44f57de2674b73edf21700536",
+   "source": "live"
+  },
+  "leak_scan.py::BINARY_SUFFIXES": {
+   "collection_id": "leak_scan.py::BINARY_SUFFIXES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:020a4132d40dd986d85b77e6538513e1c6d6db1a7a1d81d24f5f1cbcf3c994ed",
+   "source": "live"
+  },
+  "leak_scan.py::EXCLUDED_PATH_PARTS": {
+   "collection_id": "leak_scan.py::EXCLUDED_PATH_PARTS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:dd3cf6a52abf8b608ff6867afc63730760a88578d4ba0786fb6aca0997c44bf0",
+   "source": "live"
+  },
+  "leak_scan.py::NON_LIVE_CLASSIFICATIONS": {
+   "collection_id": "leak_scan.py::NON_LIVE_CLASSIFICATIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:15f4afa3fbe6ee53ca03026068f13c6be6291131fc532fac3efe1995b660601b",
+   "source": "live"
+  },
+  "leak_scan.py::SKIP_DIRS": {
+   "collection_id": "leak_scan.py::SKIP_DIRS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:5dfbe129598cee1c19865b231b5531208ff4ff8b012943e9961e083b6af069cc",
+   "source": "live"
+  },
+  "leak_scan.py::_DIGEST_WIDTHS": {
+   "collection_id": "leak_scan.py::_DIGEST_WIDTHS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:a899d946a20b1dd8296b444f1c31e1d5853c90c09c96e16f596dab55e64deb4e",
+   "source": "live"
+  },
+  "leak_scan.py::_DIRECTORY_CATEGORY": {
+   "collection_id": "leak_scan.py::_DIRECTORY_CATEGORY",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4b6169895d0d4616adc372cf61d6b8444954e263bb4e2c085841ed8d1e606601",
+   "source": "live"
+  },
+  "must_not_contract.py::FORBIDDEN_CAPABILITIES": {
+   "collection_id": "must_not_contract.py::FORBIDDEN_CAPABILITIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:20f85c68fa824bfc19c64af8327f9f4fe87a5d81f6682b5b6a0476d7485c0f78",
+   "source": "live"
+  },
+  "mutation_discovery.py::SET_COVERING_TESTS": {
+   "collection_id": "mutation_discovery.py::SET_COVERING_TESTS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:79f884441f9a64c1e5004c5481feed9c7a52121e4963d81b7d0cf33dfcac11cc",
+   "source": "live"
+  },
+  "npm_authority.py::AUTHORITY_MODELS": {
+   "collection_id": "npm_authority.py::AUTHORITY_MODELS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:d376b0ddd6baf39cd6ce65786325ddafa05b5ff8639797a8abc3fef013ffe699",
+   "source": "live"
+  },
+  "npm_authority.py::DISPOSITIONS": {
+   "collection_id": "npm_authority.py::DISPOSITIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:2700376f6575d32db7393e9e21ac4931bccb62a5724ffdcb24e56cb3f9fe620a",
+   "source": "live"
+  },
+  "npm_authority.py::NATIVE_MAGIC": {
+   "collection_id": "npm_authority.py::NATIVE_MAGIC",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4ec2525ff7c0c066d3f7d28d26379a5989a6807de02c111aa5a0f513e38fcee6",
+   "source": "live"
+  },
+  "npm_authority.py::NPM_WORDS": {
+   "collection_id": "npm_authority.py::NPM_WORDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:7f1cb5f3d9b6266250b838868284251182cd51b889fa6c76bd417af9d4f78199",
+   "source": "live"
+  },
+  "policy_inventory.py::BOUNDARY_KINDS": {
+   "collection_id": "policy_inventory.py::BOUNDARY_KINDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:9a7a2b21307154d5b9681328257140ff876b2b6238201bd88435aacf73c7e92b",
+   "source": "live"
+  },
+  "policy_inventory.py::NOT_A_POLICY": {
+   "collection_id": "policy_inventory.py::NOT_A_POLICY",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:54d6203b5f9a9512888dff14b28a743406ed2a9e6ec44296b79c147f6078f620",
+   "source": "live"
+  },
+  "production_certification.py::ALLOWED_TRANSITIONS": {
+   "collection_id": "production_certification.py::ALLOWED_TRANSITIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:e57cdc83309a45aa0f6c0ddbee12f15e0aaff5a2f074740f93bab6f1e39b4005",
+   "source": "live"
+  },
+  "production_certification.py::REQUIRED_ARTIFACT_FIELDS": {
+   "collection_id": "production_certification.py::REQUIRED_ARTIFACT_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:44caaecff147007fa7d775e6eaa999bf85ed28c5c7a27691e311febece7b2712",
+   "source": "live"
+  },
+  "production_certification.py::REQUIRED_FLAG": {
+   "collection_id": "production_certification.py::REQUIRED_FLAG",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:fc9a68e26a4e9162520eb16e377227ea013d2d3d94d1f3ef2dc1f4a1833e5e4e",
+   "source": "live"
+  },
+  "production_certification.py::SELF_ATTESTING_FIELDS": {
+   "collection_id": "production_certification.py::SELF_ATTESTING_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:73301630fb61b4b694c116153cec5bd9acf8428f3a98431ce412e83ecd5ca031",
+   "source": "live"
+  },
+  "protected_inventory.py::REQUIRED_FIELDS": {
+   "collection_id": "protected_inventory.py::REQUIRED_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:533f5adfdba600586713eafd429e533fb72c8d5f04a6051be0ae6cd463ad4b16",
+   "source": "live"
+  },
+  "protected_inventory.py::SELF_ATTESTING_FIELDS": {
+   "collection_id": "protected_inventory.py::SELF_ATTESTING_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:b175e7db80ec1a44f12dd865ca45617698305ecacd065a88f8fa5e2ea5512913",
+   "source": "live"
+  },
+  "provenance.py::ARN_FIELDS": {
+   "collection_id": "provenance.py::ARN_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4d6bed6c5fc8d2243ab9c1cab93d6a35f98453409a4d2c139732c0f6b1cade45",
+   "source": "live"
+  },
+  "provenance.py::NON_CERTIFYING": {
+   "collection_id": "provenance.py::NON_CERTIFYING",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:25629bdbb84cc9c394d78af86f11152375a9721d06704f66c3732beb7c0133d4",
+   "source": "live"
+  },
+  "provenance.py::REQUIRED_TWO_LINEAGE_ROWS": {
+   "collection_id": "provenance.py::REQUIRED_TWO_LINEAGE_ROWS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:a5bc5af2fc95a56af59d43e71e52f2b4b486930914f4844b8f9e3ea8cbb7eb3f",
+   "source": "live"
+  },
+  "pytest_config_contract.py::COLLECTION_REMOVERS": {
+   "collection_id": "pytest_config_contract.py::COLLECTION_REMOVERS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:4c3667424fe1b281bde8561a64bf2983d9de92ceeb3cdcde28f420aedecde970",
+   "source": "live"
+  },
+  "pytest_config_contract.py::CONFIG_CANDIDATES": {
+   "collection_id": "pytest_config_contract.py::CONFIG_CANDIDATES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:b09909f79a83c1afdc09f633caec8cafe8770b7977e9ba96aabb03bbd3785889",
+   "source": "live"
+  },
+  "pytest_config_contract.py::SELECTION_FLAGS": {
+   "collection_id": "pytest_config_contract.py::SELECTION_FLAGS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:d35e046f8d1ddf1166267a7ace4b110d191a477bc2610db9266c11fe835bf09a",
+   "source": "live"
+  },
+  "review_pin_control.py::_DIGEST_SOURCES": {
+   "collection_id": "review_pin_control.py::_DIGEST_SOURCES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:057c528bd6a0403a1eab49ebdf062993186cd8d8e8aadfd324fae7558e08f5ea",
+   "source": "live"
+  },
+  "review_pin_control.py::_FORBIDDEN_PIN_FIELDS": {
+   "collection_id": "review_pin_control.py::_FORBIDDEN_PIN_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:857af5e0c9949a94eb7afd938f67c9a3691fd5f4aeb8aa50b76829a370fb3cc3",
+   "source": "live"
+  },
+  "role_bootstrap_executor.py::REQUIRED_MANIFEST_FIELDS": {
+   "collection_id": "role_bootstrap_executor.py::REQUIRED_MANIFEST_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:2aea4973917201e35a63ce3c4c38597ea7f4498c289cbb4a3924b61c7c5197aa",
+   "source": "live"
+  },
+  "role_bootstrap_executor.py::REQUIRED_ROLE_FIELDS": {
+   "collection_id": "role_bootstrap_executor.py::REQUIRED_ROLE_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:18fb1bdb57ad388cedb73bf69d3036639e6d3330c42c8cf4c3d0d0ee0e83625f",
+   "source": "live"
+  },
+  "role_bootstrap_lifecycle.py::ACTOR_RULES": {
+   "collection_id": "role_bootstrap_lifecycle.py::ACTOR_RULES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:e69a62cb90f98c1974c89c52be6121fa26126571e724a18784dba270e2b0a715",
+   "source": "live"
+  },
+  "role_bootstrap_lifecycle.py::IDENTITY_CENTRE_ADMIN_ACTIONS": {
+   "collection_id": "role_bootstrap_lifecycle.py::IDENTITY_CENTRE_ADMIN_ACTIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:d79d6f77d64a62e3927b9ebea6d2ad76f13f20be37453e19bd156bc494ed4e9c",
+   "source": "live"
+  },
+  "shell_command_model.py::COMMAND_PREFIXES": {
+   "collection_id": "shell_command_model.py::COMMAND_PREFIXES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:bba6c0627b6f1a406ffbae75e5b5b6c4696efa89539f407ad942fdbabbaf1342",
+   "source": "live"
+  },
+  "shell_command_model.py::DATA_CONSUMERS": {
+   "collection_id": "shell_command_model.py::DATA_CONSUMERS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:a7779a1cb13b52ea5a67273b4adafa69648d8e511c0c386b58e1bdde779cf16e",
+   "source": "live"
+  },
+  "shell_command_model.py::PYTHON_BASENAMES": {
+   "collection_id": "shell_command_model.py::PYTHON_BASENAMES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:bd6335d1e7b7db5c150fe9843fa4e5343d098e32215c92e4763d516cc9c98f5b",
+   "source": "live"
+  },
+  "shell_command_model.py::SHELL_LAUNCHERS": {
+   "collection_id": "shell_command_model.py::SHELL_LAUNCHERS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:10006516f11b86f1a2c45472f1cce6f364a04161b72b9468527649fd38765e9c",
+   "source": "live"
+  },
+  "shell_command_model.py::_KEYWORDS": {
+   "collection_id": "shell_command_model.py::_KEYWORDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:f44da3307b3a6ba6af49e5488d99726b9dfa6d70861c880b5aa7e511444f671d",
+   "source": "live"
+  },
+  "shell_positions.py::COMMAND_WRAPPERS": {
+   "collection_id": "shell_positions.py::COMMAND_WRAPPERS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:ac0ea2334eb507841fd32df674e1010e279a48d4a2e3949e10f7a5973b7269c9",
+   "source": "live"
+  },
+  "shell_positions.py::EXEC_COMBINABLE": {
+   "collection_id": "shell_positions.py::EXEC_COMBINABLE",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:1379979de3f911b0bd14a4bbdb62285ccd63200089a587e879a9932d37c93fea",
+   "source": "live"
+  },
+  "shell_positions.py::EXEC_OPTIONS": {
+   "collection_id": "shell_positions.py::EXEC_OPTIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:bbaa8d823192e0dd697f73e310de980faa0de9a0f0ea02dee3440b538dcf5b4f",
+   "source": "live"
+  },
+  "shell_positions.py::FAIL_CLOSED_WORDS": {
+   "collection_id": "shell_positions.py::FAIL_CLOSED_WORDS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:a74c915d39b6e4983ae28578b49630bf2c588f831d3f18911903227fbf6543ea",
+   "source": "live"
+  },
+  "shell_positions.py::KEYWORDS_INTRODUCING_A_COMMAND": {
+   "collection_id": "shell_positions.py::KEYWORDS_INTRODUCING_A_COMMAND",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:6ff28a3b67e7ab1e9cfafe6f3fcf9f55e3e16ef30dc39db3725eaeb9d14918e5",
+   "source": "live"
+  },
+  "shell_positions.py::NESTED_SHELL": {
+   "collection_id": "shell_positions.py::NESTED_SHELL",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:7611f08cb0492b2c37952d363b8116cbfc3709ea22f8761b001c43da9aba2057",
+   "source": "live"
+  },
+  "shell_positions.py::SHELL_BUILTINS": {
+   "collection_id": "shell_positions.py::SHELL_BUILTINS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:9858d725c48750c5f9e0cac1b51017028b02ee52bef837eb67e2b5dadf29f7af",
+   "source": "live"
+  },
+  "site_coverage.py::COVERING": {
+   "collection_id": "site_coverage.py::COVERING",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:1e14b415fa974f96942ce9d87852d4504770a8ffa293582bc1750f4fb0872c48",
+   "source": "live"
+  },
+  "site_taxonomy.py::FRAMEWORK_DISPATCH_NAMES": {
+   "collection_id": "site_taxonomy.py::FRAMEWORK_DISPATCH_NAMES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:c0813a80e687db00935ac0dadeae95152e8ae7c8138c44e091a0b66d37c76079",
+   "source": "live"
+  },
+  "site_taxonomy.py::FRAMEWORK_DISPATCH_PREFIXES": {
+   "collection_id": "site_taxonomy.py::FRAMEWORK_DISPATCH_PREFIXES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:aa427dbfad1267e20e3aac95268f265e35f2f0fe5c4048ac2cb0c5ee52661879",
+   "source": "live"
+  },
+  "site_taxonomy.py::FRAMEWORK_VISITOR_BASES": {
+   "collection_id": "site_taxonomy.py::FRAMEWORK_VISITOR_BASES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:79415cfec743dd495c2a95fa95be8258722f93116104c75337e2d1ff20dcdd22",
+   "source": "live"
+  },
+  "site_taxonomy.py::MUTATING_METHODS": {
+   "collection_id": "site_taxonomy.py::MUTATING_METHODS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:f4c6644a781c8a2c34237a81862591df31a7c08109957e7bbfb85db8eb763899",
+   "source": "live"
+  },
+  "site_taxonomy.py::TERMINAL_CALLS": {
+   "collection_id": "site_taxonomy.py::TERMINAL_CALLS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:18a964175cc11b2ccedde8302e5397b802ec6a386660ad541287616b16d4eb02",
+   "source": "live"
+  },
+  "site_taxonomy.py::_DUNDER_AND_STDLIB_SAFE": {
+   "collection_id": "site_taxonomy.py::_DUNDER_AND_STDLIB_SAFE",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:edb19b5d8a96b9eb2c870df08317a22581b61b2a8f003ed566e6a1f4e37c8a17",
+   "source": "live"
+  },
+  "smoke_http.py::EXPECTED_CITIES": {
+   "collection_id": "smoke_http.py::EXPECTED_CITIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:05c20e0317bf98a90111a3c8196c539b39515648d62f05fe1a65d18b563d9985",
+   "source": "ast_literal"
+  },
+  "terraform_role_inventory.py::INLINE_POLICY_LIFECYCLE_ACTIONS": {
+   "collection_id": "terraform_role_inventory.py::INLINE_POLICY_LIFECYCLE_ACTIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:9991480881acc691258e4aebc45b40f9b85389928d6658ac3c55c417dbe96bae",
+   "source": "live"
+  },
+  "tracked_state.py::STATES": {
+   "collection_id": "tracked_state.py::STATES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:f0e447ad1462b909352ef18459a9fbdd9c7a7132c94fd1bc428c5b2cad09fcdf",
+   "source": "live"
+  },
+  "trust_validator.py::ROLE_PURPOSE": {
+   "collection_id": "trust_validator.py::ROLE_PURPOSE",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:dfed4f43a3fa2a2a9a6153d52c15151705f4d7809c8427b78f1d91640ddd1e30",
+   "source": "live"
+  },
+  "verify_artifacts.py::UNLISTED_SUFFIXES": {
+   "collection_id": "verify_artifacts.py::UNLISTED_SUFFIXES",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:915159f6e6a7fc2f2c014b54280a85cfb41625dd5fe336ddd04831af4465486f",
+   "source": "live"
+  },
+  "workflow_assurance.py::_BUILD_INPUT_FIELDS": {
+   "collection_id": "workflow_assurance.py::_BUILD_INPUT_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:addf9fdfe2447fce3148371cb01b09415daab9fedfd5bac26bd3ac87f1ca0d05",
+   "source": "live"
+  },
+  "workflow_assurance.py::_DOCKER_STATE_FIELDS": {
+   "collection_id": "workflow_assurance.py::_DOCKER_STATE_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:8e4325a3f560e41e2d0452384c50c2e279c88466a9cbdf176bb5b66f5072c422",
+   "source": "live"
+  },
+  "workflow_assurance.py::_ESTABLISH_FIELDS": {
+   "collection_id": "workflow_assurance.py::_ESTABLISH_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:6305cc8e9b7a1d29bc652bf7d792c212dda83fa7d01a417e341f7256a3fae0f1",
+   "source": "live"
+  },
+  "workflow_assurance.py::_MUTABLE_TAG_TOKENS": {
+   "collection_id": "workflow_assurance.py::_MUTABLE_TAG_TOKENS",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:a0ffda00a2362a5af7e5b07946e08ea5364f59a4e6fa78e1aa9cc20492fac15c",
+   "source": "live"
+  },
+  "workflow_assurance.py::_PRE_BUILD_FIELDS": {
+   "collection_id": "workflow_assurance.py::_PRE_BUILD_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:3ea79f9f65f2052ad68513b43954b391a607e71817bcbd5c9a782979cd3eba7d",
+   "source": "live"
+  },
+  "workflow_assurance.py::_SOURCE_IDENTITY_FIELDS": {
+   "collection_id": "workflow_assurance.py::_SOURCE_IDENTITY_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:095c7b0f8e23796244b51093f543b9f83163e205c1ea3b0e3041685554c233fe",
+   "source": "live"
+  },
+  "workflow_assurance.py::_WORKFLOW_IDENTITY_FIELDS": {
+   "collection_id": "workflow_assurance.py::_WORKFLOW_IDENTITY_FIELDS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
+   "reviewed_digest": "sha256:e9677a9648ffe5c27fac404f0bd080e6ad1554e7c98ea2db10c00454ea2826f2",
+   "source": "live"
+  }
+ }
+}

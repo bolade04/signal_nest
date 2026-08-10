@@ -1,0 +1,374 @@
+{
+ "_comment": "GATE 4N-I26D, closing I26B-01. One completeness spec per SECURITY_CRITICAL collection. Each names a domain source that is NOT the collection — the constants the module defines, the keys a producer emits, the actions an emitted policy carries, or an independently authored contract. scripts/collection_completeness.py computes BOTH set differences and returns non-zero on either. A collection classified SECURITY_CRITICAL with no spec here FAILS, and a spec for a collection that is not security-critical FAILS.",
+ "specs": {
+  "production_certification.py::STATES": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "production_states_provider",
+   "reads": "production_certification.state_universe",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "tracked_state.py::STATES": {
+   "resolver": "module_constants",
+   "module": "tracked_state.py",
+   "name_pattern": "UNTRACKED|IGNORED|STAGED_ADDITION|STAGED_MODIFICATION|TRACKED_IN_HEAD|MODIFIED_IN_WORKTREE|ABSENT",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "site_coverage.py::COVERING": {
+   "resolver": "module_constants",
+   "module": "site_coverage.py",
+   "name_pattern": "CAUGHT|RELATED",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "evidence_binding.py::BINDING_FIELDS": {
+   "resolver": "function_result_keys",
+   "module": "evidence_binding.py",
+   "function": "current_binding",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "production_certification.py::VALIDATED_AUTHORIZATION_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "authorization_fields_provider",
+   "reads": "production_certification.authorization_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "EXTERNAL_AUTHORIZATION_FIELD"
+  },
+  "mutation_discovery.py::DISCOVERERS": {
+   "resolver": "discovered_kinds",
+   "module": "mutation_discovery.py",
+   "function": "discover_sites",
+   "field": "kind",
+   "domain_class": "SITE_CLASS_DOMAIN"
+  },
+  "gen_boundary_policy.py::ACCOUNT_ADMIN_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "gen_boundary_policy.py::CLOUDTRAIL_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "gen_boundary_policy.py::ECS_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "gen_boundary_policy.py::IAM_ADMIN_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "gen_boundary_policy.py::LOGS_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "gen_boundary_policy.py::S3_ACL_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "gen_boundary_policy.py::S3_DELIVERY_DENIED": {
+   "resolver": "emitted_policy",
+   "module": "gen_boundary_policy.py",
+   "function": "boundary_policy",
+   "effect": "Deny",
+   "domain_class": "POLICY_ACTION_DOMAIN",
+   "partition_group": "boundary_deny",
+   "_note": "the seven boundary_deny lists partition the SIX flat admin-Deny statements' 78 actions (partition_universe_sids); the resource-scoped inline denies added by later gates are denied elsewhere and were never claimed by a named list",
+   "partition_universe_sids": [
+    "DenyAuditDeliveryTampering",
+    "DenyAuditTrailShutdown",
+    "DenyEcsControlPlaneMutation",
+    "DenyIdentityAndAccountAdministration",
+    "DenyLogGroupDestructionAndRetentionTampering",
+    "DenyObjectAndBucketAclChanges"
+   ]
+  },
+  "reviewer_retrieval_state.py::STATES": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "reviewer_states_provider",
+   "reads": "reviewer_retrieval_state.state_universe",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "reviewer_retrieval_state.py::NEVER_RELAUNCH": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "never_relaunch_provider",
+   "reads": "reviewer_retrieval_state.never_relaunch_set",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "iam_eval.py::DATE_OPERATORS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "date_operators_provider",
+   "reads": "iam_eval.date_operator_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "trust_policies.py::ROLE_TRUST": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "reader_role_provider",
+   "reads": "trust_policies.revision_reader_role_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "workflow_graph_validator.py::_ASSURANCE_ROLES": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "assurance_roles_provider",
+   "reads": "workflow_graph_validator.assurance_role_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "review_packet_digest.py::REQUIRED_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "review_packet_fields_provider",
+   "reads": "review_packet_digest.required_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "resource_oracle.py::GENERATED_KEYS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "generated_arn_keys_provider",
+   "reads": "resource_oracle.generated_arn_key_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "GENERATED_KEY_DOMAIN"
+  },
+  "docker_assurance_state.py::_PROVENANCE_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "provenance_fields_provider",
+   "reads": "docker_assurance_state.provenance_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "workflow_assurance.py::_AUTHORIZATION_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "workflow_authorization_fields_provider",
+   "reads": "workflow_assurance.authorization_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "workflow_assurance.py::_IMAGE_MANIFEST_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "image_manifest_fields_provider",
+   "reads": "workflow_assurance.image_manifest_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "workflow_assurance.py::_BUILD_OUTPUT_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "build_output_fields_provider",
+   "reads": "workflow_assurance.build_output_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "workflow_assurance.py::_PRE_PUSH_FIELDS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "pre_push_fields_provider",
+   "reads": "workflow_assurance.pre_push_field_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "MANIFEST_FIELD_DOMAIN"
+  },
+  "startup_policy.py::DISPOSITIONS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "startup_dispositions_provider",
+   "reads": "startup_policy.disposition_vocabulary",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "cache_authority.py::CLASSIFICATIONS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "cache_classifications_provider",
+   "reads": "cache_authority.classification_vocabulary",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "external_executable_trust.py::CLASSIFICATIONS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "external_trust_classifications_provider",
+   "reads": "external_executable_trust.classification_vocabulary",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "leak_scan.py::DECISIONS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "leak_decisions_provider",
+   "reads": "leak_scan.decision_vocabulary",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "leak_scan.py::ALLOWED_ACCOUNTS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "allowed_accounts_provider",
+   "reads": "leak_scan.approved_account_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "EXTERNAL_ACCOUNT_REGISTRY"
+  },
+  "gen_role_bootstrap_policy.py::ALLOWED_TAG_KEYS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "reviewed_tag_keys_provider",
+   "reads": "gen_role_bootstrap_policy.reviewed_tag_key_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "trust_validator.py::ALLOWED_SERVICE_PRINCIPALS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "service_principals_provider",
+   "reads": "trust_validator.service_principal_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "docker_boundary.py::SITE_DECISIONS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "site_decisions_provider",
+   "reads": "docker_boundary.site_decision_vocabulary",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "workflow_graph_validator.py::_ASSURANCE_ROLE_BY_MODE": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "assurance_modes_provider",
+   "reads": "workflow_assurance.lifecycle_mode_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "docker_boundary.py::DOCKER_STEERING_CATEGORIES": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "docker_steering_categories_provider",
+   "reads": "docker_boundary.referenced_steering_category_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "CLOSED_ENUM"
+  },
+  "gen_role_bootstrap_policy.py::READ_BACK_ACTIONS": {
+   "framework_kind": "schema_validation",
+   "resolver": "schema_validation",
+   "relation": "REQUIRED_SUPERSET",
+   "provider": "read_back_actions_provider",
+   "reads": "gen_role_bootstrap_policy.read_after_create_domain",
+   "load_bearing_direction": "missing",
+   "domain_class": "POLICY_ACTION_DOMAIN"
+  }
+ }
+}

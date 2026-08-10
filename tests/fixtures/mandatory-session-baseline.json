@@ -1,0 +1,69 @@
+{
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_purpose": "Pinned baseline of the authored mandatory-node registry and the session guard (Gate 4N-I28Y).",
+ "_trust_limit": [
+  "This pins the registry and the guard so that a REDUCTION is visible as a diff against an",
+  "authored baseline rather than arriving unread. It is not protection against a party who",
+  "rewrites the registry, this baseline and the graded command contract coherently in one",
+  "change \u2014 an authored oracle cannot prove itself. What it does is make each weakening a",
+  "separate, visible, reviewable edit in a different file from the one being weakened.",
+  "",
+  "GATE 4N-I28AB. Identity is no longer a name. The registered plugin must be the exact type this",
+  "module builds, its source must hash to guard_sha256, its spec origin and loader must match, and",
+  "it must carry evidence that its own lifecycle hooks ran. The provenance digest is NOT a secret \u2014",
+  "a party with repository read access can recompute it. What it buys is that substituting the",
+  "guard now requires changing several separately reviewed, separately pinned files rather than",
+  "appending four lines to one conftest."
+ ],
+ "_why_two_loaders": "pytest imports modules under its own assertion-rewriting importer, so the loader class is AssertionRewritingHook inside a pytest session and SourceFileLoader outside one. Both are pytest's or CPython's own importers; the binding that matters is resolved_path plus source_sha256, which are identical either way. Pinning only SourceFileLoader would have made the control fail in the very session it exists to protect.",
+ "approved_loader_classes": [
+  "SourceFileLoader",
+  "AssertionRewritingHook"
+ ],
+ "bootstrap_sha256": "62fe263aa21467c3ad5dc008b0803296f8d5245ad2d988f9e85a116a5328403d",
+ "change_ledger": [
+  "4N-I28Y: created. Closes I28X-01 \u2014 the graded pytest session did not guarantee that the assertion-control tests were collected and executed. Ten nodes: the three layer-1 executors, the four layer-2 controls (meta contract, collection, registry baseline, helper provenance), the reachability dead-branch pin, and the two layer-3 nodes that protect the guard itself.",
+  "4N-I28AB: closes ADV-I28AA-01. Added guard_version, guard_canonical_module, guard_class_qualname and approved_loader_classes so identity is bound to implementation provenance rather than to the plugin name. Mandatory nodes 10 -> 11: the new identity node tests/test_i28ab_guard_identity.py::test_the_registered_guard_is_the_genuine_implementation.",
+  "4N-I28AE: closes ACC-I28AC-01. Adds scripts/signalnest_bootstrap.py and scripts/executed_code_provenance.py, pins tests/fixtures/protected-module-set.json, and raises mandatory nodes to 12 with the executed-code provenance node. Identity is now bound to the code objects that actually executed, not to the file on disk, because I28AC proved a substituted module reports the genuine source digest.",
+  {
+   "gate": "4N-I28AI",
+   "mandatory_node_set_changed": false,
+   "what_changed": "guard_sha256, bootstrap_sha256, executed_code_provenance_sha256 and protected_module_set_sha256 re-pinned",
+   "why": "ADV-I28AH-01 required registry_path() to delegate to the new registry_authority module and load_registry() to parse the bytes the authority hashed; ADV-I28AH-02 required the bootstrap to run and re-verify the external-executable trust layer; the protected set grew by the two new verifiers. The mandatory node set itself is UNCHANGED \u2014 count and ids are identical."
+  },
+  {
+   "gate": "4N-I28AK",
+   "mandatory_node_set_changed": false,
+   "what_changed": "bootstrap_sha256 and protected_module_set_sha256 re-pinned",
+   "why": "ADV-I28AJ-01 required the bootstrap to run the derived-inventory layer at configure and re-run it at session finish, and the protected set grew by executable_inventory. The mandatory node set is UNCHANGED."
+  },
+  {
+   "gate": "4N-I28AM",
+   "mandatory_node_set_changed": false,
+   "what_changed": "protected_module_set_sha256 re-pinned",
+   "why": "ADV-I28AL-03 required reverify and pytest_sessionfinish to become critical callables, and executed_code_provenance was added to the protected set because stubbing its verify defeated that fix one level down. Mandatory node set UNCHANGED."
+  }
+ ],
+ "executed_code_provenance_sha256": "fc8d353fd5c60c9a08c12f6e572d77c978444ebf35f9e5bfff1ea2419ee1d2a5",
+ "guard_canonical_module": "pytest_session_guard",
+ "guard_class_qualname": "MandatorySessionGuard",
+ "guard_sha256": "283cafef6a13a9079df85918b17692d286d9ff3d1b9da14a79fb1430c45fafbe",
+ "guard_version": "4N-I28AB.1",
+ "mandatory_node_count": 12,
+ "mandatory_node_ids": [
+  "tests/test_i28ab_guard_identity.py::test_the_registered_guard_is_the_genuine_implementation",
+  "tests/test_i28ae_executed_provenance.py::test_executed_code_matches_the_authorized_package",
+  "tests/test_i28u_assertion_self_protection.py::test_j07_replacing_the_validators_rejection_with_success_is_visible",
+  "tests/test_i28u_assertion_self_protection.py::test_the_contracted_assertions_are_all_intact",
+  "tests/test_i28u_assertion_self_protection.py::test_the_inventory_cannot_lose_an_entry_unnoticed",
+  "tests/test_i28w_assertion_reachability.py::test_every_mandatory_test_is_collected",
+  "tests/test_i28w_assertion_reachability.py::test_f_the_exact_i28v_dead_branch_mutation_is_caught",
+  "tests/test_i28w_assertion_reachability.py::test_k05_every_registered_helper_declares_its_implementation_provenance",
+  "tests/test_i28w_assertion_reachability.py::test_the_authored_registry_matches_its_pinned_baseline",
+  "tests/test_i28w_assertion_reachability.py::test_the_meta_contract_holds",
+  "tests/test_i28y_mandatory_session.py::test_the_mandatory_registry_matches_its_pinned_baseline",
+  "tests/test_i28y_mandatory_session.py::test_the_session_guard_is_active_in_this_session"
+ ],
+ "protected_module_set_sha256": "37b21b89405c7cbd62fa5414a1c1263a1fb86a89550bda17394cca61977d8f0c",
+ "registry_sha256": "0f25e961f88d86d48abf9a48ca14d0f3654342525c249430d9d6e221b18df8f7"
+}

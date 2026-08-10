@@ -1,0 +1,1652 @@
+{
+ "_authority": "AUTHORED. Every graded Docker call site carries an explicit trust boundary, and every relevant steering mechanism carries an explicit disposition. An unclassified site or mechanism fails closed.",
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_model_choice": "Forced by MEASUREMENT, not preference. This host has no docker CLI, no ~/.docker, no daemon socket, no context store and no Docker Desktop, and the gate forbids installing Docker. Model A requires binding a daemon-reported identity, server version, security options and architecture \u2014 none obtainable here, and claiming them would be inventing evidence. Model B claims strictly less and enforces what it claims.",
+ "_purpose": "Close Gate 4N-I28AP finding ADV-I28AP-01: Docker CLI identity was bound while daemon, context, environment, configuration, transport, plugin and credential state were entirely unadjudicated.",
+ "_what_is_not_claimed": [
+  "the Docker daemon's identity or integrity",
+  "the Docker context's remote endpoint",
+  "TLS trust material",
+  "registry identity",
+  "BuildKit worker identity",
+  "SSH transport endpoints",
+  "credential-helper behaviour",
+  "plugin behaviour",
+  "that binding the CLI binary binds any of the above"
+ ],
+ "call_sites": [
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#container-build#6#1",
+   "job": "container-build",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "API image imports cleanly",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#container-build#7#1",
+   "job": "container-build",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "Migration actor + schema-compat check run in the image",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#container-build#8#1",
+   "job": "container-build",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "Worker refuses an un-migrated database (schema gate)",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#container-build#9#1",
+   "job": "container-build",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "Bare migration actor command + revision tools (exact ECS shape, fail-closed)",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#4",
+   "job": "revision-reader",
+   "line_in_block": 4,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#9",
+   "job": "revision-reader",
+   "line_in_block": 9,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#17",
+   "job": "revision-reader",
+   "line_in_block": 17,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#24",
+   "job": "revision-reader",
+   "line_in_block": 24,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#26",
+   "job": "revision-reader",
+   "line_in_block": 26,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#28",
+   "job": "revision-reader",
+   "line_in_block": 28,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#38",
+   "job": "revision-reader",
+   "line_in_block": 38,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#54",
+   "job": "revision-reader",
+   "line_in_block": 54,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#85",
+   "job": "revision-reader",
+   "line_in_block": 85,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#94",
+   "job": "revision-reader",
+   "line_in_block": 94,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "ci.yml#revision-reader#54#101",
+   "job": "revision-reader",
+   "line_in_block": 101,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/ci.yml",
+   "step_name": "In-image verification band",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "ci.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#10#2",
+   "job": "build-publish-reader",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The image runs at all, and psycopg imports",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#11#3",
+   "job": "build-publish-reader",
+   "line_in_block": 3,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The image CANNOT migrate \u2014 Alembic and the application are absent",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#12#3",
+   "job": "build-publish-reader",
+   "line_in_block": 3,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The image carries no shell",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#13#2",
+   "job": "build-publish-reader",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The entrypoint is the exact fixed exec form, with empty CMD and non-root user",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#13#3",
+   "job": "build-publish-reader",
+   "line_in_block": 3,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The entrypoint is the exact fixed exec form, with empty CMD and non-root user",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#13#4",
+   "job": "build-publish-reader",
+   "line_in_block": 4,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The entrypoint is the exact fixed exec form, with empty CMD and non-root user",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#14#4",
+   "job": "build-publish-reader",
+   "line_in_block": 4,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "An override command becomes argv and is REJECTED (exit 50)",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#15#5",
+   "job": "build-publish-reader",
+   "line_in_block": 5,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Destination is baked \u2014 any host but the baked one fails closed, nothing discloses",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#16#2",
+   "job": "build-publish-reader",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Baked pins and the CA bundle are present and consistent with the build args",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#17#2",
+   "job": "build-publish-reader",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "The baked CA bundle is byte-identical to the reviewed, pinned asset",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#18#2",
+   "job": "build-publish-reader",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Log the exact interpreter patch version (drift visible, not asserted)",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#19#2",
+   "job": "build-publish-reader",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Verify the OCI revision label matches the trusted checkout",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#19#7",
+   "job": "build-publish-reader",
+   "line_in_block": 7,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Verify the OCI revision label matches the trusted checkout",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#26#4",
+   "job": "build-publish-reader",
+   "line_in_block": 4,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Push by immutable commit tag and read the registry digest back",
+   "subcommand": "tag",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "operates on the CI daemon's local image store and pushes to the registry the runner is authenticated to. Registry identity is NOT claimed by this gate.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#26#5",
+   "job": "build-publish-reader",
+   "line_in_block": 5,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Push by immutable commit tag and read the registry digest back",
+   "subcommand": "push",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "operates on the CI daemon's local image store and pushes to the registry the runner is authenticated to. Registry identity is NOT claimed by this gate.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "reader-publish.yml#build-publish-reader#26#16",
+   "job": "build-publish-reader",
+   "line_in_block": 16,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/reader-publish.yml",
+   "step_name": "Push by immutable commit tag and read the registry digest back",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "reader-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#12#3",
+   "job": "build-publish",
+   "line_in_block": 3,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify bootstrap module inside the worker image (fail-closed)",
+   "subcommand": "create",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#12#5",
+   "job": "build-publish",
+   "line_in_block": 5,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify bootstrap module inside the worker image (fail-closed)",
+   "subcommand": "rm",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#12#9",
+   "job": "build-publish",
+   "line_in_block": 9,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify bootstrap module inside the worker image (fail-closed)",
+   "subcommand": "cp",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#12#77",
+   "job": "build-publish",
+   "line_in_block": 77,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify bootstrap module inside the worker image (fail-closed)",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#13#3",
+   "job": "build-publish",
+   "line_in_block": 3,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify hardened migration entrypoint inside the worker image (fail-closed)",
+   "subcommand": "create",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#13#5",
+   "job": "build-publish",
+   "line_in_block": 5,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify hardened migration entrypoint inside the worker image (fail-closed)",
+   "subcommand": "rm",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#13#12",
+   "job": "build-publish",
+   "line_in_block": 12,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify hardened migration entrypoint inside the worker image (fail-closed)",
+   "subcommand": "cp",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#13#222",
+   "job": "build-publish",
+   "line_in_block": 222,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify hardened migration entrypoint inside the worker image (fail-closed)",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#16#1",
+   "job": "build-publish",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "API image imports cleanly",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#17#1",
+   "job": "build-publish",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Migration actor + schema gate run in the worker image",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#18#1",
+   "job": "build-publish",
+   "line_in_block": 1,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Bare migration actor command (exact ECS shape) in the worker image",
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#19#2",
+   "job": "build-publish",
+   "line_in_block": 2,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify OCI revision labels match the trusted checkout",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#19#7",
+   "job": "build-publish",
+   "line_in_block": 7,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Verify OCI revision labels match the trusted checkout",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#28#5",
+   "job": "build-publish",
+   "line_in_block": 5,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Push both images by immutable commit tag and read back digests",
+   "subcommand": "tag",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "operates on the CI daemon's local image store and pushes to the registry the runner is authenticated to. Registry identity is NOT claimed by this gate.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#28#6",
+   "job": "build-publish",
+   "line_in_block": 6,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Push both images by immutable commit tag and read back digests",
+   "subcommand": "push",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "operates on the CI daemon's local image store and pushes to the registry the runner is authenticated to. Registry identity is NOT claimed by this gate.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "staging-publish.yml#build-publish#28#18",
+   "job": "build-publish",
+   "line_in_block": 18,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash --noprofile --norc -euo pipefail {0}",
+   "source": ".github/workflows/staging-publish.yml",
+   "step_name": "Push both images by immutable commit tag and read back digests",
+   "subcommand": "inspect",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "runs against the daemon the CI runner provisions; the repository neither selects nor identifies that daemon, and every mechanism by which it could is refused.",
+   "workflow": "staging-publish.yml"
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "docker-security-check.sh#12",
+   "job": null,
+   "line_in_block": 12,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash",
+   "source": "scripts/docker-security-check.sh",
+   "step_name": null,
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "invoked by ci.yml's security-check steps inside the CI job, where the daemon is the runner's. The script has no independent daemon of its own, and a developer running it locally is outside the graded path entirely.",
+   "workflow": null
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "docker-security-check.sh#25",
+   "job": null,
+   "line_in_block": 25,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash",
+   "source": "scripts/docker-security-check.sh",
+   "step_name": null,
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "invoked by ci.yml's security-check steps inside the CI job, where the daemon is the runner's. The script has no independent daemon of its own, and a developer running it locally is outside the graded path entirely.",
+   "workflow": null
+  },
+  {
+   "authoritative_inputs": [
+    "the CI-provisioned daemon",
+    "the image built in this job"
+   ],
+   "continue_on_error": false,
+   "failure_behaviour": "refuse before the call runs; the graded run is invalidated",
+   "id": "docker-security-check.sh#37",
+   "job": null,
+   "line_in_block": 37,
+   "permitted_steering": [],
+   "prohibited_steering": [
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "TLS variables",
+    "steering flags",
+    "a defined Docker context"
+   ],
+   "required_verification": "the external-CI assumption holds and no steering is present",
+   "session_finish_obligation": "steering, config, context, PATH and binary re-compared",
+   "shell": "bash",
+   "source": "scripts/docker-security-check.sh",
+   "step_name": null,
+   "subcommand": "run",
+   "trust_boundary": "EXTERNAL_CI_DAEMON_ASSUMPTION",
+   "why": "invoked by ci.yml's security-check steps inside the CI job, where the daemon is the runner's. The script has no independent daemon of its own, and a developer running it locally is outside the graded path entirely.",
+   "workflow": null
+  }
+ ],
+ "ci_assumption": {
+  "daemon_provisioned_by": "GitHub-hosted Actions runner (ubuntu-latest), with docker preinstalled",
+  "docker_output_is_not_proof": "docker-security-check.sh reads its verdict from `docker run` output. Under this assumption that verdict is evidence about the image AS BUILT BY THE ASSUMED DAEMON, and is explicitly not independent cryptographic proof of anything about this repository.",
+  "expected_marker_values": {
+   "GITHUB_ACTIONS": "true"
+  },
+  "failure_behaviour": "If the assumption does not hold \u2014 a forged or partial CI marker, a steering variable set, a context defined, a config field that redirects \u2014 the graded run is INVALIDATED before any Docker output is consumed.",
+  "marker_env": [
+   "GITHUB_ACTIONS",
+   "GITHUB_RUN_ID",
+   "GITHUB_WORKFLOW"
+  ],
+  "not_claimed": [
+   "daemon integrity",
+   "daemon identity",
+   "image-registry identity",
+   "that Docker output is independent cryptographic proof about this repository"
+  ],
+  "runner": "ubuntu-latest",
+  "statement": "The Docker daemon used by every graded Docker call site is provisioned by the GitHub-hosted Actions runner. Its integrity is OUTSIDE repository verification and is assumed. This repository verifies only that no repository-controlled mechanism redirects Docker away from that daemon.",
+  "version": "2026-08-05.1",
+  "workflows": [
+   "ci.yml",
+   "reader-publish.yml",
+   "staging-publish.yml"
+  ]
+ },
+ "config_fields": {
+  "HttpHeaders": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "extra headers on API calls to the ALREADY-selected daemon; it cannot change which daemon that is"
+  },
+  "aliases": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "CLI subcommand aliases; they expand to docker subcommands whose argv this gate scans for steering flags"
+  },
+  "auths": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "embedded registry credentials change which registry a push or pull authenticates to"
+  },
+  "cliPluginsExtraDirs": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it adds directories from which the CLI loads plugin executables"
+  },
+  "credHelpers": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "per-registry helper binaries, executed by the CLI, with the same injection surface"
+  },
+  "credsStore": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it names an external helper binary the CLI executes to obtain registry credentials"
+  },
+  "currentContext": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it selects a context, and therefore a daemon endpoint, without any environment variable being set"
+  },
+  "detachKeys": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "a key sequence for detaching from an interactive container; it cannot select a daemon, a registry or a helper"
+  },
+  "experimental": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it enables command behaviour outside the adjudicated set"
+  },
+  "features": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "CLI feature toggles that do not select an endpoint, helper or registry"
+  },
+  "imagesFormat": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "output formatting for `docker images`; presentation only"
+  },
+  "nodesFormat": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "output formatting; presentation only"
+  },
+  "plugins": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "plugin configuration can alter subcommand behaviour"
+  },
+  "proxies": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it injects proxy environment into every container the CLI starts"
+  },
+  "psFormat": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "output formatting for `docker ps`; presentation only"
+  },
+  "servicesFormat": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "output formatting; presentation only"
+  },
+  "stackOrchestrator": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "retired swarm/kubernetes stack selector; no declared call site uses `docker stack`"
+  },
+  "statsFormat": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "output formatting for `docker stats`; presentation only"
+  }
+ },
+ "config_symlink_prohibited": true,
+ "flag_expanding_variables": [
+  "DOCKER_OPTS",
+  "DOCKER_ARGS",
+  "EXTRA_DOCKER_FLAGS"
+ ],
+ "model": "MODEL_B_EXTERNAL_CI_ASSUMPTION",
+ "prohibit_local_docker_execution": true,
+ "steering": {
+  "BUILDKIT_HOST": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it moves the BuildKit worker that actually performs builds to an attacker-chosen endpoint"
+  },
+  "COMPOSE_DOCKER_CLI_BUILD": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it changes which client performs compose builds"
+  },
+  "DOCKER_API_VERSION": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "pinning an old API version can change command semantics and silently disable newer safety behaviour"
+  },
+  "DOCKER_BUILDKIT": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it switches the builder implementation, changing which component interprets the Dockerfile"
+  },
+  "DOCKER_CERT_PATH": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it supplies the client certificates used to reach a TLS daemon"
+  },
+  "DOCKER_CONFIG": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it relocates the config directory, and with it currentContext, credential helpers and plugin directories"
+  },
+  "DOCKER_CONTENT_TRUST": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it changes whether image signatures are enforced, altering what a pull or push accepts"
+  },
+  "DOCKER_CONTENT_TRUST_SERVER": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it redirects the notary server that content trust consults"
+  },
+  "DOCKER_CONTEXT": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it selects a named context, which carries its own daemon endpoint and TLS material"
+  },
+  "DOCKER_DEFAULT_PLATFORM": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it changes the image platform actually built and run, so the artifact verified is not the artifact shipped"
+  },
+  "DOCKER_HOST": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it selects the daemon endpoint outright \u2014 the single most direct redirection"
+  },
+  "DOCKER_TLS": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "it changes transport security for the daemon connection"
+  },
+  "DOCKER_TLS_VERIFY": {
+   "disposition": "FATAL_IF_PRESENT",
+   "why": "setting it to 0 disables verification of the daemon this gate does not otherwise identify"
+  },
+  "HTTPS_PROXY": {
+   "disposition": "EXTERNAL_INFRASTRUCTURE_ASSUMPTION",
+   "why": "as above"
+  },
+  "HTTP_PROXY": {
+   "disposition": "EXTERNAL_INFRASTRUCTURE_ASSUMPTION",
+   "why": "runner egress configuration is part of the assumed CI environment; it cannot select a different daemon"
+  },
+  "NO_PROXY": {
+   "disposition": "EXTERNAL_INFRASTRUCTURE_ASSUMPTION",
+   "why": "as above"
+  },
+  "SSH_AUTH_SOCK": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "no declared call site uses an ssh:// context; with DOCKER_HOST and DOCKER_CONTEXT both FATAL_IF_PRESENT there is no path by which an SSH transport is selected"
+  },
+  "XDG_CONFIG_HOME": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALLS",
+   "why": "the docker CLI resolves its config from DOCKER_CONFIG or ~/.docker, not XDG paths"
+  }
+ }
+}

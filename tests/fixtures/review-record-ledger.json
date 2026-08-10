@@ -1,0 +1,19 @@
+{
+ "_classification": "SECURITY_CRITICAL \u2014 review-record ledger; ROOT OF TRUST (small, human-reviewable end-to-end)",
+ "_note": "A digest pin is honoured only while it cites an ACTIVE record here. Superseding a record instantly REDs every pin that cited it until re-reviewed.",
+ "_root_of_trust": "This ledger is the smallest independently-reviewable surface. It pins the canonical digests of the two authored maps (assurance registry + review-pin registry) that decide what is governed and against what baseline; changing either without re-reviewing this file fails closed. Reviewed end-to-end on every change.",
+ "governed_files": {
+  "critical-list-contract.json": "sha256:1770228b833c848dca33f6011944d59a9b19312a996f542523cd3e5028577e0e",
+  "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
+  "review-pin-registry.json": "sha256:2503f7889d94e9ad393cddc035bb9b5227572ab2930431130a4c78fd0cff2d37",
+  "security-assurance-registry.json": "sha256:8a7bdd7f562712bf9d2fcb6dc920ece61ce173555200e55907d31f992328b46c"
+ },
+ "review_records": {
+  "REV-2026-08-10-BH-B-ARCH-BASELINE": {
+   "approver": "gate-4N-I28BH-B-ARCHITECTURAL-ADJUDICATION",
+   "established": "2026-08-10",
+   "scope": "BH-B-ARCHITECTURAL-ADJUDICATION baseline: authored SOURCE-OF-TRUTH vocabularies (class C) + review-pin fallbacks, approved as the reviewed baseline under the gate authorization 2026-08-10T06:00:00Z.",
+   "status": "ACTIVE"
+  }
+ }
+}

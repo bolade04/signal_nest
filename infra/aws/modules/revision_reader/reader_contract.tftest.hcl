@@ -60,6 +60,8 @@ override_resource {
 # between them.
 variables {
   publication_bootstrap_enabled = true
+  role_boundary_mode            = "required"
+  role_permissions_boundary_arn = "arn:aws:iam::111122223333:policy/signalnest-staging-role-boundary"
   runtime_enabled               = true
   name_prefix                   = "signalnest-staging"
   aws_region                    = "us-east-1"
@@ -460,6 +462,8 @@ run "bootstrap_only_creates_publication_stage_without_db_secret_grant" {
 
   variables {
     publication_bootstrap_enabled = true
+    role_boundary_mode            = "required"
+    role_permissions_boundary_arn = "arn:aws:iam::111122223333:policy/signalnest-staging-role-boundary"
     runtime_enabled               = false
     revision_reader_image_digest  = null
   }
@@ -527,6 +531,8 @@ run "runtime_without_digest_is_rejected" {
 
   variables {
     publication_bootstrap_enabled = true
+    role_boundary_mode            = "required"
+    role_permissions_boundary_arn = "arn:aws:iam::111122223333:policy/signalnest-staging-role-boundary"
     runtime_enabled               = true
     revision_reader_image_digest  = null
   }
@@ -573,5 +579,83 @@ run "disabled_creates_nothing" {
   assert {
     condition     = output.publication_bootstrap_enabled == false && output.runtime_enabled == false
     error_message = "both enablement outputs must be false when disabled"
+  }
+}
+
+# --- Gate 4N-I5: Stage-A preconditions must fail at PLAN time, before creation --------
+#
+# The Stage-A graph creates the ECR repository and its lifecycle policy BEFORE the
+# publisher role. If the boundary ARN is absent, the bootstrap operator's
+# boundary-conditioned iam:CreateRole grant cannot match and the apply fails AFTER both
+# ECR resources exist. These runs prove the configuration is rejected during validation
+# instead, so nothing is created.
+
+run "stage_a_without_a_boundary_arn_is_rejected_before_any_resource" {
+  command = plan
+
+  variables {
+    publication_bootstrap_enabled = true
+    github_oidc_provider_arn      = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+    github_repository             = "example/repo"
+    role_boundary_mode            = "disabled"
+    role_permissions_boundary_arn = null
+  }
+
+  expect_failures = [var.publication_bootstrap_enabled]
+}
+
+# NOTE: a companion run asserting that publication without an OIDC provider is rejected
+# was REMOVED along with its validation. The module deliberately supports that
+# configuration (skipping only the federated roles), so rejecting it would have broken a
+# supported path — see oidc_absent_skips_only_the_federated_roles above.
+
+run "stage_a_with_both_prerequisites_reaches_the_intended_four_addresses" {
+  command = plan
+
+  variables {
+    publication_bootstrap_enabled = true
+    # The file-level variables block enables runtime; Stage A is publication ONLY, so
+    # this run must turn it off explicitly or it would be asserting against Stage B.
+    runtime_enabled               = false
+    github_oidc_provider_arn      = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+    github_repository             = "example/repo"
+    role_boundary_mode            = "required"
+    role_permissions_boundary_arn = "arn:aws:iam::111122223333:policy/signalnest-staging-role-boundary"
+  }
+
+  assert {
+    condition     = length(aws_ecr_repository.reader) == 1 && length(aws_ecr_lifecycle_policy.reader) == 1
+    error_message = "Stage A must create the reader ECR repository and its lifecycle policy."
+  }
+
+  assert {
+    condition     = length(aws_iam_role.reader_publisher) == 1 && length(aws_iam_role_policy.reader_publisher) == 1
+    error_message = "Stage A must create the publisher role and its inline policy."
+  }
+
+  assert {
+    condition     = aws_iam_role.reader_publisher[0].permissions_boundary == var.role_permissions_boundary_arn
+    error_message = "the publisher role must carry the supplied permissions boundary."
+  }
+
+  assert {
+    condition     = length(aws_iam_role.reader_execution) == 0 && length(aws_iam_role.reader_runner) == 0
+    error_message = "Stage A must not create the Stage-B runtime roles."
+  }
+}
+
+run "dark_default_creates_nothing_and_needs_no_boundary" {
+  command = plan
+
+  variables {
+    publication_bootstrap_enabled = false
+    runtime_enabled               = false
+    role_boundary_mode            = "disabled"
+    role_permissions_boundary_arn = null
+  }
+
+  assert {
+    condition     = length(aws_ecr_repository.reader) == 0 && length(aws_iam_role.reader_publisher) == 0
+    error_message = "the dark default must create nothing, and must not require a boundary ARN."
   }
 }

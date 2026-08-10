@@ -59,3 +59,21 @@ phase        = "4B-C"
 # sns_topic_arn             = null                          # or "arn:aws:sns:<region>:<account>:<topic>"
 # monthly_budget_limit      = <1-200>                       # USD; ADR-0001 §M hard ceiling
 # budget_notification_email = "<ops-alias@example.com>"
+
+# --- IAM role permissions boundary (Gate 4N-I8) --------------------------------------
+#
+# DURABILITY. `permissions_boundary` is a MANAGED attribute on all eight roles. If the
+# boundary is attached out-of-band and a later execution supplies null, OpenTofu plans
+# REMOVAL and the next apply strips it from every deployed role. That is the Gate 4N-I7
+# durability defect, so the mode is now explicit and "disabled" must be chosen deliberately.
+#
+# disabled : no boundary is attached. This is the currently deployed state.
+# enforced : role_permissions_boundary_arn is REQUIRED and must name the reviewed policy
+#            signalnest-staging-role-boundary, or the plan fails before any mutation.
+#
+# Switch to "enforced" only after an authorized gate has created the boundary policy in AWS.
+# REQUIRED. There is no default — omitting this fails before planning, because a boundary
+# that vanishes through omission is not a boundary (Gate 4N-I14 Defect 3).
+role_boundary_mode = "disabled"
+# role_boundary_mode            = "required"
+# role_permissions_boundary_arn = "arn:aws:iam::<account>:policy/signalnest-staging-role-boundary"

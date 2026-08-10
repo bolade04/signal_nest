@@ -1,0 +1,109 @@
+{
+ "_authority": "AUTHORED. Silence is not permission: startup_policy.check() refuses any observed mechanism this file does not classify.",
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_dispositions": [
+  "REQUIRED_AND_BOUND",
+  "ALLOWED_AND_BOUND",
+  "PROHIBITED",
+  "NOT_APPLICABLE"
+ ],
+ "_purpose": "Classify every startup mechanism that can influence the graded assurance run, and bind the content of every one that is allowed.",
+ "_why_this_file_exists": "Gate 4N-I28AF finding ADV-I28AF-02: the startup surface was recorded as evidence and never adjudicated, so a staged sitecustomize.py was accepted while every executed module stayed byte-identical.",
+ "mechanisms": {
+  "BASH_ENV": {
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse if set",
+   "why_prohibited": "sourced by non-interactive bash, so it executes inside the CI wrapper scripts that reach the graded command"
+  },
+  "ENV": {
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse if set",
+   "why_prohibited": "the POSIX-shell equivalent of BASH_ENV"
+  },
+  "PATH": {
+   "allow_system_executables": true,
+   "disposition": "ALLOWED_AND_BOUND",
+   "failure_behavior": "refuse if a required executable is unresolvable",
+   "required_executables": [
+    "git",
+    "bash"
+   ],
+   "why_allowed": "the assurance chain shells out to git and bash; both are system executables by design"
+  },
+  "PYTEST_ADDOPTS": {
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse if set",
+   "why_prohibited": "injects arbitrary pytest flags into the graded command without editing it; Gate 4N-I28AF used exactly this to drop four assurance modules from collection"
+  },
+  "PYTEST_PLUGINS": {
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse if set",
+   "why_prohibited": "loads plugins the pinned command never names"
+  },
+  "PYTHONHOME": {
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse if set",
+   "why_prohibited": "relocates the standard library, which would change which code every import resolves to"
+  },
+  "PYTHONPATH": {
+   "allowed_relative_entries": [
+    "scripts"
+   ],
+   "disposition": "REQUIRED_AND_BOUND",
+   "failure_behavior": "refuse any entry outside the repository trust root, and any repository entry other than scripts/",
+   "multiplicity": 1,
+   "why_allowed": "the graded command sets PYTHONPATH=<workspace>/scripts so the protected modules are importable as -p plugins; this is the pinned invocation, not an injection"
+  },
+  "PYTHONSTARTUP": {
+   "disposition": "NOT_APPLICABLE",
+   "failure_behavior": "refuse if set",
+   "proof_test": "tests/test_i28ag_executed_state_and_startup.py::test_pythonstartup_provably_does_not_execute_for_the_graded_invocation",
+   "why_not_applicable": "CPython reads PYTHONSTARTUP only in interactive mode. Measured: with PYTHONSTARTUP pointing at a file that raises SystemExit, `python -m pytest --version` and `python -c` both run normally and the file does not execute, while `python -i` does read it. The graded command is non-interactive, so this variable cannot influence it \u2014 and refusing it would break every operator shell that legitimately sets one for the REPL."
+  },
+  "conftest": {
+   "disposition": "ALLOWED_AND_BOUND",
+   "failure_behavior": "refuse an unpinned conftest, a missing pinned conftest, or changed content",
+   "files": {
+    "tests/conftest.py": "951c4005c4c395f0e907e561612ca0572289993f447f3c1cd9ee666e8deb6a3d"
+   },
+   "multiplicity": 1,
+   "scope": "the collection roots the graded `pytest tests/` invocation actually reaches: the repository root and tests/. Vendored conftests inside .venv/node_modules are excluded because that run never loads them.",
+   "why_allowed": "pytest requires conftest for fixture and collection wiring; a conftest executes during collection and can remove tests, so every one is pinned by content"
+  },
+  "import_hooks_meta_path": {
+   "disposition": "NOT_APPLICABLE",
+   "proof_test": "tests/test_i28ag_executed_state_and_startup.py::test_meta_path_variant_is_still_displaced_by_pytest",
+   "why_not_applicable": "Gate 4N-I28AC measured that pytest inserts its AssertionRewritingHook at meta_path[0] AFTER sitecustomize runs, displacing an attacker finder; the substitution that does work is sys.modules pre-seeding, which executed-code and executed-state provenance bind directly. Recorded so a future change to that measurement is a visible policy decision."
+  },
+  "interpreter_site_flags": {
+   "disposition": "NOT_APPLICABLE",
+   "proof_test": "tests/test_i28ag_executed_state_and_startup.py::test_site_flags_can_only_remove_startup_mechanisms",
+   "why_not_applicable": "-S/-I would DISABLE site loading, which can only remove startup mechanisms, never add one; the prohibited-mechanism checks above already refuse anything site loading could introduce."
+  },
+  "pth_files": {
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse the session",
+   "multiplicity": 0,
+   "why_prohibited": "a .pth line beginning with import executes at site initialisation, earlier than any assurance code can observe"
+  },
+  "pytest_plugins": {
+   "disposition": "ALLOWED_AND_BOUND",
+   "failure_behavior": "refuse a plugin module loaded from outside the repository or the interpreter installation",
+   "why_allowed": "the graded command names -p signalnest_bootstrap and -p pytest_session_guard, and pytest loads its own machinery; all must resolve inside the trust root"
+  },
+  "sitecustomize": {
+   "canonical_location": null,
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse the session",
+   "multiplicity": 0,
+   "why_prohibited": "the exact ACC-I28AC-01 vector: auto-imported at interpreter startup from the graded command's own PYTHONPATH, before pytest exists, and able to pre-seed sys.modules"
+  },
+  "usercustomize": {
+   "canonical_location": null,
+   "disposition": "PROHIBITED",
+   "failure_behavior": "refuse the session",
+   "multiplicity": 0,
+   "why_prohibited": "same mechanism as sitecustomize, sourced from user-site instead of PYTHONPATH"
+  }
+ }
+}

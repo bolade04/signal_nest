@@ -1,0 +1,98 @@
+{
+  "_purpose": "Independently AUTHORED widening ceiling (Gate 4N-I17, Defect 7, Phase U).",
+  "_why_this_file_exists": [
+    "Gate 4N-I16's containment test iterated gen.INLINE_POLICY_ROLE_ARNS as its definition of",
+    "'the declared roles' \u2014 the policy's own Resource list. Allow, deny-fence and test",
+    "expectation therefore moved together, and appending an arbitrary attacker ARN to that list",
+    "left the whole suite and nine guard scripts green. A ceiling derived from the grant it is",
+    "measuring is not a ceiling."
+  ],
+  "_authority": [
+    "Authored from the architecture requirement that a role is writable ONLY IF the composition",
+    "intends it to carry an inline policy. NOT parsed from the .tf files and NOT read from any",
+    "generated policy \u2014 those are the OBSERVED side. Changing this file is a reviewable diff.",
+    "The .tf parser in scripts/terraform_role_inventory.py is a THIRD, separate cross-check:",
+    "declared (parsed) vs expected (this file) vs generated (policy) must all agree."
+  ],
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "role_name_suffixes_writable": [
+    {
+      "suffix": "ecs-execution",
+      "why": "carries the shared execution inline policy: ECR pull, log delivery, referenced-secret retrieval"
+    },
+    {
+      "suffix": "api-task",
+      "why": "carries the app S3 workload policy"
+    },
+    {
+      "suffix": "worker-task",
+      "why": "carries the app S3 workload policy"
+    },
+    {
+      "suffix": "ci-publisher",
+      "why": "carries the CI publish policy for the api/worker repositories"
+    },
+    {
+      "suffix": "revision-reader-execution",
+      "why": "carries the reader execution policy"
+    },
+    {
+      "suffix": "revision-reader-publisher",
+      "why": "carries the reader publish policy"
+    },
+    {
+      "suffix": "revision-reader-runner",
+      "why": "carries the reader runner policy"
+    }
+  ],
+  "role_name_suffixes_never_writable": [
+    {
+      "suffix": "migration-task",
+      "why": "deliberately empty. The module states: 'The migration role is deliberately absent (empty role, no policy)' and 'migration code calls no AWS API.' Gate 4N-I16 made it writable by scoping from ALL_ROLE_NAMES.",
+      "forbidden_actions": [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:PassRole"
+      ]
+    }
+  ],
+  "forbidden_resource_classes": [
+    {
+      "class": "wildcard role",
+      "why": "a write grant names its targets"
+    },
+    {
+      "class": "reserved SSO role",
+      "why": "AWSReservedSSO_* roles are Identity Center managed"
+    },
+    {
+      "class": "cross-account role",
+      "why": "any role ARN outside the approved account"
+    },
+    {
+      "class": "non-role resource",
+      "why": "KMS keys, buckets, secrets are not inline-policy targets"
+    }
+  ],
+  "_i24c_identity_requirement": [
+    "GATE 4N-I24C, finding I24C-04. Suffix rules pin how identities are SPELLED, not WHICH",
+    "identities may be written. Two executed exploits followed: a role named",
+    "'<prefix>-evil-api-task' satisfied endswith('api-task') and entered BOTH sides as",
+    "CORRECTLY_WRITABLE clean; and a role the .tf parser MISSED vanished from both sides with",
+    "zero problems (FAIL-OPEN), because unknown_roles iterated the parsed set. These EXACT names",
+    "are the requirement. A name not listed here is UNKNOWN and UNKNOWN is a finding."
+  ],
+  "writable_role_names": [
+    "signalnest-staging-ecs-execution",
+    "signalnest-staging-api-task",
+    "signalnest-staging-worker-task",
+    "signalnest-staging-ci-publisher",
+    "signalnest-staging-revision-reader-execution",
+    "signalnest-staging-revision-reader-publisher",
+    "signalnest-staging-revision-reader-runner"
+  ],
+  "never_writable_role_names": [
+    "signalnest-staging-migration-task"
+  ]
+}

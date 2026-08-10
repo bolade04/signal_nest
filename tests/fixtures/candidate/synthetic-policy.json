@@ -1,0 +1,13 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SyntheticAllow",
+      "Effect": "Allow",
+      "Action": ["iam:GetRole"],
+      "Resource": "arn:aws:iam::111122223333:role/synthetic-fixture-role",
+      "Condition": {"DateLessThan": {"aws:CurrentTime": "2099-01-01T00:00:00Z"}}
+    }
+  ]
+}

@@ -1,0 +1,305 @@
+{
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_critical_callables_rule": "authored, not derived: each entry names the callables whose ABSENCE or alteration disables the control. Comparing only the intersection of disk and runtime code objects would miss a monkey-patch, because a replaced method is absent from the runtime map rather than different from it.",
+ "_membership_rule": "a module belongs here when substituting it can neutralise an assurance control without failing anything else",
+ "_purpose": "The authored set of Gate 4N validation modules whose EXECUTED code must be provenance-bound (Gate 4N-I28AE, closing ACC-I28AC-01).",
+ "_trust_boundary": [
+  "Executed-code identity is compared against a plain compile of the pinned bytes. Substituted",
+  "code that behaves differently has different bytecode and is caught; substituted code that is",
+  "byte-identical cannot behave differently.",
+  "",
+  "HONEST LIMIT. This does not defend against a party able to rewrite every independently pinned",
+  "source at once, nor against code that patches a live function object AFTER verification \u2014",
+  "which is why verification re-runs at session finish. Both limits are stated rather than closed."
+ ],
+ "_why_this_file_exists": [
+  "Gate 4N-I28AC proved that a sitecustomize.py staged into the repository's own scripts/",
+  "directory is auto-imported at interpreter startup by the graded command's own PYTHONPATH, and",
+  "that pre-seeding sys.modules there makes the guard and every verifier resolve the same",
+  "substituted module while inspect.getsource, the provenance hash and package coherence all",
+  "report the legitimate staged file. Measured: 2906 passed / 0 failed with four assurance-control",
+  "modules absent.",
+  "",
+  "Membership is bounded on purpose. These are the modules whose substitution silently disables",
+  "assurance. Protecting the whole repository would make the control expensive and its failures",
+  "uninformative; protecting nothing is the status quo this gate exists to end."
+ ],
+ "protected_modules": [
+  {
+   "critical_callables": [
+    "validate",
+    "validate_meta",
+    "assertion_reachability"
+   ],
+   "module": "assertion_contracts",
+   "proving_substitution": "replace validate() so problems is always empty; the dead-branch and assert-True pins stop failing",
+   "relative_path": "scripts/assertion_contracts.py",
+   "required_resident": false,
+   "why_protected": "the assertion semantic and reachability validator; substituting it lets trivialised or unreachable assertions satisfy their contracts"
+  },
+  {
+   "critical_callables": [
+    "verify",
+    "fresh_taxonomy",
+    "cached_taxonomy",
+    "deep_freeze",
+    "load_policy",
+    "discover_caches",
+    "_suspend_caches",
+    "assert_pinned",
+    "canonical",
+    "source_identity"
+   ],
+   "module": "cache_authority",
+   "proving_substitution": "replace fresh_taxonomy() so it returns cached_taxonomy() instead of deriving with the caches suspended: every comparison then succeeds by construction and a poisoned cache is verified against itself, which is exactly the tautology this layer exists to avoid. Or replace deep_freeze() with an identity function: the cached values become mutable again and ADV-I28AP-03's nested in-place mutation works once more, with verify() still clean at the moment it runs.",
+   "relative_path": "scripts/cache_authority.py",
+   "why_protected": "Gate 4N-I28AP finding ADV-I28AP-03. This module is the only layer that binds a value the process DERIVED rather than code or state it read from disk. Unprotected, it can be replaced as easily as the cache it guards."
+  },
+  {
+   "module": "docker_assurance_state",
+   "relative_path": "scripts/docker_assurance_state.py",
+   "required_resident": false,
+   "critical_callables": [
+    "fresh_state",
+    "authoritative_state",
+    "validate_state",
+    "state_digest",
+    "cache_key",
+    "cache_key_digest",
+    "validate_cache_key",
+    "validate_cache_value",
+    "store",
+    "lookup",
+    "establish_state",
+    "reverify_state",
+    "compare_states",
+    "reset_caches"
+   ],
+   "proving_substitution": "replace validate_state()/reverify_state() so problems is always empty; a stale-tree, retired-authorization, or empty-universe state stops failing the session",
+   "why_protected": "the authoritative Docker assurance state and its governed cache; substituting it lets a cross-tree or poisoned cache decide the Docker baseline"
+  },
+  {
+   "critical_callables": [
+    "verify",
+    "derive_call_sites",
+    "reconcile_with_shared_deriver",
+    "steering_state",
+    "steering_problems",
+    "config_fields",
+    "config_problems",
+    "flag_problems",
+    "call_site_problems",
+    "availability_problems",
+    "ci_assumption_problems",
+    "load_policy",
+    "snapshot",
+    "compare",
+    "_command_words",
+    "_scan_source",
+    "_strip_comment",
+    "_in_ci"
+   ],
+   "module": "docker_boundary",
+   "proving_substitution": "replace steering_state() so it returns an empty environment: every steering variable becomes invisible and ADV-I28AP-01 is fully restored \u2014 DOCKER_HOST redirects the daemon with the layer reporting clean. Or replace config_fields() with a fixed known-key list: an unrecognised config field stops being seen and the fail-closed branch becomes unreachable code, which is the exact fail-open this gate found in its own first implementation, twice. Or replace ci_assumption_problems() with a constant empty list: a forged CI marker satisfies the assumption the whole model rests on.",
+   "relative_path": "scripts/docker_boundary.py",
+   "why_protected": "Gate 4N-I28AP finding ADV-I28AP-01. This module is the sole adjudicator of the Docker execution boundary, and under Model B it is the ONLY thing standing between a repository-controlled steering mechanism and a daemon of the attacker's choosing. The daemon itself is an explicit external assumption; this layer is what makes that assumption meaningful rather than decorative."
+  },
+  {
+   "critical_callables": [
+    "check",
+    "static_inventory",
+    "runtime_inventory",
+    "reconcile"
+   ],
+   "module": "executable_inventory",
+   "proving_substitution": "replace static_inventory() with a constant list omitting tar: the unclassified-executable refusal stops firing",
+   "relative_path": "scripts/executable_inventory.py",
+   "why_protected": "Gate 4N-I28AK. This module DERIVES which executables must be classified. A substituted copy would report a complete inventory while omitting a reachable executable, which is ADV-I28AJ-01 restored."
+  },
+  {
+   "critical_callables": [
+    "verify",
+    "disk_code_identity",
+    "runtime_code_identity",
+    "load_protected_set"
+   ],
+   "module": "executed_code_provenance",
+   "proving_substitution": "replace verify() with constant success: before this entry, reverify() stayed clean and every provenance layer agreed",
+   "relative_path": "scripts/executed_code_provenance.py",
+   "why_protected": "Gate 4N-I28AM, proven necessary. This is the code-provenance verifier itself, and it was never in its own protected set: stubbing executed_code_provenance.verify made reverify() report clean. Protecting reverify (ADV-I28AL-03) without protecting the verifier it calls would be half a fix \u2014 the same attack succeeds one level down."
+  },
+  {
+   "critical_callables": [
+    "verify",
+    "state_identity",
+    "reachable_names",
+    "state_token",
+    "unbounded_access",
+    "load_contract"
+   ],
+   "module": "executed_state_provenance",
+   "proving_substitution": "replace verify() with one that returns clean=True unconditionally: the ADV-I28AF-01 REGISTRY rebinding stops being detected",
+   "relative_path": "scripts/executed_state_provenance.py",
+   "why_protected": "Gate 4N-I28AG. This is the control that binds load-bearing module state. If its own executing code can be substituted, every state verdict it produces is worthless, so it must be provenance-bound like the modules it protects."
+  },
+  {
+   "critical_callables": [
+    "check",
+    "resolve",
+    "snapshot",
+    "compare",
+    "load_policy",
+    "git_invocation",
+    "bash_invocation"
+   ],
+   "module": "external_executable_trust",
+   "proving_substitution": "replace resolve() so approved-path membership always passes: a fake git earlier on PATH stops being refused",
+   "relative_path": "scripts/external_executable_trust.py",
+   "why_protected": "Gate 4N-I28AI. This module decides which git and bash are trusted. A substituted copy would approve a shadowed binary."
+  },
+  {
+   "critical_callables": [
+    "verify",
+    "resolve_chain",
+    "classify_installation",
+    "manager_selected_versions",
+    "_verify_version_manager_tree",
+    "_verify_package_manager_tree",
+    "_verify_ci_assumption",
+    "configuration_state",
+    "configuration_problems",
+    "lifecycle_problems",
+    "load_policy",
+    "snapshot",
+    "compare",
+    "_package_root",
+    "_node_version_header",
+    "_object_type",
+    "_symlink_chain"
+   ],
+   "module": "npm_authority",
+   "proving_substitution": "replace classify_installation() so it returns an empty problem list: every attacker layout under an approved installation root is accepted again and ADV-I28AP-02 is fully restored. Or replace manager_selected_versions() with a function returning every installed directory: a fully self-consistent attacker installation \u2014 correct layout, correct symlink, plausible package.json, a copied genuine node binary, a semver directory name and a node_version.h agreeing with it \u2014 is accepted again, which is the escape this gate's own attack matrix found in its first implementation. Or replace _package_root() with a constant: npm's metadata stops being read and any file called npm passes.",
+   "relative_path": "scripts/npm_authority.py",
+   "why_protected": "Gate 4N-I28AP finding ADV-I28AP-02. This module is the sole authority for the npm -> Node execution chain, and its verdict decides whether a graded release-blocking job may run npm at all. Unprotected, it can be replaced as easily as the npm it authorizes."
+  },
+  {
+   "critical_callables": [
+    "check",
+    "_conftest_problems",
+    "_module_level_skip_problems"
+   ],
+   "module": "pytest_config_contract",
+   "proving_substitution": "replace check() to return clean; collect_ignore in an approved conftest stops being reported",
+   "relative_path": "scripts/pytest_config_contract.py",
+   "required_resident": false,
+   "why_protected": "the pytest configuration contract; substituting it lets collection-removing configuration pass unflagged"
+  },
+  {
+   "critical_callables": [
+    "MandatorySessionGuard.pytest_sessionfinish",
+    "MandatorySessionGuard.evaluate",
+    "MandatorySessionGuard.pytest_collection_modifyitems",
+    "MandatorySessionGuard.pytest_runtest_logreport",
+    "pytest_configure",
+    "is_genuine",
+    "implementation_provenance"
+   ],
+   "module": "pytest_session_guard",
+   "proving_substitution": "sitecustomize pre-seeds sys.modules with a copy whose sessionfinish never sets exitstatus: 2906 passed / 0 failed with four control modules absent",
+   "relative_path": "scripts/pytest_session_guard.py",
+   "required_resident": true,
+   "why_protected": "the authoritative session guard; substituting it neutralises mandatory-node enforcement entirely, which is exactly what ACC-I28AC-01 demonstrated"
+  },
+  {
+   "critical_callables": [
+    "effective_registry",
+    "authoritative",
+    "verify"
+   ],
+   "module": "registry_authority",
+   "proving_substitution": "replace effective_registry() so it honours SIGNALNEST_MANDATORY_NODES again: the in-tree decoy stops being refused",
+   "relative_path": "scripts/registry_authority.py",
+   "why_protected": "Gate 4N-I28AI. This module decides WHICH registry the guard enforces. A substituted copy could reinstate the override that ADV-I28AH-01 exploited."
+  },
+  {
+   "critical_callables": [
+    "_load_protected",
+    "establish",
+    "pytest_configure",
+    "pytest_sessionfinish",
+    "reverify",
+    "startup_surface"
+   ],
+   "module": "signalnest_bootstrap",
+   "proving_substitution": "replace establish() so preseeded modules are ignored; the ACC-I28AC-01 exploit stops being refused | Gate 4N-I28AM: replacing reverify or pytest_sessionfinish with constant success left provenance clean at Gate 4N-I28AL because neither was a critical callable; both are now bound.",
+   "relative_path": "scripts/signalnest_bootstrap.py",
+   "required_resident": false,
+   "why_protected": "the bootstrap itself; substituting it removes the pre-seeding detection that protects every other entry, so it must be provenance-bound by the same rule it applies"
+  },
+  {
+   "critical_callables": [
+    "_cached",
+    "_store",
+    "ci_release_control_sites",
+    "production_control_function_sites",
+    "release_roots"
+   ],
+   "module": "site_taxonomy",
+   "proving_substitution": "replace release_roots with `lambda: []`: before this entry the npm precondition silently stopped being able to fire and every layer stayed clean GATE 4N-I28AR: _store() is the single point at which a derived value enters _DERIVED, and it enters frozen; replacing it with a plain assignment restores the mutable cache ADV-I28AP-03 poisoned, so it is critical for the same reason release_roots() is.",
+   "relative_path": "scripts/site_taxonomy.py",
+   "required_resident": false,
+   "why_protected": "Gate 4N-I28AN finding ADV-I28AN-02. `release_roots()` supplies the root set to external_executable_trust's executable precondition \u2014 the mechanism that decides whether an executable may remain unbound. Replacing it with a function returning [] disarmed that decision while executed-code, executed-state and the trust layer all reported clean. A module a trust decision READS must be bound."
+  },
+  {
+   "critical_callables": [
+    "check",
+    "observe",
+    "load_policy",
+    "in_trust_root"
+   ],
+   "module": "startup_policy",
+   "proving_substitution": "replace check() so problems is always empty: an unauthorized sitecustomize.py stops being refused",
+   "relative_path": "scripts/startup_policy.py",
+   "why_protected": "Gate 4N-I28AG. This is the control that adjudicates the startup surface. A substituted classifier would report a hostile surface as policy-clean."
+  },
+  {
+   "critical_callables": [
+    "establish",
+    "validate_establishment",
+    "pre_build_verify",
+    "validate_pre_build",
+    "validate_build_inputs",
+    "post_build_image_bind",
+    "validate_image_manifest",
+    "pre_push_verify",
+    "validate_pre_push",
+    "source_content_manifest",
+    "validate_source_manifest",
+    "fresh_docker_state_identity",
+    "validate_docker_state",
+    "validate_authorization",
+    "validate_workflow_identity",
+    "record_passes"
+   ],
+   "module": "workflow_assurance",
+   "relative_path": "scripts/workflow_assurance.py",
+   "required_resident": false,
+   "proving_substitution": "replace pre_push_verify()/validate_image_manifest() so problems is always empty, or record_passes() so it returns True regardless: an image substitution, a tag substitution, a source drift, or a manifest replayed from another workflow/job/tree/authorization window stops failing the push. Or replace source_content_manifest() so a post-checkout mutation no longer moves the digest: the bound tree identity stops meaning the checked-out content.",
+   "why_protected": "Gate 4N-I28BG-B1. The reusable publish-workflow verifier: it is the ONLY thing that binds the BUILT image digest, the resolved immutable tags, and the freshly re-derived source identity to the authorized workflow/job/authorization window at build and push time. Substituting it lets a generated artefact the static Docker Part A model cannot see be published unbound."
+  },
+  {
+   "critical_callables": [
+    "validate_workflow",
+    "analyse_workflow",
+    "_validate_job_ordering",
+    "_roles",
+    "_assurance_mode"
+   ],
+   "module": "workflow_graph_validator",
+   "relative_path": "scripts/workflow_graph_validator.py",
+   "required_resident": false,
+   "proving_substitution": "replace validate_workflow()/_validate_job_ordering() so problems is always empty: a verify step placed after the build, a continue-on-error on an assurance step, an always() on a downstream Docker step, or an alternate push path stops being detected. Or replace _assurance_mode() so it reports an assurance step where none runs: an unprotected workflow is marked integrated.",
+   "why_protected": "Gate 4N-I28BG-B1. The static graph validator proves the WIRING that makes the runtime verifier load-bearing: ordering, fail-closed propagation, and no-bypass. Substituting it lets a structurally-broken integration report protected, and lets an unprotected publish workflow be called covered."
+  }
+ ]
+}

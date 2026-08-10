@@ -1,0 +1,874 @@
+{
+ "_authority": "AUTHORED. Resolution outside an approved path set is refused; membership is tested on the RESOLVED target so a symlink named to look approved does not pass.",
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_classifications": [
+  "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+  "CURRENT_INTERPRETER_IDENTITY_BOUND",
+  "EXACT_PATH_AND_CONTENT_BOUND",
+  "NOT_APPLICABLE",
+  "POLICY_TRUSTED_WITH_EXPLICIT_JUSTIFICATION",
+  "PROHIBITED",
+  "UNREACHABLE_FROM_GRADED_ROOTS"
+ ],
+ "_content_binding_note": "Content digests are captured at establish() and re-compared at session finish; they are NOT pinned to a repository constant, because the binary differs per runner image and a pinned digest would fail everywhere except where it was generated. This is session-consistent content binding over an approved path set, which is weaker than cryptographic pinning and stronger than path observation. Stated rather than overclaimed.",
+ "_derivation": "The inventory is DERIVED by scripts/executable_inventory.py from reachable behaviour, not authored. Every derived executable must appear here or the session fails closed. Gate 4N-I28AJ finding ADV-I28AJ-01: the previous policy was only as complete as the person writing it remembered to be.",
+ "_dynamic_shell_sites_note": "Gate 4N-I28AO. Every command position the model cannot resolve, declared individually with what bounds it. The check is two-way: an undeclared site fails and a stale declaration fails, so neither a new dynamic command nor an obsolete exemption can pass unnoticed.",
+ "_dynamic_sites_note": "A subprocess whose command word is computed cannot be bounded statically. Each such site is DECLARED here with a reason; an UNDECLARED dynamic site fails closed. Declaring a site makes it visible and reviewable \u2014 it does not bind the command, and that limit is stated rather than papered over.",
+ "_purpose": "Approved locations and trust classification for every external executable the assurance path invokes.",
+ "_retired_classifications": {
+  "REACHABLE_NOT_EXERCISED_IN_GRADED_PATH": "RETIRED at Gate 4N-I28AM. It meant 'unbound unless runtime tracing happens to observe it later', and the tracing never ran in a graded session (ADV-I28AL-02). Every executable that carried it is now APPROVED_PATH_SET_AND_CONTENT_BOUND and resolved before graded work."
+ },
+ "_why_this_file_exists": "Gate 4N-I28AH finding ADV-I28AH-02: git and bash were PATH-discovered and path-recorded but never path-enforced, so a fake binary earlier on PATH was selected while the policy reported clean.",
+ "dynamic_invocation_sites": [
+  {
+   "exercised_in_graded_path": false,
+   "function": "_pytest_interpreter",
+   "module": "boundary_state_mutations.py",
+   "why": "probes candidate interpreters returned by shutil.which to pick one; the candidates themselves (python3, python) are classified CURRENT_INTERPRETER_IDENTITY_BOUND"
+  },
+  {
+   "exercised_in_graded_path": false,
+   "function": "_pytest",
+   "module": "boundary_state_mutations.py",
+   "why": "runs the interpreter chosen by _pytest_interpreter, which prefers sys.executable"
+  },
+  {
+   "exercised_in_graded_path": false,
+   "function": "check_executable",
+   "module": "check_toolchain_integrity.py",
+   "why": "runs `<resolved> --version` on a which() result for tofu/terraform, both classified NOT_APPLICABLE (presence observed, never executed for a verdict)"
+  },
+  {
+   "exercised_in_graded_path": false,
+   "function": "trace_command",
+   "module": "execution_trace.py",
+   "why": "traces a caller-supplied command by design; no graded control supplies one, confirmed by the instrumented suite recording no additional executables"
+  },
+  {
+   "exercised_in_graded_path": true,
+   "function": "resolve",
+   "module": "external_executable_trust.py",
+   "why": "runs `<validated absolute path> --version` on the binary it has just resolved and hashed; the command word IS the validated path"
+  },
+  {
+   "exercised_in_graded_path": true,
+   "function": "_run_guard",
+   "module": "site_behavior.py",
+   "why": "runs sys.executable against a guard script path"
+  },
+  {
+   "exercised_in_graded_path": true,
+   "function": "_guard",
+   "module": "site_coverage.py",
+   "why": "runs sys.executable against a guard script path"
+  }
+ ],
+ "dynamic_shell_sites": [
+  {
+   "line": 21,
+   "module": "bootstrap.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the bootstrap interpreter chosen from python3/python, both of which are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PYTHON_BIN"
+  },
+  {
+   "line": 25,
+   "module": "bootstrap.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 26,
+   "module": "bootstrap.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 12,
+   "module": "ci-smoke.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 33,
+   "module": "ci-smoke.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 63,
+   "module": "ci-smoke.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 5,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 7,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 9,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 11,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 13,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 15,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 17,
+   "module": "ci.yml#migration-and-contract#4",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter resolved by the workflow step from the reader virtualenv inside the workspace; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PY"
+  },
+  {
+   "line": 4,
+   "module": "demo-setup.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 8,
+   "module": "demo-setup.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 10,
+   "module": "demo-setup.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 4,
+   "module": "dev.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 12,
+   "module": "dev.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 36,
+   "module": "empty_home_ci.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "empty_home_ci.sh probes candidate interpreters returned by an explicit list before choosing one; every candidate is a python family member, CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$candidate"
+  },
+  {
+   "line": 36,
+   "module": "empty_home_ci.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "empty_home_ci.sh probes candidate interpreters returned by an explicit list before choosing one; every candidate is a python family member, CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$candidate"
+  },
+  {
+   "line": 37,
+   "module": "empty_home_ci.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "empty_home_ci.sh probes candidate interpreters returned by an explicit list before choosing one; every candidate is a python family member, CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$candidate"
+  },
+  {
+   "line": 53,
+   "module": "empty_home_ci.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter empty_home_ci.sh selected from those candidates; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PYBIN"
+  },
+  {
+   "line": 79,
+   "module": "empty_home_ci.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the interpreter empty_home_ci.sh selected from those candidates; python/python3 are CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "word": "$PYBIN"
+  },
+  {
+   "line": 5,
+   "module": "gen-types.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 9,
+   "module": "gen-types.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 5,
+   "module": "migrate-create.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 29,
+   "module": "migrate-create.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family. NEWLY VISIBLE at Gate 4N-I28AV: this line sits after a `case` in the same file, so ADV-I28AT-01 hid it from the deriver entirely. It is the same construct already declared for bootstrap.sh, dev.sh and the migrate-* family, and it is declared here for the first time because the parser can finally see it.",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 6,
+   "module": "migrate-down.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 11,
+   "module": "migrate-down.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 3,
+   "module": "migrate-status.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 7,
+   "module": "migrate-status.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 10,
+   "module": "migrate-status.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 3,
+   "module": "migrate.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 7,
+   "module": "migrate.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 6,
+   "module": "run-api.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 12,
+   "module": "run-api.sh",
+   "reason": "the `exec` child command is a variable expansion, so it cannot be resolved",
+   "why_bounded": "GATE 4N-I28BB. `exec \"$VENV_PY\"` replaces the shell with the API virtualenv interpreter, whose path lib.sh sets to a location inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family. The exec transfer is now an EXPLICIT unresolved site rather than an invisible one.",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 5,
+   "module": "run-tests-api.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 9,
+   "module": "run-tests-api.sh",
+   "reason": "the `exec` child command is a variable expansion, so it cannot be resolved",
+   "why_bounded": "GATE 4N-I28BB. Same bound as run-api.sh:12 \u2014 the repository-internal API virtualenv interpreter, CURRENT_INTERPRETER_IDENTITY_BOUND.",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 7,
+   "module": "run-worker.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 11,
+   "module": "run-worker.sh",
+   "reason": "the `exec` child command is a variable expansion, so it cannot be resolved",
+   "why_bounded": "GATE 4N-I28BB. Same bound as run-api.sh:12 \u2014 the repository-internal API virtualenv interpreter, CURRENT_INTERPRETER_IDENTITY_BOUND.",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 3,
+   "module": "seed-reset.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 7,
+   "module": "seed-reset.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 5,
+   "module": "seed.sh",
+   "reason": "`source` executes a computed operand",
+   "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
+   "word": "source"
+  },
+  {
+   "line": 9,
+   "module": "seed.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 35,
+   "module": "test-ci-pipefail.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "an array holding the bash -c invocation under test; bash is APPROVED_PATH_SET_AND_CONTENT_BOUND and the quoted operand is scanned as nested shell, which is how tee at lines 35 and 53 was discovered",
+   "word": "${CI_SHELL[@]}"
+  },
+  {
+   "line": 53,
+   "module": "test-ci-pipefail.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "an array holding the bash -c invocation under test; bash is APPROVED_PATH_SET_AND_CONTENT_BOUND and the quoted operand is scanned as nested shell, which is how tee at lines 35 and 53 was discovered",
+   "word": "${CI_SHELL[@]}"
+  }
+ ],
+ "executables": {
+  "awk": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/awk",
+    "/bin/awk",
+    "/sbin/awk",
+    "/usr/sbin/awk",
+    "/opt/homebrew/bin/awk",
+    "/usr/local/bin/awk"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "staging-publish.yml run: blocks post-process command output"
+  },
+  "aws": {
+   "_i28am": "Gate 4N-I28AL finding ADV-I28AL-02: this was REACHABLE_NOT_EXERCISED_IN_GRADED_PATH, a classification whose only safety net was a runtime contradiction check that never ran in a graded session. Binding happens before graded work now; the trust decision precedes execution.",
+   "approved_paths": [
+    "/usr/local/bin/aws",
+    "/opt/homebrew/bin/aws",
+    "/usr/bin/aws"
+   ],
+   "bound_before_execution": true,
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "cloudfront_precheck.collect() can reach it; binding before execution removes the 'unbound unless observed' state"
+  },
+  "bash": {
+   "approved_paths": [
+    "/bin/bash",
+    "/usr/bin/bash",
+    "/usr/local/bin/bash",
+    "/opt/homebrew/bin/bash"
+   ],
+   "capture_version": true,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "configuration_controls": "bash_invocation() passes --noprofile --norc; BASH_ENV and ENV are refused by check() and by the startup policy",
+   "why_required": "ci_harness.py executes workflow step bodies with bash, and the command-root model resolves shell wrappers"
+  },
+  "cat": {
+   "approved_paths": [
+    "/bin/cat",
+    "/usr/bin/cat",
+    "/usr/local/bin/cat",
+    "/opt/homebrew/bin/cat"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "scripts/ci-smoke.sh:44,57 pipe a log file to stderr on failure, and the graded suite exercises that path (observed twice under runtime instrumentation at Gate 4N-I28AK). It was first classified REACHABLE_NOT_EXERCISED and the runtime evidence refuted that, so it is bound rather than excused."
+  },
+  "curl": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/curl",
+    "/bin/curl",
+    "/sbin/curl",
+    "/usr/sbin/curl",
+    "/opt/homebrew/bin/curl",
+    "/usr/local/bin/curl"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci-smoke.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "ci-smoke.sh polls /health; the readiness verdict is read from its exit status"
+  },
+  "cut": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/cut",
+    "/bin/cut",
+    "/sbin/cut",
+    "/usr/sbin/cut",
+    "/opt/homebrew/bin/cut",
+    "/usr/local/bin/cut"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "reader-publish.yml",
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "reader-publish.yml and staging-publish.yml parse identifiers from command output"
+  },
+  "date": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/date",
+    "/bin/date",
+    "/sbin/date",
+    "/usr/sbin/date",
+    "/opt/homebrew/bin/date",
+    "/usr/local/bin/date"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "reader-publish.yml",
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "reader-publish.yml and staging-publish.yml stamp artefacts"
+  },
+  "dirname": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/dirname",
+    "/bin/dirname",
+    "/sbin/dirname",
+    "/usr/sbin/dirname",
+    "/opt/homebrew/bin/dirname",
+    "/usr/local/bin/dirname"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "bootstrap.sh",
+    "ci-smoke.sh",
+    "demo-setup.sh",
+    "dev.sh",
+    "empty_home_ci.sh",
+    "gen-types.sh",
+    "lib.sh",
+    "migrate-create.sh",
+    "migrate-down.sh",
+    "migrate-status.sh",
+    "migrate.sh",
+    "run-api.sh",
+    "run-tests-api.sh",
+    "run-worker.sh",
+    "seed-reset.sh",
+    "seed.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "decides REPO_ROOT in bootstrap.sh, ci-smoke.sh, empty_home_ci.sh and others"
+  },
+  "docker": {
+   "_absent_here": "not installed on this development host; present on the CI runner. Bound WHENEVER it resolves; absence is not a bypass because the steps that use it fail outright without it.",
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/docker",
+    "/bin/docker",
+    "/sbin/docker",
+    "/usr/sbin/docker",
+    "/opt/homebrew/bin/docker",
+    "/usr/local/bin/docker"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "docker-security-check.sh",
+    "reader-publish.yml",
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "required_present": false,
+   "why_required": "docker-security-check.sh reads the image security verdict from its output; ci.yml, reader-publish.yml and staging-publish.yml run graded image steps through it"
+  },
+  "env": {
+   "_i28am": "Gate 4N-I28AL finding ADV-I28AL-02: this was REACHABLE_NOT_EXERCISED_IN_GRADED_PATH, a classification whose only safety net was a runtime contradiction check that never ran in a graded session. Binding happens before graded work now; the trust decision precedes execution.",
+   "approved_paths": [
+    "/usr/bin/env",
+    "/bin/env"
+   ],
+   "bound_before_execution": true,
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "empty_home_ci.sh invokes it"
+  },
+  "find": {
+   "_i28am": "Gate 4N-I28AL finding ADV-I28AL-02: this was REACHABLE_NOT_EXERCISED_IN_GRADED_PATH, a classification whose only safety net was a runtime contradiction check that never ran in a graded session. Binding happens before graded work now; the trust decision precedes execution.",
+   "approved_paths": [
+    "/usr/bin/find",
+    "/bin/find",
+    "/opt/homebrew/bin/find",
+    "/usr/local/bin/find"
+   ],
+   "bound_before_execution": true,
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "docker-security-check.sh invokes it"
+  },
+  "git": {
+   "approved_paths": [
+    "/usr/bin/git",
+    "/usr/local/bin/git",
+    "/opt/homebrew/bin/git",
+    "/bin/git"
+   ],
+   "capture_version": true,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "configuration_controls": "git_invocation() neutralises system and global config, hooks, pager, editor, external diff and credential helpers; steering environment variables are refused outright by check()",
+   "why_required": "six assurance modules shell out to git for staged membership, HEAD, tracked-file status and tree archives"
+  },
+  "grep": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/grep",
+    "/bin/grep",
+    "/sbin/grep",
+    "/usr/sbin/grep",
+    "/opt/homebrew/bin/grep",
+    "/usr/local/bin/grep"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "reader-publish.yml",
+    "staging-publish.yml",
+    "test-ci-pipefail.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "test-ci-pipefail.sh:56 and ci.yml decide a PASS/FAIL from its exit status"
+  },
+  "head": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/head",
+    "/bin/head",
+    "/sbin/head",
+    "/usr/sbin/head",
+    "/opt/homebrew/bin/head",
+    "/usr/local/bin/head"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "reader-publish.yml",
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "reader-publish.yml and staging-publish.yml truncate command output"
+  },
+  "mkdir": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/mkdir",
+    "/bin/mkdir",
+    "/sbin/mkdir",
+    "/usr/sbin/mkdir",
+    "/opt/homebrew/bin/mkdir",
+    "/usr/local/bin/mkdir"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "reader-publish.yml",
+    "reader-run.yml",
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "ci.yml and the publish workflows create artefact directories"
+  },
+  "mktemp": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/mktemp",
+    "/bin/mktemp",
+    "/sbin/mktemp",
+    "/usr/sbin/mktemp",
+    "/opt/homebrew/bin/mktemp",
+    "/usr/local/bin/mktemp"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "empty_home_ci.sh",
+    "test-ci-pipefail.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "creates the sandbox HOME in empty_home_ci.sh and the workdir in test-ci-pipefail.sh"
+  },
+  "node": {
+   "_i28as": "ADDED by Gate 4N-I28AS. npm_authority.resolve_chain() resolves the Node interpreter from the shebang and PATH, which makes `node` a statically reachable executable \u2014 and the executable inventory refused the session until it was classified, which is the Gate 4N-I28AJ control working exactly as intended. Its identity is bound as part of the npm chain: canonical path, content digest, object type (a shell script standing in for Node is refused) and the requirement that it belong to the SAME installation as the npm it interprets. It is delegated rather than APPROVED_PATH_SET_AND_CONTENT_BOUND because its authorization is a property of the chain, not of a fixed path list.",
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "npm_authority.py"
+   ],
+   "capture_version": false,
+   "classification": "TOOLCHAIN_IDENTITY_DELEGATED",
+   "delegated_to": "npm_authority",
+   "required_present": false,
+   "why_required": "npm is a JavaScript entrypoint; the process that actually runs a graded `npm run` step is Node. Binding npm without binding its interpreter would leave the half of the chain that executes the code unbound."
+  },
+  "npm": {
+   "_i28ao": "RECLASSIFIED from UNREACHABLE_FROM_GRADED_ROOTS. Gate 4N-I28AM chose unreachability to avoid binding a machine-specific version-manager path. Gate 4N-I28AO's command-position derivation, which for the first time reads ci.yml run: blocks, found npm invoked by eight graded steps \u2014 so the unreachability claim was FALSE and the precondition that Gate 4N-I28AN found unprotected refuted it as soon as the derivation could see those sites. The precondition worked; the classification did not.",
+   "_i28as": "RECLASSIFIED from APPROVED_PATH_SET_AND_CONTENT_BOUND, and the approved_path_prefixes list is DELETED. Gate 4N-I28AP finding ADV-I28AP-02: a prefix match skipped the approved-path membership test entirely, so any file beneath ~/.nvm/versions/node/ was accepted and the attacker's digest was recorded as the bound content. npm's identity is not a file digest \u2014 it is a CHAIN (wrapper -> symlink -> CLI JavaScript -> Node interpreter -> package root -> package.json -> installation family), and it is adjudicated by scripts/npm_authority.py, which binds the installation tree, the Node<->npm relationship and the version manager's own metadata rather than a path shape.",
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "bootstrap.sh",
+    "ci.yml",
+    "dev.sh",
+    "gen-types.sh"
+   ],
+   "capture_version": false,
+   "classification": "TOOLCHAIN_IDENTITY_DELEGATED",
+   "delegated_to": "npm_authority",
+   "required_present": false,
+   "why_required": "ci.yml#frontend-quality runs npm lint, type-check, test and build; that job's outcome blocks release"
+  },
+  "pip": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/pip",
+    "/bin/pip",
+    "/sbin/pip",
+    "/usr/sbin/pip",
+    "/opt/homebrew/bin/pip",
+    "/usr/local/bin/pip",
+    "/opt/miniconda3/bin/pip",
+    "/usr/local/opt/python/bin/pip"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "ci.yml installs the graded test dependencies"
+  },
+  "python": {
+   "capture_version": true,
+   "classification": "CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "interpreter_rule": "identical to python3",
+   "why_required": "same fallback chain as python3"
+  },
+  "python3": {
+   "capture_version": true,
+   "classification": "CURRENT_INTERPRETER_IDENTITY_BOUND",
+   "interpreter_rule": "a child Python process must be sys.executable \u2014 the SAME interpreter as the parent assurance process. A PATH-resolved python3 is a fallback only and must equal sys.executable when both resolve.",
+   "why_required": "boundary_state_mutations._pytest_interpreter() falls back to shutil.which('python3') when sys.executable is unavailable; every graded child Python process observed used sys.executable"
+  },
+  "rm": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/rm",
+    "/bin/rm",
+    "/sbin/rm",
+    "/usr/sbin/rm",
+    "/opt/homebrew/bin/rm",
+    "/usr/local/bin/rm"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "empty_home_ci.sh",
+    "staging-publish.yml",
+    "test-ci-pipefail.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "trap bodies in empty_home_ci.sh and test-ci-pipefail.sh remove sandboxes"
+  },
+  "rsync": {
+   "_i28am": "Gate 4N-I28AL finding ADV-I28AL-02: this was REACHABLE_NOT_EXERCISED_IN_GRADED_PATH, a classification whose only safety net was a runtime contradiction check that never ran in a graded session. Binding happens before graded work now; the trust decision precedes execution.",
+   "approved_paths": [
+    "/usr/bin/rsync",
+    "/usr/local/bin/rsync",
+    "/opt/homebrew/bin/rsync"
+   ],
+   "bound_before_execution": true,
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "mutation_discovery.isolated_clone() builds the isolated repository falsification results are computed from \u2014 the one with a plausible load-bearing path"
+  },
+  "seq": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/seq",
+    "/bin/seq",
+    "/sbin/seq",
+    "/usr/sbin/seq",
+    "/opt/homebrew/bin/seq",
+    "/usr/local/bin/seq"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci-smoke.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "ci-smoke.sh bounds the readiness retry loop"
+  },
+  "sh": {
+   "classification": "NOT_APPLICABLE",
+   "why_not_applicable": "no assurance module invokes sh directly; every shell invocation in scripts/ names bash explicitly, and no subprocess call in scripts/ uses shell=True (verified by grep at Gate 4N-I28AI)."
+  },
+  "sha256sum": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/sha256sum",
+    "/bin/sha256sum",
+    "/sbin/sha256sum",
+    "/usr/sbin/sha256sum",
+    "/opt/homebrew/bin/sha256sum",
+    "/usr/local/bin/sha256sum"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "staging-publish.yml"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "staging-publish.yml digests published artefacts"
+  },
+  "sleep": {
+   "_i28am": "Gate 4N-I28AL finding ADV-I28AL-02: this was REACHABLE_NOT_EXERCISED_IN_GRADED_PATH, a classification whose only safety net was a runtime contradiction check that never ran in a graded session. Binding happens before graded work now; the trust decision precedes execution.",
+   "approved_paths": [
+    "/bin/sleep",
+    "/usr/bin/sleep"
+   ],
+   "bound_before_execution": true,
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "ci-smoke.sh wait loop"
+  },
+  "tar": {
+   "approved_paths": [
+    "/usr/bin/tar",
+    "/bin/tar",
+    "/usr/local/bin/tar",
+    "/opt/homebrew/bin/tar",
+    "/usr/local/opt/gnu-tar/libexec/gnubin/tar"
+   ],
+   "capture_version": true,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "invocation_note": "resolved once, validated, then invoked by validated absolute path via external_executable_trust.tar_invocation(); never re-resolved through PATH after validation",
+   "why_required": "commit_package_coherence.materialize() extracts the predicted tree that the i23 coherence control then reads file CONTENT from; a substituted tar controls what coherence inspects"
+  },
+  "tee": {
+   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
+   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
+   "approved_paths": [
+    "/usr/bin/tee",
+    "/bin/tee",
+    "/sbin/tee",
+    "/usr/sbin/tee",
+    "/opt/homebrew/bin/tee",
+    "/usr/local/bin/tee"
+   ],
+   "bound_before_execution": true,
+   "call_site_modules": [
+    "ci.yml",
+    "test-ci-pipefail.sh"
+   ],
+   "capture_version": false,
+   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
+   "why_required": "test-ci-pipefail.sh writes the log its pipefail assertions read; ci.yml tees step logs"
+  },
+  "terraform": {
+   "classification": "NOT_APPLICABLE",
+   "why_not_applicable": "same as tofu: presence is observed for classification, never executed by the assurance path."
+  },
+  "tofu": {
+   "classification": "NOT_APPLICABLE",
+   "why_not_applicable": "check_toolchain_integrity.py resolves tofu only to REPORT its presence for toolchain classification; this gate authorizes no OpenTofu execution and no assurance verdict depends on running it."
+  }
+ }
+}

@@ -1,0 +1,13 @@
+{
+  "_comment": "GATE 4N-I26B, closing I26B-10. ONE canonical site-ID form. The I25 adversarial addendum found scripts/mutation_discovery.py emitting `synthetic-ledger.json::ledger_version` while tests/test_i24d_site_coverage.py used `synthetic-ledger::ledger_version` — ZERO of fifteen identifiers shared between them, so nothing could compare the two sets even in principle, and they had already drifted: the matrix declared 15 sites and the test dictionary held 14. The missing one was synthetic-requirements::version.",
+  "contract_version": "1",
+  "form": "<namespace>::<key>",
+  "namespace": "the SOURCE FILE BASENAME WITH ITS EXTENSION RETAINED, e.g. synthetic-ledger.json",
+  "extension_handling": "RETAINED. Dropping it was the drift: two files that differ only by suffix would otherwise collide, and a reader cannot tell a fixture from a module.",
+  "key": "the JSON key, function name or workflow step id, verbatim",
+  "separator": "::",
+  "case": "preserved exactly; identifiers are compared byte-for-byte, never case-folded",
+  "normalization": "NONE beyond stripping surrounding whitespace. A normalizer that maps two distinct source keys onto one identifier silently merges two sites into one, so any collision after normalization is an error rather than a merge.",
+  "alias_policy": "aliases must be declared EXPLICITLY below. An undeclared spelling is not resolved to a canonical id — it is a failure. Silent resolution is how the two vocabularies drifted apart unnoticed for two gates.",
+  "declared_aliases": {}
+}

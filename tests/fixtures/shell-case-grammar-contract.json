@@ -1,0 +1,108 @@
+{
+ "_authority": "AUTHORED. The case grammar this parser CLAIMS, form by form. A form absent from this contract is not supported, and any form that is neither parsed nor explicitly failed closed is a defect of the kind ADV-I28AT-01 was.",
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_purpose": "Close ADV-I28AT-01. `esac` never cleared the case-pattern skip, so every word after a `;;`-terminated case was skipped and the partial result returned as COMPLETE.",
+ "_rule": "No form may silently return a partial COMPLETE result. Every form is SUPPORTED_AND_PARSED, UNSUPPORTED_AND_FAIL_CLOSED or MALFORMED_AND_FAIL_CLOSED.",
+ "forms": {
+  "branch bodies with multiple commands": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "the body is an ordinary command list"
+  },
+  "branch terminator ;&": {
+   "class": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "why": "the fallthrough terminator is not tokenised as a unit; it splits into `;` and `&` and the following pattern word reads as a command. It does not appear in this repository. Because the error direction is a SPURIOUS command word rather than a missing one, it fails closed: the extra word must be classified or the inventory refuses."
+  },
+  "branch terminator ;;": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "tokenised as a distinct operator"
+  },
+  "branch terminator ;;&": {
+   "class": "UNSUPPORTED_AND_FAIL_CLOSED",
+   "why": "same as `;&`; absent from this repository and fail-closed in the same direction"
+  },
+  "case WORD in ... esac": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "the ordinary form; commands before, inside and after are all discovered"
+  },
+  "case inside command substitution": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "substitutions are scanned by a fresh nested scan"
+  },
+  "case inside conditional": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "conditional bodies are ordinary command lists"
+  },
+  "case inside function": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "function bodies are ordinary command lists"
+  },
+  "case inside loop": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "loop bodies are ordinary command lists"
+  },
+  "case inside subshell": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "the paren stack restores the enclosing position"
+  },
+  "comments": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "comment bodies are inert"
+  },
+  "empty case": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "no branches; esac closes the construct and scanning continues"
+  },
+  "heredocs inside branch bodies": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "heredoc bodies are inert; the opener line is a command position"
+  },
+  "malformed case": {
+   "class": "MALFORMED_AND_FAIL_CLOSED",
+   "why": "open-frame balance counting yields status MALFORMED"
+  },
+  "missing esac": {
+   "class": "MALFORMED_AND_FAIL_CLOSED",
+   "why": "open `case` frame at end of input -> MALFORMED"
+  },
+  "missing in": {
+   "class": "MALFORMED_AND_FAIL_CLOSED",
+   "why": "without `in` the pattern region never opens; the construct is unbalanced and fails closed"
+  },
+  "missing terminator": {
+   "class": "MALFORMED_AND_FAIL_CLOSED",
+   "why": "the last branch has no `;;`; if `esac` is also absent the case frame stays open"
+  },
+  "multiline patterns": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "newlines inside the pattern region are skipped with it"
+  },
+  "multiple branches": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "each `;;` re-arms the pattern skip and each `)` disarms it"
+  },
+  "nested case": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "each esac disarms the skip; balance counting detects an unclosed inner case"
+  },
+  "one branch": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "pattern, body, terminator"
+  },
+  "pattern alternation": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "`a|b)` \u2014 the `|` falls inside the pattern skip"
+  },
+  "quoted patterns": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "quoting is handled by the tokeniser"
+  },
+  "redirections": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "redirection operators are recognised and their targets consumed"
+  },
+  "wildcard branch": {
+   "class": "SUPPORTED_AND_PARSED",
+   "why": "`*)` is a pattern like any other"
+  }
+ }
+}

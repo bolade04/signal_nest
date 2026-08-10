@@ -426,3 +426,72 @@ variable "revision_reader_image_digest" {
     error_message = "revision_reader_image_digest, when set, must be an immutable digest of the exact form sha256:<64 lowercase hex chars> (never a mutable tag)."
   }
 }
+
+# --- Gate 4N-I3: IAM role permissions boundary -------------------------------------
+# Single boundary ARN threaded into every module that creates an IAM role. The boundary
+# caps a created role's effective permissions to (identity policy AND boundary), so a
+# role minted by this composition can never reconstitute capabilities the boundary
+# withholds — the transitive escalation recorded in Gate 4N-I1/I2.
+#
+# GATE 4N-I8 DEFECT 8 — DURABILITY.
+#
+# The Gate 4N-I7 adversarial lane found the hardening was NON-DURABLE, and no artifact,
+# claim or test covered it. `permissions_boundary` is a MANAGED attribute on all eight
+# roles, this variable defaulted to null, no tfvars file set it, and none of the rollout
+# operations persisted it. So the sequence was:
+#
+#   1. the bootstrap operator attaches the boundary out-of-band;
+#   2. a later OpenTofu execution supplies null;
+#   3. OpenTofu plans REMOVAL;
+#   4. the next apply strips the boundary from all five existing roles.
+#
+# The fix is an explicit MODE, so "no boundary" must be stated rather than defaulted into.
+# OPTION A from the gate: enforcement requires a non-null ARN, and the pairing is validated
+# at plan time, before any resource mutation.
+variable "role_boundary_mode" {
+  description = "Boundary enforcement mode. REQUIRED — there is no default. 'required' attaches the reviewed boundary to all eight roles; 'disabled' is the pre-rollout dark state and must be stated deliberately."
+  type        = string
+  # GATE 4N-I14 DEFECT 3: the default was "disabled". A security boundary that disappears
+  # through OMISSION is not a boundary — a later ordinary execution inherited the default,
+  # planned removal from every deployed role, and no validation fired. There is no default
+  # now: an execution that does not state its mode fails before planning.
+
+  validation {
+    condition     = contains(["disabled", "required"], var.role_boundary_mode)
+    error_message = "role_boundary_mode must be exactly 'disabled' or 'required'. It is REQUIRED — omitting it is not the same as choosing 'disabled'."
+  }
+}
+
+variable "role_permissions_boundary_arn" {
+  description = "ARN of the IAM permissions boundary applied to every role created by this composition. Required when role_boundary_mode = 'required', and must be null when it is 'disabled'."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.role_permissions_boundary_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:policy/", var.role_permissions_boundary_arn))
+    error_message = "role_permissions_boundary_arn must be null or a full IAM policy ARN (arn:aws:iam::<account>:policy/<name>)."
+  }
+
+  # THE DURABILITY GUARD. Enforced mode with a null ARN is exactly the state that silently
+  # strips the boundary from every deployed role, so it fails at plan time.
+  validation {
+    condition     = var.role_boundary_mode != "required" || var.role_permissions_boundary_arn != null
+    error_message = "role_boundary_mode = 'required' requires a non-null role_permissions_boundary_arn. Supplying null while roles are deployed BOUNDED plans removal of the boundary from every role — the Gate 4N-I7 durability defect. To intentionally remove it, set role_boundary_mode = 'disabled' explicitly."
+  }
+
+  # GATE 4N-I16 PHASE B, the other half of the state model. "disabled" mode carrying a
+  # non-null ARN is INVALID_PARTIAL_BOOTSTRAP: it reads as protected while every role
+  # consumes the mode-derived value and deploys UNBOUNDED. Gate 4N-I15 had only the
+  # required+null direction, so this combination passed every guard in the composition.
+  validation {
+    condition     = var.role_boundary_mode != "disabled" || var.role_permissions_boundary_arn == null
+    error_message = "role_boundary_mode = 'disabled' requires role_permissions_boundary_arn = null. A non-null ARN under 'disabled' mode is not a boundary — roles consume the mode-derived value and are created unbounded while the configuration reads as protected. To apply the boundary, set role_boundary_mode = 'required'."
+  }
+
+  # The boundary policy name is fixed by the reviewed design. A syntactically valid ARN
+  # pointing at some OTHER policy would attach the wrong ceiling.
+  validation {
+    condition     = var.role_permissions_boundary_arn == null || can(regex("policy/signalnest-staging-role-boundary$", var.role_permissions_boundary_arn))
+    error_message = "role_permissions_boundary_arn must name the reviewed boundary policy signalnest-staging-role-boundary."
+  }
+}
