@@ -805,6 +805,18 @@
     "scripts/critical_list_inventory.py"
    ],
    "test_path": "tests/test_i28bh_c_falsification.py"
+  },
+  {
+   "canary": "collection_completeness reverting to demand membership completeness from ALL SECURITY collections (reporting property-specifically-governed collections as uncovered), OR a membership/partition collection silently losing its consumer, OR a SECURITY collection escaping ownership by having no assignment / an unknown kind / being owned by neither validator.",
+   "expected_control": "collection_completeness derives completeness-applicability from the authoritative assurance registry; requires a consumer only for MEMBERSHIP/PARTITION (completeness_ungoverned==0); cross-validator totality: every SECURITY owned by exactly one validator (completeness for membership/partition, security_collection_assurance otherwise); unassigned/unknown-kind fails closed.",
+   "family": "COMPLETENESS_APPLICABILITY_ALIGNMENT",
+   "gate": "4N-I28BH-E1",
+   "source_paths": [
+    "scripts/collection_completeness.py",
+    "scripts/security_collection_assurance.py",
+    "scripts/critical_list_inventory.py"
+   ],
+   "test_path": "tests/test_i28bh_e1_completeness_applicability.py"
   }
  ]
 }

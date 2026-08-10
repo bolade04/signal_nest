@@ -479,18 +479,84 @@ def test_the_ci_certification_gate_asserts_refusal_not_success():
         "the workflow still asserts a synthetic candidate is successfully certified")
 
 
-def test_index_tree_hash_is_the_index_tree_not_heads(tmp_path):
-    """I22 H1/F4, found independently by THREE lanes. The field carried HEAD's tree."""
+def _build_index_diverged_repo(repo: Path) -> tuple:
+    """A throwaway git repo whose INDEX differs from HEAD (a staged addition).
+
+    Returns (head_tree, index_tree) computed independently via git. Lets the I22-H1/F4 regression
+    be proven where index != HEAD BY CONSTRUCTION — the 'field carries HEAD's tree' defect is
+    invisible on a clean checkout of the real repo (index == HEAD makes the two trees equal).
+    """
+    import os as _os
+
+    def g(*args, index_file=None):
+        env = {**_os.environ}
+        if index_file:
+            env["GIT_INDEX_FILE"] = index_file
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                              env=env, check=True)
+
+    repo.mkdir(parents=True, exist_ok=True)
+    g("init", "-q")
+    g("config", "user.email", "reconciliation@example.invalid")
+    g("config", "user.name", "reconciliation")
+    g("config", "commit.gpgsign", "false")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    head_tree = g("rev-parse", "HEAD^{tree}").stdout.strip()
+    (repo / "staged.txt").write_text("added\n", encoding="utf-8")
+    g("add", "staged.txt")
+    index_tree = g("write-tree").stdout.strip()
+    return head_tree, index_tree
+
+
+def test_index_tree_hash_is_the_index_tree_not_heads(tmp_path, monkeypatch):
+    """I22 H1/F4, found independently by THREE lanes. The field carried HEAD's tree.
+
+    GATE 4N-I28BH-E1-HISTORY-RECONCILIATION. The original proof included
+    `index_tree_hash != head_tree_hash`. That inequality was a phase-dependent PROXY: it held
+    only because the branch was uncommitted, so the index differed from HEAD. On a clean checkout
+    of the now-committed branch (commit d5cab12d) index == HEAD, so the CORRECT index tree
+    legitimately EQUALS the head tree and the proxy fails though the field is right — the exact
+    'true only under an accidental precondition' shape this gate family exists to remove. The real
+    invariant is (1) EQUALITY to the independently-computed index tree, strengthened with (2) a
+    positive probe that a change to the index MOVES the field, which a field carrying HEAD's tree
+    could never do (that is the I22-H1/F4 signature: 'staging left the field unchanged')."""
+    import os as _os
     record = ts.repository_state_record()
     assert record["index_tree_hash"] is not None
-    assert record["index_tree_hash"] != record["head_tree_hash"], (
-        "index_tree_hash equals head_tree_hash; the field is carrying the wrong object")
+    # (1) the field equals the tree the CURRENT index actually produces.
     index_copy = tmp_path / "idx"
     index_copy.write_bytes((REPO_ROOT / ".git" / "index").read_bytes())
-    import os as _os
     real = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT, capture_output=True, text=True,
                           env={**_os.environ, "GIT_INDEX_FILE": str(index_copy)}).stdout.strip()
     assert record["index_tree_hash"] == real
+    # (2) mutating the index MOVES the index tree off both its prior value and HEAD's tree. Done
+    # against the COPY index via --cacheinfo, so the real .git/index is never touched; writing the
+    # probe blob into the object database is harmless and idempotent (the module relies on the same
+    # property). A field that carried HEAD's tree could not move under an index-only change.
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=REPO_ROOT,
+                          input="reconciliation-probe\n", capture_output=True, text=True,
+                          env={**_os.environ}).stdout.strip()
+    subprocess.run(["git", "update-index", "--add", "--cacheinfo",
+                    f"100644,{blob},reconciliation-probe-path.txt"], cwd=REPO_ROOT, check=True,
+                   capture_output=True, text=True,
+                   env={**_os.environ, "GIT_INDEX_FILE": str(index_copy)})
+    moved = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT, capture_output=True, text=True,
+                           env={**_os.environ, "GIT_INDEX_FILE": str(index_copy)}).stdout.strip()
+    assert moved != record["index_tree_hash"], "a change to the index did not move the index tree"
+    assert moved != record["head_tree_hash"], "the moved index tree collides with HEAD's tree"
+    # (3) Phase-INDEPENDENT I22-H1/F4 regression at its NAMED location. On a clean checkout the real
+    # repo has index == HEAD, so a field returning HEAD's tree is indistinguishable from correct and
+    # arms (1)-(2) above cannot see it. Prove it where index != HEAD by construction: a synthetic
+    # repo with a staged addition. index_tree_hash() must read the INDEX (the tree WITH the addition),
+    # which differs from that repo's HEAD tree; a field carrying HEAD's tree fails the second assert.
+    synth = tmp_path / "synthetic-index"
+    head_tree, index_tree = _build_index_diverged_repo(synth)
+    assert head_tree != index_tree, "synthetic setup did not diverge the index from HEAD"
+    monkeypatch.setattr(ts, "REPO_ROOT", synth)
+    assert ts.index_tree_hash() == index_tree, "index_tree_hash did not read the index (I22-H1/F4)"
+    assert ts.index_tree_hash() != head_tree, "index_tree_hash returned HEAD's tree, not the index's"
 
 
 def test_computing_the_index_tree_does_not_touch_the_real_index():
@@ -501,11 +567,15 @@ def test_computing_the_index_tree_does_not_touch_the_real_index():
 
 
 def test_the_certification_binding_uses_the_real_index_tree():
+    """GATE 4N-I28BH-E1-HISTORY-RECONCILIATION. The former `binding != head_tree_hash` was a
+    phase-dependent proxy that fails on a clean checkout (index == HEAD) though the binding is
+    correct. The real invariant is that the consumer reads the SAME index tree the model computes:
+    parity with both the record and an independent recomputation — checkout-independent."""
     import production_certification as pc
     binding = pc.resolve_repository_binding()
     record = ts.repository_state_record()
     assert binding["index_tree_hash"] == record["index_tree_hash"]
-    assert binding["index_tree_hash"] != record["head_tree_hash"]
+    assert binding["index_tree_hash"] == ts.index_tree_hash()
 
 
 def test_containment_scripts_have_an_executed_ci_consumer():

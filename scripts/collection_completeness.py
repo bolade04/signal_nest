@@ -45,11 +45,36 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 SPECS = REPO_ROOT / "tests" / "fixtures" / "collection-completeness-specs.json"
+ASSURANCE_REGISTRY = REPO_ROOT / "tests" / "fixtures" / "security-assurance-registry.json"
 
 sys.path.insert(0, str(SCRIPTS))
 
 RESOLVERS = ("module_constants", "function_result_keys", "emitted_policy",
              "discovered_kinds", "authored_contract")
+
+# Gate 4N-I28BH-E1. The BH-B architectural adjudication established that NOT every SECURITY collection
+# has (or can soundly have) an independent membership-completeness oracle; each carries exactly one
+# PRIMARY assurance class, and membership/partition completeness is REQUIRED only for the two classes
+# whose property IS completeness. The other classes (AUTHORED / EXCLUSION / RUNTIME / CROSS_DOMAIN /
+# GENERATED) are owned by security_collection_assurance. So this validator demands a completeness
+# consumer only from the collections whose registry-assigned class is one of these, deriving that set
+# from the AUTHORITATIVE assurance registry (never a second hand-maintained list). It does NOT report
+# a soundly property-governed collection as "uncovered".
+COMPLETENESS_REQUIRING_KINDS = ("INDEPENDENT_MEMBERSHIP_COMPLETENESS", "PARTITION_RELATION_ASSURANCE")
+
+
+def completeness_applicable(critical: set) -> tuple[set, dict]:
+    """The subset of SECURITY collections whose PRIMARY assurance class requires membership/partition
+    completeness, plus the registry it was derived from. Fail-closed: an absent registry, or a
+    SECURITY collection with no registry assignment, is a finding (returned as unassigned)."""
+    if not ASSURANCE_REGISTRY.is_file():
+        raise CompletenessError(
+            f"the security-assurance registry is absent: {ASSURANCE_REGISTRY}. Completeness "
+            "applicability cannot be derived, and absence must not read as 'nothing is applicable'.")
+    registry = json.loads(ASSURANCE_REGISTRY.read_text(encoding="utf-8")).get("assurance", {})
+    applicable = {cid for cid in critical
+                  if registry.get(cid, {}).get("assurance_kind") in COMPLETENESS_REQUIRING_KINDS}
+    return applicable, registry
 
 def _framework_kinds() -> tuple:
     """The framework-kind resolvers, taken from completeness_framework's OWN canonical set — the
@@ -223,16 +248,36 @@ def check() -> dict:
     critical = {cid for cid, klass in contract["classifications"].items()
                 if klass == inventory.SECURITY_CRITICAL}
     declared = specs()
+    applicable, registry = completeness_applicable(critical)
 
     problems: list[str] = []
     rows: list[dict] = []
 
-    # META-COMPLETENESS OF THE CONSUMERS THEMSELVES, both directions.
-    for cid in sorted(critical - set(declared)):
-        problems.append(f"{cid}: SECURITY_CRITICAL with NO completeness consumer")
+    # APPLICABILITY-SCOPED META-COMPLETENESS (Gate 4N-I28BH-E1). A completeness consumer is REQUIRED
+    # only from collections whose primary assurance class is one whose property IS membership/partition
+    # completeness; a collection governed by another property-specific class is owned by
+    # security_collection_assurance, not reported here as "uncovered".
+    for cid in sorted(applicable - set(declared)):
+        problems.append(f"{cid}: assurance class {registry.get(cid, {}).get('assurance_kind')!r} "
+                        "REQUIRES membership/partition completeness but has NO completeness consumer")
     for cid in sorted(set(declared) - critical):
         problems.append(f"{cid}: a consumer is declared for a collection that is not "
                         "SECURITY_CRITICAL (or no longer exists)")
+
+    # CROSS-VALIDATOR TOTALITY (no SECURITY collection may silently escape ALL assurance). Every
+    # SECURITY collection must carry exactly one registry assignment; membership/partition rows are
+    # OWNED here and must have a consumer (checked above); every other row must be owned by
+    # security_collection_assurance (a recognized non-completeness kind). An unassigned SECURITY
+    # collection, or one whose kind is neither completeness-owned nor a recognized other kind, fails.
+    import security_collection_assurance as _sca
+    recognized = set(_sca._HANDLERS)
+    for cid in sorted(critical):
+        kind = registry.get(cid, {}).get("assurance_kind")
+        if kind is None:
+            problems.append(f"{cid}: SECURITY_CRITICAL with NO assurance assignment — owned by NEITHER "
+                            "completeness nor security_collection_assurance")
+        elif kind not in recognized:
+            problems.append(f"{cid}: unknown assurance kind {kind!r} — owned by no validator")
 
     # PARTITIONS. Seven of the boundary deny lists are each a SUBSET of what the emitted policy
     # denies — no single one can equal the domain, and comparing each against the whole reports
@@ -317,11 +362,19 @@ def check() -> dict:
         row["result"] = "COMPLETE" if not missing and not unknown else "INCOMPLETE"
         rows.append(row)
 
-    return {"security_critical": len(critical), "with_consumer": len(critical & set(declared)),
-            "without_consumer": sorted(critical - set(declared)),
+    return {"security_total": len(critical),
+            "completeness_applicable": len(applicable),
+            "completeness_governed": len(applicable & set(declared)),
+            "completeness_ungoverned": sorted(applicable - set(declared)),
+            "non_completeness_assurance_owned_elsewhere": len(critical - applicable),
+            "security_critical": len(critical), "with_consumer": len(critical & set(declared)),
+            "without_consumer": sorted(applicable - set(declared)),
             "orphan_consumers": sorted(set(declared) - critical),
             "rows": rows, "problems": problems,
             "both_directions": "missing = domain - collection; unknown = collection - domain",
+            "applicability": "membership/partition completeness is REQUIRED only for the assurance "
+                             "classes whose property IS completeness; other classes are owned by "
+                             "security_collection_assurance (Gate 4N-I28BH-E1).",
             "clean": not problems}
 
 
@@ -338,9 +391,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result, indent=2))
     else:
-        print(f"  {result['security_critical']} security-critical collections; "
-              f"{result['with_consumer']} with a completeness consumer; "
-              f"{len(result['without_consumer'])} without")
+        print(f"  {result['security_total']} SECURITY; "
+              f"{result['completeness_applicable']} completeness-applicable (membership/partition); "
+              f"{result['completeness_governed']} governed; "
+              f"{len(result['completeness_ungoverned'])} completeness-ungoverned; "
+              f"{result['non_completeness_assurance_owned_elsewhere']} owned by "
+              "security_collection_assurance")
         for problem in result["problems"][:30]:
             print(f"    {problem}", file=sys.stderr)
         print("COLLECTION COMPLETENESS:", "complete" if result["clean"] else "INCOMPLETE")

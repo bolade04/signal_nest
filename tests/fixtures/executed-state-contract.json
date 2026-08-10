@@ -641,7 +641,7 @@
     "TERMINAL_CALLS": "VALUE:frozenset([\"'SystemExit'\", \"'_exit'\", \"'exit'\"])",
     "TESTS": "DIR:tests",
     "TaxonomyError": "CLASS:TaxonomyError:44136fa355b3678a1146ad16f7e8649e",
-    "WORKFLOW": "FILE:.github/workflows/ci.yml:24736698853f0a7857becea4f3a2d4ad",
+    "WORKFLOW": "FILE:.github/workflows/ci.yml:366debb823fab6b8bb9a336de5b06936",
     "_DERIVED": "VOLATILE_CACHE:NON_AUTHORITATIVE_PERFORMANCE_HINT",
     "_DUNDER_AND_STDLIB_SAFE": "VALUE:frozenset([\"'__class__'\", \"'__dict__'\", \"'__doc__'\"])",
     "_INDEX": "VOLATILE_CACHE:NON_AUTHORITATIVE_PERFORMANCE_HINT",

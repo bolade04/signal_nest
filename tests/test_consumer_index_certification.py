@@ -210,38 +210,132 @@ def test_widening_both_the_generator_and_the_policy_is_still_caught():
 # =====================================================================================
 # ARCH-H3/AWS-3 — index is not history
 # =====================================================================================
+#
+# GATE 4N-I28BH-E1-HISTORY-RECONCILIATION. These controls proved "the index is not committed
+# history" by pointing at the real fixtures, which HAPPENED to be staged-not-committed while this
+# branch was uncommitted. The authorized commit d5cab12d moved those anchors into HEAD, so that
+# incidental specimen is gone and the pre-commit assertions fire — exactly as their authors
+# demanded ("this branch has committed, so this test must be revisited rather than silently
+# passing for a new reason"). The reconciliation does NOT weaken the discrimination: it proves the
+# same load-bearing property (in-index / not-in-HEAD is a STAGED_ADDITION, never committed) on a
+# SYNTHETIC throwaway git repo, so it holds in every commit phase and in a clean CI checkout.
 
 
-def test_git_ls_files_does_not_establish_history():
-    """The defect in one assertion.
+def _build_synthetic_repo(repo: Path) -> dict:
+    """A throwaway git repo with one path in each of the seven tracked_state states.
 
-    Every fixture is in the INDEX, so `git ls-files` is non-empty and the old check passed.
-    None of them is in HEAD. A staged anchor has no history and no review trail — precisely
-    the weakness the control named.
+    Returns {relpath: expected_state}. The classifier is driven against it by rebinding the
+    single module global `tracked_state.REPO_ROOT` (see the `synthetic_states` fixture): every
+    tracked_state function reads that global, so the whole classifier redirects here. A synthetic
+    repo has a real `.git` DIRECTORY, so `.git/index` exists and `git write-tree` runs — none of
+    which depends on whether THIS branch has committed.
+    """
+    def g(*args, index_file: str | None = None):
+        import os as _os
+        env = {**_os.environ}
+        if index_file:
+            env["GIT_INDEX_FILE"] = index_file
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                              env=env, check=True)
+
+    repo.mkdir(parents=True, exist_ok=True)
+    g("init", "-q")
+    g("config", "user.email", "reconciliation@example.invalid")
+    g("config", "user.name", "reconciliation")
+    g("config", "commit.gpgsign", "false")
+    # Initial commit. .gitignore is committed HERE, in the first commit, so that later staging is
+    # never swept into a second commit (a `git commit` writes the whole index, which would move
+    # staged specimens into HEAD and destroy the states we are constructing).
+    (repo / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    (repo / "committed.txt").write_text("v1\n", encoding="utf-8")
+    (repo / "to_modify_worktree.txt").write_text("base\n", encoding="utf-8")
+    (repo / "to_modify_staged.txt").write_text("base\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    # The remaining states, created with NO further commit.
+    (repo / "staged_addition.txt").write_text("new\n", encoding="utf-8")
+    g("add", "staged_addition.txt")                          # in index, absent from HEAD
+    (repo / "to_modify_staged.txt").write_text("changed\n", encoding="utf-8")
+    g("add", "to_modify_staged.txt")                         # in HEAD, index content differs
+    (repo / "to_modify_worktree.txt").write_text("changed\n", encoding="utf-8")   # worktree differs, not added
+    (repo / "untracked.txt").write_text("loose\n", encoding="utf-8")              # never added
+    (repo / "ignored.txt").write_text("junk\n", encoding="utf-8")                 # matched by .gitignore
+    return {
+        "committed.txt": ts.TRACKED_IN_HEAD,
+        "staged_addition.txt": ts.STAGED_ADDITION,
+        "to_modify_staged.txt": ts.STAGED_MODIFICATION,
+        "to_modify_worktree.txt": ts.MODIFIED_IN_WORKTREE,
+        "untracked.txt": ts.UNTRACKED,
+        "ignored.txt": ts.IGNORED,
+        "absent.txt": ts.ABSENT,
+    }
+
+
+@pytest.fixture
+def synthetic_states(tmp_path, monkeypatch):
+    """Build the synthetic repo and redirect the whole tracked_state classifier at it.
+
+    `monkeypatch` restores `tracked_state.REPO_ROOT` after the test, so the real repository is
+    never affected and other tests keep measuring it.
+    """
+    repo = tmp_path / "synthetic-git"
+    expected = _build_synthetic_repo(repo)
+    monkeypatch.setattr(ts, "REPO_ROOT", repo)
+    return expected
+
+
+def test_git_ls_files_does_not_establish_history(synthetic_states):
+    """The ARCH-H3/AWS-3 defect, proven on a controlled specimen.
+
+    `git ls-files` reports the INDEX; a staged-only path is in the index yet absent from
+    committed history and carries no review trail. Formerly demonstrated with the real fixtures
+    (staged-not-committed on an uncommitted branch); now that the branch has committed the proof
+    runs on a synthetic repo and no longer depends on the branch's commit phase.
     """
     index = ts.index_paths()
     head = ts.head_paths()
-    fixtures = {p for p in index if p.startswith("tests/fixtures/")}
-    assert fixtures, "no fixtures in the index"
-    assert not (fixtures & head), (
-        "fixtures are now in HEAD; this branch has committed, so this test must be revisited "
-        "rather than silently passing for a new reason")
+    assert "staged_addition.txt" in index, "`git ls-files` does not see the staged addition"
+    assert "staged_addition.txt" not in head, "the staged addition is in committed history"
+    assert index - head, "index membership coincides with HEAD; the distinction is untested"
+    # The load-bearing discrimination: an in-index / not-in-HEAD path is a STAGED_ADDITION, never
+    # 'committed'/TRACKED_IN_HEAD. A control that equated ls-files membership with history would
+    # return TRACKED_IN_HEAD here.
+    assert ts.state_of("staged_addition.txt") == ts.STAGED_ADDITION
+    assert ts.state_of("staged_addition.txt") != ts.TRACKED_IN_HEAD
 
 
 @pytest.mark.parametrize("rel,expected", [
-    ("tests/fixtures/lifecycle-canonical-sha256.txt", ts.STAGED_ADDITION),
-    ("tests/fixtures/expected-writable-roles.json", ts.STAGED_ADDITION),
-    # GATE 4N-I23: the full verification package is now STAGED, so these two moved states.
-    # action_classifier.py was UNTRACKED (it would not have reached the commit at all — the
-    # I22 blocker) and ci.yml was MODIFIED_IN_WORKTREE. ci.yml is now a STAGED_MODIFICATION,
-    # a state that did not exist before I23 because it was collapsed into TRACKED_IN_HEAD.
-    ("scripts/action_classifier.py", ts.STAGED_ADDITION),
+    # GATE 4N-I28BH-E1-HISTORY-RECONCILIATION. Only phase-STABLE real-repo anchors remain here.
+    # After the authorized commit d5cab12d these production anchors are committed, so in any clean
+    # checkout they are TRACKED_IN_HEAD. The transient staging states they used to demonstrate
+    # (STAGED_ADDITION for the two fixtures + action_classifier.py, STAGED_MODIFICATION for ci.yml)
+    # are now proven on a synthetic repo in test_synthetic_repo_reports_all_seven_states, which is
+    # checkout-independent. ci.yml was DROPPED from this list rather than re-pointed: its state is
+    # legitimately checkout-dependent (STAGED_MODIFICATION while a change is staged, TRACKED_IN_HEAD
+    # in a clean checkout), so a fixed transient expectation for it would be true only under an
+    # accidental precondition — the exact defect shape this module exists to remove.
+    ("tests/fixtures/lifecycle-canonical-sha256.txt", ts.TRACKED_IN_HEAD),
+    ("tests/fixtures/expected-writable-roles.json", ts.TRACKED_IN_HEAD),
+    ("scripts/action_classifier.py", ts.TRACKED_IN_HEAD),
     ("infra/aws/live-resource-inventory.json", ts.IGNORED),
-    (".github/workflows/ci.yml", ts.STAGED_MODIFICATION),
     ("README.md", ts.TRACKED_IN_HEAD),
 ])
 def test_each_path_reports_its_exact_state(rel, expected):
     assert ts.state_of(rel) == expected
+
+
+def test_synthetic_repo_reports_all_seven_states(synthetic_states):
+    """The full seven-way discrimination on controlled specimens, independent of commit phase.
+
+    Strictly stronger than the previous real-path rows: it exercises every transient staging
+    state (STAGED_ADDITION, STAGED_MODIFICATION, MODIFIED_IN_WORKTREE, UNTRACKED) that a clean
+    checkout of a committed branch can no longer show on the real anchors — so the staging-vs-
+    committed discrimination the retired rows demonstrated is preserved, not lost.
+    """
+    for rel, expected in synthetic_states.items():
+        assert ts.state_of(rel) == expected, f"{rel}: got {ts.state_of(rel)}, expected {expected}"
+    # The seven states are genuinely distinct — a classifier that collapsed any pair would fail.
+    assert len(set(synthetic_states.values())) == 7
 
 
 def test_the_ambiguous_vocabulary_is_refused():
@@ -261,9 +355,25 @@ def test_the_predicted_commit_tree_is_reproducible_and_does_not_touch_the_index(
     assert before == after, "building the predicted tree modified the real index"
 
 
-def test_the_predicted_tree_includes_staged_additions_and_differs_from_head():
+def test_the_predicted_tree_includes_staged_additions_and_differs_from_head(synthetic_states):
+    """With a staged addition present, the predicted commit tree INCLUDES it and DIFFERS from
+    HEAD's tree. GATE 4N-I28BH-E1-HISTORY-RECONCILIATION: formerly asserted on the real branch,
+    where `predicted != head` held only while uncommitted; on a clean checkout of the committed
+    branch index == HEAD and the correct predicted tree equals HEAD's, so the property is now
+    proven deterministically on a synthetic repo that always has a staged addition."""
     predicted = ts.predicted_commit_tree()
-    assert predicted["predicted_tree_hash"] != predicted["head_tree_hash"]
+    assert predicted["predicted_tree_hash"] != predicted["head_tree_hash"], (
+        "a staged addition did not move the predicted tree off HEAD")
+    assert "staged_addition.txt" in predicted["entries"], "the staged addition would not reach the commit"
+    assert "staged_addition.txt" in predicted["added_relative_to_head"]
+
+
+def test_the_predicted_tree_contains_the_committed_governance_fixtures():
+    """Phase-invariant real-repo coverage retained from the reconciled test above: whatever the
+    branch's commit phase, the predicted commit tree IS the index tree and contains the
+    governance fixtures — committed (clean checkout) or staged (pre-commit)."""
+    predicted = ts.predicted_commit_tree()
+    assert predicted["predicted_tree_hash"] == ts.index_tree_hash()
     for rel in ("tests/fixtures/expected-writable-roles.json",
                 "tests/fixtures/readonly-verifier-ceiling.json"):
         assert rel in predicted["entries"], f"{rel} would not reach the commit"
@@ -295,9 +405,17 @@ def test_the_state_record_separates_every_hash():
     """
     record = ts.repository_state_record()
 
-    # The one distinction that can never legitimately collapse: if the commit would change
-    # anything at all, the predicted tree differs from HEAD's tree.
-    assert record["predicted_commit_tree_hash"] != record["head_tree_hash"]
+    # The predicted commit tree IS the index tree, so it differs from HEAD's tree EXACTLY when
+    # something is staged. GATE 4N-I28BH-E1-HISTORY-RECONCILIATION: the old unconditional
+    # `predicted != head` held only while the branch was uncommitted; on a clean checkout of the
+    # committed branch nothing is staged, index == HEAD, and equality is CORRECT — not a collapse.
+    # Derive the expectation from the actual staged state, the same shape this test already uses
+    # for the diff digests below.
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO_ROOT).returncode != 0
+    if staged:
+        assert record["predicted_commit_tree_hash"] != record["head_tree_hash"]
+    else:
+        assert record["predicted_commit_tree_hash"] == record["head_tree_hash"]
 
     unstaged = subprocess.run(["git", "diff", "--name-only"], cwd=REPO_ROOT,
                               capture_output=True, text=True).stdout.split()

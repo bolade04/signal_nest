@@ -461,7 +461,7 @@ jobs:
       # reads like a policy decision rather than a missing package. Installed HERE, before the
       # first guard, from the pinned contract in scripts/requirements-gate.txt.
       - name: Install Gate 4N guard dependencies
-        run: python3 -m pip install --require-hashes=false -r scripts/requirements-gate.txt
+        run: python3 -m pip install -r scripts/requirements-gate.txt
 
       - name: Gate 4N guard dependency contract
         id: gate_dependencies

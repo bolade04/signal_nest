@@ -451,7 +451,8 @@
   "shell_positions.py::ALL_KEYWORDS": "NON_SECURITY_CONFIGURATION",
   "signalnest_identity.py::ALL_ROLE_NAMES": "NON_SECURITY_CONFIGURATION",
   "trust_policies.py::_BY_SUFFIX": "NON_SECURITY_CONFIGURATION",
-  "security_collection_assurance.py::_GOVERNED_FILES": "NON_SECURITY_CONFIGURATION"
+  "security_collection_assurance.py::_GOVERNED_FILES": "NON_SECURITY_CONFIGURATION",
+  "collection_completeness.py::COMPLETENESS_REQUIRING_KINDS": "NON_SECURITY_CONFIGURATION"
  },
  "completeness_consumers": {
   "reviewer_retrieval_state.py::STATES": {

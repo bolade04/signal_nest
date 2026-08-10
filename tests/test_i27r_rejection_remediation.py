@@ -560,7 +560,7 @@ _REMEDIATION_FIXTURES = frozenset({"approved-account-registry.json",
 # that admits every other one. Command roots stay 41 and graded steps stay 44; exactly these
 # three identities are new, and each is named in
 # ~/.signalnest/generated/4n-i28y/control-category-reconciliation.json.
-EXPECTED_PRODUCTION_CONTROL_SITES = 828  # BH-C: +1 (critical_list_inventory._collection_value helper added by the F8 discovery extension)
+EXPECTED_PRODUCTION_CONTROL_SITES = 829  # BH-C-E1: +1 (collection_completeness.completeness_applicable helper for registry-derived completeness applicability)  # BH-C: +1 (critical_list_inventory._collection_value helper added by the F8 discovery extension)
 # GATE 4N-I28BH-B (this gate): 790 -> 827. Exactly 37 sites added (35 + the SCAN_DECISIONS runtime-schema predicate _runtime_scan_decisions_schema, which replaced SCAN_DECISIONS review-pin after review found it a runtime accumulator), ZERO removed (established by
 # identity against START_TREE 45eb4d72). CAUSE: the property-specific security-collection assurance
 # machinery landed. 1 graded_step: the new mandatory ci.yml step `scripts/security_collection_
