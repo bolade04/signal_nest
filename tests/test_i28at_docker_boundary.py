@@ -344,14 +344,44 @@ def test_d26_a_flag_expanding_variable_is_a_blocker():
 
 
 # ------------------------------------------------------------------ 7. availability and CI marker
-def test_d27_docker_is_genuinely_absent_on_this_host():
-    """Recorded as a FACT, because the model choice rests on it."""
-    assert shutil.which("docker") is None
-    assert not (Path.home() / ".docker").exists()
-    assert not Path("/var/run/docker.sock").exists()
+# Gate 4N-I28BH-E6. docker absence is the LOCAL developer model baseline, not a universal fact of
+# every execution host: a GitHub-hosted runner intentionally has Docker (MODEL_B's stated
+# assumption). So these tests MODEL the docker-present/absent and CI-marker states explicitly, at
+# the resolution boundary, rather than reading the physical runner's PATH or ambient GitHub markers.
+# docker_boundary.py itself is unchanged — the property under test is unchanged, only the way the
+# environment is established.
+_GH_MARKERS = ("GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_WORKFLOW")
 
 
-def test_d28_absence_is_permitted_only_outside_the_graded_path(clean_env):
+def _model_docker_absent(monkeypatch):
+    real = shutil.which
+    monkeypatch.setattr(db.shutil, "which",
+                        lambda cmd, *a, **k: None if cmd == "docker" else real(cmd, *a, **k))
+
+
+def test_d27_docker_presence_is_reported_honestly_and_absence_is_the_model_baseline(
+        clean_env, monkeypatch, tmp_path):
+    """MODEL_B rests on HONEST REPORTING of whether docker is resolvable, not on a fixed host fact.
+    The derived state must report whatever docker the host really has, and under the documented
+    docker-absent baseline (modelled here) an honest non-CI session is clean. Portable to a runner
+    that has Docker and to a developer host that does not."""
+    for name in _GH_MARKERS:
+        os.environ.pop(name, None)
+    # 1. honest reporting: the derived docker_on_path IS the real resolver's answer, whatever it is.
+    assert db.steering_state()["docker_on_path"] == shutil.which("docker")
+    # 2. the documented MODEL_B baseline, modelled explicitly: an honest docker-absent, non-CI
+    #    session is clean. A fresh HOME gives the same empty ~/.docker surface a developer host has.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _model_docker_absent(monkeypatch)
+    assert db.steering_state()["docker_on_path"] is None
+    assert db.verify()["clean"], "an honest docker-absent non-CI session must be clean"
+
+
+def test_d28_absence_is_permitted_only_outside_the_graded_path(clean_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))          # clean config surface, no ambient ~/.docker
+    _model_docker_absent(monkeypatch)                  # modelled docker absence, host-independent
+    for name in _GH_MARKERS:
+        os.environ.pop(name, None)
     assert db.verify()["clean"], "Docker absence outside CI must not fail an honest session"
     os.environ.update({"GITHUB_ACTIONS": "true", "GITHUB_RUN_ID": "1", "GITHUB_WORKFLOW": "ci"})
     result = db.verify()
@@ -362,6 +392,8 @@ def test_d28_absence_is_permitted_only_outside_the_graded_path(clean_env):
 
 
 def test_d29_a_partially_forged_ci_marker_is_refused(clean_env):
+    for name in _GH_MARKERS:                            # start from a clean marker environment, so
+        os.environ.pop(name, None)                     # only the partial subset below is present
     os.environ["GITHUB_RUN_ID"] = "1"
     problems = db.ci_assumption_problems(db.steering_state(), db.load_policy())
     assert any("partially forged" in p for p in problems), problems

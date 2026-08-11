@@ -347,11 +347,25 @@ def test_n21_an_unknown_installation_layout_fails_closed_with_an_actionable_mess
     result = na.verify(path_env=f"{fake}:{os.environ['PATH']}")
     assert not result["clean"]
     joined = " ".join(result["problems"])
-    assert "no declared installation family" in joined or "no npm package root" in joined
+    # Gate 4N-I28BH-E6. Fail-closed is proven by clean == False; WHICH diagnostic is reached
+    # depends on the host: with no approved family installed (a developer host) npm "lies in no
+    # declared installation family"; with setup-node's npm present (a hosted runner) the prepended
+    # fake npm is "outside every location the declared CI toolchain covers". Both are legitimate,
+    # actionable fail-closed diagnostics, so the test asserts the SEMANTIC contract — npm is named,
+    # the location is identified as unsupported/undeclared/outside-approved, and the message is
+    # actionable — rather than one historical sentence.
+    assert "npm resolves to" in joined, "the diagnostic must name the npm it refused"
+    location_diagnostics = ("no declared installation family", "outside every location",
+                            "no npm package root")
+    assert any(d in joined for d in location_diagnostics), (
+        f"the diagnostic must identify the unsupported/undeclared/outside-approved location: {joined}")
     if "no declared installation family" in joined:
         assert "do not add a path prefix" in joined, (
             "the message must tell the operator what to do AND what not to do; the obvious wrong "
             "fix here is the defect itself")
+    if "outside every location" in joined:
+        assert "not covered by it" in joined or "setup-node" in joined, (
+            "the outside-approved diagnostic must name what the toolchain does and does not cover")
 
 
 def test_n22_an_invalid_authority_model_is_refused(tmp_path):
@@ -474,6 +488,25 @@ def test_n33_the_snapshot_covers_every_load_bearing_component():
         assert field in snap, f"{field} is not carried into session-finish comparison"
 
 
+def _distinct_from(field, baseline, proposed):
+    """A validly-typed mutation guaranteed to DIFFER from the live baseline (Gate 4N-I28BH-E6).
+
+    A mutation that happens to equal the host's live value (e.g. npm_mode already '0o777' on a
+    hosted runner) is not a mutation at all, and compare() correctly reports no drift for it — so
+    the test, not the control, must guarantee the change. The parametrized value is used when it
+    already differs; otherwise a deterministic alternate of the same shape is derived.
+    """
+    if proposed != baseline:
+        return proposed
+    if isinstance(baseline, str) and baseline.startswith("0o"):
+        return "0o755" if baseline == "0o777" else "0o777"
+    if isinstance(baseline, list):
+        return [*baseline, "/tmp/e6-distinct"] if baseline != ["/tmp/e6-distinct"] else ["/tmp/e6-other"]
+    if isinstance(baseline, str):
+        return baseline + "-e6-distinct"
+    return f"e6-distinct::{baseline!r}"
+
+
 @pytest.mark.parametrize("field,changed", [
     ("npm_sha256", "deadbeef"),
     ("canonical_npm", "/tmp/other/npm"),
@@ -488,6 +521,10 @@ def test_n33_the_snapshot_covers_every_load_bearing_component():
 ])
 def test_n34_every_late_mutation_is_detected_as_drift(field, changed):
     before = na.snapshot()
+    changed = _distinct_from(field, before.get(field), changed)
+    assert changed != before.get(field), (
+        f"the mutation for {field} must genuinely differ from the live baseline, or it tests "
+        "nothing (an identity 'mutation' is not drift)")
     after = dict(before)
     after[field] = changed
     drift = na.compare(before, after)
