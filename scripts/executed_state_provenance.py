@@ -153,6 +153,171 @@ def _defaults_token(obj) -> str:
     return f"D{repr(d)}|K{repr(sorted(k.items())) if k else 'None'}"
 
 
+# --------------------------------------------------------------------------- import provenance
+# GATE 4N-I28BH-E4. What follows separates two provenance questions the earlier design conflated
+# under one signal — the file's PATH.
+#
+#   E4-B THIRD_PARTY_LOCATION_CLASSIFICATION. local_import_tokens classified a function-local import
+#   as repository-owned versus third-party purely by `str(REPO_ROOT) in str(origin)`. A virtual
+#   environment created UNDER the workspace (CI builds `.reader-venv` at the repo root) is physically
+#   inside the tree yet holds externally-installed packages, so PyYAML's __init__.py was bound as a
+#   repository FILE and drifted from the pinned `MODULE:yaml@<outside-repo>`. Location is not
+#   provenance: a package is third-party because an INSTALLED DISTRIBUTION provides it and owns the
+#   bytes actually imported, established here from importlib.metadata rather than from where the file
+#   happens to sit. A hand-dropped `yaml.py` with no distribution, or a module shadowing a real one
+#   on sys.path, is owned by no distribution's file manifest and is refused. The token records the
+#   distribution name and version, so a version change is a visible drift rather than a silent one.
+#
+#   E4-A CALLABLE_FINGERPRINT_PORTABILITY. local_import_tokens bound every function-local callable,
+#   including stdlib and third-party ones, by raw code identity (_code_token hashes co_code). CPython
+#   serialises the same source to different bytecode across interpreter patch levels, so a contract
+#   pinned under one 3.12.x refused an unmodified subprocess.run under another — a state drift on code
+#   nobody changed, the same class of accidental non-determinism I28AM/_canonical already excise. Our
+#   OWN modules stay exact-byte bound (we author them; their bytecode is a function of our commit).
+#   A callable whose source lives OUTSIDE the repository is bound instead by its version-independent
+#   semantic identity — module, qualified name, provenance of its defining file, signature and
+#   defaults. That still refuses a monkeypatch, a wrapper, a different module, a callable compiled
+#   from a different file, or a name/qualname spoof, because each of those changes one of those
+#   fields; what it deliberately no longer asserts is the patch-level bytecode of code the repository
+#   does not own, which is the interpreter/toolchain layer's to pin, not this one's.
+
+
+def _resolve_origin(origin) -> Path | None:
+    try:
+        return Path(origin).resolve() if origin else None
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _under_repo(path: Path | None) -> bool:
+    """True only for a real path in the repository SOURCE tree, not an isolated env under it.
+
+    A directory carrying a pyvenv.cfg is a virtual environment; anything at or below it is
+    installed, not authored, and must earn third-party provenance from its distribution rather than
+    inherit repository trust from a path prefix. The walk stops at REPO_ROOT so a pyvenv.cfg placed
+    ABOVE the repository cannot flip the classification of the repository's own files.
+    """
+    if path is None:
+        return False
+    try:
+        path.relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+    for parent in [path, *path.parents]:
+        if parent == REPO_ROOT:
+            break
+        if (parent / "pyvenv.cfg").is_file():
+            return False
+    return True
+
+
+def _under_interpreter(path: Path | None) -> bool:
+    """True when the file lives under this interpreter's own installation (its stdlib)."""
+    if path is None:
+        return False
+    for base in {sys.base_prefix, sys.prefix}:
+        try:
+            root = Path(base).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if path == root or root in path.parents:
+            return True
+    return False
+
+
+def _owning_distribution(import_name: str, origin: Path | None):
+    """(distribution_name, version) iff an installed distribution PROVIDES import_name AND OWNS origin.
+
+    Independent evidence (Gate 4N-I28BH-E4 §13): the answer comes from installed-distribution
+    metadata, not from the file's location and not from any self-claim by the module. packages_
+    distributions() maps the top-level import to the distributions that declare it, and the file
+    actually imported must appear in that distribution's own file manifest — so a module shadowing a
+    real one on sys.path, or a bare file with no distribution behind it, is not owned and returns
+    None. The version travels in the token, so a drift from the pinned dependency is visible here.
+    """
+    if not import_name or origin is None:
+        return None
+    try:
+        import importlib.metadata as md
+    except Exception:                                               # noqa: BLE001
+        return None
+    try:
+        mapping = md.packages_distributions()
+    except Exception:                                               # noqa: BLE001
+        return None
+    for dist_name in dict.fromkeys(mapping.get(import_name, []) or []):
+        try:
+            dist = md.distribution(dist_name)
+            owned = {
+                _resolve_origin(dist.locate_file(f))
+                for f in (dist.files or [])
+            }
+        except Exception:                                          # noqa: BLE001
+            continue
+        if origin in owned:
+            return dist_name, dist.version
+    return None
+
+
+def _localimport_token(import_name: str, imported) -> str:
+    """Provenance of a function-local import, keyed on WHO PROVIDES it, not on WHERE it sits."""
+    origin = getattr(imported, "__file__", None)
+    resolved = _resolve_origin(origin)
+    dist = _owning_distribution(import_name, resolved)
+    if dist is not None:
+        return f"DIST:{import_name}@{dist[0]}=={dist[1]}"
+    if not origin:
+        return f"MODULE:{import_name}@<builtin>"
+    if resolved is not None and _under_repo(resolved):
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()[:32]
+        return f"FILE:{_relative(resolved)}:{digest}"
+    # Not distribution-owned and not repository source: the interpreter's own stdlib, or a file
+    # outside the tree that no distribution claims. Bound by name and basename as before — this is
+    # the branch stdlib imports (ast, subprocess, ...) have always taken, unchanged.
+    return f"MODULE:{import_name}@<outside-repo>{Path(origin).name}"
+
+
+def _callable_provenance(value) -> str:
+    """A version-independent classification of where an imported callable's code comes from."""
+    code = getattr(value, "__code__", None)
+    if code is None:
+        return "BUILTIN"
+    cf = _resolve_origin(code.co_filename)
+    if cf is None or not cf.is_file():
+        # A co_filename that names no real file (e.g. '<string>', a compiled-in name) cannot be
+        # attributed to the stdlib or a distribution, so it is never treated as trusted-external.
+        return "SYNTHETIC"
+    if _under_repo(cf):
+        return f"REPO:{_relative(cf)}"
+    top = str(getattr(value, "__module__", "") or "").split(".")[0]
+    dist = _owning_distribution(top, cf) if top else None
+    if dist is not None:
+        return f"DIST:{dist[0]}=={dist[1]}"
+    if _under_interpreter(cf):
+        return "STDLIB"
+    return f"OUTSIDE:{cf.name}"
+
+
+def _extern_callable_token(value) -> str:
+    """Version-independent identity for a callable the repository does not author.
+
+    Binds the semantic surface that is stable across interpreter patch levels and that an attacker
+    must change to substitute behaviour: defining module, qualified name, the provenance of the
+    defining file, the call signature, and the defaults. It does NOT bind co_code, which is the
+    field that legitimately differs between CPython builds of identical source.
+    """
+    import inspect
+
+    mod = getattr(value, "__module__", "?")
+    qn = getattr(value, "__qualname__", getattr(value, "__name__", "?"))
+    prov = _callable_provenance(value)
+    try:
+        sig = str(inspect.signature(value))
+    except (ValueError, TypeError):
+        sig = "<no-signature>"
+    return f"EXTERNCALLABLE:{mod}.{qn}@{prov}|sig={sig}|{_defaults_token(value)}"
+
+
 # A module-level MEMOISATION CACHE is reachable state whose CONTENT is a function of already-pinned
 # code and already-pinned files. Pinning its content would pin a value that legitimately differs
 # between "before any derivation ran" and "after", so the token cannot bind content.
@@ -338,13 +503,7 @@ def local_import_tokens(module, critical_callables) -> tuple[dict, list]:
             problems.append(f"local import {target}: cannot be resolved ({exc}); an import the "
                             "verifier cannot follow is refused rather than assumed benign")
             continue
-        origin = getattr(imported, "__file__", None)
-        if origin and str(REPO_ROOT) in str(origin):
-            digest = hashlib.sha256(Path(origin).read_bytes()).hexdigest()[:32]
-            tokens[f"LOCALIMPORT:{target}"] = f"FILE:{_relative(Path(origin))}:{digest}"
-        else:
-            tokens[f"LOCALIMPORT:{target}"] = (
-                f"MODULE:{target}@{'<builtin>' if not origin else '<outside-repo>' + Path(origin).name}")
+        tokens[f"LOCALIMPORT:{target}"] = _localimport_token(target, imported)
         for attr in sorted(imports[target]):
             value = getattr(imported, attr, None)
             if value is None or not callable(value):
@@ -352,8 +511,15 @@ def local_import_tokens(module, critical_callables) -> tuple[dict, list]:
             code = getattr(value, "__code__", None)
             if code is None:
                 continue
-            tokens[f"LOCALCALLABLE:{target}.{attr}"] = (
-                f"CALLABLE:{_code_token(code)}|{_defaults_token(value)}")
+            key = f"LOCALCALLABLE:{target}.{attr}"
+            cf = _resolve_origin(code.co_filename)
+            if cf is not None and _under_repo(cf):
+                # Our own code, imported function-locally: bound to its exact bytes, because we
+                # author it and its bytecode is a function of the committed source, not the build.
+                tokens[key] = f"CALLABLE:{_code_token(code)}|{_defaults_token(value)}"
+            else:
+                # stdlib / third-party: version-independent semantic + provenance identity.
+                tokens[key] = _extern_callable_token(value)
     return tokens, problems
 
 
