@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '@/auth/AuthContext';
 import { navItems } from './nav';
 import { cn } from '@/lib/utils';
 
@@ -26,13 +27,20 @@ function BrandMark() {
 }
 
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+  const { user } = useAuth();
+  // Operator entries are hidden from non-operators. This is UX only — the route
+  // itself is guarded by RequireOperator and every operator endpoint is enforced
+  // server-side by require_operator.
+  const visibleItems = navItems.filter(
+    (item) => !item.operatorOnly || (user?.is_operator ?? false),
+  );
   return (
     <nav className="flex h-full flex-col gap-1" aria-label="Primary">
       <div className="mb-4 pt-1">
         <BrandMark />
       </div>
       <ul className="flex flex-1 flex-col gap-1">
-        {navItems.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           return (
             <li key={item.to}>

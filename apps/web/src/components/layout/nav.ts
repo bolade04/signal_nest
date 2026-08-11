@@ -1,4 +1,5 @@
 import {
+  Activity,
   Compass,
   LayoutDashboard,
   ListChecks,
@@ -14,6 +15,12 @@ export interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   end?: boolean;
   description: string;
+  /**
+   * Shown only when the server-authoritative session says the user is an
+   * operator. The entry stays in this array regardless so breadcrumb labels
+   * (derived at module scope) remain stable; the sidebar filters at render time.
+   */
+  operatorOnly?: boolean;
 }
 
 export const navItems: NavItem[] = [
@@ -59,5 +66,12 @@ export const navItems: NavItem[] = [
     label: 'Settings',
     icon: Settings,
     description: 'Workspace and account settings',
+  },
+  {
+    to: '/operations',
+    label: 'Operations',
+    icon: Activity,
+    description: 'Operator observability and capability control',
+    operatorOnly: true,
   },
 ];

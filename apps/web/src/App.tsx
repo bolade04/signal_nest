@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom';
 import { AppShell } from '@/components/layout/app-shell';
 import { ProtectedRoute } from '@/auth/ProtectedRoute';
+import { RequireOperator } from '@/auth/RequireOperator';
 import { SignInPage } from '@/pages/auth/SignIn';
 import { RegisterPage } from '@/pages/auth/Register';
 import { OverviewPage } from '@/pages/Overview';
@@ -11,6 +12,7 @@ import { ScoutRequestsPage } from '@/pages/ScoutRequests';
 import { ScoutRequestDetailPage } from '@/pages/ScoutRequestDetail';
 import { OpportunitiesPage } from '@/pages/Opportunities';
 import { OpportunityDetailPage } from '@/pages/OpportunityDetail';
+import { OperationsPage } from '@/pages/operations/Operations';
 import { SettingsPage } from '@/pages/Settings';
 import { NotFoundPage } from '@/pages/NotFound';
 
@@ -30,6 +32,9 @@ export function App() {
           <Route path="opportunities" element={<OpportunitiesPage />} />
           <Route path="opportunities/:opportunityId" element={<OpportunityDetailPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route element={<RequireOperator />}>
+            <Route path="operations" element={<OperationsPage />} />
+          </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Route>

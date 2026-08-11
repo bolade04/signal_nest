@@ -252,7 +252,226 @@ const emptyProfile = {
   workspace_id: workspace.id,
 };
 
+// ---- Operator observability + capability governance (4A-D) ----
+// A stateful in-memory override store so tests can exercise the full
+// set → resolve → clear loop against the same deny-biased precedence the real
+// resolver applies. Operations tests call resetCapabilityOverrides() in their
+// beforeEach; no other suite touches this state.
+const capabilityRegistryItems = [
+  {
+    capability: 'opportunity_feedback',
+    label: 'Opportunity Feedback',
+    global_flag_attr: 'opportunity_feedback_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '4B',
+  },
+  {
+    capability: 'scout_scheduling',
+    label: 'Scout Scheduling',
+    global_flag_attr: 'scout_scheduling_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '4B',
+  },
+  {
+    capability: 'connector_rss',
+    label: 'RSS Connector',
+    global_flag_attr: 'connector_rss_enabled',
+    workspace_enableable: false,
+    workspace_disableable: true,
+    future_activation_phase: '4B',
+  },
+] as const;
+
+interface OverrideRow {
+  id: string;
+  organization_id: string;
+  workspace_id: string;
+  capability: string;
+  enabled: boolean;
+  reason: string | null;
+  set_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+const capabilityOverrideRows = new Map<string, OverrideRow>();
+const overrideKey = (ws: string, cap: string) => `${ws}:${cap}`;
+
+export function resetCapabilityOverrides(): void {
+  capabilityOverrideRows.clear();
+}
+
+// Mirrors the backend resolver's honored-override semantics: an enable is
+// honored only for an enableable capability; a disable for a disableable one;
+// otherwise the deny-biased secure default applies. All global flags are False
+// (dark), so with no override the global configuration decides "disabled".
+function resolveEffective(ws: string, item: (typeof capabilityRegistryItems)[number]) {
+  const row = capabilityOverrideRows.get(overrideKey(ws, item.capability));
+  if (row) {
+    if (row.enabled && item.workspace_enableable) {
+      return {
+        capability: item.capability,
+        workspace_id: ws,
+        effective_enabled: true,
+        decided_by: 'workspace_override',
+        global_flag: false,
+        has_override: true,
+        override_value: true,
+      };
+    }
+    if (!row.enabled && item.workspace_disableable) {
+      return {
+        capability: item.capability,
+        workspace_id: ws,
+        effective_enabled: false,
+        decided_by: 'workspace_override',
+        global_flag: false,
+        has_override: true,
+        override_value: false,
+      };
+    }
+    return {
+      capability: item.capability,
+      workspace_id: ws,
+      effective_enabled: false,
+      decided_by: 'secure_default',
+      global_flag: false,
+      has_override: false,
+      override_value: null,
+    };
+  }
+  return {
+    capability: item.capability,
+    workspace_id: ws,
+    effective_enabled: false,
+    decided_by: 'global_configuration',
+    global_flag: false,
+    has_override: false,
+    override_value: null,
+  };
+}
+
+// The capability endpoints are tenant-scoped and deliberately non-enumerating:
+// a scope that is not the demo org/workspace 404s, mirroring the backend. A
+// test that renders the page successfully therefore proves the frontend sent
+// the active workspace's real scope.
+function scopeInvalid(url: URL): boolean {
+  return (
+    url.searchParams.get('organization_id') !== org.id ||
+    url.searchParams.get('workspace_id') !== workspace.id
+  );
+}
+
 export const handlers = [
+  // ---- Operator observability + capability governance (4A-D; operator-only) ----
+  http.get(P('/internal/system/overview'), () =>
+    HttpResponse.json({
+      as_of: '2026-06-01T12:00:00Z',
+      stale_after_seconds: 120,
+      jobs: {
+        total: 6,
+        stuck_count: 1,
+        dead_letter_count: 2,
+        status_counts: { queued: 1, running: 2, succeeded: 1, dead_letter: 2 },
+      },
+      workers: { active_count: 3, stale_count: 1, status_counts: { active: 3, stale: 1 } },
+      schedules: { total: 4, state_counts: { active: 3, paused: 1 } },
+    }),
+  ),
+  http.get(P('/internal/system/telemetry'), () =>
+    HttpResponse.json({
+      logging_format: 'json',
+      metrics_enabled: false,
+      exporter_status: 'noop',
+      telemetry_failures: 0,
+      trace_export_failures: 0,
+      tracing_enabled: false,
+      tracing_exporter: 'none',
+      tracing_sample_ratio: 0,
+      tracing_status: 'disabled',
+      redaction_enabled: true,
+      correlation_enabled: true,
+    }),
+  ),
+  http.get(P('/internal/system/capabilities/registry'), () =>
+    HttpResponse.json({ items: capabilityRegistryItems }),
+  ),
+  http.get(P('/internal/system/capabilities/effective'), ({ request }) => {
+    const url = new URL(request.url);
+    if (scopeInvalid(url)) return HttpResponse.json({ detail: 'not_found' }, { status: 404 });
+    return HttpResponse.json({
+      items: capabilityRegistryItems.map((item) => resolveEffective(workspace.id, item)),
+    });
+  }),
+  http.get(P('/internal/system/capabilities/overrides'), ({ request }) => {
+    const url = new URL(request.url);
+    if (scopeInvalid(url)) return HttpResponse.json({ detail: 'not_found' }, { status: 404 });
+    const items = [...capabilityOverrideRows.values()];
+    return HttpResponse.json({ items, total: items.length, limit: 50, offset: 0 });
+  }),
+  http.put(P('/internal/system/capabilities/overrides'), async ({ request }) => {
+    const body = (await request.json()) as {
+      organization_id: string;
+      workspace_id: string;
+      capability: string;
+      enabled: boolean;
+      reason?: string | null;
+    };
+    if (body.organization_id !== org.id || body.workspace_id !== workspace.id) {
+      return HttpResponse.json({ detail: 'not_found' }, { status: 404 });
+    }
+    const item = capabilityRegistryItems.find((c) => c.capability === body.capability);
+    if (!item) return HttpResponse.json({ detail: 'unknown_capability' }, { status: 422 });
+    if (body.enabled && !item.workspace_enableable) {
+      return HttpResponse.json(
+        { detail: 'capability_override_not_permitted' },
+        { status: 422 },
+      );
+    }
+    const key = overrideKey(body.workspace_id, body.capability);
+    const existing = capabilityOverrideRows.get(key);
+    const row: OverrideRow = {
+      id: existing?.id ?? `ovr-${key}`,
+      organization_id: body.organization_id,
+      workspace_id: body.workspace_id,
+      capability: body.capability,
+      enabled: body.enabled,
+      reason: body.reason ?? null,
+      set_by_user_id: demoUser.id,
+      created_at: existing?.created_at ?? '2026-06-01T12:00:00Z',
+      updated_at: '2026-06-01T12:00:00Z',
+    };
+    capabilityOverrideRows.set(key, row);
+    return HttpResponse.json({
+      capability: body.capability,
+      workspace_id: body.workspace_id,
+      enabled: body.enabled,
+      changed: existing?.enabled !== body.enabled,
+      created: !existing,
+      override_id: row.id,
+    });
+  }),
+  http.delete(P('/internal/system/capabilities/overrides'), ({ request }) => {
+    const url = new URL(request.url);
+    if (scopeInvalid(url)) return HttpResponse.json({ detail: 'not_found' }, { status: 404 });
+    const capability = url.searchParams.get('capability') ?? '';
+    const key = overrideKey(workspace.id, capability);
+    const existing = capabilityOverrideRows.get(key);
+    capabilityOverrideRows.delete(key);
+    // Mirrors the real clear service: the mutation result never carries the
+    // cleared row's id (override_id is always null on DELETE).
+    return HttpResponse.json({
+      capability,
+      workspace_id: workspace.id,
+      enabled: null,
+      changed: Boolean(existing),
+      created: false,
+      override_id: null,
+    });
+  }),
+
   // ---- System (runtime introspection; secret-free) ----
   // Coarse summary for any authenticated caller (no per-capability topology).
   http.get(P('/system/capabilities'), () =>
