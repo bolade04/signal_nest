@@ -7,6 +7,17 @@ export const queryKeys = {
   session: ['session'] as const,
   runtimeSummary: ['system', 'capabilities'] as const,
   runtimeDetail: ['internal', 'system', 'capabilities'] as const,
+
+  // Operator-only internal reads (4A-D). The tenant-scoped capability keys embed
+  // both the organization and workspace ids so switching tenant context can never
+  // reuse another workspace's cached activation state.
+  operationsOverview: ['internal', 'system', 'overview'] as const,
+  operationsTelemetry: ['internal', 'system', 'telemetry'] as const,
+  capabilityRegistry: ['internal', 'system', 'capabilities', 'registry'] as const,
+  capabilityEffective: (orgId: string, workspaceId: string) =>
+    ['internal', 'system', 'capabilities', 'effective', orgId, workspaceId] as const,
+  capabilityOverrides: (orgId: string, workspaceId: string) =>
+    ['internal', 'system', 'capabilities', 'overrides', orgId, workspaceId] as const,
   organizations: ['organizations'] as const,
   workspaces: (orgId: string) => ['organizations', orgId, 'workspaces'] as const,
   workspace: (workspaceId: string) => ['workspaces', workspaceId] as const,

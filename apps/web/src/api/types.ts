@@ -80,6 +80,21 @@ export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];
 
+// Operator-only capability governance + observability (4A-D). All of these are
+// generated contract types — no hand-written shapes for internal endpoints.
+export type Capability = S['Capability'];
+export type DecisionSource = S['DecisionSource'];
+export type CapabilityRegistryItem = S['CapabilityRegistryItemOut'];
+export type CapabilityRegistry = S['CapabilityRegistryOut'];
+export type CapabilityEffective = S['CapabilityEffectiveOut'];
+export type CapabilityEffectiveList = S['CapabilityEffectiveListOut'];
+export type CapabilityOverride = S['CapabilityOverrideOut'];
+export type CapabilityOverridePage = S['CapabilityOverridePageOut'];
+export type CapabilityOverrideMutation = S['CapabilityOverrideMutationOut'];
+export type CapabilityOverrideSetIn = S['CapabilityOverrideSetIn'];
+export type OperationalOverview = S['OperationalOverviewOut'];
+export type TelemetryStatus = S['TelemetryStatusOut'];
+
 // Campaign-context list endpoints return loosely-typed dict rows; every row
 // carries at least an id alongside its input fields.
 export type ContextRow = Record<string, unknown> & { id: string };

@@ -3,6 +3,12 @@ import type {
   AudienceIn,
   BrandOut,
   BrandVoiceIn,
+  Capability,
+  CapabilityEffectiveList,
+  CapabilityOverrideMutation,
+  CapabilityOverridePage,
+  CapabilityOverrideSetIn,
+  CapabilityRegistry,
   BusinessProfileBase,
   BusinessProfileOut,
   CampaignIn,
@@ -26,6 +32,7 @@ import type {
   OfferIn,
   OnboardingRequest,
   OnboardingResult,
+  OperationalOverview,
   OpportunityCard,
   OpportunityDetail,
   OpportunityFilters,
@@ -43,6 +50,7 @@ import type {
   ScoutScheduleOut,
   SessionOut,
   SourcePrefIn,
+  TelemetryStatus,
   WorkspaceCreate,
   WorkspaceOut,
 } from './types';
@@ -55,6 +63,55 @@ export const getRuntimeSummary = (signal?: AbortSignal) =>
 // Detailed per-capability backend topology — operator-only (403 otherwise).
 export const getRuntimeDetail = (signal?: AbortSignal) =>
   apiRequest<RuntimeCapabilities>('/internal/system/capabilities', { signal });
+
+// ---- Operator observability + capability governance (4A-D) ----
+// Every endpoint below is operator-only: the backend's require_operator dependency
+// rejects non-operators with 403. The frontend gates these calls on the
+// server-authoritative `user.is_operator` so a customer session never issues them.
+export const getOperationalOverview = (signal?: AbortSignal) =>
+  apiRequest<OperationalOverview>('/internal/system/overview', { signal });
+
+export const getTelemetryStatus = (signal?: AbortSignal) =>
+  apiRequest<TelemetryStatus>('/internal/system/telemetry', { signal });
+
+export const getCapabilityRegistry = (signal?: AbortSignal) =>
+  apiRequest<CapabilityRegistry>('/internal/system/capabilities/registry', { signal });
+
+export const getCapabilityEffective = (
+  organizationId: string,
+  workspaceId: string,
+  signal?: AbortSignal,
+) =>
+  apiRequest<CapabilityEffectiveList>('/internal/system/capabilities/effective', {
+    query: { organization_id: organizationId, workspace_id: workspaceId },
+    signal,
+  });
+
+export const getCapabilityOverrides = (
+  organizationId: string,
+  workspaceId: string,
+  signal?: AbortSignal,
+) =>
+  apiRequest<CapabilityOverridePage>('/internal/system/capabilities/overrides', {
+    query: { organization_id: organizationId, workspace_id: workspaceId },
+    signal,
+  });
+
+export const setCapabilityOverride = (body: CapabilityOverrideSetIn) =>
+  apiRequest<CapabilityOverrideMutation>('/internal/system/capabilities/overrides', {
+    method: 'PUT',
+    body,
+  });
+
+export const clearCapabilityOverride = (
+  organizationId: string,
+  workspaceId: string,
+  capability: Capability,
+) =>
+  apiRequest<CapabilityOverrideMutation>('/internal/system/capabilities/overrides', {
+    method: 'DELETE',
+    query: { organization_id: organizationId, workspace_id: workspaceId, capability },
+  });
 
 // ---- Auth ----
 export const login = (body: LoginRequest, signal?: AbortSignal) =>
