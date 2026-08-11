@@ -1,0 +1,866 @@
+{
+  "_classification": "SECURITY_GOVERNANCE",
+  "_purpose": "Gate 4N-I28BH-E2. CLOSED, review-governed registry of requirement_key sites that are NOT standalone graded CLI-guard inputs (suite-only / meta / self-referential / derived). Each was individually adjudicated by CONSUMER SEMANTICS (not by absence of a mutation): no ci.yml graded step reads the key such that its corruption exits non-zero; enforcement is the pytest suite or it is coverage/identity metadata. site_coverage.check() consults this registry ONLY for kind=requirement_key; an excluded id must NOT also be in the executed matrix (conflict fails closed), and a discovered requirement_key that is neither matrix-covered nor excluded fails closed.",
+  "_rule": "exclusion is not membership: every entry carries fixture, key, consumers, reads_by_cli_guard=false, exclusion_reason, owner_family. Stale (id no longer discovered) fails closed. Moving a real guard key here is caught because the matrix executes it (a key cannot be both).",
+  "exclusions": {
+    "assertion-contract-registry.json::contracts": {
+      "fixture": "assertion-contract-registry.json",
+      "key": "contracts",
+      "consumers": [
+        "collection_completeness.py(structural)",
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['collection_completeness.py(structural)', 'assertion_contracts.py(pytest)'].",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-meta-contract.json::mandatory_tests": {
+      "fixture": "assertion-meta-contract.json",
+      "key": "mandatory_tests",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-meta-contract.json::registered_helper_contracts": {
+      "fixture": "assertion-meta-contract.json",
+      "key": "registered_helper_contracts",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-meta-contract.json::required_validator_behaviours": {
+      "fixture": "assertion-meta-contract.json",
+      "key": "required_validator_behaviours",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::change_ledger": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "change_ledger",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::contract_count": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "contract_count",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::contract_ids": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "contract_ids",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::meta_contract_path": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "meta_contract_path",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::meta_contract_sha256": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "meta_contract_sha256",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::per_contract_shape": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "per_contract_shape",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::registry_path": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "registry_path",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "assertion-registry-baseline.json::registry_sha256": {
+      "fixture": "assertion-registry-baseline.json",
+      "key": "registry_sha256",
+      "consumers": [
+        "assertion_contracts.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['assertion_contracts.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "ASSURANCE_COLLECTION"
+    },
+    "cache-authority-policy.json::caches": {
+      "fixture": "cache-authority-policy.json",
+      "key": "caches",
+      "consumers": [
+        "cache_authority.py(pytest)",
+        "docker_assurance_state.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py', 'commit_package_coherence.py', 'mutation_discovery.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['cache_authority.py(pytest)', 'docker_assurance_state.py(pytest)'].",
+      "owner_family": "CACHE_AUTHORITY"
+    },
+    "ci-invocation-contract.json::totals": {
+      "fixture": "ci-invocation-contract.json",
+      "key": "totals",
+      "consumers": [
+        "ci_invocation_model.py(graded; reads graded_steps only)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Derived summary counts; ci_invocation_model.py reads only graded_steps and never references 'totals' (recomputed, not trusted). Sibling graded_steps is CAUGHT.",
+      "owner_family": "CI_WORKFLOW"
+    },
+    "docker-boundary-policy.json::ci_assumption": {
+      "fixture": "docker-boundary-policy.json",
+      "key": "ci_assumption",
+      "consumers": [
+        "docker_boundary.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['docker_boundary.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "DOCKER_BOUNDARY"
+    },
+    "docker-boundary-policy.json::config_fields": {
+      "fixture": "docker-boundary-policy.json",
+      "key": "config_fields",
+      "consumers": [
+        "docker_boundary.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['docker_boundary.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "DOCKER_BOUNDARY"
+    },
+    "docker-boundary-policy.json::config_symlink_prohibited": {
+      "fixture": "docker-boundary-policy.json",
+      "key": "config_symlink_prohibited",
+      "consumers": [
+        "docker_boundary.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['docker_boundary.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "DOCKER_BOUNDARY"
+    },
+    "docker-boundary-policy.json::flag_expanding_variables": {
+      "fixture": "docker-boundary-policy.json",
+      "key": "flag_expanding_variables",
+      "consumers": [
+        "docker_boundary.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['docker_boundary.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "DOCKER_BOUNDARY"
+    },
+    "docker-boundary-policy.json::model": {
+      "fixture": "docker-boundary-policy.json",
+      "key": "model",
+      "consumers": [
+        "docker_boundary.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['docker_boundary.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "DOCKER_BOUNDARY"
+    },
+    "docker-boundary-policy.json::prohibit_local_docker_execution": {
+      "fixture": "docker-boundary-policy.json",
+      "key": "prohibit_local_docker_execution",
+      "consumers": [
+        "docker_boundary.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['docker_boundary.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "DOCKER_BOUNDARY"
+    },
+    "exec-transfer-corpus.json::cases": {
+      "fixture": "exec-transfer-corpus.json",
+      "key": "cases",
+      "consumers": [
+        "test_i28bb_exec_transfer.py(pytest)",
+        "exec_transfer_oracle.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_i28bb_exec_transfer.py(pytest)', 'exec_transfer_oracle.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "EXEC_TRANSFER"
+    },
+    "executable-trust-policy.json::dynamic_invocation_sites": {
+      "fixture": "executable-trust-policy.json",
+      "key": "dynamic_invocation_sites",
+      "consumers": [
+        "external_executable_trust.py(pytest)",
+        "executable_inventory.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['external_executable_trust.py(pytest)', 'executable_inventory.py(pytest)'].",
+      "owner_family": "EXECUTABLE_TRUST"
+    },
+    "executable-trust-policy.json::dynamic_shell_sites": {
+      "fixture": "executable-trust-policy.json",
+      "key": "dynamic_shell_sites",
+      "consumers": [
+        "external_executable_trust.py(pytest)",
+        "executable_inventory.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['external_executable_trust.py(pytest)', 'executable_inventory.py(pytest)'].",
+      "owner_family": "EXECUTABLE_TRUST"
+    },
+    "executed-state-contract.json::modules": {
+      "fixture": "executed-state-contract.json",
+      "key": "modules",
+      "consumers": [
+        "executed_state_provenance.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "expected-provenance-values.json::expected_digests": {
+      "fixture": "expected-provenance-values.json",
+      "key": "expected_digests",
+      "consumers": [
+        "provenance.py(graded; TIER_2 branch only)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Production-tier (TIER_2_PROTECTED) digest map. provenance.py selects expected_digests_synthetic under TIER_1_SYNTHETIC (the graded CI tier), so the graded run never reads this key. Its synthetic sibling expected_digests_synthetic is executed-covered in the matrix.",
+      "owner_family": "PROVENANCE_LINEAGE"
+    },
+    "expected-writable-roles.json::forbidden_resource_classes": {
+      "fixture": "expected-writable-roles.json",
+      "key": "forbidden_resource_classes",
+      "consumers": [
+        "terraform_role_inventory.py(graded; reads role-name lists+suffixes only)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Not referenced by any script; terraform_role_inventory decisive scope reads only the role-name lists and suffixes (all 4 of which are CAUGHT). Authored requirement field, pytest-checked at most.",
+      "owner_family": "AWS_IAM_AUTHORIZATION"
+    },
+    "external-authorization-contract.json::contract_version": {
+      "fixture": "external-authorization-contract.json",
+      "key": "contract_version",
+      "consumers": [
+        "production_certification.py verify(pytest gate)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Contract schema version; verify-path only, pytest-exercised. Not read by the graded `state` step.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "external-authorization-contract.json::field_semantics": {
+      "fixture": "external-authorization-contract.json",
+      "key": "field_semantics",
+      "consumers": [
+        "production_certification.py verify(pytest gate)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Field-semantics documentation block; verify-path only, pytest-exercised. Not read by the graded `state` step.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "external-authorization-contract.json::pin_note": {
+      "fixture": "external-authorization-contract.json",
+      "key": "pin_note",
+      "consumers": [
+        "production_certification.py verify(pytest gate)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Descriptive note beside the pins; verify-path only, pytest-exercised. Not read by the graded `state` step.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "external-authorization-contract.json::pinned_authorization_digests": {
+      "fixture": "external-authorization-contract.json",
+      "key": "pinned_authorization_digests",
+      "consumers": [
+        "production_certification.py verify(pytest gate)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Security-decisive ONLY for the production-gate path (production_certification.py verify -> resolve_external_authorization). The graded CI step is `production_certification.py state`, which calls derive_current_state() and never reads this contract. The verify gate is exercised by the pytest suite. Not a graded-CLI input.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "framework-dispatch-observed.json::observed": {
+      "fixture": "framework-dispatch-observed.json",
+      "key": "observed",
+      "consumers": [
+        "site_taxonomy.py(pytest/non-graded)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py', 'commit_package_coherence.py', 'mutation_discovery.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['site_taxonomy.py(pytest/non-graded)'].",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "historical-fixture-disposition.json::dispositions": {
+      "fixture": "historical-fixture-disposition.json",
+      "key": "dispositions",
+      "consumers": [
+        "test_i28am_session_finish_and_metapath.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_i28am_session_finish_and_metapath.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "HISTORICAL_META"
+    },
+    "mandatory-pytest-nodes.json::mandatory_nodes": {
+      "fixture": "mandatory-pytest-nodes.json",
+      "key": "mandatory_nodes",
+      "consumers": [
+        "pytest_session_guard.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['pytest_session_guard.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::approved_loader_classes": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "approved_loader_classes",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::bootstrap_sha256": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "bootstrap_sha256",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::change_ledger": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "change_ledger",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::executed_code_provenance_sha256": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "executed_code_provenance_sha256",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::guard_canonical_module": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "guard_canonical_module",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::guard_class_qualname": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "guard_class_qualname",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::guard_sha256": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "guard_sha256",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::guard_version": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "guard_version",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::mandatory_node_count": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "mandatory_node_count",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::mandatory_node_ids": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "mandatory_node_ids",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::protected_module_set_sha256": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "protected_module_set_sha256",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "mandatory-session-baseline.json::registry_sha256": {
+      "fixture": "mandatory-session-baseline.json",
+      "key": "registry_sha256",
+      "consumers": [
+        "executed_state_provenance.py(pytest)",
+        "registry_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['executed_state_provenance.py(pytest)', 'registry_authority.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "npm-authority-policy.json::call_sites": {
+      "fixture": "npm-authority-policy.json",
+      "key": "call_sites",
+      "consumers": [
+        "npm_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['npm_authority.py(pytest)'].",
+      "owner_family": "NPM_AUTHORITY"
+    },
+    "npm-authority-policy.json::ci_assumption": {
+      "fixture": "npm-authority-policy.json",
+      "key": "ci_assumption",
+      "consumers": [
+        "npm_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['npm_authority.py(pytest)'].",
+      "owner_family": "NPM_AUTHORITY"
+    },
+    "npm-authority-policy.json::configuration": {
+      "fixture": "npm-authority-policy.json",
+      "key": "configuration",
+      "consumers": [
+        "npm_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['npm_authority.py(pytest)'].",
+      "owner_family": "NPM_AUTHORITY"
+    },
+    "npm-authority-policy.json::installation_families": {
+      "fixture": "npm-authority-policy.json",
+      "key": "installation_families",
+      "consumers": [
+        "npm_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['npm_authority.py(pytest)'].",
+      "owner_family": "NPM_AUTHORITY"
+    },
+    "npm-authority-policy.json::required_present": {
+      "fixture": "npm-authority-policy.json",
+      "key": "required_present",
+      "consumers": [
+        "npm_authority.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['commit_package_coherence.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['npm_authority.py(pytest)'].",
+      "owner_family": "NPM_AUTHORITY"
+    },
+    "protected-module-set.json::protected_modules": {
+      "fixture": "protected-module-set.json",
+      "key": "protected_modules",
+      "consumers": [
+        "executed_code_provenance.py(pytest)",
+        "collection_completeness.py(structural)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['executed_code_provenance.py(pytest)', 'collection_completeness.py(structural)'].",
+      "owner_family": "EXECUTABLE_TRUST"
+    },
+    "pytest-configuration-baseline.json::approved_sources": {
+      "fixture": "pytest-configuration-baseline.json",
+      "key": "approved_sources",
+      "consumers": [
+        "pytest_config_contract.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['pytest_config_contract.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "required-production-checks.json::required_checks": {
+      "fixture": "required-production-checks.json",
+      "key": "required_checks",
+      "consumers": [
+        "production_certification.py verify/eligibility(pytest gate)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Read only by production_certification.py required_checks() on the verify/eligibility path; the graded `state` step never calls it. Pytest-exercised.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "shell-case-grammar-contract.json::forms": {
+      "fixture": "shell-case-grammar-contract.json",
+      "key": "forms",
+      "consumers": [
+        "test_i28av_shell_parser_completeness.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_i28av_shell_parser_completeness.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SHELL_GRAMMAR"
+    },
+    "shell-grammar-corpus.json::cases": {
+      "fixture": "shell-grammar-corpus.json",
+      "key": "cases",
+      "consumers": [
+        "test_i28av_shell_parser_completeness.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_i28av_shell_parser_completeness.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SHELL_GRAMMAR"
+    },
+    "site-coverage-function-assurance.json::modules": {
+      "fixture": "site-coverage-function-assurance.json",
+      "key": "modules",
+      "consumers": [
+        "site_coverage.py(self-governance)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "site_coverage's OWN governance registry; not an external guard input. Tampering is caught by the digest-pin governance of these registries (fail-closed at check() start), not by a JSON-key mutation of a separate guard.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-coverage-matrix.json::sites": {
+      "fixture": "site-coverage-matrix.json",
+      "key": "sites",
+      "consumers": [
+        "site_coverage.py(self-referential coverage registry)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key. Usable graded reachers ['collection_completeness.py', 'commit_package_coherence.py', 'mutation_discovery.py'] read the fixture only structurally (completeness/inventory), not this value; value+delete mutation survived exit 0. Substantive consumer is pytest/non-graded: ['site_coverage.py(self-referential coverage registry)'].",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-coverage-requirement-exclusions.json::exclusions": {
+      "fixture": "site-coverage-requirement-exclusions.json",
+      "key": "exclusions",
+      "consumers": [
+        "site_coverage.py(self-governance)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "site_coverage's OWN governance registry; not an external guard input. Tampering is caught by the digest-pin governance of these registries (fail-closed at check() start), not by a JSON-key mutation of a separate guard.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::alias_policy": {
+      "fixture": "site-identifier-contract.json",
+      "key": "alias_policy",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::case": {
+      "fixture": "site-identifier-contract.json",
+      "key": "case",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::contract_version": {
+      "fixture": "site-identifier-contract.json",
+      "key": "contract_version",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::declared_aliases": {
+      "fixture": "site-identifier-contract.json",
+      "key": "declared_aliases",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::extension_handling": {
+      "fixture": "site-identifier-contract.json",
+      "key": "extension_handling",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::form": {
+      "fixture": "site-identifier-contract.json",
+      "key": "form",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::key": {
+      "fixture": "site-identifier-contract.json",
+      "key": "key",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::namespace": {
+      "fixture": "site-identifier-contract.json",
+      "key": "namespace",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::normalization": {
+      "fixture": "site-identifier-contract.json",
+      "key": "normalization",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "site-identifier-contract.json::separator": {
+      "fixture": "site-identifier-contract.json",
+      "key": "separator",
+      "consumers": [
+        "site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['site_coverage.py(id-grammar contract; graded step baseline!=0 in gate state)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SITE_COVERAGE_META"
+    },
+    "startup-policy.json::mechanisms": {
+      "fixture": "startup-policy.json",
+      "key": "mechanisms",
+      "consumers": [
+        "startup_policy.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['startup_policy.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "SESSION_GUARD"
+    },
+    "synthetic-anchor.json::identity_center": {
+      "fixture": "synthetic-anchor.json",
+      "key": "identity_center",
+      "consumers": [
+        "anchor_loader.py(graded; validates account/partition/region/prefix/version/permission_sets only)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Anchor identity-center config block. No graded guard reads it as a decisive value (the only 'identity_center' token in a graded script is a substring of a deny-policy requirement NAME in deny_requirements.py, not a fixture read). anchor_loader validates only REQUIRED_FIELDS+version+permission_sets.",
+      "owner_family": "AWS_IAM_AUTHORIZATION"
+    },
+    "synthetic-anchor.json::provenance": {
+      "fixture": "synthetic-anchor.json",
+      "key": "provenance",
+      "consumers": [
+        "anchor_loader.py(graded; validates account/partition/region/prefix/version/permission_sets only)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Human-readable provenance label. Not in anchor_loader REQUIRED_FIELDS nor in provenance.py's canonical field projection; the sibling account/region/partition/prefix/version/permission_sets are all CAUGHT.",
+      "owner_family": "AWS_IAM_AUTHORIZATION"
+    },
+    "synthetic-external-authorization.json::approved_anchor_sha256": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "approved_anchor_sha256",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::approved_evidence_classification": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "approved_evidence_classification",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::approved_inventory_sha256": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "approved_inventory_sha256",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::authorization_version": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "authorization_version",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::authorized_candidate_scope": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "authorized_candidate_scope",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::eligibility_lineage_sha256": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "eligibility_lineage_sha256",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::issued_utc": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "issued_utc",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::non_synthetic_required": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "non_synthetic_required",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::protected_tier": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "protected_tier",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::required_production_checks": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "required_production_checks",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-external-authorization.json::valid_until_utc": {
+      "fixture": "synthetic-external-authorization.json",
+      "key": "valid_until_utc",
+      "consumers": [
+        "test_consumer_index_certification.py(pytest)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['test_consumer_index_certification.py(pytest)']. Test-baseline / meta / self-referential.",
+      "owner_family": "PRODUCTION_CERTIFICATION"
+    },
+    "synthetic-inventory.json::buckets": {
+      "fixture": "synthetic-inventory.json",
+      "key": "buckets",
+      "consumers": [
+        "protected_inventory.py(graded; REQUIRED_FIELDS only)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "Legacy/derived list; no script reads top-level 'buckets' (only 'buckets_by_role', which is CAUGHT). Not in protected_inventory REQUIRED_FIELDS. Survived value+delete against all 19 closure guards.",
+      "owner_family": "AWS_IAM_AUTHORIZATION"
+    }
+  }
+}

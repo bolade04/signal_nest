@@ -139,7 +139,16 @@ def run_step(step: dict, env_values: dict[str, str]) -> dict:
     env = {
         # The minimum a shell needs. Deliberately NOT os.environ: inheriting the developer
         # shell is how the previous harness acquired the tier it was supposed to be testing for.
-        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
+        #
+        # GATE 4N-I28BH-E2. `dirname(sys.executable)` is prepended so that a body invoking bare
+        # `python3` resolves to THE SAME interpreter this harness runs under — the one CI prepared
+        # with the pinned Gate dependencies (setup-python + `pip install -r requirements-gate.txt`
+        # both target it) — instead of a stray `/usr/bin/python3` that may be an older CPython
+        # (no `co_qualname`, added 3.11) with no PyYAML. That mismatch made the harness report its
+        # OWN degraded interpreter as a repository defect. This changes only WHICH python3 runs the
+        # body, never the env VALUES the body sees (still exactly env_values), so the ordering /
+        # tier-isolation property this harness exists to prove is untouched.
+        "PATH": os.path.dirname(sys.executable) + ":/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
         "HOME": tempfile.mkdtemp(prefix="ci-harness-home-"),
         "LANG": "C",
         **env_values,
@@ -155,7 +164,33 @@ def run_step(step: dict, env_values: dict[str, str]) -> dict:
         shutil.rmtree(env["HOME"], ignore_errors=True)
 
 
+def _require_adequate_interpreter() -> None:
+    """Fail closed if the interpreter the bodies will use is inadequate.
+
+    GATE 4N-I28BH-E2. Bodies now invoke the harness's own interpreter (run_step prepends
+    dirname(sys.executable) to PATH). It must satisfy the contracts the graded guards rely on:
+    Python >= 3.11 (code.co_qualname, used by the provenance fingerprint) and an importable
+    PyYAML (structural workflow analysis). If it does not, that is an ENVIRONMENT defect in how
+    the harness was launched, not a repository defect — refuse loudly rather than mis-report the
+    guards as broken.
+    """
+    if tuple(sys.version_info[:2]) < (3, 11):
+        raise SystemExit(
+            "ci_harness: refusing — interpreter is Python "
+            f"{sys.version_info[0]}.{sys.version_info[1]}; the graded guards require >= 3.11 "
+            "(code.co_qualname). Run the harness under the Gate-dependency interpreter.")
+    try:
+        import yaml  # noqa: F401
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "ci_harness: refusing — PyYAML is not importable in this interpreter "
+            f"({sys.executable}); the graded guards require it. Install "
+            "scripts/requirements-gate.txt into the interpreter that runs the harness.") from exc
+
+
 def check(execute: bool = True) -> dict:
+    if execute:
+        _require_adequate_interpreter()
     steps = _bodies()
     model = available_env()
     values = _workflow_env_values()
@@ -174,6 +209,13 @@ def check(execute: bool = True) -> dict:
         results.append(row)
 
     problems = []
+    # GATE 4N-I28BH-E2. Ambient runner/toolchain vars (PATH, DOCKER_CONFIG, …) are supplied by the
+    # runner, not produced by the workflow, and are read defensively by consumers. ci_env_dataflow
+    # governs them via a CLOSED authored allow-list; apply the SAME list here so the harness's
+    # "missing at its point" agrees with the dataflow model and does not report an ambient var —
+    # which IS available on the runner — as a real gap.
+    import ci_env_dataflow
+    ambient = ci_env_dataflow._ambient_allow_list()
     # BIDIRECTIONAL completeness. A harness that models a subset of the graded steps and reports
     # a pass rate over that subset is claiming coverage it does not have.
     for missing in sorted(graded_ids - modelled_ids):
@@ -181,6 +223,7 @@ def check(execute: bool = True) -> dict:
     for extra in sorted(modelled_ids - graded_ids):
         problems.append(f"{extra}: modelled but not a graded workflow step")
     for row in results:
+        row["missing_env"] = [v for v in row["missing_env"] if v not in ambient]
         if row["missing_env"]:
             problems.append(f"{row['id']}: consumes {row['missing_env']} unavailable at its point")
         if row.get("exit") not in (None, 0):

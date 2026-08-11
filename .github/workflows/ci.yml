@@ -454,6 +454,13 @@ jobs:
           python -m venv .reader-venv
           .reader-venv/bin/pip install --upgrade pip
           .reader-venv/bin/pip install -e "apps/revision-reader[dev]"
+          # GATE 4N-I28BH-E2. The main Gate-4N security suite runs UNDER this reader venv
+          # (the "Operator permission-set policy and cache-classification tests" step), and its
+          # strict bootstrap (signalnest_bootstrap.establish -> executable_inventory) imports
+          # yaml. The venv is isolated (no --system-site-packages), so the system-python install
+          # of the pinned Gate contract below does NOT reach it. Install the SAME pinned contract
+          # here so every interpreter that executes a YAML-dependent Gate consumer has PyYAML.
+          .reader-venv/bin/pip install -r scripts/requirements-gate.txt
 
       # GATE 4N-I26C. The Gate 4N guards run under the SYSTEM python3, not the reader venv, and
       # three of them parse this workflow as YAML. Gate 4N-I26B shipped them depending on a

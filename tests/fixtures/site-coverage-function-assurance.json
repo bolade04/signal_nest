@@ -1,0 +1,709 @@
+{
+  "_classification": "SECURITY_GOVERNANCE",
+  "_purpose": "Gate 4N-I28BH-E2. Governed per-module function-site coverage authority for site_coverage's FUNCTION route. Each of the 58 modules that contribute production-control function sites (site_taxonomy.production_control_function_sites) is bound to an INDEPENDENT load-bearing detector (producer != claimant) whose neutralization was EXECUTED-proven to drive a graded control non-zero. detector_kind is CLOSED: CERTIFICATE_BACKED | GRADED_PYTEST | E2_NEW_TEST. site_coverage.check() function route requires every discovered function site's module to be ASSURED here; a module with no detector is RESIDUAL and fails closed. Governed-non-primary-meta (content-baseline pin) applies to 0 sites at this tree (rule recorded).",
+  "_independence_rule": "the detector for a module must not be the module asserting itself; each entry records the executed neutralize->RED probe (baseline_exit 0 -> neutralized_exit non-zero on an INDEPENDENT graded control).",
+  "_governed_meta_rule": "A residual function site is GOVERNED_NON_PRIMARY_META (needs a CONTENT-BASELINE/golden-value PIN, not a behavioural mutation detector) iff, structurally from the taxonomy: role=='COMPUTES' AND terminal_failure_behaviour has NEITHER 'RAISES' NOR 'EXITS' (it makes no branch a caller acts on and cannot itself fail-close) AND no invocation_chain routes its output into a DECIDES site that is already behaviourally detected (otherwise it is transitively assured). Its only risk is silent value drift, which a pinned golden baseline catches. This is a structural rule over (role, terminal_failure_behaviour, invocation_chain) \u2014 NOT a filename glob.",
+  "modules": {
+    "action_classifier.py": {
+      "fn_count": 3,
+      "detector": "tests/test_verifier_ceiling.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_refresh_observed_reads",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "allow_model.py": {
+      "fn_count": 15,
+      "detector": "tests/test_allow_axis.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "audit_grants",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "anchor_loader.py": {
+      "fn_count": 7,
+      "detector": "tests/test_external_anchor.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_validate",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "arn_model.py": {
+      "fn_count": 5,
+      "detector": "tests/test_arn_model.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "critical_arns",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "cache_authority.py": {
+      "fn_count": 1,
+      "detector": "tests/test_i28ar_cache_authority.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "deep_freeze",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "candidate_manifest.py": {
+      "fn_count": 7,
+      "detector": "tests/test_candidate_artifacts.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_reject_latest",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "check-iam-role-boundaries.py": {
+      "fn_count": 2,
+      "detector": "tests/test_i28bh_e2_ci_guard_repairs.py::TestIamRoleBoundaryFailOpen (planted unbounded role)",
+      "detector_kind": "E2_NEW_TEST",
+      "probe": {
+        "representative_fn": "main (boundary-presence decision)",
+        "baseline_exit": 0,
+        "neutralized_exit": 0,
+        "detected": false,
+        "secondary": "neutralize find_role_blocks->None -> exit 1 only via crash + found==0 backstop (self-protection, not independent)"
+      },
+      "status": "ASSURED"
+    },
+    "check_gate_dependencies.py": {
+      "fn_count": 7,
+      "detector": "tests/test_i28bh_e2_ci_guard_repairs.py::TestReaderVenvTotality (reader-venv PyYAML totality)",
+      "detector_kind": "E2_NEW_TEST",
+      "probe": {
+        "representative_fn": "own-CLI is producer==claimant",
+        "baseline_exit": 0,
+        "neutralized_exit": "own-CLI fail-open/RED-pre-fix",
+        "detected": false,
+        "note": "scripts/check_gate_dependencies.py own CLI is producer==claimant (baseline GREEN); NO importing test"
+      },
+      "status": "ASSURED"
+    },
+    "check_toolchain_integrity.py": {
+      "fn_count": 11,
+      "detector": "tests/test_toolchain_cache_classification.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "check_caches",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "ci_env_dataflow.py": {
+      "fn_count": 11,
+      "detector": "tests/test_i28bh_e2_ci_guard_repairs.py::TestCiEnvDataflow (alias-narrowing C1 + ambient C2 mutation)",
+      "detector_kind": "E2_NEW_TEST",
+      "probe": {
+        "representative_fn": "own-CLI is producer==claimant",
+        "baseline_exit": 1,
+        "neutralized_exit": "own-CLI fail-open/RED-pre-fix",
+        "detected": false,
+        "note": "scripts/ci_env_dataflow.py own CLI is producer==claimant (baseline RED, pre-fix); NO importing test"
+      },
+      "status": "ASSURED"
+    },
+    "ci_harness.py": {
+      "fn_count": 8,
+      "detector": "tests/test_i28bh_e2_ci_guard_repairs.py::TestCiHarness (interpreter precondition + PATH)",
+      "detector_kind": "E2_NEW_TEST",
+      "probe": {
+        "representative_fn": "own-CLI is producer==claimant",
+        "baseline_exit": 1,
+        "neutralized_exit": "own-CLI fail-open/RED-pre-fix",
+        "detected": false,
+        "note": "scripts/ci_harness.py own CLI is producer==claimant (baseline RED: runs /usr/bin/python3 3.9); NO importing test"
+      },
+      "status": "ASSURED"
+    },
+    "ci_invocation_model.py": {
+      "fn_count": 11,
+      "detector": "tests/test_i24c_thirteen_findings.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_dedent_block",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "collection_completeness.py": {
+      "fn_count": 13,
+      "detector": "tests/test_i28bh_e1_completeness_applicability.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "commit_package_coherence.py": {
+      "fn_count": 10,
+      "detector": "tests/test_i23_package_and_lineage.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_git",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "completeness_framework.py": {
+      "fn_count": 250,
+      "detector": "scripts/collection_completeness.py (certificate binding)",
+      "detector_kind": "CERTIFICATE_BACKED",
+      "probe": {
+        "representative_fn": "evaluate / _mint_clean_view",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "critical_list_inventory.py": {
+      "fn_count": 6,
+      "detector": "tests/test_i28i_enforcement_path_classification.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "deny_exhaustion.py": {
+      "fn_count": 5,
+      "detector": "tests/test_deny_exhaustion.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_strip_statement",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "deny_requirements.py": {
+      "fn_count": 16,
+      "detector": "tests/test_i24d_site_coverage.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "deny_triangulation.py": {
+      "fn_count": 16,
+      "detector": "tests/test_deny_triangulation.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "derive_repo_operation_graph.py": {
+      "fn_count": 2,
+      "detector": "tests/test_closure_independence.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_block_body",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "evidence_binding.py": {
+      "fn_count": 9,
+      "detector": "tests/test_i24c_thirteen_findings.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_git",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "expiry_authorization.py": {
+      "fn_count": 4,
+      "detector": "tests/test_expiry_authorization.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_parse",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "external_anchor.py": {
+      "fn_count": 7,
+      "detector": "tests/test_external_anchor.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "external_executable_trust.py": {
+      "fn_count": 6,
+      "detector": "tests/test_i28ak_executable_inventory.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "failure_propagation.py": {
+      "fn_count": 26,
+      "detector": "tests/test_i27u_failure_propagation.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "gen_bootstrap_operator_policy.py": {
+      "fn_count": 2,
+      "detector": "tests/test_bootstrap_operator.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "bootstrap_operator_policy",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "gen_boundary_policy.py": {
+      "fn_count": 2,
+      "detector": "tests/test_boundary_compatibility.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "boundary_policy",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "gen_boundary_rollout.py": {
+      "fn_count": 3,
+      "detector": "tests/test_bootstrap_operator.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "evaluate",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "gen_operator_policies.py": {
+      "fn_count": 4,
+      "detector": "tests/test_allow_axis.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "bootstrap_temp_policy",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "gen_readonly_verifier_policy.py": {
+      "fn_count": 5,
+      "detector": "tests/test_expiry_authorization.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "readonly_verifier_policy",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "gen_role_bootstrap_policy.py": {
+      "fn_count": 4,
+      "detector": "tests/test_i28bh_a1a_policy_source_adjudication.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "require_reviewed_tag_keys",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "hcl_expressions.py": {
+      "fn_count": 10,
+      "detector": "tests/test_repository_expressions.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_attribute",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "iam_eval.py": {
+      "fn_count": 13,
+      "detector": "tests/test_iam_eval_semantics.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_as_list",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "leak_scan.py": {
+      "fn_count": 12,
+      "detector": "tests/test_i28i_scan_accounting.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "lifecycle_canonical.py": {
+      "fn_count": 2,
+      "detector": "tests/test_graph_oracle_independence.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "canonical_steps",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "mutation_discovery.py": {
+      "fn_count": 3,
+      "detector": "tests/test_i27r_rejection_remediation.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "discover_sites",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "package_requirements.py": {
+      "fn_count": 7,
+      "detector": "tests/test_i24c_thirteen_findings.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "check",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "policy_inventory.py": {
+      "fn_count": 4,
+      "detector": "tests/test_policy_inventory.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "discover",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "production_certification.py": {
+      "fn_count": 17,
+      "detector": "tests/test_consumer_index_certification.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_external_problems",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "protected_inventory.py": {
+      "fn_count": 10,
+      "detector": "tests/test_provenance.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "provenance.py": {
+      "fn_count": 17,
+      "detector": "tests/test_provenance.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_actions_claim_problems",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "putrolepolicy_classification.py": {
+      "fn_count": 7,
+      "detector": "tests/test_putrolepolicy_closure.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "check_policies",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "resource_deny_probes.py": {
+      "fn_count": 6,
+      "detector": "tests/test_resource_deny_probes.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "run",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "resource_oracle.py": {
+      "fn_count": 15,
+      "detector": "tests/test_resource_oracle.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "compare",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "review_pin_control.py": {
+      "fn_count": 10,
+      "detector": "tests/test_i28bh_b_arch_assurance.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_canonical_member",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "role_bootstrap_lifecycle.py": {
+      "fn_count": 9,
+      "detector": "tests/test_role_bootstrap_lifecycle.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_numeric",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "security_collection_assurance.py": {
+      "fn_count": 25,
+      "detector": "tests/test_i28bh_b_arch_assurance.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_expanded_members",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "shell_command_model.py": {
+      "fn_count": 19,
+      "detector": "tests/test_i28ar_cache_authority.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_is_python",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "signalnest_identity.py": {
+      "fn_count": 10,
+      "detector": "tests/test_arn_model.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_live",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "site_coverage.py": {
+      "fn_count": 7,
+      "detector": "tests/test_i28bh_e2_ci_guard_repairs.py::TestSiteCoverageAntiHollow (\u00a714 route-disable)",
+      "detector_kind": "E2_NEW_TEST",
+      "probe": {
+        "representative_fn": "own-CLI is producer==claimant",
+        "baseline_exit": 1,
+        "neutralized_exit": "own-CLI fail-open/RED-pre-fix",
+        "detected": false,
+        "note": "scripts/site_coverage.py own CLI is producer==claimant (baseline RED: 964 GAPS, matrix never widened post-I28K); NO importing test"
+      },
+      "status": "ASSURED"
+    },
+    "site_taxonomy.py": {
+      "fn_count": 47,
+      "detector": "tests/test_i28k_site_taxonomy.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_cached",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "smoke_http.py": {
+      "fn_count": 3,
+      "detector": "tests/test_i28bh_e2_ci_guard_repairs.py::TestSmokeHttp (neutralize -> RED)",
+      "detector_kind": "E2_NEW_TEST",
+      "probe": {
+        "representative_fn": "main (tenant-isolation HTTP check)",
+        "baseline_exit": 1,
+        "neutralized_exit": "n/a (integration; needs live uvicorn)",
+        "detected": false
+      },
+      "status": "ASSURED"
+    },
+    "terraform_role_inventory.py": {
+      "fn_count": 16,
+      "detector": "tests/test_consumer_index_certification.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_block",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "tracked_state.py": {
+      "fn_count": 10,
+      "detector": "tests/test_consumer_index_certification.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_git",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "trust_policies.py": {
+      "fn_count": 5,
+      "detector": "tests/test_trust_policies.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "canonical",
+        "baseline_exit": 0,
+        "neutralized_exit": 2,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "trust_validator.py": {
+      "fn_count": 10,
+      "detector": "tests/test_trust_policies.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "ALL_TOP_LEVEL_DECIDES(neutralize-all)",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "verifier_ceiling.py": {
+      "fn_count": 6,
+      "detector": "tests/test_verifier_ceiling.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_statement_actions",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
+    "verify_closure.py": {
+      "fn_count": 6,
+      "detector": "tests/test_closure_independence.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "_probe_resource",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    }
+  }
+}

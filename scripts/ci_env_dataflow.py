@@ -36,6 +36,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 SCRIPTS = REPO_ROOT / "scripts"
+AMBIENT = REPO_ROOT / "tests" / "fixtures" / "ci-ambient-env.json"
 
 # A $GITHUB_ENV write is visible to LATER steps only. This constant exists so the rule is
 # stated once and named, rather than implied by an index comparison somewhere.
@@ -44,6 +45,18 @@ GITHUB_ENV_APPLIES_FROM_NEXT_STEP = True
 
 class DataflowError(RuntimeError):
     """Fail-closed."""
+
+
+def _ambient_allow_list() -> set[str]:
+    """The CLOSED authored set of ambient runner/toolchain env vars (see ci-ambient-env.json).
+
+    GATE 4N-I28BH-E2. Absence of the file, or a malformed one, fails closed (empty set → every
+    unproduced var stays 'unknown'). This list is consulted ONLY on the 'no producer' branch.
+    """
+    if not AMBIENT.exists():
+        raise DataflowError(f"the authored ambient-env allow-list is absent: {AMBIENT}")
+    doc = json.loads(AMBIENT.read_text(encoding="utf-8"))
+    return set(doc.get("ambient_variables") or {})
 
 
 def _load_workflow() -> dict:
@@ -57,27 +70,74 @@ def _load_workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+def _denotes_environ(value: ast.AST | None, aliases: set[str]) -> bool:
+    """True when `value` denotes the os.environ mapping AS A WHOLE.
+
+    GATE 4N-I28BH-E2. The alias test used to be `any(_is_environ(sub) for sub in ast.walk(value))`
+    — a name was tainted as an environ alias whenever its value CONTAINED an os.environ read
+    anywhere inside it. So `state = {"config_dir": ..., "ci_marker": {n: os.environ.get(n) ...}}`
+    tainted `state`, and every later literal-key subscript (`state["config_dir"]`) was mis-read as
+    an environment consumption — reporting internal dict keys as unproduced workflow inputs. An
+    alias binding is a WHOLE-MAPPING relation: `env` is os.environ only when it is bound to the
+    mapping itself, not to a structure that merely holds one reading of it. Recognized whole-map
+    forms are explicit and CLOSED; anything else is not an alias.
+    """
+    if value is None:
+        return False
+    if _is_environ(value):                                        # os.environ
+        return True
+    if isinstance(value, ast.Name) and value.id in aliases:       # a name already bound to environ
+        return True
+    if isinstance(value, ast.IfExp):                              # env = os.environ if .. else env
+        return _denotes_environ(value.body, aliases) or _denotes_environ(value.orelse, aliases)
+    if isinstance(value, ast.BoolOp):                             # env = os.environ or {}
+        return any(_denotes_environ(v, aliases) for v in value.values)
+    if isinstance(value, ast.Call):                               # dict(os.environ) / os.environ.copy()
+        func = value.func
+        if isinstance(func, ast.Attribute) and func.attr == "copy" and _is_environ(func.value):
+            return True
+        if isinstance(func, ast.Name) and func.id == "dict" and value.args \
+                and _denotes_environ(value.args[0], aliases):
+            return True
+    if isinstance(value, (ast.DictComp, ast.SetComp, ast.ListComp, ast.GeneratorExp)):
+        # a comprehension that MATERIALIZES the whole mapping, e.g. {k: v for k, v in
+        # os.environ.items()} — its result, subscripted by a literal key, is a real environ read,
+        # so it stays an alias (guards against a false negative from the narrowing above).
+        return any(_is_environ(sub) for gen in value.generators for sub in ast.walk(gen.iter))
+    return False
+
+
 def _environ_aliases(tree: ast.AST) -> set[str]:
-    """Names this module ever binds to os.environ.
+    """Names this module ever binds to os.environ AS A WHOLE.
 
     WHY THIS EXISTS. The first version of this module matched `os.environ.get("X")` syntactically
     and reported the workflow CLEAN on the exact defect it was written to catch — because
     anchor_loader.py reads the tier as `env.get("SIGNALNEST_ANCHOR_TIER")` after
     `env = os.environ if env is None else env`. Matching a fixed set of spellings is the
     hand-authored-list defect wearing a different hat, and it produced a green result on a
-    deterministic CI failure. Aliases are resolved instead of enumerated.
+    deterministic CI failure. Aliases are RESOLVED (whole-mapping denotation, see _denotes_environ)
+    to a FIXPOINT so a chain `a = os.environ; b = a` is fully followed — not enumerated, and not
+    over-tainted by mere containment.
     """
-    aliases: set[str] = set()
+    assigns: list[tuple[list[str], ast.AST]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = node.value
-        if value is None or not any(_is_environ(sub) for sub in ast.walk(value)):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        for target in targets:
-            if isinstance(target, ast.Name):
-                aliases.add(target.id)
+        names = [t.id for t in targets if isinstance(t, ast.Name)]
+        if names:
+            assigns.append((names, node.value))
+
+    aliases: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for names, value in assigns:
+            if _denotes_environ(value, aliases):
+                for name in names:
+                    if name not in aliases:
+                        aliases.add(name)
+                        changed = True
     return aliases
 
 
@@ -213,11 +273,24 @@ def check() -> dict:
     problems: list[str] = []
     unknown: list[str] = []
 
+    ambient = _ambient_allow_list()
+    # C2 (GATE 4N-I28BH-E2): an ambient var must NOT also be workflow-produced, or a removed
+    # producer could be laundered as "ambient". A var a step produces is governed by the ordering
+    # rule, never by the allow-list. Violation fails closed.
+    produced = {v for s in graded for v in (set(s["github_env_writes"]) | set(s["step_env"])
+                                            | set(s["job_env"]))}
+    for var in sorted(ambient & produced):
+        problems.append(
+            f"{var}: declared ambient in ci-ambient-env.json but a workflow step also produces it; "
+            "an ambient var may not be workflow-produced (a removed producer must not be laundered).")
+
     for step in graded:
         for var in step["missing"]:
             producer = next((s for s in graded
                              if var in s["github_env_writes"] or var in s["step_env"]), None)
             if producer is None:
+                if var in ambient:
+                    continue    # legitimately supplied by the runner/toolchain, not the workflow
                 unknown.append(
                     f"{step['id']}: consumes {var} and NO step in the workflow produces it. "
                     "Unknown availability fails closed.")

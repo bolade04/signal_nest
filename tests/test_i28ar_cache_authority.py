@@ -543,7 +543,7 @@ def test_c35_a_fresh_interpreter_agrees_with_this_sessions_derivation():
     # Established by IDENTITY against START_TREE 45eb4d72: exactly these 33 sites (1 graded_step + 34
     # functions) were ADDED and ZERO were removed; site_taxonomy resolves them (unresolved_calls==0).
     assert fresh["production"] == len(
-        {s["canonical_site_id"] for s in st.production_control_function_sites()}) == 784  # BH-C-E1: +1 (completeness_applicable)  # BH-C: +1 (_collection_value; roots unchanged at 42)
+        {s["canonical_site_id"] for s in st.production_control_function_sites()}) == 793  # BH-C-E1: +1 (completeness_applicable)  # BH-C: +1 (_collection_value; roots unchanged at 42)  # E2: +9 site_coverage/ci_env_dataflow/ci_harness helpers (roots unchanged at 42)
 
 
 # --------------------------------------------------------------------- 10. measured obligations
