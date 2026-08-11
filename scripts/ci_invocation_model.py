@@ -500,10 +500,32 @@ def _option_problems(sid: str, spec: dict, commands: list[dict]) -> list[str]:
     return problems
 
 
+# --------------------------------------------------------------------------- #
+# GATE 4N-I28BH-E5: a strict-bootstrap step must run under a hermetic HOME
+# --------------------------------------------------------------------------- #
+#
+# The strict bootstrap adjudicates the AMBIENT Docker configuration surface (docker_boundary),
+# and a hosted runner's ~/.docker/config.json carries registry 'auths', which the boundary
+# declares FATAL_IF_PRESENT. This step CONSUMES no Docker, so it must run under a fresh,
+# step-scoped HOME so no ambient ~/.docker can reach the boundary. DOCKER_CONFIG cannot be the
+# lever — the boundary declares it FATAL steering — so the isolation is a fresh HOME, exactly as
+# scripts/empty_home_ci.sh does for the local reproduction. This is a NECESSARY structural
+# condition; docker_boundary stays the runtime authority that refuses 'auths' wherever it reads.
+
+# These are module-level CONSTANTS, not new function sites, on purpose: the isolation is
+# adjudicated INLINE inside check() so the production-control site universe does not move for a
+# CI-config repair (a new graded-module function would enlarge it and cascade the derivation
+# pins). _FRESH_HOME_ASSIGN matches `VAR="$(mktemp -d)"`; _INLINE_HOME_PREFIX matches the
+# `HOME=<expr>` env prefix on the pytest command.
+_FRESH_HOME_ASSIGN = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)="?\$\(\s*mktemp\s+-d\s*\)"?$')
+_INLINE_HOME_PREFIX = re.compile(r'^HOME=(?P<val>\S+)(?:\s|$)')
+
+
 def check(text: str | None = None) -> dict:
     doc = contract()
     required = doc["graded_steps"]
     steps = {s["id"]: s for s in parse_steps(text)}
+    workflow_text = WORKFLOW.read_text(encoding="utf-8") if text is None else text
     problems: list[str] = []
     rows = []
 
@@ -525,6 +547,53 @@ def check(text: str | None = None) -> dict:
             why = f" (present but classified {classes})" if classes else " (absent entirely)"
             problems.append(f"{sid}: must invoke {w!r} and does not{why}")
         problems += _option_problems(sid, spec, commands)
+        # GATE 4N-I28BH-E5. A step marked required_home_isolation must run its strict-bootstrap
+        # pytest under a FRESH, step-scoped HOME, so the ambient runner Docker/credential config
+        # (~/.docker/config.json, adjudicated FATAL_IF_PRESENT by docker_boundary) cannot reach it.
+        # HOME must be set inline on the pytest command from a `$(mktemp -d)` directory created
+        # earlier in the same step; it may not be job/step-global, and it may not follow the run.
+        # docker_boundary stays the runtime authority that refuses 'auths' wherever it reads.
+        if spec.get("required_home_isolation"):
+            if re.search(r'(?mi)^\s*HOME\s*:\s*\S', workflow_text):
+                problems.append(
+                    f"{sid}: HOME is defined as a workflow env: key. The hermetic HOME for the "
+                    "strict bootstrap must be an inline, step-scoped shell assignment; a job/step "
+                    "env HOME relocates the Docker-config surface of the later image build and "
+                    "verification steps.")
+            fresh_before: dict = {}
+            pytest_idx, pytest_text = None, ""
+            for i, c in enumerate(commands):
+                fm = _FRESH_HOME_ASSIGN.match(c["text"].strip())
+                if fm:
+                    fresh_before.setdefault(fm.group(1), i)
+                runs = _pytest_options([{"class": INVOKED, "argv": c.get("argv") or []}])
+                if (c["class"] == INVOKED and runs
+                        and _has_sequence(runs[0], ["-p", "signalnest_bootstrap"])):
+                    pytest_idx, pytest_text = i, c["text"]
+            if pytest_idx is None:
+                problems.append(f"{sid}: required_home_isolation is set but no INVOKED strict-"
+                                "bootstrap pytest command was found to isolate")
+            else:
+                hm = _INLINE_HOME_PREFIX.match(pytest_text.strip())
+                if not hm:
+                    problems.append(
+                        f"{sid}: the strict-bootstrap pytest command does not set a step-scoped "
+                        "HOME inline, so it runs under the ambient runner HOME whose "
+                        "~/.docker/config.json carries registry 'auths' — FATAL to the Docker "
+                        "boundary. Prefix it with HOME=<a fresh `mktemp -d` dir>.")
+                else:
+                    val = hm.group("val").strip('"')
+                    ok = bool(re.fullmatch(r'\$\(\s*mktemp\s+-d\s*\)', val))
+                    if not ok:
+                        vm = re.fullmatch(r'\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?', val)
+                        if vm and vm.group(1) in fresh_before and fresh_before[vm.group(1)] < pytest_idx:
+                            ok = True
+                    if not ok:
+                        problems.append(
+                            f"{sid}: the strict-bootstrap pytest sets HOME={val!r}, which is not a "
+                            "fresh `$(mktemp -d)` directory created earlier in this step. A reused, "
+                            "fixed or later-assigned HOME does not guarantee an empty ~/.docker, so "
+                            "the ambient 'auths' could still reach the boundary.")
         rows.append({"id": sid, "present": True, "form": step["form"],
                      "invoked": sorted(targets), "required": sorted(wanted),
                      "missing": missing,
@@ -540,7 +609,6 @@ def check(text: str | None = None) -> dict:
     # job, so proving it invokes the right command is not enough. A substring-preserving
     # rename of the guard entry (`package_coherence=` -> `package_coherence_x=`) leaves the
     # step running and its result unread.
-    workflow_text = WORKFLOW.read_text(encoding="utf-8") if text is None else text
     for sid in sorted(required):
         if sid not in steps:
             continue

@@ -188,7 +188,9 @@
     "--maxfail"
    ],
    "why_options_are_contracted": "Gate 4N-I28X: `--deselect` on this step removed every mandatory assurance control while the step still invoked pytest and the contract still passed.",
-   "why_bootstrap_is_required": "Gate 4N-I28AE closing ACC-I28AC-01: the bootstrap must establish executed-code provenance for the protected modules, and it must load BEFORE the session guard it protects."
+   "why_bootstrap_is_required": "Gate 4N-I28AE closing ACC-I28AC-01: the bootstrap must establish executed-code provenance for the protected modules, and it must load BEFORE the session guard it protects.",
+   "required_home_isolation": true,
+   "why_home_isolation_is_required": "Gate 4N-I28BH-E5: the strict bootstrap adjudicates the ambient Docker configuration surface (docker_boundary). A GitHub-hosted runner ships ~/.docker/config.json carrying registry 'auths', which the boundary declares FATAL_IF_PRESENT. This step consumes no Docker, so its strict-bootstrap pytest MUST run under a fresh, step-scoped HOME (a `$(mktemp -d)` directory set inline on the pytest command, established earlier in the same step) so no ambient ~/.docker can reach the boundary. DOCKER_CONFIG is not usable — the boundary declares it FATAL steering. HOME may not be a job/step-level env: key, because that would relocate the surface of the later image build/verify steps too."
   },
   "policy_validation": {
    "must_invoke": [

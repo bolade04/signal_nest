@@ -893,7 +893,20 @@ jobs:
           SIGNALNEST_CANDIDATE_MANIFEST: ${{ github.workspace }}/tests/fixtures/candidate-manifest.json
         run: |
           .reader-venv/bin/pip install pytest
-          PYTHONPATH="$GITHUB_WORKSPACE/scripts" .reader-venv/bin/python -m pytest tests/ -q -p signalnest_bootstrap -p pytest_session_guard
+          # GATE 4N-I28BH-E5. The strict Gate-4N bootstrap adjudicates the AMBIENT Docker
+          # configuration surface (docker_boundary), and a GitHub-hosted runner ships
+          # ~/.docker/config.json carrying registry 'auths' — which docker_boundary declares
+          # FATAL_IF_PRESENT because embedded credentials change which registry a push/pull
+          # authenticates to. This graded step CONSUMES no Docker (docker_boundary only READS
+          # state; no graded script shells out to the docker CLI), so its correct execution
+          # surface is a hermetic HOME — exactly as scripts/empty_home_ci.sh establishes for the
+          # local reproduction. DOCKER_CONFIG is deliberately NOT used to point elsewhere: the
+          # boundary declares DOCKER_CONFIG itself FATAL_IF_PRESENT steering. HOME is set ONLY on
+          # this pytest command, so the later "Build the reader image" / "In-image verification"
+          # steps keep the runner HOME and its CI-provisioned daemon. A clean config with 'auths'
+          # would still be FATAL — this relocates the surface, it does not weaken the rule.
+          SANDBOX_HOME="$(mktemp -d)"
+          HOME="$SANDBOX_HOME" PYTHONPATH="$GITHUB_WORKSPACE/scripts" .reader-venv/bin/python -m pytest tests/ -q -p signalnest_bootstrap -p pytest_session_guard
 
       # GATE 4N-I26C, wiring the three controls Gate 4N-I26B built and left unexecuted. A
       # control that is not invoked by the workflow is not a control; I26B's own evidence

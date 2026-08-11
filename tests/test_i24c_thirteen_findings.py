@@ -49,11 +49,81 @@ def test_policy_tests_is_graded_and_must_invoke_pytest():
     assert "PYTEST" in spec["must_invoke"] or "tests/" in spec["must_invoke"]
     text = WORKFLOW.read_text(encoding="utf-8")
     mutated = text.replace(
-        '          PYTHONPATH="$GITHUB_WORKSPACE/scripts" .reader-venv/bin/python '
-        "-m pytest tests/ -q -p signalnest_bootstrap -p pytest_session_guard",
+        '          HOME="$SANDBOX_HOME" PYTHONPATH="$GITHUB_WORKSPACE/scripts" '
+        ".reader-venv/bin/python -m pytest tests/ -q -p signalnest_bootstrap -p pytest_session_guard",
         '          echo "pytest tests/ -q skipped"', 1)
     assert mutated != text
     assert any("policy_tests" in p for p in cim.check(mutated)["problems"])
+
+
+# --------------------------------------------------------------------------- #
+# Gate 4N-I28BH-E5 — the strict-bootstrap step must run under a hermetic HOME
+# --------------------------------------------------------------------------- #
+#
+# The strict bootstrap adjudicates the ambient Docker configuration surface (docker_boundary),
+# and a hosted runner's ~/.docker/config.json carries registry 'auths' — FATAL_IF_PRESENT. This
+# step consumes no Docker, so its pytest must run under a fresh, step-scoped HOME so no ambient
+# ~/.docker can reach the boundary. DOCKER_CONFIG cannot be the lever — the boundary declares it
+# FATAL steering — so the isolation is a fresh `$(mktemp -d)` HOME, set inline on the pytest run.
+
+_E5_HOME_ASSIGN = '          SANDBOX_HOME="$(mktemp -d)"'
+_E5_PYTEST_LINE = (
+    '          HOME="$SANDBOX_HOME" PYTHONPATH="$GITHUB_WORKSPACE/scripts" '
+    ".reader-venv/bin/python -m pytest tests/ -q -p signalnest_bootstrap -p pytest_session_guard")
+
+
+def test_policy_tests_declares_and_satisfies_home_isolation():
+    """The contract requires it, and the real workflow must satisfy it (positive control)."""
+    spec = cim.contract()["graded_steps"]["policy_tests"]
+    assert spec.get("required_home_isolation") is True
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert _E5_HOME_ASSIGN in text and _E5_PYTEST_LINE in text
+    assert not any("policy_tests" in p and "HOME" in p
+                   for p in cim.check(text)["problems"])
+
+
+def test_removing_the_inline_hermetic_home_is_detected():
+    """Mutation: drop the step-scoped HOME= prefix -> the ambient runner ~/.docker reaches the
+    boundary and its 'auths' is FATAL. Must be RED."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    mutated = text.replace('HOME="$SANDBOX_HOME" PYTHONPATH', "PYTHONPATH", 1)
+    assert mutated != text
+    assert any("policy_tests" in p and "HOME" in p
+               for p in cim.check(mutated)["problems"])
+
+
+def test_assigning_the_hermetic_home_after_pytest_is_detected():
+    """Mutation: move the `mktemp -d` assignment AFTER the pytest run -> HOME resolves to an
+    unset variable at runtime and the isolation is not established. Must be RED."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    mutated = text.replace(
+        _E5_HOME_ASSIGN + "\n" + _E5_PYTEST_LINE,
+        _E5_PYTEST_LINE + "\n" + _E5_HOME_ASSIGN, 1)
+    assert mutated != text
+    assert any("policy_tests" in p and "HOME" in p
+               for p in cim.check(mutated)["problems"])
+
+
+def test_a_fixed_or_reused_home_is_not_a_hermetic_home():
+    """Mutation: a fixed HOME path is not a fresh `mktemp -d` dir and cannot guarantee an empty
+    ~/.docker. Must be RED."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    mutated = text.replace('SANDBOX_HOME="$(mktemp -d)"', 'SANDBOX_HOME="/tmp/reused"', 1)
+    assert mutated != text
+    assert any("policy_tests" in p and "HOME" in p
+               for p in cim.check(mutated)["problems"])
+
+
+def test_a_job_or_step_global_home_env_key_is_detected():
+    """Mutation: HOME as a workflow env: key is job/step-global and relocates the Docker-config
+    surface of the LATER image build/verify steps too. Must be RED."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    mutated = text.replace(
+        "        env:\n          SIGNALNEST_ANCHOR_TIER: TIER_1_SYNTHETIC",
+        "        env:\n          HOME: /tmp/empty\n          SIGNALNEST_ANCHOR_TIER: TIER_1_SYNTHETIC", 1)
+    assert mutated != text
+    assert any("policy_tests" in p and "HOME" in p
+               for p in cim.check(mutated)["problems"])
 
 
 @pytest.mark.parametrize("replacement", [
