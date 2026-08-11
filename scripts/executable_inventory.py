@@ -63,6 +63,21 @@ SHELL_BUILTINS = frozenset({
 })
 
 
+def _is_venv_console_script(word: str) -> bool:
+    """A console script inside a Python virtual-environment `bin` directory.
+
+    GATE 4N-I28BH-E3. This is the ONLY slash-containing command word exempted from bare-name
+    binding: `<something>venv/bin/<name>` (e.g. `.reader-venv/bin/pip`, `apps/api/.venv/bin/python`)
+    is created by the trusted `python -m venv` and resolved literally by the shell, never via a PATH
+    search, so it cannot be PATH-shadowed. The rule is STRUCTURAL — a component ending in `venv`
+    immediately followed by a `bin` component — not a data allow-list of binary names, and it does
+    NOT match an arbitrary relative path like `tools/evil`, which stays bound and fails closed.
+    """
+    parts = Path(word).parts
+    return any(parts[i].endswith("venv") and i + 1 < len(parts) and parts[i + 1] == "bin"
+               for i in range(len(parts) - 1))
+
+
 class InventoryError(RuntimeError):
     """Fail closed. An inventory that cannot be derived is never reported as complete."""
 
@@ -322,10 +337,25 @@ def static_inventory() -> dict:
             if word in shell_positions.SHELL_BUILTINS or word in shell_functions \
                     or word in shell_positions.ALL_KEYWORDS:
                 continue
+            # GATE 4N-I28BH-E3. A command word is a PATH-shadowable BARE command only when it has no
+            # slash — then the shell searches PATH and an earlier entry can stand in for it, so it is
+            # bound by name and refused unless it resolves to an approved path. The over-binding this
+            # closes (ADV-I28AN): a RELATIVE venv console script `.reader-venv/bin/pip` was basenamed
+            # to `pip` and demanded an approved PATH pip that no call site invokes; it is resolved
+            # LITERALLY by the shell (never via PATH), created by the trusted `python -m venv`, so it
+            # cannot be PATH-shadowed. ONLY such venv console scripts are exempted as `explicit_path`.
+            # Every OTHER slash-containing word (e.g. `tools/evil`, `./x`) stays bound by name so an
+            # unclassified relative path still fails closed — the exemption is exactly the venv-bin
+            # pattern, not "any path with a slash" (Gate 4N-I28BH-E3 adversarial finding, FALSE_TRUST).
+            if word.startswith("/"):
+                executable, form = Path(word).name, "absolute"
+            elif "/" in word and _is_venv_console_script(word):
+                executable, form = None, "explicit_path"
+            else:
+                executable, form = Path(word).name, "bare_name"
             invocations.append({"module": origin, "function": "<shell>", "line": command.line,
-                                "call": "shell", "executable": Path(word).name,
-                                "construct": command.construct,
-                                "form": "absolute" if word.startswith("/") else "bare_name"})
+                                "call": "shell", "executable": executable, "path": word,
+                                "construct": command.construct, "form": form})
         for problem in scanned.unresolved:
             unresolved.append({"module": origin, "function": "<shell>", "line": problem.line,
                                "call": "shell", "executable": None,

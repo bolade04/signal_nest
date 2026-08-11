@@ -1,5 +1,6 @@
 {
  "_authority": "AUTHORED. Resolution outside an approved path set is refused; membership is tested on the RESOLVED target so a symlink named to look approved does not pass.",
+ "_e3_pip_removal": "GATE 4N-I28BH-E3. The bare `pip` APPROVED_PATH_SET entry was removed as an over-binding from the I28AN command-position model, which basenamed the RELATIVE venv console scripts (.reader-venv/bin/pip, apps/api/.venv/bin/pip) to `pip` and demanded an approved PATH pip that no call site invokes. ci.yml invokes pip only as those explicit venv paths (resolved literally by the shell, never via PATH, so not shadowable) and as `python3 -m pip` (the trusted CURRENT_INTERPRETER_IDENTITY_BOUND interpreter's module). executable_inventory now classifies slash-containing shell words as `explicit_path`, so `pip` is no longer a discovered bare command. A future GENUINE bare `pip` reappears in static.executables and fails closed as an unbound reachable executable. This restores the actual startup surface WITHOUT trusting setup-python's versioned /opt/hostedtoolcache pip by pathname (the master requirement).",
  "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
  "_classifications": [
   "APPROVED_PATH_SET_AND_CONTENT_BOUND",
@@ -708,27 +709,6 @@
    "delegated_to": "npm_authority",
    "required_present": false,
    "why_required": "ci.yml#frontend-quality runs npm lint, type-check, test and build; that job's outcome blocks release"
-  },
-  "pip": {
-   "_approved_path_note": "the set spans the standard system locations on macOS and on the Linux CI runner. resolve() ignores entries that do not exist, so a path absent here is harmless; membership is tested on the RESOLVED target, which is what a shadow cannot satisfy.",
-   "_i28ao": "Gate 4N-I28AN finding ADV-I28AN-01: invisible to the previous line-initial shell scan. Discovered by the command-position model and bound before execution.",
-   "approved_paths": [
-    "/usr/bin/pip",
-    "/bin/pip",
-    "/sbin/pip",
-    "/usr/sbin/pip",
-    "/opt/homebrew/bin/pip",
-    "/usr/local/bin/pip",
-    "/opt/miniconda3/bin/pip",
-    "/usr/local/opt/python/bin/pip"
-   ],
-   "bound_before_execution": true,
-   "call_site_modules": [
-    "ci.yml"
-   ],
-   "capture_version": false,
-   "classification": "APPROVED_PATH_SET_AND_CONTENT_BOUND",
-   "why_required": "ci.yml installs the graded test dependencies"
   },
   "python": {
    "capture_version": true,
