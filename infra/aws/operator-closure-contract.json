@@ -1,0 +1,252 @@
+{
+  "_purpose": "AUTHORITATIVE, INDEPENDENTLY DERIVED expectation of the AWS operations the SignalNest operator principals must be authorized to perform. Gate 4N-I4.",
+  "_why_this_file_exists": "The Gate 4N-I3 closure test iterated the same Python dict that generated the policy, so a defect in that dict changed both the policy and its expected value simultaneously \u2014 the test could not fail. This file is a SEPARATE SOURCE, authored from evidence rather than generated. scripts/gen_operator_policies.py MUST NOT read or write it, and tests/test_operator_policies.py compares the generated policy AGAINST it.",
+  "_derivation": {
+    "provider_source": "hashicorp/aws v6.55.0 (the pinned version)",
+    "reference_execution": "the complete successful full-graph refresh of 2026-07-28T22:01:44Z-22:01:48Z: 267 CloudTrail events under the Terraform provider user agent, zero write operations",
+    "denied_calls_included": "YES. A closure derived only from SUCCESSFUL calls cannot see an action the reference run itself lacked. Every denial in that run is classified below.",
+    "repository_graph": "infra/aws/main.tf plus all modules, at checkpoint a4ec974",
+    "action_metadata": "AWS Service Reference (servicereference.us-east-1.amazonaws.com) for resource-level support"
+  },
+  "historical_denials_classified": [
+    {
+      "action": "s3:ListTagsForResource",
+      "occurrences": 4,
+      "error": "AccessDenied",
+      "classification": "OPTIONAL_SOFT_FAIL",
+      "evidence": "issued once per workload bucket against the s3-control endpoint, one second after a SUCCESSFUL s3:GetBucketTagging on the same bucket. The refresh completed normally with all four denied.",
+      "decision": "GRANT IT. The provider tolerates the denial today, but tolerance is a provider-version property, not a contract. Granting it is cheap (it supports the bucket resource type) and removes a standing dependency on undocumented fallback behaviour. This is the action Gate 4N-I3 omitted because it derived only from authorized calls.",
+      "required": true
+    },
+    {
+      "action": "s3:GetBucketWebsite",
+      "occurrences": 4,
+      "error": "NoSuchWebsiteConfiguration",
+      "classification": "UNRELATED",
+      "evidence": "the call was AUTHORIZED; the error means no website configuration exists on the bucket. Not a permission signal.",
+      "required": true
+    },
+    {
+      "action": "s3:GetBucketCORS",
+      "occurrences": 4,
+      "error": "NoSuchCORSConfiguration",
+      "classification": "UNRELATED",
+      "evidence": "authorized; no CORS configuration exists.",
+      "required": true
+    },
+    {
+      "action": "s3:GetReplicationConfiguration",
+      "occurrences": 4,
+      "error": "ReplicationConfigurationNotFoundError",
+      "classification": "UNRELATED",
+      "evidence": "authorized; no replication configuration exists.",
+      "required": true
+    },
+    {
+      "action": "s3:GetBucketObjectLockConfiguration",
+      "occurrences": 4,
+      "error": "ObjectLockConfigurationNotFoundError",
+      "classification": "UNRELATED",
+      "evidence": "authorized; object lock not configured.",
+      "required": true
+    },
+    {
+      "action": "s3:GetLifecycleConfiguration",
+      "occurrences": 3,
+      "error": "NoSuchLifecycleConfiguration",
+      "classification": "UNRELATED",
+      "evidence": "authorized; three of four buckets have no lifecycle configuration. The fourth (spa) does and returned success.",
+      "required": true
+    }
+  ],
+  "refresh_closure": {
+    "_note": "IAM ACTION names, which differ from CloudTrail eventNames in several places. Every entry was observed in the reference execution unless marked otherwise.",
+    "resource_star_regional": [
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:GetDashboard",
+      "cloudwatch:ListTagsForResource",
+      "ec2:DescribeAddresses",
+      "ec2:DescribeAddressesAttribute",
+      "ec2:DescribeInternetGateways",
+      "ec2:DescribeNatGateways",
+      "ec2:DescribeNetworkAcls",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeSecurityGroupRules",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcAttribute",
+      "ec2:DescribeVpcs",
+      "ecr:DescribeRepositories",
+      "ecr:GetLifecyclePolicy",
+      "ecr:ListTagsForResource",
+      "ecs:DescribeClusters",
+      "ecs:ListTagsForResource",
+      "elasticache:DescribeCacheClusters",
+      "elasticache:DescribeCacheParameterGroups",
+      "elasticache:DescribeCacheParameters",
+      "elasticache:DescribeCacheSubnetGroups",
+      "elasticache:DescribeReplicationGroups",
+      "elasticache:ListTagsForResource",
+      "elasticloadbalancing:DescribeCapacityReservation",
+      "elasticloadbalancing:DescribeListenerAttributes",
+      "elasticloadbalancing:DescribeListeners",
+      "elasticloadbalancing:DescribeLoadBalancerAttributes",
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTags",
+      "elasticloadbalancing:DescribeTargetGroupAttributes",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "kms:ListAliases",
+      "logs:DescribeLogGroups",
+      "logs:DescribeMetricFilters",
+      "logs:ListTagsForResource",
+      "sts:GetCallerIdentity"
+    ],
+    "_resource_star_note": "Several of these DO support resource-level scoping (ec2:DescribeVpcAttribute -> vpc, ecr:* -> repository, ecs:DescribeClusters -> cluster, elasticache:* -> various, logs:* -> log-group, cloudwatch:* -> alarm/dashboard). They are held at Resource \"*\" as a deliberate, recorded choice for a read-only diagnostic surface, NOT because scoping is unavailable. The Gate 4N-I3 comment claiming 'no resource-level support in aggregate' was false and is corrected here.",
+    "rds_star": [
+      "rds:DescribeDBInstances"
+    ],
+    "_rds_star_note": "CloudTrail requestParameters show this is called with a filters block keyed on dbi-resource-id, NOT with DBInstanceIdentifier. A filter-shaped Describe authorizes list-style against db:*, so an ARN-scoped statement using the NAME form would not bind. Held at \"*\". The Gate 4N-I3 justification ('called with no identifier') was factually wrong and is corrected here.",
+    "rds_exact": [
+      "rds:DescribeDBParameterGroups",
+      "rds:DescribeDBParameters",
+      "rds:DescribeDBSubnetGroups",
+      "rds:ListTagsForResource"
+    ],
+    "s3_bucket": [
+      "s3:GetAccelerateConfiguration",
+      "s3:GetBucketAcl",
+      "s3:GetBucketCORS",
+      "s3:GetBucketLogging",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetBucketOwnershipControls",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketRequestPayment",
+      "s3:GetBucketTagging",
+      "s3:GetBucketVersioning",
+      "s3:GetBucketWebsite",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetReplicationConfiguration",
+      "s3:ListBucket",
+      "s3:ListTagsForResource"
+    ],
+    "kms_exact": [
+      "kms:DescribeKey",
+      "kms:GetKeyPolicy",
+      "kms:GetKeyRotationStatus",
+      "kms:ListResourceTags"
+    ],
+    "secrets": [
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetResourcePolicy"
+    ],
+    "iam_read": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies"
+    ],
+    "_iam_read_note": "iam:ListRoleTags was in the Gate 4N-I3 closure but was NEVER observed in the reference execution. Removed here: an unobserved action must not be presented as evidence-derived.",
+    "route53": [
+      "route53:GetHostedZone",
+      "route53:ListResourceRecordSets"
+    ],
+    "cloudfront_read": [
+      "cloudfront:GetDistribution",
+      "cloudfront:GetOriginAccessControl",
+      "cloudfront:ListTagsForResource"
+    ],
+    "cloudtrail_read_exact": [
+      "cloudtrail:GetTrailStatus",
+      "cloudtrail:ListTags"
+    ],
+    "cloudtrail_read_star": [
+      "cloudtrail:DescribeTrails"
+    ],
+    "budgets": [
+      "budgets:ViewBudget",
+      "budgets:ListTagsForResource"
+    ],
+    "_budgets_note": "budgets:ViewBudget authorizes DescribeBudget, DescribeNotificationsForBudget and DescribeSubscribersForNotification, all observed. Gate 4N-I2 dropped it and broke module.cost planning.",
+    "_ecs_note": "ecs:ListTagsForResource was NOT in the 2026-07-28 reference window but HAS been called by this principal (once), and the ecs cluster carries tags so refresh requires it. Included. The generator omitted it; this contract caught the omission \u2014 which is the independence design working."
+  },
+  "stage_a_create_closure": {
+    "_scope": "module.revision_reader Stage A only: publication_bootstrap_enabled = true, runtime_enabled = false.",
+    "_addresses": [
+      "module.revision_reader.aws_ecr_repository.reader",
+      "module.revision_reader.aws_ecr_lifecycle_policy.reader",
+      "module.revision_reader.aws_iam_role.reader_publisher",
+      "module.revision_reader.aws_iam_role_policy.reader_publisher"
+    ],
+    "ecr_create": [
+      "ecr:CreateRepository",
+      "ecr:PutLifecyclePolicy",
+      "ecr:TagResource",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:PutImageTagMutability"
+    ],
+    "ecr_read_after_create": [
+      "ecr:DescribeRepositories",
+      "ecr:GetLifecyclePolicy",
+      "ecr:ListTagsForResource"
+    ],
+    "iam_read_after_create": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRoleTags"
+    ],
+    "_ordering_hazard": "OpenTofu creates the two ECR resources before the IAM role. If the IAM grant cannot match, the apply fails AFTER the ECR resources already exist \u2014 a partial apply. This is why the boundary precondition must be asserted BEFORE apply, not discovered during it.",
+    "_boundary_dependency": "aws_iam_role.reader_publisher sets permissions_boundary = var.role_permissions_boundary_arn. If that variable is null the provider sends no boundary, so a CreateRole grant conditioned on iam:PermissionsBoundary can never match. Stage A therefore REQUIRES the variable to be set to the exact boundary ARN and the boundary policy to exist.",
+    "_ecr_read_note": "ecr:GetRepositoryPolicy was in an earlier draft of this contract and is REMOVED: it has never been called by this principal, and provider v6.55.0 internal/service/ecr/repository.go reads exclusively via findRepositoryByName -> DescribeRepositories. Removing it is a correction to THIS FILE, caught by the independence test comparing contract against generated policy.",
+    "_ecr_create_note": "PutImageScanningConfiguration and PutImageTagMutability are granted DEFENSIVELY. On a fresh create the provider passes imageScanningConfiguration and imageTagMutability as CreateRepository parameters, so they are not strictly needed; but repository.go exposes both as UPDATE calls, and the reader repository sets image_tag_mutability=IMMUTABLE and scan_on_push=true (modules/revision_reader/main.tf:68-75). If the repository already exists with different settings, the apply would call them and fail mid-run. Given Defect 5 was a mid-apply failure after partial creation, the defensive grant is the correct trade.",
+    "_iam_list_role_tags_note": "iam:ListRoleTags is required on the CREATE path only. Provider v6.55.0 internal/service/iam/role.go defines roleTags() calling ListRoleTags via a paginator. It was NOT observed during the reference refresh, but that refresh only read ALREADY-EXISTING roles; no reader role has ever been created, so absence there proves nothing about the create path. Granted to the temporary operator, withheld from permanent W0.",
+    "_gate_4n_i9_note": "iam_create was REMOVED from this section in Gate 4N-I9 and moved to role_bootstrap_closure. Stage-A now consumes PRE-EXISTING roles and holds no role authoring capability of any kind."
+  },
+  "state_backend_closure": {
+    "_note": "Required by tofu init/plan/apply against the S3 backend. Held by the temporary operator only; permanent W0 has none of it.",
+    "read": [
+      "s3:GetObject",
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
+    ],
+    "write_apply_only": [
+      "s3:PutObject"
+    ],
+    "lock": [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem"
+    ],
+    "_lock_note": "dynamodb:DescribeTable was PROVEN UNUSED by the OpenTofu 1.12.5 S3 backend: every DescribeTable on the lock table came from aws-cli, resource-explorer, or BootstrapOp managing the table. Excluded.",
+    "cmk": [
+      "kms:Decrypt",
+      "kms:GenerateDataKey",
+      "kms:DescribeKey"
+    ],
+    "_cmk_note": "GenerateDataKey and Decrypt are PROVEN REQUIRED: the state bucket has BucketKeyEnabled and the lock table is encrypted with the SAME CMK, with CloudTrail showing both encryption contexts. kms:Encrypt was never observed and is excluded.",
+    "_use_lockfile_hazard": "UNRESOLVED. infra/aws/backend.tf is a partial backend; whether use_lockfile is set is not knowable from the repository, and the trail has no S3 data events so it cannot be inferred. If use_lockfile is enabled, locking additionally needs s3:PutObject and s3:DeleteObject on <key>.tflock, which this contract does NOT grant. Read the operator backend config before any apply."
+  },
+  "explicitly_not_required": {
+    "audit_bucket_mutation": "s3:PutBucketPolicy and s3:PutBucketPublicAccessBlock on the audit bucket are NOT required for the current Gate 4N plan. Live evidence: the trail has been logging since 2026-07-27 and is delivering; the audit bucket policy and PAB are already converged and were read successfully by the reference refresh. Gate 4N-I3 granted them unnecessarily, covering only 2 of the 6 module-owned observability resources, and thereby opened a path to halt log delivery without calling cloudtrail:StopLogging.",
+    "cloudtrail_create": "cloudtrail:CreateTrail and StartLogging are NOT required: the trail exists and is logging.",
+    "cloudfront_write": "no CloudFront create/update/delete is required: the distribution and OAC exist and no approved step touches them.",
+    "iam_list_role_tags": "never observed in the reference execution."
+  },
+  "role_bootstrap_closure": {
+    "_scope": "GATE 4N-I9 DEFECT 1. iam:CreateRole accepts the AssumeRolePolicyDocument and AWS has no condition key over the whole trust document, so a principal holding it for an approved role NAME can still create that role with attacker-chosen trust that OUTLIVES the principal's expiry. These actions therefore no longer belong to the Stage-A operator; they belong to a separate, minimal RoleBootstrapOperator whose safety rests on exact reviewed trust files plus mandatory post-create read-back and immediate rollback on mismatch.",
+    "_enforcement_is_operational_not_iam": "AWS offers no prevent here. The control is detect-and-revert, and it is recorded as such rather than described as if IAM enforced the trust bytes.",
+    "iam_create": [
+      "iam:CreateRole",
+      "iam:PutRolePolicy",
+      "iam:TagRole"
+    ],
+    "iam_read_after_create": [
+      "iam:GetRole",
+      "iam:ListRoleTags"
+    ],
+    "_moved_from": "stage_a_create_closure.iam_create (Gates 4N-I3 through 4N-I8)"
+  }
+}

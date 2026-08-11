@@ -1,0 +1,876 @@
+{
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_purpose": "Pinned baseline of the authored assertion contracts (Gate 4N-I28W, bounded protection against unauthorized weakening).",
+ "_trust_limit": [
+  "This detects an UNEXPLAINED change to the authored registry. It does NOT defend against a party",
+  "able to rewrite the registry, this baseline and the change ledger in one edit \u2014 no authored",
+  "oracle can. What it buys is that weakening a contract now requires a second, visible edit in a",
+  "different file, with an explanation, rather than a quiet one-line change."
+ ],
+ "change_ledger": [
+  {
+   "change": "initial ten contracts authored",
+   "gate": "4N-I28U",
+   "identity_level_explanation": "AC-01..AC-10, each earned by a proving mutation executed against a green baseline"
+  },
+  {
+   "change": "four contracts added and two marked conditional-with-proof",
+   "gate": "4N-I28W",
+   "identity_level_explanation": "AC-11 scan-accounting decision set, AC-12 packet digest distinctness, AC-13 trap scope, AC-14 predicted-tree incoherence \u2014 each proven unsubsumed in the I28W Phase B reproduction by gutting it and observing the qualified suite stay green. AC-04 and AC-05 gained allow_conditional with a named reachable guard, because their assertions run inside loops over derived collections."
+  },
+  {
+   "change": "helper implementation provenance rule added to the meta contract",
+   "gate": "4N-I28W",
+   "identity_level_explanation": "each registered helper now declares implementation_source; a third_party helper must have NO in-tree implementation (proving the 'weakened implementation' attack is unreachable rather than merely untested), and an in_tree helper must pin implementation_sha256. This closes readiness criterion 16 by making the attack detectable the moment a project helper is registered."
+  },
+  {
+   "change": "two contracts added for the npm/Node toolchain-identity controls",
+   "gate": "4N-I28AS",
+   "identity_level_explanation": "AC-15 pins test_n14, which requires that a fully SELF-CONSISTENT attacker Node installation is still refused \u2014 correct layout, correct symlink, plausible package.json, a copied genuine node binary, a semver directory name and a node_version.h agreeing with it. That case ESCAPED the first implementation of this gate: internal consistency is forgeable, because an attacker only has to be consistent with themselves. The contract pins both the refusal AND its reason token ('metadata references none of it'), so a refusal for an unrelated cause cannot satisfy it. AC-16 pins test_n01, which requires external_executable_trust to contain exactly ONE read of approved_path_prefixes \u2014 the refusal keeping it out of the policy \u2014 and ZERO assignments emptying the approved path set, since the single line `approved = []` is the whole of ADV-I28AP-02. Both facts are asserted as one equality keyed by stable names, because the first version asserted them against local variables and the analyser correctly rejected it: `len(reads) == 1` carries no token a contract can pin, so weakening it to `>= 0` would have been invisible. No pre-existing contract shape was altered."
+  },
+  {
+   "change": "two contracts added for the Docker execution-boundary controls",
+   "gate": "4N-I28AT",
+   "identity_level_explanation": "AC-17 pins test_d12, which requires that an UNCLASSIFIED Docker steering variable is refused by name. That branch was unreachable code in this gate's first implementation \u2014 the collector iterated the policy's own key list, so a variable nobody had classified was never collected and DOCKER_MYSTERY_KNOB passed with the layer clean. AC-18 pins test_d21, which requires a defined Docker CONTEXT to be refused WITH the remote endpoint named; a context selects the daemon without any environment variable being set, so it is the redirection that survives an environment-only control. Both contracts pin the reason token as well as the refusal, so a refusal for an unrelated cause cannot satisfy them. No pre-existing contract shape was altered."
+  },
+  {
+   "change": "two contracts added for the shell-parser completeness controls",
+   "gate": "4N-I28AV",
+   "identity_level_explanation": "AC-19 pins test_v01, which requires that a command after `case \u2026 esac` is BOTH discovered AND returned in a trustworthy result \u2014 the two halves matter separately, because ADV-I28AT-01 produced a result that was 'successful' and simply contained fewer commands. AC-20 pins test_v16, which requires the executable inventory to REFUSE a parse that is not complete; that consumer had no independent superset, so a clean result computed from incomplete input was indistinguishable from coverage. Both contracts pin the reason token as well as the refusal. No pre-existing contract shape was altered."
+  },
+  {
+   "gate": "4N-I28BB",
+   "change": "one contract added for the exec command-position transfer control",
+   "identity_level_explanation": "AC-21 pins test_the_adv_i28ax_01_finding_is_closed, which requires BOTH halves of the ADV-I28AX-01 shape separately: the bare control `kubectl apply -f x` must discover kubectl, AND `exec kubectl apply -f x` must discover it too. The two matter independently because before this gate the exec form returned a result that was 'successful' \u2014 COMPLETE, trustworthy, zero unresolved, zero unsupported, zero parse errors \u2014 and simply contained no command at all, indistinguishable from the inert `# exec kubectl`. Its proving mutation f01 restores idx=j+1 with expecting=False, reproducing the finding exactly; that mutation was measured REFUSED, and it remains refused even with the test's own first assertion neutered, because the corpus and transfer-site assertions cover the property redundantly."
+  },
+  {
+   "gate": "4N-I28BE",
+   "change": "one contract added for Docker per-site steering enforcement",
+   "identity_level_explanation": "AC-22 pins test_every_required_field_is_consumed_by_the_decision, which asserts that the set of fields the per-site DECISION reads is a superset of the authored per-site schema. The distinction it protects is precise: before this gate all four steering fields were derived, stored and serialised on all 50 sites and read by zero decision paths, and 8 of 10 mutations to those records produced no final failure. Its proving mutation removes a field from the consumed set, restoring the evidence-only shape."
+  },
+  {
+   "gate": "4N-I28BF-A",
+   "change": "one contract added for exact Docker category resolution and session-finish rederivation",
+   "identity_level_explanation": "AC-23 pins test_no_substring_matching_remains, which asserts BOTH that substring containment is absent from the source AND that 'flagrant nonsense' resolves to no mechanism. The two halves matter separately: the structural half catches a reintroduced `in lowered` test, the functional half catches any other route to the same widening. Its proving mutation restores containment, which made fifteen unrelated inputs resolve to real mechanisms."
+  },
+  "Gate 4N-I28BF-B1: added AC-B1-STATE-AUTH-BINDING, AC-B1-STATE-DIGEST-SENSITIVITY, AC-B1-CACHE-KEY-COMPLETENESS, AC-B1-POISON-FORCED-AGGREGATE for the authoritative Docker assurance state and governed cache. No existing contract was weakened; four added.",
+  "Gate 4N-I28BF-B3: added AC-B3-HASHSEED-DETERMINISM, AC-B3-HOSTILE-DOCKER-ENV, AC-B3-CROSS-TREE-CACHE for the environment matrix. No existing contract weakened; three added.",
+  "Gate 4N-I28BG-B1: added AC-BG1-SOURCE-SENSITIVITY, AC-BG1-WORKFLOW-IDENTITY-BINDING, AC-BG1-JOB-IDENTITY-BINDING, AC-BG1-STEP-IDENTITY-BINDING, AC-BG1-IMAGE-DIGEST-BINDING, AC-BG1-IMMUTABLE-TAG-BINDING, AC-BG1-AUTHORIZATION-BINDING, AC-BG1-PRE-BUILD-FRESH-VERIFY, AC-BG1-PRE-PUSH-FRESH-VERIFY, AC-BG1-GRAPH-ORDERING, AC-BG1-NO-BYPASS, AC-BG1-FAILURE-PROPAGATION for the reusable workflow-assurance verifier and the static graph validator. No existing contract weakened; twelve added.",
+  "Gate 4N-I28BG-B2: added eleven AC-BG2-READER-* contracts for the integrated reader-publish workflow assurance (establishment presence, workflow-content binding, pre-build/pre-push freshness, image-digest/immutable-tag binding, push binding, sixteen-site coverage, no-bypass, failure propagation, aggregate consistency). No existing contract weakened; eleven added.",
+  "Gate 4N-I28BG-B3: added sixteen AC-BG3-* contracts for the integrated staging-publish dual-image assurance (establishment, workflow-content binding, API+worker pre-build/pre-push freshness, API+worker image binding, API/worker non-interchangeability, API+worker immutable tags, dual-image push completeness, sixteen-site coverage, no-bypass, failure propagation, aggregate consistency). No existing contract weakened; sixteen added.",
+  "Gate 4N-I28BG-B4: added fifteen AC-BG4-* contracts for the cross-workflow 32-arm falsification, TOCTOU, job-graph bypass, replay, image/tag substitution, aggregate, site-universe, and failure-propagation batteries closing ADV-I28AX-ARCH-01-PART-B. No existing contract weakened; fifteen added."
+ ],
+ "contract_count": 84,
+ "contract_ids": [
+  "AC-01-SMOKE-HTTP-REAL-CHAIN",
+  "AC-02-COMMENT-CANNOT-MOVE-UNIVERSE",
+  "AC-03-MUTATION-HARNESS-CAN-REPORT-MOVEMENT",
+  "AC-04-NO-TEXTUAL-ROOT",
+  "AC-05-SITE-ROLE-EQUALS-ROOT-ROLE",
+  "AC-06-UNGRADED-SMOKE-DOES-NOT-BLOCK-RELEASE",
+  "AC-07-SITE-BEHAVIOR-DISPOSITION",
+  "AC-08-COMMENT-PINS-REMAIN",
+  "AC-09-SITE-UNIVERSE-PIN",
+  "AC-10-UNRESOLVED-MENTION-FAILS-CLOSED",
+  "AC-11-SCAN-ACCOUNTING-DECISION-SET",
+  "AC-12-PACKET-DIGESTS-ARE-DISTINCT",
+  "AC-13-TRAP-SCOPE-SEMANTICS",
+  "AC-14-PREDICTED-TREE-INCOHERENCE-DETECTED",
+  "AC-15-NPM-SELF-CONSISTENT-INSTALLATION-REFUSED",
+  "AC-16-NPM-PREFIX-MECHANISM-ABSENT",
+  "AC-17-DOCKER-UNCLASSIFIED-STEERING-FAILS-CLOSED",
+  "AC-18-DOCKER-CONTEXT-REFUSED",
+  "AC-19-SHELL-COMMAND-AFTER-CASE-DISCOVERED",
+  "AC-20-INVENTORY-REFUSES-INCOMPLETE-PARSE",
+  "AC-21-EXEC-COMMAND-POSITION-TRANSFER",
+  "AC-22-DOCKER-PER-SITE-ENFORCEMENT",
+  "AC-23-DOCKER-CATEGORY-AND-SESSION-FINISH",
+  "AC-B1-CACHE-KEY-COMPLETENESS",
+  "AC-B1-POISON-FORCED-AGGREGATE",
+  "AC-B1-STATE-AUTH-BINDING",
+  "AC-B1-STATE-DIGEST-SENSITIVITY",
+  "AC-B3-CROSS-TREE-CACHE",
+  "AC-B3-HASHSEED-DETERMINISM",
+  "AC-B3-HOSTILE-DOCKER-ENV",
+  "AC-BG1-AUTHORIZATION-BINDING",
+  "AC-BG1-FAILURE-PROPAGATION",
+  "AC-BG1-GRAPH-ORDERING",
+  "AC-BG1-IMAGE-DIGEST-BINDING",
+  "AC-BG1-IMMUTABLE-TAG-BINDING",
+  "AC-BG1-JOB-IDENTITY-BINDING",
+  "AC-BG1-NO-BYPASS",
+  "AC-BG1-PRE-BUILD-FRESH-VERIFY",
+  "AC-BG1-PRE-PUSH-FRESH-VERIFY",
+  "AC-BG1-SOURCE-SENSITIVITY",
+  "AC-BG1-STEP-IDENTITY-BINDING",
+  "AC-BG1-WORKFLOW-IDENTITY-BINDING",
+  "AC-BG2-READER-AGGREGATE-CONSISTENCY",
+  "AC-BG2-READER-ESTABLISHMENT-PRESENCE",
+  "AC-BG2-READER-FAILURE-PROPAGATION",
+  "AC-BG2-READER-IMAGE-DIGEST-BINDING",
+  "AC-BG2-READER-IMMUTABLE-TAG",
+  "AC-BG2-READER-NO-BYPASS",
+  "AC-BG2-READER-PRE-BUILD-FRESH",
+  "AC-BG2-READER-PRE-PUSH-FRESH",
+  "AC-BG2-READER-PUSH-BINDING",
+  "AC-BG2-READER-SIXTEEN-SITE-COVERAGE",
+  "AC-BG2-READER-WORKFLOW-CONTENT-BINDING",
+  "AC-BG3-AGGREGATE-CONSISTENCY",
+  "AC-BG3-API-IMAGE-BINDING",
+  "AC-BG3-API-IMMUTABLE-TAG",
+  "AC-BG3-API-PRE-BUILD-FRESH",
+  "AC-BG3-API-PRE-PUSH-FRESH",
+  "AC-BG3-API-WORKER-NON-INTERCHANGEABILITY",
+  "AC-BG3-DUAL-IMAGE-PUSH-COMPLETENESS",
+  "AC-BG3-FAILURE-PROPAGATION",
+  "AC-BG3-NO-BYPASS",
+  "AC-BG3-SIXTEEN-SITE-COVERAGE",
+  "AC-BG3-STAGING-ESTABLISHMENT",
+  "AC-BG3-STAGING-WORKFLOW-CONTENT-BINDING",
+  "AC-BG3-WORKER-IMAGE-BINDING",
+  "AC-BG3-WORKER-IMMUTABLE-TAG",
+  "AC-BG3-WORKER-PRE-BUILD-FRESH",
+  "AC-BG3-WORKER-PRE-PUSH-FRESH",
+  "AC-BG4-32-SITE-COMPLETENESS",
+  "AC-BG4-AGGREGATE-CONSISTENCY",
+  "AC-BG4-BOTH-WORKFLOWS-PASS",
+  "AC-BG4-CROSS-WORKFLOW-REPLAY",
+  "AC-BG4-DUAL-IMAGE-NON-INTERCHANGEABILITY",
+  "AC-BG4-FAILURE-PROPAGATION",
+  "AC-BG4-GLOBAL-50-SITE",
+  "AC-BG4-HARNESS-32-ARMS",
+  "AC-BG4-HARNESS-NO-ESCAPE",
+  "AC-BG4-IMAGE-TAG-SUBSTITUTION",
+  "AC-BG4-NO-BYPASS",
+  "AC-BG4-PRE-BUILD-FRESH",
+  "AC-BG4-PRE-PUSH-FRESH",
+  "AC-BG4-TOCTOU-CLOSURE",
+  "AC-BG4-WORKFLOW-CONTENT-BINDING"
+ ],
+ "meta_contract_path": "tests/fixtures/assertion-meta-contract.json",
+ "meta_contract_sha256": "d121efc1a42a254b9b77e022b87355375150ce7380d033b9a44ce4bedd6a654e",
+ "per_contract_shape": {
+  "AC-01-SMOKE-HTTP-REAL-CHAIN": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 4,
+   "must_reference_token_count": 5,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "EXACT_IDENTITY_EQUALITY",
+    "IDENTITY_COMPARISON"
+   ]
+  },
+  "AC-02-COMMENT-CANNOT-MOVE-UNIVERSE": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 5,
+   "must_reference_token_count": 9,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "EXACT_IDENTITY_EQUALITY",
+    "HASH_EQUALITY"
+   ]
+  },
+  "AC-03-MUTATION-HARNESS-CAN-REPORT-MOVEMENT": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "required_classes": [
+    "MEMBERSHIP",
+    "MUTATION_CHANGES_RESULT"
+   ]
+  },
+  "AC-04-NO-TEXTUAL-ROOT": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 3,
+   "must_reference_token_count": 5,
+   "required_classes": [
+    "INEQUALITY",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-05-SITE-ROLE-EQUALS-ROOT-ROLE": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 3,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "EXACT_IDENTITY_EQUALITY"
+   ]
+  },
+  "AC-06-UNGRADED-SMOKE-DOES-NOT-BLOCK-RELEASE": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "IDENTITY_COMPARISON"
+   ]
+  },
+  "AC-07-SITE-BEHAVIOR-DISPOSITION": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 3,
+   "must_reference_token_count": 2,
+   "required_classes": [
+    "MEMBERSHIP",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-08-COMMENT-PINS-REMAIN": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 4,
+   "must_reference_token_count": 4,
+   "required_classes": [
+    "MEMBERSHIP",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-09-SITE-UNIVERSE-PIN": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "required_classes": [
+    "COUNT_EQUALITY"
+   ]
+  },
+  "AC-10-UNRESOLVED-MENTION-FAILS-CLOSED": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 3,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "MEANINGFUL_TRUTHINESS",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-11-SCAN-ACCOUNTING-DECISION-SET": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "required_classes": [
+    "SET_EQUALITY"
+   ]
+  },
+  "AC-12-PACKET-DIGESTS-ARE-DISTINCT": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "required_classes": [
+    "INEQUALITY"
+   ]
+  },
+  "AC-13-TRAP-SCOPE-SEMANTICS": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "IDENTITY_COMPARISON"
+   ]
+  },
+  "AC-14-PREDICTED-TREE-INCOHERENCE-DETECTED": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEANINGFUL_TRUTHINESS"
+   ]
+  },
+  "AC-15-NPM-SELF-CONSISTENT-INSTALLATION-REFUSED": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "MEANINGFUL_TRUTHINESS",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-16-NPM-PREFIX-MECHANISM-ABSENT": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ]
+  },
+  "AC-17-DOCKER-UNCLASSIFIED-STEERING-FAILS-CLOSED": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "MEANINGFUL_TRUTHINESS",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-18-DOCKER-CONTEXT-REFUSED": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "MEMBERSHIP",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-19-SHELL-COMMAND-AFTER-CASE-DISCOVERED": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-20-INVENTORY-REFUSES-INCOMPLETE-PARSE": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "required_classes": [
+    "MEANINGFUL_TRUTHINESS",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-21-EXEC-COMMAND-POSITION-TRANSFER": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "required_classes": [
+    "MEMBERSHIP",
+    "MEMBERSHIP"
+   ]
+  },
+  "AC-22-DOCKER-PER-SITE-ENFORCEMENT": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "required_classes": [
+    "SET_EQUALITY"
+   ]
+  },
+  "AC-23-DOCKER-CATEGORY-AND-SESSION-FINISH": {
+   "has_proving_mutation": true,
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 1,
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ]
+  },
+  "AC-B1-STATE-AUTH-BINDING": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-B1-STATE-DIGEST-SENSITIVITY": {
+   "required_classes": [
+    "MUTATION_CHANGES_RESULT"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-B1-CACHE-KEY-COMPLETENESS": {
+   "required_classes": [
+    "SET_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-B1-POISON-FORCED-AGGREGATE": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-B3-HASHSEED-DETERMINISM": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-B3-HOSTILE-DOCKER-ENV": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-B3-CROSS-TREE-CACHE": {
+   "required_classes": [
+    "MEANINGFUL_TRUTHINESS"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-SOURCE-SENSITIVITY": {
+   "required_classes": [
+    "MUTATION_CHANGES_RESULT"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-WORKFLOW-IDENTITY-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-JOB-IDENTITY-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-STEP-IDENTITY-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-IMAGE-DIGEST-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-IMMUTABLE-TAG-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-AUTHORIZATION-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-PRE-BUILD-FRESH-VERIFY": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-PRE-PUSH-FRESH-VERIFY": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-GRAPH-ORDERING": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-NO-BYPASS": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG1-FAILURE-PROPAGATION": {
+   "required_classes": [
+    "IDENTITY_COMPARISON",
+    "INEQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-ESTABLISHMENT-PRESENCE": {
+   "required_classes": [
+    "MEANINGFUL_TRUTHINESS",
+    "MEANINGFUL_TRUTHINESS"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-WORKFLOW-CONTENT-BINDING": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-PRE-BUILD-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "IDENTITY_COMPARISON"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-IMAGE-DIGEST-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-IMMUTABLE-TAG": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-PRE-PUSH-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-PUSH-BINDING": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "IDENTITY_COMPARISON"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-SIXTEEN-SITE-COVERAGE": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-NO-BYPASS": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-FAILURE-PROPAGATION": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG2-READER-AGGREGATE-CONSISTENCY": {
+   "required_classes": [
+    "IDENTITY_COMPARISON",
+    "INEQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-STAGING-ESTABLISHMENT": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "IDENTITY_COMPARISON"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-STAGING-WORKFLOW-CONTENT-BINDING": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-API-PRE-BUILD-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-WORKER-PRE-BUILD-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-API-IMAGE-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-WORKER-IMAGE-BINDING": {
+   "required_classes": [
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-API-WORKER-NON-INTERCHANGEABILITY": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-API-IMMUTABLE-TAG": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-WORKER-IMMUTABLE-TAG": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-API-PRE-PUSH-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-WORKER-PRE-PUSH-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-DUAL-IMAGE-PUSH-COMPLETENESS": {
+   "required_classes": [
+    "IDENTITY_COMPARISON"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-SIXTEEN-SITE-COVERAGE": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-NO-BYPASS": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-FAILURE-PROPAGATION": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG3-AGGREGATE-CONSISTENCY": {
+   "required_classes": [
+    "IDENTITY_COMPARISON",
+    "INEQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-BOTH-WORKFLOWS-PASS": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-HARNESS-32-ARMS": {
+   "required_classes": [
+    "COUNT_EQUALITY",
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-HARNESS-NO-ESCAPE": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 3,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-32-SITE-COMPLETENESS": {
+   "required_classes": [
+    "COUNT_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-GLOBAL-50-SITE": {
+   "required_classes": [
+    "COUNT_EQUALITY",
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-WORKFLOW-CONTENT-BINDING": {
+   "required_classes": [
+    "INEQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-CROSS-WORKFLOW-REPLAY": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 6,
+   "must_reference_token_count": 3,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-DUAL-IMAGE-NON-INTERCHANGEABILITY": {
+   "required_classes": [
+    "INEQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 1,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-PRE-BUILD-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-PRE-PUSH-FRESH": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-TOCTOU-CLOSURE": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-IMAGE-TAG-SUBSTITUTION": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY"
+   ],
+   "minimum_meaningful_assertions": 5,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-NO-BYPASS": {
+   "required_classes": [
+    "EXACT_IDENTITY_EQUALITY",
+    "MEMBERSHIP"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-AGGREGATE-CONSISTENCY": {
+   "required_classes": [
+    "IDENTITY_COMPARISON"
+   ],
+   "minimum_meaningful_assertions": 1,
+   "must_reference_token_count": 2,
+   "has_proving_mutation": true
+  },
+  "AC-BG4-FAILURE-PROPAGATION": {
+   "required_classes": [
+    "IDENTITY_COMPARISON",
+    "IDENTITY_COMPARISON"
+   ],
+   "minimum_meaningful_assertions": 2,
+   "must_reference_token_count": 4,
+   "has_proving_mutation": true
+  }
+ },
+ "registry_path": "tests/fixtures/assertion-contract-registry.json",
+ "registry_sha256": "f0f44b73840c7fdaf98430c73283138cbf3adb0bce622205ed5e9babb65ec69d"
+}

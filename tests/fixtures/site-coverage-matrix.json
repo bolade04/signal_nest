@@ -1,0 +1,472 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_purpose": "Authored mutation matrix for EXECUTED site coverage (Gate 4N-I24D, closing I24C-12).",
+  "_why": [
+    "Coverage must be an executed fact. An earlier draft credited a site when its name",
+    "appeared in a test file, so fourteen keys became 'covered' the moment a dictionary",
+    "listed them \u2014 no behaviour proven. Each entry here is executed: the key is mutated in",
+    "the real fixture, the real shipping guard runs, and the guard must exit non-zero."
+  ],
+  "_authority": [
+    "AUTHORED. scripts/site_coverage.py reads this and executes it; it never derives",
+    "the matrix from the discovery inventory, so the two sources stay independent."
+  ],
+  "sites": {
+    "approved-account-registry.json::approved_accounts": {
+      "fixture": "approved-account-registry.json",
+      "guard": "leak_scan.py",
+      "key": "approved_accounts",
+      "mutate_to": [],
+      "attributable_token": "approved_accounts"
+    },
+    "candidate-manifest.json::artifact_root": {
+      "fixture": "candidate-manifest.json",
+      "guard": "candidate_manifest.py",
+      "key": "artifact_root",
+      "mutate_to": "E2-MUTATED-VALUE"
+    },
+    "candidate-manifest.json::artifacts": {
+      "fixture": "candidate-manifest.json",
+      "guard": "candidate_manifest.py",
+      "key": "artifacts",
+      "mutate_to": {}
+    },
+    "candidate-manifest.json::candidate_id": {
+      "fixture": "candidate-manifest.json",
+      "guard": "candidate_manifest.py",
+      "key": "candidate_id",
+      "mutate_to": "E2-MUTATED-VALUE"
+    },
+    "candidate-manifest.json::certifies_production": {
+      "fixture": "candidate-manifest.json",
+      "guard": "candidate_manifest.py",
+      "key": "certifies_production",
+      "mutate_to": true
+    },
+    "candidate-manifest.json::prefreeze_manifest": {
+      "fixture": "candidate-manifest.json",
+      "guard": "candidate_manifest.py",
+      "key": "prefreeze_manifest",
+      "mutate_to": "__DELETE__"
+    },
+    "ci-ambient-env.json::ambient_variables": {
+      "fixture": "ci-ambient-env.json",
+      "guard": "ci_env_dataflow.py",
+      "key": "ambient_variables",
+      "mutate_to": {}
+    },
+    "ci-invocation-contract.json::graded_steps": {
+      "fixture": "ci-invocation-contract.json",
+      "guard": "ci_invocation_model.py",
+      "key": "graded_steps",
+      "mutate_to": {}
+    },
+    "collection-completeness-specs.json::specs": {
+      "fixture": "collection-completeness-specs.json",
+      "guard": "collection_completeness.py",
+      "key": "specs",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a1a_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a1a_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a1b_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a1b_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a1c_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a1c_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a2a_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a2a_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a2b_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a2b_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a2c_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a2c_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a3_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a3_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a4_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a4_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::a5_adjudication": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "a5_adjudication",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::classifications": {
+      "fixture": "critical-list-contract.json",
+      "guard": "critical_list_inventory.py",
+      "key": "classifications",
+      "mutate_to": {}
+    },
+    "critical-list-contract.json::completeness_consumers": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "completeness_consumers",
+      "mutate_to": {},
+      "attributable_token": "completeness_consumers"
+    },
+    "critical-list-contract.json::reasons": {
+      "fixture": "critical-list-contract.json",
+      "guard": "security_collection_assurance.py",
+      "key": "reasons",
+      "mutate_to": {}
+    },
+    "docker-boundary-policy.json::call_sites": {
+      "fixture": "docker-boundary-policy.json",
+      "guard": "collection_completeness.py",
+      "key": "call_sites",
+      "mutate_to": []
+    },
+    "docker-boundary-policy.json::steering": {
+      "fixture": "docker-boundary-policy.json",
+      "guard": "collection_completeness.py",
+      "key": "steering",
+      "mutate_to": {}
+    },
+    "executable-trust-policy.json::executables": {
+      "fixture": "executable-trust-policy.json",
+      "guard": "commit_package_coherence.py",
+      "key": "executables",
+      "mutate_to": {}
+    },
+    "expected-provenance-values.json::algorithm": {
+      "fixture": "expected-provenance-values.json",
+      "guard": "provenance.py",
+      "key": "algorithm",
+      "mutate_to": "md5(value)",
+      "attributable_token": "algorithm"
+    },
+    "expected-provenance-values.json::expected_digests_synthetic": {
+      "fixture": "expected-provenance-values.json",
+      "guard": "provenance.py",
+      "key": "expected_digests_synthetic",
+      "mutate_to": {},
+      "attributable_token": null
+    },
+    "expected-writable-roles.json::never_writable_role_names": {
+      "fixture": "expected-writable-roles.json",
+      "guard": "terraform_role_inventory.py",
+      "key": "never_writable_role_names",
+      "mutate_to": []
+    },
+    "expected-writable-roles.json::role_name_suffixes_never_writable": {
+      "fixture": "expected-writable-roles.json",
+      "guard": "terraform_role_inventory.py",
+      "key": "role_name_suffixes_never_writable",
+      "mutate_to": [],
+      "attributable_token": "role_name_suffixes_never_writable"
+    },
+    "expected-writable-roles.json::role_name_suffixes_writable": {
+      "fixture": "expected-writable-roles.json",
+      "guard": "terraform_role_inventory.py",
+      "key": "role_name_suffixes_writable",
+      "mutate_to": [],
+      "attributable_token": "role_name_suffixes_writable"
+    },
+    "expected-writable-roles.json::writable_role_names": {
+      "fixture": "expected-writable-roles.json",
+      "guard": "terraform_role_inventory.py",
+      "key": "writable_role_names",
+      "mutate_to": [],
+      "attributable_token": "writable_role_names"
+    },
+    "external-authorization-contract.json::required_fields": {
+      "fixture": "external-authorization-contract.json",
+      "guard": "collection_completeness.py",
+      "key": "required_fields",
+      "mutate_to": []
+    },
+    "package-requirements.json::required_paths": {
+      "fixture": "package-requirements.json",
+      "guard": "package_requirements.py",
+      "key": "required_paths",
+      "mutate_to": {}
+    },
+    "provenance-row-inventory.json::other_certifying_comparisons": {
+      "fixture": "provenance-row-inventory.json",
+      "guard": "provenance.py",
+      "key": "other_certifying_comparisons",
+      "mutate_to": [],
+      "attributable_token": null
+    },
+    "provenance-row-inventory.json::two_lineage_required": {
+      "fixture": "provenance-row-inventory.json",
+      "guard": "provenance.py",
+      "key": "two_lineage_required",
+      "mutate_to": []
+    },
+    "readonly-verifier-ceiling.json::expiry_required_on_every_allow": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "verifier_ceiling.py",
+      "key": "expiry_required_on_every_allow",
+      "mutate_to": false,
+      "attributable_token": "expiry_required_on_every_allow"
+    },
+    "readonly-verifier-ceiling.json::explicitly_forbidden_actions": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "security_collection_assurance.py",
+      "key": "explicitly_forbidden_actions",
+      "mutate_to": {}
+    },
+    "readonly-verifier-ceiling.json::forbidden_categories": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "security_collection_assurance.py",
+      "key": "forbidden_categories",
+      "mutate_to": []
+    },
+    "readonly-verifier-ceiling.json::permitted_actions": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "verifier_ceiling.py",
+      "key": "permitted_actions",
+      "mutate_to": []
+    },
+    "readonly-verifier-ceiling.json::permitted_categories": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "verifier_ceiling.py",
+      "key": "permitted_categories",
+      "mutate_to": []
+    },
+    "readonly-verifier-ceiling.json::resource_rules": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "verifier_ceiling.py",
+      "key": "resource_rules",
+      "mutate_to": {},
+      "attributable_token": null
+    },
+    "readonly-verifier-ceiling.json::unknown_action_behaviour": {
+      "fixture": "readonly-verifier-ceiling.json",
+      "guard": "verifier_ceiling.py",
+      "key": "unknown_action_behaviour",
+      "mutate_to": "ALLOW",
+      "attributable_token": "unknown_action_behaviour"
+    },
+    "remediation-pin-registry.json::remediations": {
+      "fixture": "remediation-pin-registry.json",
+      "guard": "package_requirements.py",
+      "key": "remediations",
+      "mutate_to": [],
+      "attributable_token": "remediations"
+    },
+    "review-pin-registry.json::pins": {
+      "fixture": "review-pin-registry.json",
+      "guard": "security_collection_assurance.py",
+      "key": "pins",
+      "mutate_to": {}
+    },
+    "review-record-ledger.json::governed_files": {
+      "fixture": "review-record-ledger.json",
+      "guard": "security_collection_assurance.py",
+      "key": "governed_files",
+      "mutate_to": {},
+      "attributable_token": "governed_files"
+    },
+    "review-record-ledger.json::review_records": {
+      "fixture": "review-record-ledger.json",
+      "guard": "security_collection_assurance.py",
+      "key": "review_records",
+      "mutate_to": {}
+    },
+    "security-assurance-registry.json::assurance": {
+      "fixture": "security-assurance-registry.json",
+      "guard": "collection_completeness.py",
+      "key": "assurance",
+      "mutate_to": {},
+      "attributable_token": "assurance"
+    },
+    "synthetic-anchor.json::anchor_version": {
+      "fixture": "synthetic-anchor.json",
+      "guard": "anchor_loader.py",
+      "key": "anchor_version",
+      "mutate_to": "bogus",
+      "attributable_token": "anchor_version"
+    },
+    "synthetic-anchor.json::approved_account_id": {
+      "fixture": "synthetic-anchor.json",
+      "guard": "anchor_loader.py",
+      "key": "approved_account_id",
+      "mutate_to": "E2-MUTATED-VALUE",
+      "attributable_token": "approved_account_id"
+    },
+    "synthetic-anchor.json::approved_region": {
+      "fixture": "synthetic-anchor.json",
+      "guard": "anchor_loader.py",
+      "key": "approved_region",
+      "mutate_to": "__DELETE__",
+      "attributable_token": "approved_region"
+    },
+    "synthetic-anchor.json::partition": {
+      "fixture": "synthetic-anchor.json",
+      "guard": "external_anchor.py",
+      "key": "partition",
+      "mutate_to": "E2-MUTATED-VALUE",
+      "attributable_token": "partition"
+    },
+    "synthetic-anchor.json::permission_sets": {
+      "fixture": "synthetic-anchor.json",
+      "guard": "anchor_loader.py",
+      "key": "permission_sets",
+      "mutate_to": {},
+      "attributable_token": "permission_sets"
+    },
+    "synthetic-anchor.json::role_name_prefix": {
+      "fixture": "synthetic-anchor.json",
+      "guard": "external_anchor.py",
+      "key": "role_name_prefix",
+      "mutate_to": "E2-MUTATED-VALUE"
+    },
+    "synthetic-inventory.json::aliases": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "resource_oracle.py",
+      "key": "aliases",
+      "mutate_to": [],
+      "attributable_token": "aliases"
+    },
+    "synthetic-inventory.json::buckets_by_role": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "resource_oracle.py",
+      "key": "buckets_by_role",
+      "mutate_to": {},
+      "attributable_token": "buckets_by_role"
+    },
+    "synthetic-inventory.json::cloudfront": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "resource_oracle.py",
+      "key": "cloudfront",
+      "mutate_to": {},
+      "attributable_token": "cloudfront"
+    },
+    "synthetic-inventory.json::db": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "provenance.py",
+      "key": "db",
+      "mutate_to": [],
+      "attributable_token": "db"
+    },
+    "synthetic-inventory.json::ecr": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "resource_oracle.py",
+      "key": "ecr",
+      "mutate_to": "__DELETE__",
+      "attributable_token": "ecr"
+    },
+    "synthetic-inventory.json::lock_table_name": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "provenance.py",
+      "key": "lock_table_name",
+      "mutate_to": "E2-MUTATED-VALUE",
+      "attributable_token": "lock_table_name"
+    },
+    "synthetic-inventory.json::roles": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "resource_oracle.py",
+      "key": "roles",
+      "mutate_to": []
+    },
+    "synthetic-inventory.json::route53": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "resource_oracle.py",
+      "key": "route53",
+      "mutate_to": {},
+      "attributable_token": "route53"
+    },
+    "synthetic-inventory.json::trails": {
+      "fixture": "synthetic-inventory.json",
+      "guard": "provenance.py",
+      "key": "trails",
+      "mutate_to": [],
+      "attributable_token": "trails"
+    },
+    "synthetic-ledger.json::created_utc": {
+      "fixture": "synthetic-ledger.json",
+      "guard": "deny_requirements.py",
+      "key": "created_utc",
+      "mutate_to": "not-a-stamp",
+      "attributable_token": "created_utc"
+    },
+    "synthetic-ledger.json::entries": {
+      "fixture": "synthetic-ledger.json",
+      "guard": "deny_requirements.py",
+      "key": "entries",
+      "mutate_to": [],
+      "attributable_token": "entries"
+    },
+    "synthetic-ledger.json::entry_count": {
+      "fixture": "synthetic-ledger.json",
+      "guard": "deny_requirements.py",
+      "key": "entry_count",
+      "mutate_to": 999,
+      "attributable_token": "entry_count"
+    },
+    "synthetic-ledger.json::ledger_version": {
+      "fixture": "synthetic-ledger.json",
+      "guard": "deny_requirements.py",
+      "key": "ledger_version",
+      "mutate_to": "99",
+      "attributable_token": "ledger_version"
+    },
+    "synthetic-requirements.json::action_count": {
+      "fixture": "synthetic-requirements.json",
+      "guard": "deny_requirements.py",
+      "key": "action_count",
+      "mutate_to": 1,
+      "attributable_token": "action_count"
+    },
+    "synthetic-requirements.json::created_utc": {
+      "fixture": "synthetic-requirements.json",
+      "guard": "deny_requirements.py",
+      "key": "created_utc",
+      "mutate_to": "2026/07/31",
+      "attributable_token": "created_utc"
+    },
+    "synthetic-requirements.json::entries": {
+      "fixture": "synthetic-requirements.json",
+      "guard": "deny_requirements.py",
+      "key": "entries",
+      "mutate_to": [],
+      "attributable_token": "entries"
+    },
+    "synthetic-requirements.json::outcome_count": {
+      "fixture": "synthetic-requirements.json",
+      "guard": "deny_requirements.py",
+      "key": "outcome_count",
+      "mutate_to": 1,
+      "attributable_token": "outcome_count"
+    },
+    "synthetic-requirements.json::version": {
+      "fixture": "synthetic-requirements.json",
+      "guard": "deny_requirements.py",
+      "key": "version",
+      "mutate_to": "99",
+      "attributable_token": "version"
+    }
+  }
+}

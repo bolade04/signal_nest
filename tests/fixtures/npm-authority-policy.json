@@ -1,0 +1,208 @@
+{
+ "_authority": "AUTHORED. Every npm installation family the graded workflows or the documented development environments actually use carries an explicit authority model. An unknown layout fails closed.",
+ "_call_site_derivation": "DERIVED with the repository's own command-position grammar over every workflow run block and every tracked shell script \u2014 11 npm positions: 8 graded ci.yml steps across two jobs, plus 3 developer shell scripts. Gate 4N-I28AS directed that the previously reported figure of ten NOT be assumed; it was not.",
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_families_are_measured_not_speculative": "Only families this host or the graded workflows actually use are implemented. Volta, asdf, fnm, n and Corepack are absent here and unused by ci.yml; speculative support for them would be untested code claiming to authorize installations nobody has. They fail closed as UNKNOWN with an actionable message.",
+ "_lifecycle_boundary": "No call site is classified LIFECYCLE_EXECUTION_PROHIBITED, because none of them passes --ignore-scripts and a prohibition that is declared but not enforced is worse than an honest classification. The claim this gate makes is npm/Node BINARY identity, explicitly not package-script trust.",
+ "_purpose": "Close Gate 4N-I28AP finding ADV-I28AP-02: npm was authorized by a path PREFIX, so any file beneath an allowed installation root was accepted and the attacker's digest was recorded as the bound identity.",
+ "_required_present_why": "npm is not required to exist on every host. The graded frontend-quality and migration-and-contract jobs provision it via setup-node; a developer without npm simply cannot run those jobs. Demanding its presence everywhere would refuse honest sessions, and a control that refuses honest sessions gets disabled.",
+ "_why_no_prefix_rule": "A bare prefix rule is not among the permitted authority models because it IS the defect. A version manager embeds a version number in its paths, so no fixed path set names it on every machine \u2014 but the answer is different EVIDENCE (the installation tree and the Node<->npm relationship), not a looser path rule.",
+ "call_sites": [
+  {
+   "argv": "npm ci",
+   "id": "ci.yml#frontend-quality#npm-ci",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "a real dependency install runs preinstall/install/postinstall/prepare. This gate establishes npm's IDENTITY; it does not vouch for the packages npm installs or the scripts they run, and says so rather than blurring the two."
+  },
+  {
+   "argv": "npm run lint",
+   "id": "ci.yml#frontend-quality#lint",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "`npm run` executes the named package script by design"
+  },
+  {
+   "argv": "npm run type-check",
+   "id": "ci.yml#frontend-quality#type-check",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "as above"
+  },
+  {
+   "argv": "npm run test",
+   "id": "ci.yml#frontend-quality#test",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "as above"
+  },
+  {
+   "argv": "npm run test:ci-pipefail",
+   "id": "ci.yml#frontend-quality#test-ci-pipefail",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "as above"
+  },
+  {
+   "argv": "npm run build",
+   "id": "ci.yml#frontend-quality#build",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "as above"
+  },
+  {
+   "argv": "npm ci",
+   "id": "ci.yml#migration-and-contract#npm-ci",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "as above"
+  },
+  {
+   "argv": "npm run gen:types",
+   "id": "ci.yml#migration-and-contract#gen-types",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "generates the OpenAPI contract consumed by the drift check"
+  },
+  {
+   "argv": "npm",
+   "id": "scripts/bootstrap.sh#npm",
+   "lifecycle": "LIFECYCLE_EXECUTION_NON_LOAD_BEARING",
+   "why": "a developer convenience script; no graded step invokes it and no release decision reads its output"
+  },
+  {
+   "argv": "npm",
+   "id": "scripts/dev.sh#npm",
+   "lifecycle": "LIFECYCLE_EXECUTION_NON_LOAD_BEARING",
+   "why": "as above"
+  },
+  {
+   "argv": "npm",
+   "id": "scripts/gen-types.sh#npm",
+   "lifecycle": "LIFECYCLE_EXECUTION_NON_LOAD_BEARING",
+   "why": "the local counterpart of the graded gen:types step; the graded path is the ci.yml site above"
+  }
+ ],
+ "ci_assumption": {
+  "action": "actions/setup-node@v6",
+  "active_when_env": "GITHUB_ACTIONS",
+  "cache": "npm",
+  "corepack": "NOT engaged: neither package.json declares a packageManager field, and no workflow step runs corepack. Were one added, the execution chain would change and this assumption would no longer describe it.",
+  "engines": {
+   "node": ">=20 <21",
+   "npm": ">=10"
+  },
+  "expected_roots": [
+   "/opt/hostedtoolcache/node",
+   "/usr/local/lib/node_modules"
+  ],
+  "jobs": [
+   "frontend-quality",
+   "migration-and-contract"
+  ],
+  "node_version": "20",
+  "node_version_env": "NODE_VERSION",
+  "prohibited": "npm resolving inside the repository after setup-node has run. That is the substitution the assumption forbids, and it is checked rather than assumed.",
+  "statement": "On GitHub-hosted runners, Node and npm are provisioned by actions/setup-node@v6 with node-version from the NODE_VERSION workflow variable ('20') and cache: npm. This gate ASSUMES the runner image and that action deliver a genuine Node distribution. It does not verify them, and it does not pretend to."
+ },
+ "configuration": {
+  "COREPACK_ENABLE_STRICT": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALL",
+   "why": "Corepack is not engaged \u2014 no packageManager field and no corepack step in any workflow"
+  },
+  "NODE_OPTIONS": {
+   "disposition": "FATAL_IF_SET",
+   "why": "--require can inject arbitrary JavaScript into the npm process before the CLI runs"
+  },
+  "NODE_PATH": {
+   "disposition": "FATAL_IF_SET",
+   "why": "it changes module resolution for the npm CLI itself"
+  },
+  "NPM_CONFIG_*": {
+   "disposition": "FATAL_IF_SET",
+   "why": "any NPM_CONFIG_ variable not individually classified above can still reach npm's configuration, so the family fails closed"
+  },
+  "NPM_CONFIG_GLOBALCONFIG": {
+   "disposition": "FATAL_IF_SET",
+   "why": "same substitution surface as USERCONFIG, at global scope"
+  },
+  "NPM_CONFIG_PREFIX": {
+   "disposition": "FATAL_IF_SET",
+   "why": "it relocates global installs and can redirect which binaries resolve, so it can substitute the tool"
+  },
+  "NPM_CONFIG_REGISTRY": {
+   "disposition": "FATAL_IF_SET",
+   "why": "it changes where `npm ci` fetches packages, which changes what a graded install step installs"
+  },
+  "NPM_CONFIG_SCRIPT_SHELL": {
+   "disposition": "FATAL_IF_SET",
+   "why": "it selects the shell npm uses to run package scripts, which changes what a graded `npm run` step actually executes"
+  },
+  "NPM_CONFIG_USERCONFIG": {
+   "disposition": "FATAL_IF_SET",
+   "why": "it redirects npm to an arbitrary user config file, which can then set registry, script-shell or prefix"
+  },
+  "NVM_DIR": {
+   "disposition": "CONTENT_BOUND",
+   "why": "it selects which installation tree is inspected, so it is recorded at configure and any change by session finish is drift. Its VALUE is not fixed, because it legitimately differs between hosts; what is bound is that it did not move mid-session."
+  },
+  "XDG_CONFIG_HOME": {
+   "disposition": "IRRELEVANT_TO_ACTUAL_CALL",
+   "why": "npm does not read XDG paths for the configuration that could substitute the tool; the userconfig path is controlled directly above"
+  },
+  "files": {
+   "global_npmrc": {
+    "disposition": "CONTENT_BOUND",
+    "why": "same reasoning at global scope"
+   },
+   "project_npmrc": {
+    "disposition": "CONTENT_BOUND",
+    "why": "a repository .npmrc is legitimate and would be part of the staged tree; its CONTENT is bound so a mid-session edit is drift. None exists today."
+   },
+   "user_npmrc": {
+    "disposition": "CONTENT_BOUND",
+    "why": "a user npmrc can set registry, script-shell and prefix. It is bound by content rather than prohibited outright, because a developer's own npmrc is normal and refusing it would refuse every honest session on a real workstation."
+   }
+  },
+  "npm_config_*": {
+   "disposition": "FATAL_IF_SET",
+   "why": "the lowercase form is equivalent to NPM_CONFIG_* and is accepted by npm identically; allowing it would leave the same door open in different case"
+  }
+ },
+ "installation_families": {
+  "github_actions_setup_node": {
+   "authority_model": "EXTERNAL_CI_TOOLCHAIN_ASSUMPTION",
+   "identity_binding": "runtime chain binding, plus the workflow-level action identity and configuration recorded in ci_assumption.",
+   "installation_roots": [
+    "/opt/hostedtoolcache/node",
+    "/usr/local/lib/node_modules"
+   ],
+   "provenance_evidence": "Stated assumption plus a runtime check that the chain matches it: npm must resolve inside a location the assumption covers, must have package metadata, and must NOT resolve inside the repository.",
+   "why": "ci.yml provisions Node with actions/setup-node@v6 in both npm-running jobs. The runner image and that action are outside this repository's control, so their integrity is an INFRASTRUCTURE ASSUMPTION and is stated as one rather than presented as verification."
+  },
+  "homebrew": {
+   "authority_model": "APPROVED_PACKAGE_MANAGER_INSTALLATION_BOUND",
+   "identity_binding": "canonical npm path + content + mode, package root, package.json content, and an interpreter resolving inside the same prefix.",
+   "installation_roots": [
+    "/opt/homebrew",
+    "/usr/local/Cellar"
+   ],
+   "provenance_evidence": "Homebrew owns the tree; the installation prefix and the npm package root under it are bound, and the Node interpreter must come from the same prefix.",
+   "required_layout": [
+    "lib/node_modules/npm/package.json"
+   ],
+   "why": "Present on this host as a SECOND Node on PATH. It is not selected today, but a PATH reordering would select it, so it needs a model rather than being discovered as UNKNOWN at the worst moment."
+  },
+  "nvm": {
+   "allowed_symlink_structure": "bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js, resolving inside the same version directory. A chain escaping the installation is refused.",
+   "authority_model": "APPROVED_DIRECTORY_TREE_AND_PROVENANCE_BOUND",
+   "identity_binding": "canonical npm path + content + mode, symlink chain, canonical Node path + content, npm package root, package.json content and declared version, declared CLI entrypoint agreeing with the PATH-selected executable.",
+   "installation_roots": [
+    "$NVM_DIR/versions/node",
+    "~/.nvm/versions/node"
+   ],
+   "node_npm_relationship": "The interpreter that would actually run npm must be THIS installation's bin/node. A genuine npm beside an attacker's node is not a genuine toolchain.",
+   "provenance_evidence": "include/node/node_version.h DECLARES the distribution's own version and must equal the version directory's name. A genuine Node distribution ships it; an attacker directory containing only bin/npm has no reason to carry it and cannot make it self-consistent by placement.",
+   "required_layout": [
+    "bin/node",
+    "bin/npm",
+    "lib/node_modules/npm/package.json",
+    "include/node/node_version.h"
+   ],
+   "why": "The measured installation on this development host. Authorization binds the installation TREE and the Node<->npm relationship, never the location: Gate 4N-I28AS section 9 states, and the reproduction demonstrated, that being beneath $NVM_DIR/versions/node/ proves nothing."
+  }
+ },
+ "required_present": false
+}

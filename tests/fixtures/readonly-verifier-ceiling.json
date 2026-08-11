@@ -1,0 +1,106 @@
+{
+  "_purpose": "INDEPENDENTLY AUTHORED ceiling for the ReadOnlyVerifier permission set (Gate 4N-I19, AWS-1). This is the EXPECTED value; the generated policy is the OBSERVED value.",
+  "_why_this_exists": "Gate 4N-I17's AWS-permissions lane demonstrated an escalation: the verifier's only Deny was built as NotAction over the union of its OWN Allow sets, so the Deny could not constrain the Allow — anything added to the Allow was automatically exempted from the Deny. The single thing standing in the way was the classifier's is_read_only() pre-check, which guessed from verb prefixes. Adding sso:GetRoleCredentials (which returns live temporary AWS credentials) was accepted, placed on Resource \"*\", and evaluated EXPLICIT_ALLOW. A ceiling derived from the thing it measures is not a ceiling.",
+  "_authority": "Authored from what this permission set is FOR — confirming, without touching anything, that a boundary rollout reached the state it claims. That purpose admits identity metadata, IAM configuration and audit-trail inspection, and nothing else. It was NOT generated from the verifier's Allow list, its Deny list, any generated policy, the action classifier's output, or any candidate artifact. A change here is a reviewable diff against intent.",
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+
+  "permitted_actions": [
+    "cloudtrail:DescribeTrails",
+    "cloudtrail:GetEventSelectors",
+    "cloudtrail:GetTrail",
+    "cloudtrail:GetTrailStatus",
+    "cloudtrail:ListTags",
+    "cloudtrail:LookupEvents",
+    "iam:GetPolicy",
+    "iam:GetPolicyVersion",
+    "iam:GetRole",
+    "iam:GetRolePolicy",
+    "iam:ListAttachedRolePolicies",
+    "iam:ListEntitiesForPolicy",
+    "iam:ListPolicyVersions",
+    "iam:ListRolePolicies",
+    "iam:ListRoleTags",
+    "iam:ListRoles",
+    "iam:SimulateCustomPolicy",
+    "iam:SimulatePrincipalPolicy",
+    "sso:DescribeAccountAssignmentCreationStatus",
+    "sso:DescribeAccountAssignmentDeletionStatus",
+    "sso:DescribePermissionSet",
+    "sso:DescribePermissionSetProvisioningStatus",
+    "sso:GetInlinePolicyForPermissionSet",
+    "sso:ListAccountAssignments",
+    "sso:ListInstances",
+    "sso:ListManagedPoliciesInPermissionSet",
+    "sso:ListPermissionSets",
+    "sts:GetCallerIdentity"
+  ],
+
+  "permitted_categories": [
+    "READ_ONLY",
+    "READ_ONLY_METADATA",
+    "READ_ONLY_CONFIGURATION"
+  ],
+
+  "forbidden_categories": [
+    "CREDENTIAL_RETURNING",
+    "TOKEN_RETURNING",
+    "SECRET_RETURNING",
+    "SENSITIVE_DATA_RETURNING",
+    "AUTHORITY_BEARING",
+    "MUTATING",
+    "EXECUTION_TRIGGERING",
+    "DESTRUCTIVE",
+    "UNKNOWN"
+  ],
+
+  "explicitly_forbidden_actions": {
+    "sso:GetRoleCredentials": "returns live temporary AWS credentials for a permission set — the Gate 4N-I17 escalation",
+    "sso:GetRoleCredentialsWithIdentityContext": "same capability under a longer name",
+    "sts:AssumeRole": "returns credentials for another principal",
+    "sts:AssumeRoleWithWebIdentity": "returns credentials from a federated identity",
+    "sts:AssumeRoleWithSAML": "returns credentials from a federated identity",
+    "sts:GetFederationToken": "mints a federated session credential; the docstring case the old prefix rule could not express",
+    "sts:GetSessionToken": "mints a session credential",
+    "ecr:GetAuthorizationToken": "returns a registry authorization token",
+    "secretsmanager:GetSecretValue": "returns secret material",
+    "secretsmanager:BatchGetSecretValue": "returns secret material in bulk; the Gate 4N-I17 AWS lane's Finding 2",
+    "kms:Decrypt": "returns plaintext of encrypted material",
+    "ssm:GetParameter": "returns parameter values that may be SecureString",
+    "ssm:GetParameters": "returns parameter values that may be SecureString",
+    "logs:GetLogEvents": "returns log bodies, which carry application data",
+    "iam:PassRole": "delegates authority",
+    "ecs:RunTask": "triggers execution",
+    "cloudtrail:StopLogging": "disables the audit trail",
+    "iam:PutRolePolicy": "grants authority",
+    "iam:DeleteRolePolicy": "destroys authority records"
+  },
+
+  "resource_rules": {
+    "actions_that_may_use_star": [
+      "sts:GetCallerIdentity",
+      "iam:ListRoles",
+      "iam:SimulateCustomPolicy",
+      "iam:SimulatePrincipalPolicy",
+      "sso:ListInstances",
+      "sso:ListPermissionSets",
+      "sso:ListAccountAssignments",
+      "sso:DescribePermissionSet",
+      "sso:DescribePermissionSetProvisioningStatus",
+      "sso:DescribeAccountAssignmentCreationStatus",
+      "sso:DescribeAccountAssignmentDeletionStatus",
+      "sso:GetInlinePolicyForPermissionSet",
+      "sso:ListManagedPoliciesInPermissionSet",
+      "cloudtrail:LookupEvents",
+      "cloudtrail:DescribeTrails"
+    ],
+    "_why": "These APIs either take no resource or are not resource-scopable in a way the verifier can pin. Every OTHER permitted action must name concrete resources; a wildcard on an unlisted action is a finding.",
+    "wildcard_service_actions_forbidden": true,
+    "_wildcard_note": "A service wildcard such as iam:* or sso:* is forbidden outright: it silently admits every future action that service ever gains, which is the same open-endedness the prefix rule had."
+  },
+
+  "unknown_action_behaviour": "FAIL",
+  "_unknown_note": "An action absent from permitted_actions fails, whatever its categories say and whatever it is called. The ceiling is an allowlist; absence is refusal.",
+
+  "expiry_required_on_every_allow": true,
+  "_expiry_note": "The verifier is a temporary permission set. Every Allow must carry the DateLessThan expiry condition, and the expiry itself must satisfy the authorization contract in scripts/expiry_authorization.py."
+}

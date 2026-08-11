@@ -1,0 +1,14 @@
+{
+  "_comment": "SYNTHETIC Tier-2-SHAPED external authorization, for exercising the mechanism. It is deliberately NOT TIER_2_PROTECTED: a synthetic document must never satisfy a production gate, and the verifier refuses it for production while still proving the pin, the schema and every field check execute.",
+  "authorization_version": "1",
+  "protected_tier": "TIER_1_SYNTHETIC",
+  "approved_anchor_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "approved_inventory_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "approved_evidence_classification": "SYNTHETIC_TEST_FIXTURE",
+  "non_synthetic_required": false,
+  "eligibility_lineage_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "required_production_checks": ["synthetic_only"],
+  "issued_utc": "2026-08-01T14:45:00Z",
+  "valid_until_utc": "2026-08-02T06:00:00Z",
+  "authorized_candidate_scope": "SYNTHETIC-FIXTURE-1"
+}

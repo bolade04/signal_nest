@@ -1,0 +1,7 @@
+{
+  "_comment": "GATE 4N-I28O, closing finding I28N-01. A framework dispatcher — ast.NodeVisitor and ast.NodeTransformer here — invokes overrides by protocol, so no edge in the source names them. Which overrides a dispatcher can reach depends on the node types of the tree it is given, and that set is not statically bounded for an arbitrary tree. Candidacy is therefore decided statically by scripts/site_taxonomy.py and EXERCISE is decided by execution: this file records the overrides a real graded command was OBSERVED to run. tests/test_i28o_dynamic_edges.py re-derives it from a live trace and fails if it drifts in either direction, so it can be neither padded nor allowed to rot.",
+  "_derivation": "full graded-command trace: `python3 scripts/execution_trace.py --command 'mutation_discovery.py --fail-on-untested-layer'` (runs for minutes under the profiler, so it is an out-of-band derivation). The suite re-verifies every entry cheaply by executing the owning function on a minimal input under a narrow profiler, and fails if a pinned override does not dispatch or an unpinned candidate does.",
+  "observed": [
+    "site_taxonomy.py::_prune_dispatch.Pruner.visit_If"
+  ]
+}

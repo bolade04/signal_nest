@@ -1,0 +1,77 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_purpose": "Authored exact inventory of how EVERY production-certifying provenance row is compared (Gate 4N-I23, blocker 3).",
+  "_why_this_file_exists": [
+    "Gate 4N-I22 finding F2. tests/test_provenance.py parametrized the two-lineage guard over a",
+    "HAND-WRITTEN list of six ids. Seven rows carried DIGEST_AGAINST_TRACKED_FIXTURE. The one",
+    "omitted was secrets_cmk_key_id — the exact row the I17 architect CRITICAL was raised about.",
+    "Restoring the self-comparing defect left the full suite at 1931 passed / 83 skipped and",
+    "provenance.py printing 'PROVENANCE: clean'. A checker aimed everywhere except the thing it",
+    "was written for."
+  ],
+  "_why_not_just_discover_by_comparison": [
+    "Selecting rows BY the property under test is the same defect in a new shape: revert a row to",
+    "EXACT_STRING and it silently drops out of its own guard, so the guard passes by shrinking.",
+    "The enumeration must be independent of the property being asserted. This inventory is",
+    "authored; the guard then requires COMPLETE two-way accounting against the discovered rows —",
+    "every certifying row must appear in exactly one group, so a row can neither vanish from the",
+    "schema nor be quietly dropped from the inventory."
+  ],
+  "two_lineage_required": [
+    {
+      "id": "trail_arn",
+      "why": "live CloudTrail ARN; expected side is a tracked digest fixture, observed side the tier-resolved inventory"
+    },
+    {
+      "id": "db_arn",
+      "why": "live RDS ARN; two disjoint lineages"
+    },
+    {
+      "id": "state_bucket_name",
+      "why": "AWS-assigned bucket suffix; two disjoint lineages"
+    },
+    {
+      "id": "audit_bucket_name",
+      "why": "AWS-assigned bucket suffix; two disjoint lineages"
+    },
+    {
+      "id": "secrets_cmk_key_id",
+      "why": "THE Gate 4N-I17 architect CRITICAL (ARCH-C1). The row compared the live value against itself. It is load-bearing here precisely because omitting it is the I22 F2 defect."
+    },
+    {
+      "id": "lock_table_name",
+      "why": "AWS-assigned lock table; two disjoint lineages"
+    },
+    {
+      "id": "boundary_policy_arn",
+      "why": "permissions boundary ARN; two disjoint lineages"
+    }
+  ],
+  "other_certifying_comparisons": [
+    {
+      "id": "rds_parameter_group",
+      "comparison": "EXACT_STRING",
+      "why": "repository-authored name; no live counterpart to hash against"
+    },
+    {
+      "id": "rds_subnet_group",
+      "comparison": "EXACT_STRING",
+      "why": "repository-authored name"
+    },
+    {
+      "id": "approved_account_id",
+      "comparison": "ACCOUNT_OF_ARN",
+      "why": "derived from an ARN's account field rather than compared to a digest"
+    },
+    {
+      "id": "provider_pin",
+      "comparison": "EXACT_STRING",
+      "why": "provider version pin, repository-authored"
+    },
+    {
+      "id": "provider_constraint",
+      "comparison": "EXACT_STRING",
+      "why": "provider constraint, repository-authored"
+    }
+  ]
+}

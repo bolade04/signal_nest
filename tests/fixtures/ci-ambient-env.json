@@ -1,0 +1,31 @@
+{
+  "_purpose": "Gate 4N-I28BH-E2. A CLOSED, authored allow-list of AMBIENT environment variables that the runner/OS/toolchain provides and that Gate-4N guard consumers read DEFENSIVELY (os.environ.get(VAR, default)). ci_env_dataflow consults this list ONLY on the 'no workflow producer' branch: an ambient var legitimately has no ci.yml producer because the runner supplies it. A variable that a workflow step PRODUCES (job/step env or a $GITHUB_ENV write) is handled by the ordering rule and must NEVER appear here — ci_env_dataflow asserts that disjointness and fails closed if it is violated, so this list cannot launder a real ordering defect. Every entry names its provider and the defensive read site.",
+  "_rule": "Consulted only when producer is None. allow_list must be disjoint from every step's github_env_writes and step_env. Unknown-and-unlisted still fails closed.",
+  "ambient_variables": {
+    "PATH": {
+      "provider": "operating system / runner",
+      "read_site": "npm_authority.py:199 os.environ.get(\"PATH\", \"\")",
+      "defensive_default": true
+    },
+    "DOCKER_CONFIG": {
+      "provider": "docker toolchain (runner)",
+      "read_site": "docker_boundary.py:862 os.environ.get(\"DOCKER_CONFIG\", str(Path.home()/.docker))",
+      "defensive_default": true
+    },
+    "NVM_DIR": {
+      "provider": "nvm toolchain (runner)",
+      "read_site": "npm_authority.py:753 os.environ.get(\"NVM_DIR\")",
+      "defensive_default": false
+    },
+    "NPM_CONFIG_GLOBALCONFIG": {
+      "provider": "npm toolchain (runner)",
+      "read_site": "npm_authority.py:559 os.environ.get(\"NPM_CONFIG_GLOBALCONFIG\", \"/usr/local/etc/npmrc\")",
+      "defensive_default": true
+    },
+    "NPM_CONFIG_USERCONFIG": {
+      "provider": "npm toolchain (runner)",
+      "read_site": "npm_authority.py:557 os.environ.get(\"NPM_CONFIG_USERCONFIG\", default)",
+      "defensive_default": true
+    }
+  }
+}

@@ -1,0 +1,270 @@
+{
+  "_what_this_is": "SOURCE 1 v2 \u2014 the EXTERNAL security-requirement source, organised by OUTCOME an attacker obtains rather than by principal. Lives outside the repository at mode 400.",
+  "_why_v2": "Gate 4N-I11 Defect 1. The v1 ledger was a strict SUBSET of the in-repository architecture invariants: S1 - S2 was EMPTY, so the 'union of two independent sources' was arithmetically just the repository source, and 37 of 69 requirements had exactly one ground. Organising by OUTCOME rather than by principal makes the two sources enumerate genuinely different things, so each contains rows the other lacks \u2014 which is what independence has to mean to be worth anything.",
+  "version": "2",
+  "created_utc": "2026-07-31T18:31:13Z",
+  "outcome_count": 15,
+  "action_count": 93,
+  "entries": [
+    {
+      "outcome_id": "O1",
+      "outcome": "an operator principal outlives its window by minting a successor",
+      "actions": [
+        "iam:AddRoleToInstanceProfile",
+        "iam:CreateAccessKey",
+        "iam:CreateInstanceProfile",
+        "iam:CreateRole",
+        "iam:CreateServiceLinkedRole",
+        "iam:CreateUser"
+      ],
+      "established_by_gate": "4N-H4",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O2",
+      "outcome": "an existing role's authority is widened without creating anything",
+      "actions": [
+        "iam:AttachRolePolicy",
+        "iam:AttachUserPolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:PutUserPolicy",
+        "iam:UpdateRole"
+      ],
+      "established_by_gate": "4N-H4",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O3",
+      "outcome": "who may assume a role is changed after review",
+      "actions": [
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:CreateOpenIDConnectProvider",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateOpenIDConnectProviderThumbprint"
+      ],
+      "established_by_gate": "4N-I9",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O4",
+      "outcome": "the security ceiling itself is rewritten or removed",
+      "actions": [
+        "iam:CreatePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion"
+      ],
+      "established_by_gate": "4N-I7",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O5",
+      "outcome": "the permissions boundary is attached wrongly, or stripped, outside the reviewed window",
+      "actions": [
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:PutRolePermissionsBoundary"
+      ],
+      "established_by_gate": "4N-I10",
+      "requirement_kind": "workflow",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O6",
+      "outcome": "the record of what happened is destroyed or silenced",
+      "actions": [
+        "cloudtrail:DeleteTrail",
+        "cloudtrail:PutEventSelectors",
+        "cloudtrail:PutInsightSelectors",
+        "cloudtrail:StopLogging",
+        "cloudtrail:UpdateTrail",
+        "logs:DeleteLogGroup",
+        "logs:DeleteLogStream",
+        "logs:DeleteRetentionPolicy",
+        "logs:PutRetentionPolicy"
+      ],
+      "established_by_gate": "4N-I2",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O7",
+      "outcome": "delivered audit objects become erasable, or their delivery stops, without a Delete call",
+      "actions": [
+        "s3:PutBucketAcl",
+        "s3:PutBucketLogging",
+        "s3:PutBucketNotification",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutObjectAcl"
+      ],
+      "established_by_gate": "4N-I10",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O8",
+      "outcome": "delivered audit objects are destroyed directly",
+      "actions": [
+        "s3:DeleteBucket",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "established_by_gate": "4N-I2",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O9",
+      "outcome": "infrastructure state is read, rewritten, or its lock forged",
+      "actions": [
+        "dynamodb:BatchWriteItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DeleteTable",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "established_by_gate": "4N-C",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O10",
+      "outcome": "secret material is read, replaced, or destroyed",
+      "actions": [
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutResourcePolicy",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:RestoreSecret",
+        "secretsmanager:UpdateSecret"
+      ],
+      "established_by_gate": "4N-H1",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O11",
+      "outcome": "the keys protecting state and secrets are used, delegated, or destroyed",
+      "actions": [
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:DisableKey",
+        "kms:PutKeyPolicy",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo",
+        "kms:RetireGrant",
+        "kms:RevokeGrant",
+        "kms:ScheduleKeyDeletion"
+      ],
+      "established_by_gate": "4N-H1",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O12",
+      "outcome": "an attacker image runs with a role's identity",
+      "actions": [
+        "ecs:CreateService",
+        "ecs:ExecuteCommand",
+        "ecs:RegisterTaskDefinition",
+        "ecs:RunTask",
+        "ecs:StartTask",
+        "ecs:UpdateService",
+        "iam:PassRole"
+      ],
+      "established_by_gate": "4N-H4",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O13",
+      "outcome": "identity administration is used to grant anything at all",
+      "actions": [
+        "organizations:LeaveOrganization",
+        "sso:CreateAccountAssignment",
+        "sso:CreatePermissionSet",
+        "sso:DeleteAccountAssignment",
+        "sso:DeletePermissionSet",
+        "sso:ProvisionPermissionSet",
+        "sso:PutInlinePolicyToPermissionSet"
+      ],
+      "established_by_gate": "4N-H2",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O14",
+      "outcome": "production data is destroyed, exposed, or copied out",
+      "actions": [
+        "rds:CreateDBSnapshot",
+        "rds:DeleteDBInstance",
+        "rds:DeleteDBSnapshot",
+        "rds:ModifyDBInstance",
+        "rds:ModifyDBSnapshotAttribute",
+        "rds:RestoreDBInstanceFromDBSnapshot"
+      ],
+      "established_by_gate": "4N-I2",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    },
+    {
+      "outcome_id": "O15",
+      "outcome": "credentials or trust are chained outside the account",
+      "actions": [
+        "sts:AssumeRole",
+        "sts:AssumeRoleWithSAML",
+        "sts:AssumeRoleWithWebIdentity",
+        "sts:GetFederationToken"
+      ],
+      "established_by_gate": "4N-I7",
+      "requirement_kind": "permanent",
+      "principal": "any principal in the SignalNest design",
+      "evidence_artifact": "SYNTHETIC_EVIDENCE_PATH",
+      "evidence_sha256": "a3b0d97445e0274456b46cc1dd82789c479c179de62faec5bf28aa7f69ad607a"
+    }
+  ],
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_note": "Tier-1 synthetic copy of the retained external source. Same STRUCTURE and the same requirement rows, with the real account replaced by the AWS documentation placeholder and evidence paths redacted. Ordinary CI runs against this; it certifies mechanics, never production identity."
+}

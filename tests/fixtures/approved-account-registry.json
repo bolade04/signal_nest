@@ -1,0 +1,60 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_purpose": "The INDEPENDENT approved-account registry for the SEC-1 live-identifier containment scan (Gate 4N-I27O).",
+  "_why_this_file_exists": [
+    "scripts/leak_scan.py held ALLOWED_ACCOUNTS as a bare frozenset, and that set was the SOLE",
+    "authority for which 12-digit identifiers may appear in tracked content. Gate 4N-I27M planted",
+    "an unreviewed account id in a tracked file: the scan caught it, and adding that same id to the",
+    "frozenset made the finding disappear while none of the other thirty-six graded controls",
+    "objected. A control whose scope is a literal it also owns cannot notice its own widening.",
+    "This registry is a separate reviewed artifact. Every permitted account must appear here WITH",
+    "a classification and a stated provenance, and leak_scan compares the two sets in BOTH",
+    "directions, so broadening the code literal alone is refused rather than obeyed."
+  ],
+  "_authority": "Authored from the repository's own synthetic-anchor fixture and from the AWS-published documentation placeholder accounts. It is NOT derived from ALLOWED_ACCOUNTS; tests/test_i27o_blocker_remediations.py::test_the_registry_is_not_derived_from_the_scanner_literal asserts that independence structurally, by walking approved_accounts()'s AST and requiring that it never reads ALLOWED_ACCOUNTS.",
+  "_reference_correction": "Gate 4N-I27S. This field previously cited a test module named 'test_approved_account_registry' under tests/, which has never existed. Gate 4N-I27Q's architect and scope lanes both found it and no control refused it, because nothing validated that a path named inside a fixture resolves. The substantive guard was always present under the name above; only the citation was wrong. leak_scan.require_registry_references_resolve() now refuses any repository path this file names that is not in the tree, so a dangling reference cannot survive again. The retired name is deliberately written WITHOUT its .py suffix here so that describing the defect does not itself trip the control — a carve-out exempting this field would have been a hole in it.",
+  "_classification_meanings": {
+    "REPOSITORY_SYNTHETIC_ANCHOR": "the approved account of the tracked Tier-1 synthetic anchor; invented, and refused for the protected tier by anchor_loader",
+    "AWS_DOCUMENTATION_PLACEHOLDER": "an account id AWS publishes for use in documentation and examples; it addresses no real tenant",
+    "NOT_APPLICABLE_SENTINEL": "an all-zero form used to mean 'no account applies'",
+    "SYNTHETIC_FOREIGN_ACCOUNT": "an invented NON-approved account used by this repository's own negative probes, which must be able to appear in fixtures and probe sources"
+  },
+  "_live_accounts_are_never_registered": "No entry may describe a real SignalNest account. The containment exists precisely to keep such an identifier out of tracked content, so registering one would invert the control.",
+  "approved_accounts": [
+    {
+      "account_id": "111122223333",
+      "classification": "REPOSITORY_SYNTHETIC_ANCHOR",
+      "provenance": "tests/fixtures/synthetic-anchor.json :: approved_account_id — the Tier-1 synthetic anchor's invented account, which that fixture itself documents as the AWS documentation placeholder and not the SignalNest account"
+    },
+    {
+      "account_id": "000000000000",
+      "classification": "NOT_APPLICABLE_SENTINEL",
+      "provenance": "the all-zero form used across fixtures to mean 'no account applies'; it addresses no tenant"
+    },
+    {
+      "account_id": "123456789012",
+      "classification": "AWS_DOCUMENTATION_PLACEHOLDER",
+      "provenance": "the canonical AWS documentation example account id, published by AWS for use in examples"
+    },
+    {
+      "account_id": "444444444444",
+      "classification": "SYNTHETIC_FOREIGN_ACCOUNT",
+      "provenance": "scripts/external_anchor.py and scripts/trust_validator.py use it as the INVENTED foreign account their mechanism probes inject; the probes require a non-approved id to be expressible"
+    },
+    {
+      "account_id": "555555555555",
+      "classification": "SYNTHETIC_FOREIGN_ACCOUNT",
+      "provenance": "the alternate foreign account the same two probes fall back to when the approved account is 444444444444"
+    },
+    {
+      "account_id": "999988887777",
+      "classification": "SYNTHETIC_FOREIGN_ACCOUNT",
+      "provenance": "scripts/deny_triangulation.py and scripts/allow_model.py use it as the out-of-scope principal account in their deny probes"
+    },
+    {
+      "account_id": "111199998888",
+      "classification": "SYNTHETIC_FOREIGN_ACCOUNT",
+      "provenance": "the foreign account named in scripts/external_anchor.py's account of the Gate 4N-I18 defect it closes"
+    }
+  ]
+}

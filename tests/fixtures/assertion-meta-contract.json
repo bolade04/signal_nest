@@ -1,0 +1,158 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_purpose": "The SECOND trust layer (Gate 4N-I28W, closing I28V-02). It protects the assertion-control mechanism itself, which the primary registry cannot do without validating itself.",
+  "_trust_boundary": [
+    "LAYER 1 \u2014 tests/fixtures/assertion-contract-registry.json states what each load-bearing TEST",
+    "must assert. scripts/assertion_contracts.py::validate checks it.",
+    "LAYER 2 \u2014 this file states what the CONTROL ITSELF must do, and which mandatory tests must be",
+    "collected and must run. scripts/assertion_contracts.py::validate_meta checks it.",
+    "The two layers are deliberately separate files with separate entry points so neither can",
+    "silently remove its own protection: weakening layer 1 is caught by layer 2, and weakening",
+    "layer 2 is caught by the layer-2 test being itself listed as mandatory in layer 2.",
+    "",
+    "HONEST LIMIT. This is not protection against a party able to rewrite every independent source",
+    "in one change. An authored oracle cannot prove itself universally, and this file does not",
+    "claim to. What it does is make each weakening require a separate, visible, reviewable edit in",
+    "a different file from the one being weakened."
+  ],
+  "required_validator_behaviours": [
+    {
+      "behaviour_id": "MV-01-INVENTORY-LOADING",
+      "requirement": "a missing registry is refused, never defaulted to empty",
+      "symbol": "load_registry",
+      "must_raise": "ContractError",
+      "probe": "load_registry on an absent path"
+    },
+    {
+      "behaviour_id": "MV-02-CONTRACT-PARSING",
+      "requirement": "an unknown assertion class in a contract is refused",
+      "symbol": "validate",
+      "must_raise": "ContractError",
+      "probe": "a contract naming a class outside ASSERTION_CLASSES"
+    },
+    {
+      "behaviour_id": "MV-03-REACHABILITY",
+      "requirement": "an assertion that cannot execute cannot satisfy a required class",
+      "symbol": "assertion_reachability",
+      "must_report_problem": true,
+      "probe": "a contracted assertion wrapped in `if False:`"
+    },
+    {
+      "behaviour_id": "MV-04-TRIVIALITY",
+      "requirement": "an always-true assertion cannot satisfy a required class",
+      "symbol": "_is_always_true",
+      "must_report_problem": true,
+      "probe": "assert True"
+    },
+    {
+      "behaviour_id": "MV-05-SEMANTIC-CLASS",
+      "requirement": "a required class must be present with its stable references",
+      "symbol": "_compare_classes",
+      "must_report_problem": true,
+      "probe": "equality weakened to truthiness"
+    },
+    {
+      "behaviour_id": "MV-06-UNKNOWN-HELPER",
+      "requirement": "an unregistered helper used as the assertion mechanism is refused",
+      "symbol": "validate",
+      "must_report_problem": true,
+      "probe": "assert some_unregistered_helper(x)"
+    },
+    {
+      "behaviour_id": "MV-07-MISSING-TEST",
+      "requirement": "a contracted test that no longer exists is a problem, not a skip",
+      "symbol": "validate",
+      "must_report_problem": true,
+      "probe": "rename a contracted test"
+    },
+    {
+      "behaviour_id": "MV-08-MISSING-FILE",
+      "requirement": "a contracted file absent from the tree is a problem",
+      "symbol": "validate",
+      "must_report_problem": true,
+      "probe": "a contract pointing at a nonexistent file"
+    },
+    {
+      "behaviour_id": "MV-09-PARSE-FAILURE",
+      "requirement": "a file that does not parse is a problem and is never skipped",
+      "symbol": "validate",
+      "must_report_problem": true,
+      "probe": "a syntactically invalid contracted file"
+    },
+    {
+      "behaviour_id": "MV-10-FAILURE-PROPAGATION",
+      "requirement": "the CLI exits non-zero when any problem is reported",
+      "symbol": "main",
+      "must_exit_nonzero": true,
+      "probe": "run the CLI against a registry with a known problem"
+    }
+  ],
+  "mandatory_tests": [
+    {
+      "node_id": "tests/test_i28u_assertion_self_protection.py::test_the_contracted_assertions_are_all_intact",
+      "why": "the primary assertion-contract control; if it is removed, renamed or deselected, no contracted assertion is checked at all"
+    },
+    {
+      "node_id": "tests/test_i28w_assertion_reachability.py::test_the_meta_contract_holds",
+      "why": "the layer-2 control; listing it here is what stops layer 2 from being removed silently"
+    },
+    {
+      "node_id": "tests/test_i28w_assertion_reachability.py::test_every_mandatory_test_is_collected",
+      "why": "the collection pin itself; without it, deselection or renaming of any mandatory test would go unnoticed"
+    },
+    {
+      "node_id": "tests/test_i28w_assertion_reachability.py::test_the_authored_registry_matches_its_pinned_baseline",
+      "why": "the registry-weakening detector"
+    }
+  ],
+  "registered_helper_contracts": {
+    "pytest.raises": {
+      "arity_min": 1,
+      "argument_roles": [
+        "expected_exception"
+      ],
+      "failure_semantics": "fails when the expected exception is NOT raised inside the context",
+      "requires_nonempty_body": true,
+      "permitted_keywords": [
+        "match"
+      ],
+      "implementation_source": "third_party",
+      "implementation_note": "provided by pytest, outside this repository; there is no in-tree implementation that could be weakened. If a PROJECT helper is ever registered, implementation_source must become in_tree and implementation_sha256 must pin it."
+    },
+    "pytest.fail": {
+      "arity_min": 0,
+      "argument_roles": [
+        "message"
+      ],
+      "failure_semantics": "fails unconditionally when reached",
+      "requires_nonempty_body": false,
+      "permitted_keywords": [
+        "pytrace"
+      ],
+      "implementation_source": "third_party",
+      "implementation_note": "provided by pytest, outside this repository; there is no in-tree implementation that could be weakened. If a PROJECT helper is ever registered, implementation_source must become in_tree and implementation_sha256 must pin it."
+    },
+    "pytest.approx": {
+      "arity_min": 1,
+      "argument_roles": [
+        "expected_value"
+      ],
+      "failure_semantics": "not an assertion by itself; only meaningful inside a comparison",
+      "must_appear_inside_comparison": true,
+      "permitted_keywords": [
+        "rel",
+        "abs",
+        "nan_ok"
+      ],
+      "implementation_source": "third_party",
+      "implementation_note": "provided by pytest, outside this repository; there is no in-tree implementation that could be weakened. If a PROJECT helper is ever registered, implementation_source must become in_tree and implementation_sha256 must pin it."
+    }
+  },
+  "_helper_implementation_rule": [
+    "A registered helper is either third_party (no in-tree implementation, so its semantics cannot be",
+    "weakened from inside this repository) or in_tree, in which case it MUST carry an",
+    "implementation_sha256 that validate_meta verifies. Registering a project helper without pinning",
+    "its implementation is a problem, not an omission \u2014 that is the only way 'the helper's",
+    "implementation was weakened' can be detected rather than assumed away."
+  ]
+}

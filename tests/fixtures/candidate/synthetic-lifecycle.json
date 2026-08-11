@@ -1,0 +1,6 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "graph_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "steps": 2,
+  "note": "Structure only. This fixture exercises candidate DISCOVERY and byte checking; it is not a lifecycle design."
+}

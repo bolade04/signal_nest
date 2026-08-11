@@ -1,0 +1,111 @@
+{
+ "_authority": "AUTHORED. Every mutable cache reachable from assurance code carries an explicit authority classification. An unclassified cache fails closed; a classification whose subject no longer exists fails closed too.",
+ "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
+ "_purpose": "Close Gate 4N-I28AP finding ADV-I28AP-03: a mutable memo cache could take release roots 41 -> 0 and production sites 492 -> 0 while every protection layer reported clean.",
+ "_volatile_cache_meaning": "VOLATILE_CACHE now means mutable, NON-AUTHORITATIVE, and independently recomputed or identity-verified. It does NOT mean mutable state omitted from provenance because binding it is inconvenient \u2014 that reading is precisely what ADV-I28AP-03 exploited.",
+ "_why_this_file_exists": "A cache nothing classifies is a cache nothing stops from deciding. The classification is authored so a reader can check it; the CHECK is derived, because verify() recomputes the authoritative answer from staged source and compares, whatever the classification claims.",
+ "caches": {
+  "cache_authority._PINS": {
+   "classification": "SESSION_BASELINE_STATE",
+   "consumers": [
+    "cache_authority.assert_pinned"
+   ],
+   "fresh_recomputation": "not applicable: it holds identities, not derived answers. verify() recomputes the authoritative taxonomy without consulting it.",
+   "key_type": "str (pin label)",
+   "load_bearing": true,
+   "module": "cache_authority",
+   "name": "_PINS",
+   "population_function": "cache_authority.pin",
+   "session_finish": "re-recorded by cache_authority.verify() inside reverify()",
+   "source_inputs": [
+    "the live cache objects at the moment they were verified"
+   ],
+   "value_type": "(mapping id, {key: value id}) recorded at pin() time",
+   "why": "It records the identities a load-bearing consumer compares against, so emptying it would silently disable assert_pinned(). It is SESSION_BASELINE_STATE rather than a performance hint: its whole purpose is to remember what was true earlier in THIS session, so it legitimately differs between a fresh interpreter and a running one and cannot be content-pinned. It decides nothing on its own \u2014 a missing pin makes assert_pinned() a no-op, and the authoritative recomputation in verify() is unaffected, which is why weakening it cannot manufacture a false CLEAN."
+  },
+  "shell_command_model._cache": {
+   "classification": "NON_AUTHORITATIVE_PERFORMANCE_HINT",
+   "consumers": [
+    "site_taxonomy command-root derivation"
+   ],
+   "fresh_recomputation": "cache_authority.fresh_taxonomy() clears it and re-derives",
+   "key_type": "str (script path)",
+   "load_bearing": true,
+   "module": "shell_command_model",
+   "name": "_cache",
+   "population_function": "shell_command_model resolution helpers",
+   "session_finish": "re-verified by cache_authority.verify() inside reverify()",
+   "source_inputs": [
+    "tracked shell scripts under scripts/"
+   ],
+   "value_type": "parsed shell indirection record",
+   "why": "It feeds command-root derivation, so a poisoned entry could in principle suppress a root. It is covered because the fresh taxonomy derivation clears it along with site_taxonomy's caches and re-derives from staged source; a suppressed root therefore shows up as a fresh/served disagreement and fails closed."
+  },
+  "site_taxonomy._DERIVED": {
+   "classification": "NON_AUTHORITATIVE_PERFORMANCE_HINT",
+   "consumers": [
+    "release_roots",
+    "production_control_function_sites",
+    "ci_release_control_sites",
+    "executable reachability adjudication",
+    "npm reachability",
+    "package coherence"
+   ],
+   "fresh_recomputation": "cache_authority.fresh_taxonomy()",
+   "key_type": "str (derivation key)",
+   "load_bearing": true,
+   "module": "site_taxonomy",
+   "name": "_DERIVED",
+   "population_function": "site_taxonomy._cached(key, produce)",
+   "session_finish": "re-verified by cache_authority.verify() inside reverify()",
+   "source_inputs": [
+    ".github/workflows/*.yml",
+    "scripts/*.py",
+    "scripts/*.sh"
+   ],
+   "value_type": "canonical immutable derivation result",
+   "why": "THE ADV-I28AP-03 SUBJECT. It is now a hint and not an authority: values are canonical and immutable so nested mutation is impossible, the mapping and every value are identity-pinned so replacement is detected, and verify() derives roots and sites fresh from staged source and refuses on any disagreement."
+  },
+  "site_taxonomy._INDEX": {
+   "classification": "NON_AUTHORITATIVE_PERFORMANCE_HINT",
+   "consumers": [
+    "site derivation, transitively through _DERIVED"
+   ],
+   "fresh_recomputation": "cache_authority.fresh_taxonomy() clears it and re-derives",
+   "key_type": "str (module name)",
+   "load_bearing": true,
+   "module": "site_taxonomy",
+   "name": "_INDEX",
+   "population_function": "site_taxonomy.module_index",
+   "session_finish": "re-verified by cache_authority.verify() inside reverify()",
+   "source_inputs": [
+    "scripts/*.py"
+   ],
+   "value_type": "module index record",
+   "why": "It feeds the same derivations as _DERIVED. Cleared and re-derived by the fresh path, so a poisoned, stale or cross-tree index produces a fresh/served disagreement and fails closed."
+  },
+  "docker_assurance_state._STATE_CACHE": {
+   "classification": "AUTHORITATIVE_CONTENT_BOUND_CACHE",
+   "module": "docker_assurance_state",
+   "name": "_STATE_CACHE",
+   "load_bearing": true,
+   "key_type": "str (cache_key_digest over the complete Docker assurance identity set)",
+   "value_type": "frozen {state, state_digest, cache_key_digest, provenance, validation_status, cache_schema_version}",
+   "population_function": "docker_assurance_state.store / establish_state",
+   "consumers": [
+    "docker_assurance_state.lookup",
+    "signalnest_bootstrap.establish"
+   ],
+   "source_inputs": [
+    "docker-boundary-policy.json",
+    "the .github/workflows tree",
+    "the active authorization pair",
+    "the assertion-contract registry"
+   ],
+   "fresh_recomputation": "docker_assurance_state.fresh_state()/reverify_state() derive without consulting the cache; cache_authority._suspend_caches() empties it during every fresh authoritative taxonomy derivation",
+   "session_finish": "signalnest_bootstrap.reverify() freshly re-derives via reverify_state() and never substitutes the cache",
+   "content_binding": "cache_key binds staged_tree, source_content_token, policy_digest, category_table_digest, normalization_version, parser_schema_version, parser_completion, source_position_version, production_universe_digest, independent_universe_digest, state_schema_version, assertion_contract_digest, and authorization_pair_digest; the value re-validates the state and both digests before reuse",
+   "why": "It caches the validated authoritative Docker assurance state so a warm session need not re-derive it, but it is AUTHORITATIVE_CONTENT_BOUND_CACHE: every reuse revalidates the complete identity key AND the value's state/digests, and session finish never trusts it. A cross-tree, cross-policy, or retired-authorization entry fails its key; a mutated value fails its digests; and cache_authority suspends it during fresh derivation, so it can never manufacture a false CLEAN."
+  }
+ }
+}

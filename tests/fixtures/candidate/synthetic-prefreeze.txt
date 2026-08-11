@@ -1,0 +1,2 @@
+NON_PRODUCTION_TEST_FIXTURE
+synthetic pre-freeze manifest for candidate-discovery mechanism tests

@@ -1,0 +1,269 @@
+{
+ "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+ "_purpose": "Authored statement of which assurance controls MUST actually be collected and executed in the authoritative graded pytest session (Gate 4N-I28Y, closing I28X-01).",
+ "_why_this_file_exists": [
+  "Gate 4N-I28X proved that the whole assertion-control system could be removed from the graded",
+  "run without any control failing: `collect_ignore` in tests/conftest.py, module-level skip",
+  "markers, or `--deselect` on the graded command each restored the historical dead-branch defect",
+  "with a completely green suite. The old collection pin lived inside a file it protected and",
+  "interrogated a separate unfiltered subprocess, so a de-collected pin never ran and a",
+  "collected-but-skipped test satisfied it.",
+  "",
+  "This file is the INDEPENDENT requirement. scripts/pytest_session_guard.py reads it and checks",
+  "the real session against it. It is never derived from what pytest currently collects \u2014 that",
+  "would ratify a session that runs nothing, the same self-authored-oracle mistake Gate 4N-I28U",
+  "rejected for assertions."
+ ],
+ "_authority": [
+  "Membership is EARNED, not named. A node is mandatory only when a real bypass mutation exists",
+  "that removes it from the run and thereby lets a known defect back in \u2014 each entry names that",
+  "mutation. Nothing qualifies because its filename says 'assertion', because it is new, or",
+  "because it has many assertions."
+ ],
+ "_skip_policy": "MANDATORY_TEST_SKIP_FORBIDDEN \u2014 no node in this file may rely on a skip, xfail or deselection allowance. There is currently no authorized conditional skip for any mandatory node; adding one requires an explicit `conditional_skip_policy` field and a separate justification.",
+ "_trust_boundary": [
+  "This file states WHICH controls must run. scripts/pytest_session_guard.py enforces it inside",
+  "the authoritative session. The guard does not live in either protected assertion-control test",
+  "module, so deleting, ignoring or skipping those modules does not remove it.",
+  "",
+  "The guard's own loading is protected three independent ways: the graded command contract",
+  "requires the `-p pytest_session_guard` flag, the pytest configuration contract pins every file",
+  "that could unload it, and tests/test_i28y_mandatory_session.py fails when the plugin is absent",
+  "from the running session.",
+  "",
+  "HONEST LIMIT. This is not protection against a party able to rewrite the registry, the graded",
+  "command contract and the configuration baseline coherently in one change. What it does is make",
+  "each of those a separate, visible, reviewable edit in a different file from the one being",
+  "weakened."
+ ],
+ "mandatory_nodes": [
+  {
+   "node_id": "tests/test_i28u_assertion_self_protection.py::test_the_contracted_assertions_are_all_intact",
+   "protected_invariant": "every contracted load-bearing test still asserts what its authored contract requires, reachably and non-trivially",
+   "owning_layer": "LAYER_1_ASSERTION_CONTRACTS",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "this is the only node that EXECUTES scripts/assertion_contracts.py::validate over the real registry. Gate 4N-I28X showed that de-collecting it and the layer-2 module together restores the historical dead-branch defect with a green suite.",
+   "proving_bypass_mutation": "collect_ignore of tests/test_i28u_assertion_self_protection.py together with tests/test_i28w_assertion_reachability.py, plus the historical if-False dead-branch mutation: 2902 passed / 0 failed before this guard existed",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28u_assertion_self_protection.py::test_the_inventory_cannot_lose_an_entry_unnoticed",
+   "protected_invariant": "removing a load-bearing test from the authored inventory is detected",
+   "owning_layer": "LAYER_1_ASSERTION_CONTRACTS",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "inventory completeness is one of the two blockers Gate 4N-I28V raised; without this node an entry can be dropped silently",
+   "proving_bypass_mutation": "remove a contract from the registry \u2014 caught only if this node runs",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28u_assertion_self_protection.py::test_j07_replacing_the_validators_rejection_with_success_is_visible",
+   "protected_invariant": "the assertion validator fails closed on problems instead of reporting clean regardless",
+   "owning_layer": "LAYER_1_ASSERTION_CONTRACTS",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "forced-success and swallowed-failure are named I28X attacks 4 and 5; this node is what makes them visible",
+   "proving_bypass_mutation": "empty the problems list before validate() returns \u2014 24 suite failures with this node running, none without it",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28w_assertion_reachability.py::test_f_the_exact_i28v_dead_branch_mutation_is_caught",
+   "protected_invariant": "an assertion that can never execute cannot satisfy its contract",
+   "owning_layer": "LAYER_2_REACHABILITY",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "this is THE pin for the Gate 4N-I28V blocker; it is the node that proves the exact historical dead-branch mutation is rejected",
+   "proving_bypass_mutation": "module-level pytestmark skip on this file plus the dead-branch mutation: 2902 passed / 0 failed / 164 skipped before this guard existed",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28w_assertion_reachability.py::test_the_meta_contract_holds",
+   "protected_invariant": "the assertion control itself still satisfies its layer-2 meta contract",
+   "owning_layer": "LAYER_2_META_CONTRACT",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "the only node that executes validate_meta over the real meta contract; without it the control can lose its own required behaviours",
+   "proving_bypass_mutation": "--deselect this node id on the graded command: zero policy problems before the command contract was hardened",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28w_assertion_reachability.py::test_every_mandatory_test_is_collected",
+   "protected_invariant": "the layer-2 mandatory tests are present and collectable",
+   "owning_layer": "LAYER_2_META_CONTRACT",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "retained as SUPPLEMENTARY evidence. Gate 4N-I28X proved it cannot be the authority \u2014 it interrogates a separate unfiltered subprocess \u2014 but it still catches renames and repository-level addopts deselection, and it is now itself guarded.",
+   "proving_bypass_mutation": "rename a mandatory test out of its node id",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28w_assertion_reachability.py::test_the_authored_registry_matches_its_pinned_baseline",
+   "protected_invariant": "the authored assertion-contract registry has not been weakened without a visible baseline change",
+   "owning_layer": "LAYER_2_REGISTRY_CONSISTENCY",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "the only node that pins registry bytes, contract count, ids, per-contract shapes and the change ledger",
+   "proving_bypass_mutation": "reduce a contract's required assertion classes \u2014 caught only if this node runs",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28w_assertion_reachability.py::test_k05_every_registered_helper_declares_its_implementation_provenance",
+   "protected_invariant": "every registered assertion helper declares third_party or in_tree provenance, and an in_tree helper pins its implementation hash",
+   "owning_layer": "LAYER_2_HELPER_PROVENANCE",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "closes Gate 4N-I28W readiness criterion 16; without it a weakened in-tree helper implementation is undetectable",
+   "proving_bypass_mutation": "register an in-tree helper without an implementation_sha256",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28y_mandatory_session.py::test_the_session_guard_is_active_in_this_session",
+   "protected_invariant": "the authoritative session guard is loaded and observing THIS pytest process",
+   "owning_layer": "LAYER_3_SESSION_GUARD",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "closes the circularity: if the guard is not loaded it cannot report its own absence, so a node that FAILS when the plugin is missing is required. Removing the -p flag from the graded command is caught here as well as by the command contract.",
+   "proving_bypass_mutation": "run the graded command without -p pytest_session_guard",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28y_mandatory_session.py::test_the_mandatory_registry_matches_its_pinned_baseline",
+   "protected_invariant": "the mandatory-node registry has not been emptied, trimmed or retargeted without a visible baseline change",
+   "owning_layer": "LAYER_3_SESSION_GUARD",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "without it the guard's own requirement could be reduced to nothing in one edit and every later session would pass vacuously",
+   "proving_bypass_mutation": "delete a mandatory node from this registry, or replace the registry with the current collection",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28ab_guard_identity.py::test_the_registered_guard_is_the_genuine_implementation",
+   "protected_invariant": "the object holding the guard's plugin name is the genuine MandatorySessionGuard, with pinned implementation provenance and evidence that its lifecycle hooks actually executed",
+   "owning_layer": "LAYER_3_SESSION_GUARD",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "Gate 4N-I28AA finding ADV-I28AA-01: a same-named decoy registered from tests/conftest.py made the genuine guard early-return silently, and the then-current anti-circularity node accepted it because it checked only hasplugin(name) plus two duck-typed attributes",
+   "proving_bypass_mutation": "register a faithful same-name decoy in tests/conftest.py before the guard registers: 2943 passed / 0 failed with 8 of 10 mandatory nodes absent, before this gate",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_i28ae_executed_provenance.py::test_executed_code_matches_the_authorized_package",
+   "protected_invariant": "the code executing for every protected Gate 4N module is the code on its pinned path, proven from runtime code objects rather than from the file on disk",
+   "owning_layer": "LAYER_4_EXECUTED_CODE_PROVENANCE",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "Gate 4N-I28AC finding ACC-I28AC-01: sitecustomize pre-seeding of sys.modules made the guard and every verifier resolve the same substituted module while every disk-reading check reported the legitimate staged file",
+   "proving_bypass_mutation": "sitecustomize pre-seeds sys.modules with a guard whose sessionfinish never sets exitstatus: 2906 passed / 0 failed with four control modules absent, before this gate",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  }
+ ]
+}

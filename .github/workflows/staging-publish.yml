@@ -85,6 +85,54 @@ jobs:
       - name: Check out the exact trusted revision
         uses: actions/checkout@v7
 
+      # ------------------------------------------------------------------
+      # Gate 4N-I28BG-B3: workflow-assurance ESTABLISH (shared for both images).
+      # Immediately after checkout, bind the staging workflow/job identity, the
+      # authorization pair, the source-content manifest (workflow + Dockerfile +
+      # apps/api context, .dockerignore honoured), and the freshly derived
+      # authoritative Docker-state digest. The API and worker images are
+      # distinguished downstream by their own pre-build/bind/pre-push records
+      # (distinct target stage, immutable tag, and built digest), so one image's
+      # assurance can never cover the other's. Offline: no Docker/registry/network.
+      # ------------------------------------------------------------------
+      - name: Establish staging workflow assurance
+        id: assurance-establish
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p staging-assurance
+          python3 - <<'PY'
+          import json, os, subprocess
+          sha = os.environ["COMMIT_SHA"]
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          common = {
+            "workflow": {
+              "workflow_path": ".github/workflows/staging-publish.yml",
+              "workflow_identity": "Staging publish",
+              "job_identity": "build-publish",
+              "docker_step_identity": "build-publish",
+            },
+            "source_spec": {
+              "workflow_path": ".github/workflows/staging-publish.yml",
+              "dockerfile_path": "apps/api/Dockerfile",
+              "context_path": "apps/api",
+              "script_paths": [
+                "scripts/workflow_assurance.py",
+                "scripts/workflow_graph_validator.py",
+              ],
+              "commit_sha": sha,
+            },
+            "commit_sha": sha,
+            "tree_identity": tree,
+          }
+          json.dump(common, open("staging-assurance/common.json", "w"))
+          json.dump({**common, "expected_phase": "staging-establish"},
+                    open("staging-assurance/establish-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py establish \
+            --params staging-assurance/establish-params.json \
+            --out staging-assurance/establishment.json
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -92,10 +140,51 @@ jobs:
         id: meta
         run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      # Gate 4N-I28BG-B3: API pre-build verification. Fresh source/workflow re-derivation and API
+      # build-input binding (target api, immutable tag signalnest-api:<sha>). Fails the job before the
+      # API build on any drift. Independent from the worker record below.
+      - name: Fresh pre-build verification (API)
+        id: assurance-pre-build-api
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          CREATED: ${{ steps.meta.outputs.created }}
+          IMAGE_TARGET: api
+          IMAGE_TAG_PREFIX: signalnest-api
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          from pathlib import Path
+          sha = os.environ["COMMIT_SHA"]
+          target = os.environ["IMAGE_TARGET"]
+          tag = f"{os.environ['IMAGE_TAG_PREFIX']}:{sha}"
+          common = json.load(open("staging-assurance/common.json"))
+          src = w.source_content_manifest(Path(".").resolve(), common["source_spec"])
+          bi = {
+            "dockerfile_path": "apps/api/Dockerfile",
+            "dockerfile_digest": src["files"]["dockerfile"]["sha256"],
+            "context_path": "apps/api", "context_digest": w._digest(src["context"]),
+            "build_args": {"GIT_REVISION": sha, "IMAGE_CREATED": os.environ.get("CREATED", "")},
+            "build_secret_names": [], "cache_from": [], "cache_to": [],
+            "platforms": ["linux/amd64"], "target_stage": target, "labels": {},
+            "runtime_metadata": {"created": os.environ.get("CREATED", "")}, "resolved_tags": [tag],
+          }
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          params = {"establishment": json.load(open("staging-assurance/establishment.json")),
+                    "source_spec": common["source_spec"], "workflow": common["workflow"],
+                    "build_inputs": bi, "commit_sha": sha, "tree_identity": tree}
+          json.dump(params, open("staging-assurance/pre-build-api-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py pre_build_verify \
+            --params staging-assurance/pre-build-api-params.json \
+            --out staging-assurance/pre-build-api.json
+
       # Fresh, cache-free builds: the publish path never consumes a layer cache
       # another (less trusted) workflow run may have written. Platform is
       # pinned to the ECS task-definition runtime (LINUX/X86_64, §26.2).
       - name: Build API image (linux/amd64, SHA-stamped)
+        id: build-api
         uses: docker/build-push-action@v6
         with:
           context: apps/api
@@ -109,7 +198,77 @@ jobs:
             GIT_REVISION=${{ github.sha }}
             IMAGE_CREATED=${{ steps.meta.outputs.created }}
 
+      # Gate 4N-I28BG-B3: API post-build image bind. Consumes the API build's structured buildx
+      # metadata, validates + binds the API image digest to the API pre-build record, and emits the
+      # API executed-image manifest. Distinct from the worker manifest (different target, tag, digest).
+      - name: Bind the built API image digest
+        id: assurance-image-bind-api
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          BUILD_METADATA: ${{ steps.build-api.outputs.metadata }}
+          BUILD_DIGEST: ${{ steps.build-api.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          sha = os.environ["COMMIT_SHA"]
+          meta = json.loads(os.environ.get("BUILD_METADATA") or "{}")
+          if os.environ.get("BUILD_DIGEST"):
+              meta.setdefault("containerimage.digest", os.environ["BUILD_DIGEST"])
+          src = w.source_content_manifest(w.REPO_ROOT, json.load(open("staging-assurance/common.json"))["source_spec"])
+          params = {"pre_build_record": json.load(open("staging-assurance/pre-build-api.json")),
+                    "build_metadata": meta, "resolved_tags": [f"signalnest-api:{sha}"],
+                    "dockerfile_digest": src["files"]["dockerfile"]["sha256"],
+                    "build_context_digest": w._digest(src["context"])}
+          json.dump(params, open("staging-assurance/bind-api-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py post_build_image_bind \
+            --params staging-assurance/bind-api-params.json \
+            --out staging-assurance/image-manifest-api.json
+
+      # Gate 4N-I28BG-B3: worker pre-build verification (independent of API). Fresh source/workflow
+      # re-derivation + worker build-input binding (target worker, tag signalnest-worker:<sha>). A
+      # source mutation between the API and worker builds is detected here.
+      - name: Fresh pre-build verification (worker)
+        id: assurance-pre-build-worker
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          CREATED: ${{ steps.meta.outputs.created }}
+          IMAGE_TARGET: worker
+          IMAGE_TAG_PREFIX: signalnest-worker
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          from pathlib import Path
+          sha = os.environ["COMMIT_SHA"]
+          target = os.environ["IMAGE_TARGET"]
+          tag = f"{os.environ['IMAGE_TAG_PREFIX']}:{sha}"
+          common = json.load(open("staging-assurance/common.json"))
+          src = w.source_content_manifest(Path(".").resolve(), common["source_spec"])
+          bi = {
+            "dockerfile_path": "apps/api/Dockerfile",
+            "dockerfile_digest": src["files"]["dockerfile"]["sha256"],
+            "context_path": "apps/api", "context_digest": w._digest(src["context"]),
+            "build_args": {"GIT_REVISION": sha, "IMAGE_CREATED": os.environ.get("CREATED", "")},
+            "build_secret_names": [], "cache_from": [], "cache_to": [],
+            "platforms": ["linux/amd64"], "target_stage": target, "labels": {},
+            "runtime_metadata": {"created": os.environ.get("CREATED", "")}, "resolved_tags": [tag],
+          }
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          params = {"establishment": json.load(open("staging-assurance/establishment.json")),
+                    "source_spec": common["source_spec"], "workflow": common["workflow"],
+                    "build_inputs": bi, "commit_sha": sha, "tree_identity": tree}
+          json.dump(params, open("staging-assurance/pre-build-worker-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py pre_build_verify \
+            --params staging-assurance/pre-build-worker-params.json \
+            --out staging-assurance/pre-build-worker.json
+
       - name: Build worker image (linux/amd64, SHA-stamped)
+        id: build-worker
         uses: docker/build-push-action@v6
         with:
           context: apps/api
@@ -122,6 +281,35 @@ jobs:
           build-args: |
             GIT_REVISION=${{ github.sha }}
             IMAGE_CREATED=${{ steps.meta.outputs.created }}
+
+      # Gate 4N-I28BG-B3: worker post-build image bind. Consumes the worker build's structured
+      # metadata, binds the worker image digest to the worker pre-build record, and emits the worker
+      # executed-image manifest. The API manifest cannot satisfy worker and vice versa.
+      - name: Bind the built worker image digest
+        id: assurance-image-bind-worker
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          BUILD_METADATA: ${{ steps.build-worker.outputs.metadata }}
+          BUILD_DIGEST: ${{ steps.build-worker.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          sha = os.environ["COMMIT_SHA"]
+          meta = json.loads(os.environ.get("BUILD_METADATA") or "{}")
+          if os.environ.get("BUILD_DIGEST"):
+              meta.setdefault("containerimage.digest", os.environ["BUILD_DIGEST"])
+          src = w.source_content_manifest(w.REPO_ROOT, json.load(open("staging-assurance/common.json"))["source_spec"])
+          params = {"pre_build_record": json.load(open("staging-assurance/pre-build-worker.json")),
+                    "build_metadata": meta, "resolved_tags": [f"signalnest-worker:{sha}"],
+                    "dockerfile_digest": src["files"]["dockerfile"]["sha256"],
+                    "build_context_digest": w._digest(src["context"])}
+          json.dump(params, open("staging-assurance/bind-worker-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py post_build_image_bind \
+            --params staging-assurance/bind-worker-params.json \
+            --out staging-assurance/image-manifest-worker.json
 
       # Fail-closed zero-handoff bootstrap gate (Batch 4C.1B): the worker image
       # must carry app/db/bootstrap_app_role.py byte-identical to the trusted
@@ -567,7 +755,59 @@ jobs:
       - name: Mask the account-bearing registry host in all subsequent logs
         run: echo "::add-mask::${{ steps.ecr-login.outputs.registry }}"
 
+      # Gate 4N-I28BG-B3: API pre-push verification. Immediately before the shared push, freshly
+      # re-derive identity and refuse source/workflow drift, API image substitution, API tag
+      # substitution, authorization change, and manifest replay. The API digest/tag intended for push
+      # are exactly the API image-bind manifest's bound values. Fails the job -> blocks the push below.
+      - name: Fresh pre-push verification (API)
+        id: assurance-pre-push-api
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "scripts")
+          common = json.load(open("staging-assurance/common.json"))
+          manifest = json.load(open("staging-assurance/image-manifest-api.json"))
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          params = {"image_manifest": manifest, "source_spec": common["source_spec"],
+                    "workflow": common["workflow"],
+                    "intended_image_digest": manifest["build_output"]["image_digest"],
+                    "intended_tags": manifest["build_output"]["resolved_tags"],
+                    "commit_sha": os.environ["COMMIT_SHA"], "tree_identity": tree}
+          json.dump(params, open("staging-assurance/pre-push-api-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py pre_push_verify \
+            --params staging-assurance/pre-push-api-params.json \
+            --out staging-assurance/pre-push-api.json
+
+      # Gate 4N-I28BG-B3: worker pre-push verification (independent). Refuses worker->API / API->worker
+      # manifest substitution, worker digest/tag substitution, source/workflow drift, authorization
+      # change, and replay. The push proceeds only when BOTH pre-push checks pass.
+      - name: Fresh pre-push verification (worker)
+        id: assurance-pre-push-worker
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "scripts")
+          common = json.load(open("staging-assurance/common.json"))
+          manifest = json.load(open("staging-assurance/image-manifest-worker.json"))
+          tree = subprocess.check_output(["git", "write-tree"]).decode().strip()
+          params = {"image_manifest": manifest, "source_spec": common["source_spec"],
+                    "workflow": common["workflow"],
+                    "intended_image_digest": manifest["build_output"]["image_digest"],
+                    "intended_tags": manifest["build_output"]["resolved_tags"],
+                    "commit_sha": os.environ["COMMIT_SHA"], "tree_identity": tree}
+          json.dump(params, open("staging-assurance/pre-push-worker-params.json", "w"))
+          PY
+          python3 scripts/workflow_assurance.py pre_push_verify \
+            --params staging-assurance/pre-push-worker-params.json \
+            --out staging-assurance/pre-push-worker.json
+
       - name: Push both images by immutable commit tag and read back digests
+        id: push
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           NAME_PREFIX: ${{ vars.AWS_STAGING_NAME_PREFIX || 'signalnest-staging' }}
@@ -624,6 +864,68 @@ jobs:
           }
           EOF
           cat publish-evidence/digest-manifest.json
+
+      # Gate 4N-I28BG-B3: FINAL staging assurance aggregate. Enforcement already happened in the
+      # per-image pre-build and pre-push steps (each fails the job before its build/push). This final
+      # consistency check is derived from the ACTUAL step outcomes (never a hand-entered PASS), fails
+      # if ANY load-bearing assurance/build/push step was not successful — including a skipped step,
+      # which always() lets it observe — and requires BOTH images (no one-image partial PASS). It
+      # re-validates all four records, proves the API and worker manifests are distinct, and
+      # cross-checks each pushed registry digest against its bound built digest. Runs after the push
+      # and cannot enable a failed push path; a non-success fails the job so the upload below (default
+      # success()) is skipped.
+      - name: Final staging assurance aggregate
+        id: assurance-aggregate
+        if: always()
+        env:
+          O_ESTABLISH: ${{ steps.assurance-establish.outcome }}
+          O_PB_API: ${{ steps.assurance-pre-build-api.outcome }}
+          O_PB_WORKER: ${{ steps.assurance-pre-build-worker.outcome }}
+          O_BIND_API: ${{ steps.assurance-image-bind-api.outcome }}
+          O_BIND_WORKER: ${{ steps.assurance-image-bind-worker.outcome }}
+          O_PP_API: ${{ steps.assurance-pre-push-api.outcome }}
+          O_PP_WORKER: ${{ steps.assurance-pre-push-worker.outcome }}
+          O_BUILD_API: ${{ steps.build-api.outcome }}
+          O_BUILD_WORKER: ${{ steps.build-worker.outcome }}
+          O_PUSH: ${{ steps.push.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import workflow_assurance as w
+          outcomes = {k: os.environ.get(k) for k in
+                      ("O_ESTABLISH", "O_PB_API", "O_PB_WORKER", "O_BIND_API", "O_BIND_WORKER",
+                       "O_PP_API", "O_PP_WORKER", "O_BUILD_API", "O_BUILD_WORKER", "O_PUSH")}
+          not_ok = {k: v for k, v in outcomes.items() if v != "success"}
+          if not_ok:
+              print("::error::final staging aggregate: step(s) not successful:", not_ok); sys.exit(1)
+          checks = (("establishment.json", w.validate_establishment),
+                    ("pre-build-api.json", w.validate_pre_build),
+                    ("pre-build-worker.json", w.validate_pre_build),
+                    ("image-manifest-api.json", w.validate_image_manifest),
+                    ("image-manifest-worker.json", w.validate_image_manifest),
+                    ("pre-push-api.json", w.validate_pre_push),
+                    ("pre-push-worker.json", w.validate_pre_push))
+          for name, validate in checks:
+              errs = validate(json.load(open("staging-assurance/" + name)))
+              if errs:
+                  print("::error::final staging aggregate: %s invalid: %s" % (name, errs)); sys.exit(1)
+          man_api = json.load(open("staging-assurance/image-manifest-api.json"))
+          man_worker = json.load(open("staging-assurance/image-manifest-worker.json"))
+          if man_api["manifest_digest"] == man_worker["manifest_digest"]:
+              print("::error::final staging aggregate: API and worker manifests are not distinct"); sys.exit(1)
+          # Cross-check each pushed registry digest against its bound built digest.
+          pushed = {}
+          for line in open("publish-evidence/digests.txt"):
+              parts = line.split()
+              if len(parts) == 2:
+                  pushed[parts[0]] = parts[1]
+          for tgt, man in (("api", man_api), ("worker", man_worker)):
+              if pushed.get(tgt) and pushed[tgt] != man["build_output"]["image_digest"]:
+                  print("::error::final staging aggregate: %s pushed digest is not the bound built digest" % tgt)
+                  sys.exit(1)
+          print("ok: staging assurance aggregate consistent for both images across all phases")
+          PY
 
       - name: Upload digest manifest artifact
         uses: actions/upload-artifact@v7

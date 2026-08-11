@@ -1,0 +1,14 @@
+# Gate 4N guard dependencies — Gate 4N-I26C.
+#
+# WHY THIS FILE EXISTS. Gate 4N-I26B added three structural guards that parse
+# .github/workflows/ci.yml as YAML and DELIBERATELY refuse a regex fallback, because a regex
+# that mis-reads a block scalar is precisely how Gate 4N-I23's F5 guard became vacuous. They
+# were then left depending on a PyYAML that the Gate 4N job never installs: on the runner all
+# three would have exited 2 REFUSED, and I26B shipped that gap without wiring them into CI at
+# all. A control that cannot import its parser is a control that does not run.
+#
+# PINNED, not floated. Every other toolchain dependency in this repository is pinned to an exact
+# version (OpenTofu 1.12.5, AWS provider 6.55.0, and the image digests in the staging record),
+# and a parser is more load-bearing than most: a version that changes how a block scalar is
+# read changes what every graded step is understood to do.
+PyYAML==6.0.3

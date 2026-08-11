@@ -423,6 +423,19 @@ jobs:
     # absence does not fail loudly when it stops holding, so every one is asserted here at
     # PR time. reader-publish.yml replays the in-image band at publish time as a
     # fail-closed check against the artefact that is actually pushed.
+    #
+    # GATE 4N-I26B, closing I25's VAL-CI. The anchor tier used to be published mid-job with
+    # `>> "$GITHUB_ENV"`, which reaches only SUBSEQUENT steps — so `closure`, which ran two
+    # steps earlier, executed with it UNSET and died on an uncaught module-level AnchorError.
+    # CI was deterministically red and no local run reproduced it, because the guard harness
+    # pre-exported the variable before every step and therefore measured a state the runner
+    # never has. Declaring it at JOB scope makes it available to every step from the first,
+    # which removes the ordering hazard rather than reordering around it: there is now exactly
+    # one producer and it cannot come after any consumer. scripts/ci_env_dataflow.py proves
+    # availability precedes consumption for every consumed variable, and fails closed on any
+    # it cannot resolve.
+    env:
+      SIGNALNEST_ANCHOR_TIER: TIER_1_SYNTHETIC
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -441,6 +454,26 @@ jobs:
           python -m venv .reader-venv
           .reader-venv/bin/pip install --upgrade pip
           .reader-venv/bin/pip install -e "apps/revision-reader[dev]"
+          # GATE 4N-I28BH-E2. The main Gate-4N security suite runs UNDER this reader venv
+          # (the "Operator permission-set policy and cache-classification tests" step), and its
+          # strict bootstrap (signalnest_bootstrap.establish -> executable_inventory) imports
+          # yaml. The venv is isolated (no --system-site-packages), so the system-python install
+          # of the pinned Gate contract below does NOT reach it. Install the SAME pinned contract
+          # here so every interpreter that executes a YAML-dependent Gate consumer has PyYAML.
+          .reader-venv/bin/pip install -r scripts/requirements-gate.txt
+
+      # GATE 4N-I26C. The Gate 4N guards run under the SYSTEM python3, not the reader venv, and
+      # three of them parse this workflow as YAML. Gate 4N-I26B shipped them depending on a
+      # PyYAML nothing installed: on a runner all three would have exited 2 "refused", which
+      # reads like a policy decision rather than a missing package. Installed HERE, before the
+      # first guard, from the pinned contract in scripts/requirements-gate.txt.
+      - name: Install Gate 4N guard dependencies
+        run: python3 -m pip install -r scripts/requirements-gate.txt
+
+      - name: Gate 4N guard dependency contract
+        id: gate_dependencies
+        if: always()
+        run: python3 scripts/check_gate_dependencies.py
 
       - name: Ruff check
         run: .reader-venv/bin/python -m ruff check apps/revision-reader
@@ -449,17 +482,538 @@ jobs:
         working-directory: apps/revision-reader
         run: ../../.reader-venv/bin/python -m pytest tests -q
 
+      # Gate 4N-I8: the iam module now carries boundary_durability.tftest.hcl, which proves
+      # the permissions boundary reaches all five roles and that a null input is the removal
+      # state. Offline, mocked provider, no backend — same shape as the reader tests.
       - name: Set up OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:
+          # Pinned to the Gate 4N execution contract. Without this the action installs
+          # `latest`, and scripts/check_toolchain_integrity.py would assert a version the
+          # workflow never established.
+          tofu_version: 1.12.5
           tofu_wrapper: false
 
+      # --- Gate 4N-I4: operator permission and toolchain guards -------------------
+      # Ordering matters and was wrong in Gate 4N-I3, where the toolchain check ran
+      # AFTER the module init that legitimately creates a module-local .terraform,
+      # failed on its mere existence, and — because steps are sequential — suppressed
+      # the policy tests entirely. The corrected graph is:
+      #   1. sanitize the environment BEFORE anything initialises
+      #   2. initialise the module (creates an EXPECTED cache)
+      #   3. re-verify the toolchain, now classifying that cache by contents
+      #   4. run the policy tests regardless of step 3's outcome
+      #   5. a final gate fails the job if any required step failed
+      # No step uses unconditional continue-on-error; every failure still fails the job.
+      - name: IAM module boundary durability contract tests
+        id: iam_module_tests
+        if: always()
+        working-directory: infra/aws/modules/iam
+        run: |
+          tofu init -backend=false -input=false
+          tofu test
+
+      - name: Toolchain integrity — pre-init environment sanitization
+        id: toolchain_pre
+        run: python3 scripts/check_toolchain_integrity.py
+
       - name: Reader IaC contract tests (offline, fully mocked provider)
+        id: module_tests
         working-directory: infra/aws/modules/revision_reader
         run: |
           tofu fmt -check -diff .
           tofu init -backend=false -input=false
           tofu test
+
+      - name: Toolchain integrity — post-init cache classification
+        id: toolchain_post
+        if: always() && steps.toolchain_pre.outcome != 'skipped'
+        run: python3 scripts/check_toolchain_integrity.py
+
+      - name: IAM role permissions-boundary coverage (fail-closed)
+        id: boundaries
+        if: always()
+        run: python3 scripts/check-iam-role-boundaries.py
+
+      # Runs even when a diagnostic check above failed: a red toolchain check must
+      # never hide a policy regression. Its own failure still fails the job via the gate.
+      - name: Closure verification (repository graph JOIN provider API map)
+        id: closure
+        if: always()
+        run: python3 scripts/verify_closure.py
+
+      # Independent of the policy generators: derives expected ARNs from repository
+      # expressions, a live inventory and AWS ARN rules, and fails closed on any
+      # derivation it cannot resolve.
+      # The account is anchored OUTSIDE the repository. A repository-wide replacement now
+      # produces a MISMATCH instead of silent agreement.
+      # GATE 4N-I13: ordinary CI declares TIER_1_SYNTHETIC explicitly. There is no default
+      # and no discovery — an undeclared tier fails closed rather than reading a home
+      # directory. Tier 1 validates MECHANICS and certifies nothing about production
+      # identity; that is Tier 2's job, contracted separately below.
+      - name: Declare Tier 1 synthetic anchor
+        id: anchor_tier
+        if: always()
+        run: |
+          # GATE 4N-I26B. The `>> "$GITHUB_ENV"` write that used to be here is GONE: the tier is
+          # declared once at job scope, so this step validates it instead of publishing it. Two
+          # producers for one value is how a consumer ends up reading the wrong one.
+          test -f tests/fixtures/synthetic-anchor.json
+          test "$SIGNALNEST_ANCHOR_TIER" = "TIER_1_SYNTHETIC"
+          python3 scripts/anchor_loader.py --tier TIER_1_SYNTHETIC
+
+      - name: External identity anchor join
+        id: anchor
+        if: always()
+        run: python3 scripts/external_anchor.py
+
+      # Deny requirements come from the external incident ledger plus architecture
+      # invariants, never from the policy generators.
+      - name: Independent Deny requirements
+        id: deny_requirements
+        if: always()
+        run: python3 scripts/deny_requirements.py
+
+      # Every resource-scoped Deny is probed at the resource it protects, and every Deny
+      # statement is deleted in turn to prove something notices.
+      - name: Resource-specific Deny probes
+        id: deny_probes
+        if: always()
+        run: python3 scripts/resource_deny_probes.py
+
+      # Reconciles every mandatory Deny across incident ledger, architecture invariant,
+      # protected resource, generated policy and explicit probe.
+      # Final-defender exhaustion replaced the unfalsifiable I10 scorer.
+      # Every lifecycle step has an owner, and each owner is PROVEN to hold its action
+      # against the generated policy — not asserted in prose.
+      - name: RoleBootstrap lifecycle owner graph
+        id: lifecycle
+        if: always()
+        run: python3 scripts/role_bootstrap_lifecycle.py
+
+      # Every provenance label checked against an exact source and field; weak labels
+      # cannot authorize production.
+      - name: Provenance cross-check
+        id: provenance
+        if: always()
+        run: python3 scripts/provenance.py
+
+      - name: Deny final-defender exhaustion
+        id: exhaustion
+        if: always()
+        run: python3 scripts/deny_exhaustion.py
+
+      # Component-wise ARN comparison; a regex cannot see a one-character corruption.
+      - name: Semantic critical-ARN model
+        id: arn_model
+        if: always()
+        run: python3 scripts/arn_model.py
+
+      # Discovery-based: a new policy artifact cannot escape validation.
+      - name: Every-policy validation by discovery
+        id: policy_validation
+        if: always()
+        run: python3 scripts/policy_inventory.py
+
+      - name: Deny triangulation and per-action mutation score
+        id: triangulation
+        if: always()
+        run: python3 scripts/deny_triangulation.py --mutations
+
+      # Resolves real HCL expressions instead of restating naming conventions.
+      - name: Repository expression resolution
+        id: expressions
+        if: always()
+        run: python3 scripts/hcl_expressions.py
+
+      - name: Trust-policy validator (independent)
+        id: trust
+        if: always()
+        run: python3 scripts/trust_validator.py
+
+      - name: Independent resource oracle (fail-closed)
+        id: oracle
+        if: always()
+        run: python3 scripts/resource_oracle.py
+
+      # The Allow axis. Every prior gate mutated only Denies, so a widened grant moved
+      # no check at all. Requires 0 escapes, 0 losses and 0 unclassified grants.
+      - name: Allow-axis model and both-sided ceiling proof
+        id: allow_axis
+        if: always()
+        run: python3 scripts/allow_model.py
+
+      # Ownership is COMPUTED by evaluating each rollout operation against the assigned
+      # principal's policy, not asserted as a constant in a JSON file.
+      - name: Boundary rollout ownership
+        id: rollout
+        if: always()
+        run: python3 scripts/gen_boundary_rollout.py --check
+
+      # GATE 4N-I16 DEFECT 4. The candidate under test is named EXPLICITLY. CI declares the
+      # tracked SYNTHETIC fixture, which exercises the discovery mechanism without any real
+      # candidate present — and candidate_manifest.load() refuses a synthetic manifest that
+      # claims production certification, so this can never bless a real candidate.
+      - name: Frozen-candidate discovery contract
+        id: candidate_discovery
+        if: always()
+        env:
+          SIGNALNEST_CANDIDATE_MANIFEST: ${{ github.workspace }}/tests/fixtures/candidate-manifest.json
+        run: python3 scripts/candidate_manifest.py
+
+      # GATE 4N-I16 DEFECT 3. iam:PutRolePolicy is CLASSIFIED from primary evidence rather
+      # than excluded from the closure. UNKNOWN fails the gate.
+      - name: iam:PutRolePolicy closure classification
+        id: putrolepolicy
+        if: always()
+        run: python3 scripts/putrolepolicy_classification.py
+
+      # GATE 4N-I16 DEFECT 5. The read-only verifier's policy must generate and must contain
+      # no mutating action; the generator refuses rather than relying on review.
+      - name: ReadOnlyVerifier policy generation
+        id: verifier_policy
+        if: always()
+        run: |
+          # GATE 4N-I19, ADV-A. Issuance and expiry travel TOGETHER. A free-floating expiry is
+          # what let Gate 4N-I17 ship a window nothing bounded; both halves now come from the
+          # single reviewed pair in scripts/expiry_authorization.py, and generation refuses any
+          # window outside the 24-hour authorized maximum.
+          python3 scripts/expiry_authorization.py
+          python3 scripts/gen_readonly_verifier_policy.py \
+            --issuance 2026-08-10T06:00:00Z --expiry 2026-08-11T04:00:00Z
+
+      - name: Independent ReadOnlyVerifier ceiling (decisive, not the self-derived Deny)
+        id: verifier_ceiling
+        if: always()
+        run: python3 scripts/verifier_ceiling.py
+
+      # GATE 4N-I20, ARCH-H2. The role reconciler had NO executed consumer: nothing ran it, and
+      # as wired it compared the expected set against itself so OVER_GRANTED and UNDER_GRANTED
+      # were unreachable. It now reads the GENERATED side back out of the emitted policy and
+      # runs here, so a divergence between the Terraform declarations and the policy actually
+      # granted fails the job.
+      # GATE 4N-I23, BLOCKER 2. The expected side now comes from the INDEPENDENTLY AUTHORED
+      # requirement (tests/fixtures/expected-writable-roles.json), not from
+      # role_arns(writable_roles()) — which was the same expression the generated side was
+      # read back from. Poisoning writable_roles() to call migration-task writable now moves
+      # only the generated side and surfaces as OVER_GRANTED.
+      - name: Terraform role inventory reconciliation (authored requirement vs emitted policy)
+        id: role_inventory
+        if: always()
+        run: python3 scripts/terraform_role_inventory.py
+
+      # GATE 4N-I23, closing I22 finding F1. protected_inventory.repository_is_clean() was
+      # called only from its own main(), and neither script appeared in this workflow at all —
+      # so the SEC-1 containment invariant had no executed consumer. protected_inventory.py:60
+      # states the requirement itself: "the containment is only real if re-adding the file is
+      # noticed."
+      - name: Live-identifier containment (leak scan + protected inventory)
+        id: containment
+        if: always()
+        run: |
+          python3 scripts/leak_scan.py
+          python3 scripts/protected_inventory.py
+
+      # GATE 4N-I23, BLOCKER 1. I22 froze a candidate whose predicted commit tree was verified
+      # eleven times and never READ: it held 14 fixtures, a workflow invoking 26 absent
+      # scripts, and zero test files. A stable tree hash proves the package has not CHANGED,
+      # never that it is COHERENT. This materialises the predicted tree and requires it to be
+      # able to run its own verification package.
+      # GATE 4N-I24C, findings I24C-06 and I24C-07. I23 asserted CI wiring with a bare
+      # substring plus an echo guard that inspected " |" under block scalars and therefore
+      # could not fail; and policy_tests — the only step that runs pytest — was referenced by
+      # zero tests. This parses every graded step's run scalar as executable shell and proves
+      # INVOCATION against an authored contract.
+      - name: CI structural invocation model (all graded steps)
+        id: ci_invocation
+        if: always()
+        run: python3 scripts/ci_invocation_model.py
+
+      # GATE 4N-I24C, finding I24C-05 (adversarial X4, I23's mandatory YES). Package
+      # completeness measured against an INDEPENDENTLY AUTHORED contract. The coherence
+      # checker below stays within its own narrower contract: referenced-path existence.
+      # GATE 4N-I24C, findings I24C-01/-10/-11. Evidence must declare the object it
+      # describes and a consumer must verify that declaration against live state. I23 froze a
+      # candidate whose every tree-bearing artifact adjudicated a superseded tree.
+      # GATE 4N-I24C, findings I24C-12/-13. Mutation sites DISCOVERED from AST, the workflow
+      # graph and the authored contracts — never a hand-authored list. I23 reported 20/20
+      # caught while three of its rows were falsified by execution.
+      # GATE 4N-I24D, closing I24C-12. EXECUTED coverage: each load-bearing value is mutated
+      # in its real fixture and the real shipping guard must refuse. Names, strings and set
+      # membership never count.
+      - name: Executed site coverage
+        id: site_coverage
+        if: always()
+        run: python3 scripts/site_coverage.py
+
+      - name: Mutation-site discovery coverage
+        id: mutation_discovery
+        if: always()
+        # GATE 4N-I26C. Failing on problems is now this guard's DEFAULT; the flag is
+        # passed explicitly so the graded invocation states the mode it relies on.
+        run: python3 scripts/mutation_discovery.py --fail-on-untested-layer
+
+      - name: Evidence binding and freshness
+        id: evidence_binding
+        if: always()
+        # GATE 4N-I26B, closing ARCH-C1. This ran with NO mode flag, and the no-argument
+        # branch returned {"problems": [], "fresh": True} — literals — so the graded step
+        # exited 0 for every repository state. The mode is now NAMED, the default verifies
+        # too, and tests assert this exact invocation.
+        run: python3 scripts/evidence_binding.py --selftest
+
+      - name: Independent package completeness
+        id: package_requirements
+        if: always()
+        run: python3 scripts/package_requirements.py
+
+      - name: Predicted commit package coherence
+        id: package_coherence
+        if: always()
+        run: python3 scripts/commit_package_coherence.py
+
+      # GATE 4N-I23, BLOCKER 3. I22 finding F2: the two-lineage guard was a hand-written list
+      # of six ids while seven rows needed it, and the omitted row was secrets_cmk_key_id —
+      # the row the mechanism exists for. Coverage is now discovered and accounted in both
+      # directions, and provenance.py's exit code depends on it.
+      - name: Provenance row coverage (complete, discovered)
+        id: provenance_coverage
+        if: always()
+        run: python3 scripts/provenance.py
+
+      # GATE 4N-I20, ARCH-H3/AWS-3. Records HEAD, the index, the working tree and the PREDICTED
+      # COMMIT TREE as separate bindings, so a manifest can never again call a staged file
+      # committed.
+      - name: Authoritative git state and predicted commit tree
+        id: tracked_state
+        if: always()
+        run: python3 scripts/tracked_state.py
+
+      # Certification is a CONSUMER, not metadata: a local run is candidate-validated and the
+      # production gate refuses anything that is not PRODUCTION_CERTIFIED.
+      - name: Production-certification state (local runs are never certified)
+        id: certification
+        if: always()
+        run: python3 scripts/production_certification.py state
+
+      # GATE 4N-I20B. Gate 4N-I20A proved the previous CI step could not have caught a
+      # regression in the real production entry point: it ran the module's default mode, which
+      # reports the local state and exits 0, and never reached the artifact-validating gate. A
+      # fabricated artifact — invented candidate, invented HEAD, invented commit tree, empty
+      # check list — was PERMITTED with exit 0.
+      #
+      # This step exercises the REAL `verify` path with mandatory bindings, in a non-production
+      # test mode using protected-EQUIVALENT synthetic fixtures. It asserts BOTH directions:
+      # the exploit must be refused and a legitimately generated artifact must be permitted.
+      # It certifies nothing — the fixtures are synthetic and the run is CI-equivalent only.
+      - name: Production gate — real artifact validation (exploit refused, valid permitted)
+        id: certification_gate
+        if: always()
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          python3 - "$work" <<'PY'
+          import hashlib, json, subprocess, sys, pathlib
+          sys.path.insert(0, "scripts")
+          import production_certification as pc
+
+          work = pathlib.Path(sys.argv[1])
+          evidence = work / "evidence.json"
+          evidence.write_text(json.dumps({"approved_account_id": "111122223333",
+                                          "partition": "aws",
+                                          "_note": "protected-equivalent CI fixture"}))
+          evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
+          inventory_sha = "b" * 64
+          candidate = {"candidate_id": "SYNTHETIC-CI-FIXTURE-CANDIDATE-1",
+                       "candidate_manifest_sha256": "a" * 64}
+          external = {"protected_tier": "TIER_2_PROTECTED",
+                      "external_anchor_sha256": evidence_sha,
+                      "external_inventory_sha256": inventory_sha}
+          checks = [{"check_id": c["check_id"], "status": "PASSED"}
+                    for c in pc.required_checks()]
+          (work / "candidate.json").write_text(json.dumps(candidate))
+          (work / "external.json").write_text(json.dumps(external))
+          (work / "checks.json").write_text(json.dumps({"checks": checks}))
+
+          # THE GATE 4N-I20A EXPLOIT: every binding fabricated, checks empty.
+          (work / "exploit.json").write_text(json.dumps({
+              "schema_version": pc.SCHEMA_VERSION,
+              "certification_state": pc.PRODUCTION_CERTIFIED, "certifies_production": True,
+              "candidate_id": "TOTALLY-MADE-UP-CANDIDATE",
+              "candidate_manifest_sha256": "a" * 64, "head": "b" * 40,
+              "index_tree_hash": "c" * 40, "commit_tree_hash": "d" * 40,
+              "repository_diff_sha256": "e" * 64, "external_anchor_sha256": "f" * 64,
+              "external_inventory_sha256": "0" * 64, "protected_tier": "TIER_2_PROTECTED",
+              "certified_at_utc": "2026-08-01T00:00:00Z",
+              "valid_until_utc": "2099-01-01T00:00:00Z", "checks": [],
+              "certifier_provenance": "anything", "eligibility_sha256": "9" * 64}))
+
+          def run(*args):
+              return subprocess.run([sys.executable, "scripts/production_certification.py", *args],
+                                    capture_output=True, text=True)
+
+          refused = run("verify", "--artifact", str(work / "exploit.json"),
+                        "--candidate-manifest", str(work / "candidate.json"),
+                        "--external-binding", str(work / "external.json"))
+          assert refused.returncode != 0, "THE PRODUCTION GATE PERMITTED A FABRICATED ARTIFACT"
+          print("  exploit refused, exit", refused.returncode)
+
+          assert run("verify", "--artifact", str(work / "exploit.json")).returncode != 0, \
+              "an artifact-only verify mode is reachable"
+          print("  artifact-only mode refused")
+
+          elig = run("eligibility", "--tier2-evidence", str(evidence),
+                     "--evidence-sha256", evidence_sha, "--inventory-sha256", inventory_sha,
+                     "--candidate-manifest", str(work / "candidate.json"),
+                     "--checks", str(work / "checks.json"), "--out", str(work / "elig.json"))
+          assert elig.returncode == 0, elig.stderr
+          # GATE 4N-I23, closing I22 architect finding H3. This step USED to assert that
+          # `certify` succeeded and that the resulting PRODUCTION_CERTIFIED /
+          # certifies_production:true artifact was permitted — so every CI run manufactured a
+          # production certificate that the gate accepted. Its non-reuse rested on the mktemp
+          # directory, not on any property of the artifact, and the "certifies nothing" claim
+          # in this file's comments was something the mechanism could not actually conclude.
+          # The candidate id now carries the SYNTHETIC- prefix, which makes non-certification
+          # STRUCTURAL: it cannot be omitted from a fixture to make the pipeline go green.
+          cert = run("certify", "--eligibility", str(work / "elig.json"),
+                     "--certifier", "CI synthetic fixture", "--out", str(work / "cert.json"))
+          assert cert.returncode != 0, (
+              "CI produced a PRODUCTION_CERTIFIED artifact for a SYNTHETIC- candidate")
+          assert "can never certify production" in (cert.stdout + cert.stderr), \
+              cert.stdout + cert.stderr
+          assert not (work / "cert.json").exists(), "a refused certification still wrote an artifact"
+          print("  synthetic candidate refused certification structurally; CI certifies nothing")
+          PY
+
+      - name: Operator permission-set policy and cache-classification tests
+        id: policy_tests
+        if: always()
+        env:
+          SIGNALNEST_ANCHOR_TIER: TIER_1_SYNTHETIC
+          SIGNALNEST_CANDIDATE_MANIFEST: ${{ github.workspace }}/tests/fixtures/candidate-manifest.json
+        run: |
+          .reader-venv/bin/pip install pytest
+          # GATE 4N-I28BH-E5. The strict Gate-4N bootstrap adjudicates the AMBIENT Docker
+          # configuration surface (docker_boundary), and a GitHub-hosted runner ships
+          # ~/.docker/config.json carrying registry 'auths' — which docker_boundary declares
+          # FATAL_IF_PRESENT because embedded credentials change which registry a push/pull
+          # authenticates to. This graded step CONSUMES no Docker (docker_boundary only READS
+          # state; no graded script shells out to the docker CLI), so its correct execution
+          # surface is a hermetic HOME — exactly as scripts/empty_home_ci.sh establishes for the
+          # local reproduction. DOCKER_CONFIG is deliberately NOT used to point elsewhere: the
+          # boundary declares DOCKER_CONFIG itself FATAL_IF_PRESENT steering. HOME is set ONLY on
+          # this pytest command, so the later "Build the reader image" / "In-image verification"
+          # steps keep the runner HOME and its CI-provisioned daemon. A clean config with 'auths'
+          # would still be FATAL — this relocates the surface, it does not weaken the rule.
+          SANDBOX_HOME="$(mktemp -d)"
+          HOME="$SANDBOX_HOME" PYTHONPATH="$GITHUB_WORKSPACE/scripts" .reader-venv/bin/python -m pytest tests/ -q -p signalnest_bootstrap -p pytest_session_guard
+
+      # GATE 4N-I26C, wiring the three controls Gate 4N-I26B built and left unexecuted. A
+      # control that is not invoked by the workflow is not a control; I26B's own evidence
+      # recorded that gap rather than hiding it, and this closes it.
+      - name: CI environment dataflow (availability precedes consumption)
+        id: env_dataflow
+        if: always()
+        run: python3 scripts/ci_env_dataflow.py
+
+      - name: Structural failure propagation (does failure fail the job?)
+        id: failure_propagation
+        if: always()
+        run: python3 scripts/failure_propagation.py
+
+      - name: True CI-equivalent harness (model-only in CI; the runner IS the execution)
+        id: ci_harness
+        if: always()
+        run: python3 scripts/ci_harness.py --model-only
+
+      # GATE 4N-I26C, closing the discovery half of I26B-01. As of Gate 4N-I28BH-B every
+      # discovered SECURITY_CRITICAL collection carries an assurance ASSIGNMENT in
+      # security-assurance-registry.json (SECURITY_UNGOVERNED == 0); inventory now demands that
+      # assignment rather than a shortenable completeness_consumers entry, so an id can no longer go
+      # green by leaving the old manifest. Both-directions meta on the registry is enforced too.
+      - name: Security-critical list inventory and meta-completeness
+        id: critical_lists
+        if: always()
+        run: python3 scripts/critical_list_inventory.py
+
+      # GATE 4N-I26D. Both currently FAIL, reporting the real residual: 35 of 48
+      # security-critical collections still have no completeness consumer, and not every
+      # discovered site has executed behavioural proof. Wired anyway — I26B was faulted for
+      # building controls and leaving them unexecuted, and a guard that reports the deficit is
+      # worth more red than a green pipeline that never measured it.
+      - name: Security-critical collection completeness
+        id: collection_completeness
+        if: always()
+        run: python3 scripts/collection_completeness.py
+
+      # GATE 4N-I28BH-B. The SIBLING assurance validator: it RUNS the property-specific control for
+      # every SECURITY collection whose property collection_completeness cannot express — reviewed
+      # integrity (authored vocabularies), exclusion-policy (reviewed carve-outs / independent
+      # ceilings), cross-domain consistency, generated-contract equality, and runtime invariants —
+      # via a CLOSED {assurance_kind: handler} dispatch that fails closed on an unknown kind or a
+      # missing/invalid config. Membership/partition rows are confirmed wired to their existing
+      # certificate-backed consumer. All 176 assignments must ACCEPT.
+      - name: Security-collection assurance (property-specific, fail-closed)
+        id: security_collection_assurance
+        if: always()
+        run: python3 scripts/security_collection_assurance.py
+
+      - name: Gate 4N guard results
+        if: always()
+        run: |
+          fail=0
+          for r in "toolchain_pre=${{ steps.toolchain_pre.outcome }}" \
+                   "module_tests=${{ steps.module_tests.outcome }}" \
+                   "iam_module_tests=${{ steps.iam_module_tests.outcome }}" \
+                   "toolchain_post=${{ steps.toolchain_post.outcome }}" \
+                   "boundaries=${{ steps.boundaries.outcome }}" \
+                   "closure=${{ steps.closure.outcome }}" \
+                   "anchor_tier=${{ steps.anchor_tier.outcome }}" \
+                   "anchor=${{ steps.anchor.outcome }}" \
+                   "deny_requirements=${{ steps.deny_requirements.outcome }}" \
+                   "deny_probes=${{ steps.deny_probes.outcome }}" \
+                   "lifecycle=${{ steps.lifecycle.outcome }}" \
+                   "provenance=${{ steps.provenance.outcome }}" \
+                   "exhaustion=${{ steps.exhaustion.outcome }}" \
+                   "arn_model=${{ steps.arn_model.outcome }}" \
+                   "policy_validation=${{ steps.policy_validation.outcome }}" \
+                   "triangulation=${{ steps.triangulation.outcome }}" \
+                   "expressions=${{ steps.expressions.outcome }}" \
+                   "trust=${{ steps.trust.outcome }}" \
+                   "oracle=${{ steps.oracle.outcome }}" \
+                   "allow_axis=${{ steps.allow_axis.outcome }}" \
+                   "rollout=${{ steps.rollout.outcome }}" \
+                   "candidate_discovery=${{ steps.candidate_discovery.outcome }}" \
+                   "putrolepolicy=${{ steps.putrolepolicy.outcome }}" \
+                   "verifier_policy=${{ steps.verifier_policy.outcome }}" \
+                   "verifier_ceiling=${{ steps.verifier_ceiling.outcome }}" \
+                   "role_inventory=${{ steps.role_inventory.outcome }}" \
+                   "containment=${{ steps.containment.outcome }}" \
+                   "ci_invocation=${{ steps.ci_invocation.outcome }}" \
+                   "site_coverage=${{ steps.site_coverage.outcome }}" \
+                   "gate_dependencies=${{ steps.gate_dependencies.outcome }}" \
+                   "env_dataflow=${{ steps.env_dataflow.outcome }}" \
+                   "failure_propagation=${{ steps.failure_propagation.outcome }}" \
+                   "ci_harness=${{ steps.ci_harness.outcome }}" \
+                   "critical_lists=${{ steps.critical_lists.outcome }}" \
+                   "collection_completeness=${{ steps.collection_completeness.outcome }}" \
+                   "security_collection_assurance=${{ steps.security_collection_assurance.outcome }}" \
+                   "mutation_discovery=${{ steps.mutation_discovery.outcome }}" \
+                   "evidence_binding=${{ steps.evidence_binding.outcome }}" \
+                   "package_requirements=${{ steps.package_requirements.outcome }}" \
+                   "package_coherence=${{ steps.package_coherence.outcome }}" \
+                   "provenance_coverage=${{ steps.provenance_coverage.outcome }}" \
+                   "tracked_state=${{ steps.tracked_state.outcome }}" \
+                   "certification=${{ steps.certification.outcome }}" \
+                   "certification_gate=${{ steps.certification_gate.outcome }}" \
+                   "policy_tests=${{ steps.policy_tests.outcome }}"; do
+            echo "  $r"
+            case "$r" in *=success) ;; *) fail=1 ;; esac
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "One or more Gate 4N guards did not succeed." >&2
+            exit 1
+          fi
 
       - name: Build the reader image
         uses: docker/build-push-action@v6

@@ -1,0 +1,548 @@
+{
+ "_authority": "AUTHORED FROM SHELL GRAMMAR, not from parser behaviour. Every expectation below follows from what bash does, and several were written BEFORE the parser could satisfy them.",
+ "_purpose": "Gate 4N-I28AV \u00a711 grammar-derived corpus for ADV-I28AT-01.",
+ "cases": [
+  {
+   "expected_commands": [
+    ":"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A01 simple",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\n"
+  },
+  {
+   "expected_commands": [
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A02 empty case",
+   "note": "",
+   "source": "case \"$x\" in esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A03 one branch + after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A04 multiple branches",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; b) : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A05 wildcard branch",
+   "note": "",
+   "source": "case \"$x\" in *) : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A06 quoted patterns",
+   "note": "",
+   "source": "case \"$x\" in 'a') : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A07 alternation",
+   "note": "",
+   "source": "case \"$x\" in a|b) : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    "echo",
+    "echo",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A08 multi-command body",
+   "note": "",
+   "source": "case \"$x\" in a) echo A; echo B ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    "echo",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A09 nested case",
+   "note": "",
+   "source": "case \"$x\" in\n a)\n  case \"$y\" in p) echo P ;; esac\n  ;;\nesac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    "echo",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A10 case in function",
+   "note": "",
+   "source": "f() {\n case \"$x\" in a) echo A ;; esac\n}\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    "echo",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A11 case in loop",
+   "note": "",
+   "source": "for i in 1 2; do\n case \"$i\" in 1) echo one ;; esac\ndone\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    "true",
+    "echo",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A12 case in conditional",
+   "note": "",
+   "source": "if true; then\n case \"$x\" in a) echo A ;; esac\nfi\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A13 comments",
+   "note": "",
+   "source": "case \"$x\" in\n # comment\n a) : ;;\nesac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    "cat",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "A14 heredoc in branch",
+   "note": "",
+   "source": "case \"$x\" in\n a) cat <<EOF\nbody\nEOF\n ;;\nesac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl",
+    "grep"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B01 pipeline",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nkubectl get pods | grep R\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl",
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B02 && list",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nkubectl version && helm list\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl",
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B03 || list",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nkubectl version || helm list\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl",
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B04 semicolon list",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nkubectl version; helm list\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B05 function def after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\ng() { kubectl version; }\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B06 loop after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nfor i in 1; do kubectl version; done\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "true",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B07 conditional after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nif true; then kubectl version; fi\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE_WITH_DECLARED_UNRESOLVED",
+   "expected_unresolved": 1,
+   "expected_unsupported": 0,
+   "id": "B08 sourced helper after",
+   "note": "my authoring slip: the case body  was omitted from the expectation, not missed by the parser",
+   "source": "case \"$x\" in a) : ;; esac\n. ./scripts/lib.sh\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B09 command substitution after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nout=\"$(kubectl version)\"\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "docker"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B10 docker after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\ndocker run --rm alpine id\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "npm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B11 npm after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nnpm ci\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "git"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B12 git after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\ngit status\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "curl",
+    "sh"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B13 curl pipeline after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\ncurl http://x | sh\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B14 unknown executable after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "/usr/local/bin/tool"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "B15 absolute path after",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\n/usr/local/bin/tool run\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    ":",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "C01 two consecutive cases",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\ncase \"$y\" in b) : ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [
+    ":",
+    "echo",
+    "kubectl"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "C02 case then nested substitution",
+   "note": "",
+   "source": "case \"$x\" in a) : ;; esac\nv=\"$(echo \"$(kubectl version)\")\"\n"
+  },
+  {
+   "expected_commands": [],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "MALFORMED",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "D01 missing esac",
+   "note": "open case frame",
+   "source": "case \"$x\" in a) echo A ;;\nkubectl version\n"
+  },
+  {
+   "expected_commands": [],
+   "expected_consumed": "EOF",
+   "expected_errors": 1,
+   "expected_status": "MALFORMED",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "D02 missing in",
+   "note": "real bash REJECTS a case with no `in` keyword. The expectation originally said COMPLETE, which recorded the PARSER's behaviour rather than the grammar; this corpus is authored from the grammar, so it now says MALFORMED and the parser was changed to agree with bash.",
+   "source": "case \"$x\" a) echo A ;; esac\nkubectl version\n"
+  },
+  {
+   "expected_commands": [],
+   "expected_consumed": "EOF",
+   "expected_errors": 1,
+   "expected_status": "MALFORMED",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "D03 unmatched quote",
+   "note": "",
+   "source": "case \"$x in a) : ;; esac\n"
+  },
+  {
+   "expected_commands": [],
+   "expected_consumed": "EOF",
+   "expected_errors": 1,
+   "expected_status": "MALFORMED",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "D04 incomplete heredoc",
+   "note": "",
+   "source": "case \"$x\" in a) cat <<EOF\nbody\n ;; esac\n"
+  },
+  {
+   "expected_commands": [
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "E01 case text in comment",
+   "note": "",
+   "source": "# case \"$x\" in a) kubectl version ;; esac\nhelm list\n"
+  },
+  {
+   "expected_commands": [
+    "echo",
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "E02 case text in quoted string",
+   "note": "",
+   "source": "echo \"case x in a) kubectl ;; esac\"\nhelm list\n"
+  },
+  {
+   "expected_commands": [
+    "cat",
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "E03 esac in heredoc body",
+   "note": "",
+   "source": "cat <<EOF\nesac kubectl version\nEOF\nhelm list\n"
+  },
+  {
+   "expected_commands": [
+    "echo",
+    "helm"
+   ],
+   "expected_consumed": "EOF",
+   "expected_errors": 0,
+   "expected_status": "COMPLETE",
+   "expected_unresolved": 0,
+   "expected_unsupported": 0,
+   "id": "E04 command-looking text in echo",
+   "note": "",
+   "source": "echo kubectl version\nhelm list\n"
+  }
+ ]
+}
