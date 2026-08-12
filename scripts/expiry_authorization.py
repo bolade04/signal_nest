@@ -189,8 +189,15 @@ MIN_DURATION = datetime.timedelta(minutes=15)
 # authority) + a new validator architecture + full mutation/false-assurance/self-attestation batteries
 # + BH-B-FINAL — is a large 16-agent effort exceeding the ~15.4h then remaining. This gate authorizes
 # ONE initial restamp. Supplied by the operator, not derived. 22h, within the 24-hour maximum.
-ACTIVE_ISSUANCE_UTC = "2026-08-10T06:00:00Z"
-ACTIVE_EXPIRY_UTC = "2026-08-11T04:00:00Z"
+# RESTAMPED AT the Phase-4 EXPIRY AUTHORIZATION PIN REMEDIATION gate. The superseded pair
+# (2026-08-10T06:00:00Z / 2026-08-11T04:00:00Z, 22h) was authored for the Gate 4N-I28BH-B closeout and
+# had already fallen out of its window by wall clock: its latest authorizable expiry (issuance + 24h)
+# was in the past, so gen_bootstrap_operator_policy could no longer produce a CURRENT, usable B-1
+# boundary-bootstrap executor policy — the EXPIRY AUTHORIZATION BASELINE STALE condition. This restamp
+# advances the reviewed window to a current instant so the B-1 Phase-A executor policy can be generated
+# and provisioned within it. Supplied by the operator, not derived. 22h, within the 24-hour maximum.
+ACTIVE_ISSUANCE_UTC = "2026-08-12T05:00:00Z"
+ACTIVE_EXPIRY_UTC = "2026-08-13T03:00:00Z"
 
 PURPOSES = ("stage_a_operator", "role_bootstrap", "boundary_bootstrap", "readonly_verifier")
 
