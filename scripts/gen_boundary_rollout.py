@@ -2,7 +2,7 @@
 """Boundary rollout owner graph, with ownership COMPUTED rather than asserted (Gate 4N-I7).
 
 Gate 4N-I6 published `ownerless_operations: 0` as a hand-maintained field in a static JSON
-file, next to a principal — SignalNestBoundaryBootstrapOperator — whose policy did not
+file, next to a principal — the boundary bootstrap executor — whose policy did not
 exist anywhere. The invariant was therefore unfalsifiable: nothing could have made it
 report a non-zero value.
 
@@ -12,7 +12,7 @@ evaluator. `ownerless_operations` is the count of operations whose evaluation is
 EXPLICIT_ALLOW. Deleting a grant from the bootstrap policy makes the number move.
 
 Two principals are evaluated:
-  SignalNestBoundaryBootstrapOperator  scripts/gen_bootstrap_operator_policy.py
+  SignalNestBoundaryBootstrapOp        scripts/gen_bootstrap_operator_policy.py
   SignalNestStagingReadOnly            live-captured baseline, replayed from the pinned
                                        capability list below (read-only, live-probed in
                                        Gate 4N-I6)

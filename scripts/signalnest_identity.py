@@ -103,7 +103,15 @@ BOUNDARY_POLICY_ARN = iam_policy_arn(BOUNDARY_POLICY_NAME, path=BOUNDARY_POLICY_
 ALL_ROLE_ARNS = tuple(iam_role_arn(n) for n in ALL_ROLE_NAMES)
 READER_EXECUTION_ROLE_ARN = iam_role_arn(READER_EXECUTION_ROLE_NAME)
 
-BOOTSTRAP_OPERATOR_NAME = "SignalNestBoundaryBootstrapOperator"
+# IAM Identity Center caps permission-set names at 32 characters — CreatePermissionSet
+# rejected the original 35-character "…BootstrapOperator" spelling server-side (2026-08-12),
+# so the canonical executor name must fit that ceiling.
+PERMISSION_SET_NAME_MAX = 32
+BOOTSTRAP_OPERATOR_NAME = "SignalNestBoundaryBootstrapOp"
+# Identity Center materializes an assigned permission set as a reserved IAM role named
+# AWSReservedSSO_<permission-set-name>_<16-hex-suffix>. Retirement, read-back and
+# residual checks must target this prefix, never a hand-typed role name.
+BOOTSTRAP_OPERATOR_RESERVED_ROLE_PREFIX = f"AWSReservedSSO_{BOOTSTRAP_OPERATOR_NAME}_"
 
 
 def identity_summary() -> dict:

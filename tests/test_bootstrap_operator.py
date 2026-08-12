@@ -1,4 +1,4 @@
-"""SignalNestBoundaryBootstrapOperator materialization and negative tests (Gate 4N-I7, Defect 5).
+"""SignalNestBoundaryBootstrapOp materialization and negative tests (Gate 4N-I7, Defect 5).
 
 THE DEFECT. The Gate 4N-I6 rollout assigned 12 of its 15 operations to this principal while
 its exact policy bytes existed nowhere — not in AWS, not in the repository, not as a
@@ -255,3 +255,50 @@ def test_the_expiry_is_the_only_thing_the_argument_changes():
              for s in stamped["Statement"] if (c := s.get("Condition"))
              if "DateLessThan" in c}
     assert times == {_ea.ACTIVE_EXPIRY_UTC}
+
+
+# --- Canonical-name contract (B-1 executor rename, 2026-08-12) --------------------------
+#
+# IAM Identity Center rejected the original 35-character executor name server-side:
+# permission-set names are capped at 32 characters, and every retirement and read-back
+# step targets a reserved role whose name DERIVES from the permission-set name. The
+# superseded spelling is built from two halves so the repo-wide scan below can never
+# match its own definition.
+
+_SUPERSEDED_NAME = "SignalNestBoundaryBootstrap" + "Operator"
+
+
+def test_the_canonical_name_fits_identity_center():
+    import re
+    assert len(identity.BOOTSTRAP_OPERATOR_NAME) <= identity.PERMISSION_SET_NAME_MAX
+    assert re.fullmatch(r"[\w+=,.@-]+", identity.BOOTSTRAP_OPERATOR_NAME)
+    assert identity.BOOTSTRAP_OPERATOR_NAME == "SignalNestBoundaryBootstrapOp"
+
+
+def test_the_reserved_role_pattern_derives_from_the_canonical_name():
+    prefix = identity.BOOTSTRAP_OPERATOR_RESERVED_ROLE_PREFIX
+    assert prefix == f"AWSReservedSSO_{identity.BOOTSTRAP_OPERATOR_NAME}_"
+    # AWSReservedSSO_<name>_<16-hex-suffix> must fit the 64-character IAM role-name cap.
+    assert len(prefix) + 16 <= 64
+
+
+def test_retirement_targets_the_same_canonical_name():
+    # The rollout graph's executor principal must BE the canonical constant (identity,
+    # not a copied string), and every executor-owned step must precede retirement.
+    assert rollout.BOOTSTRAP is identity.BOOTSTRAP_OPERATOR_NAME
+    executor_steps = [o["n"] for o in rollout.operations()
+                      if o["principal"] == rollout.BOOTSTRAP]
+    retirement = max(o["n"] for o in rollout.operations() if o["principal"] == rollout.ROOT)
+    assert executor_steps and max(executor_steps) < retirement
+
+
+def test_the_superseded_name_is_gone_from_active_code_and_contracts():
+    offenders = []
+    for pattern in ("scripts/**/*.py", "tests/**/*.py", "tests/fixtures/**/*.json",
+                    ".github/**/*.yml", "docs/**/*.md", "*.md"):
+        for path in REPO_ROOT.glob(pattern):
+            if "__pycache__" in path.parts:
+                continue
+            if _SUPERSEDED_NAME in path.read_text(encoding="utf-8", errors="ignore"):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, f"superseded executor name still present in: {offenders}"
