@@ -304,6 +304,7 @@ SUPERSEDED_PAIRS = (
     ("2026-08-09T06:36:36Z", "2026-08-10T04:36:36Z"),   # retired at Gate 4N-I28BH-B0a-SLICE2
     ("2026-08-09T17:00:00Z", "2026-08-10T15:00:00Z"),   # retired at Gate 4N-I28BH-B-SLICE3
     ("2026-08-10T00:00:00Z", "2026-08-10T22:00:00Z"),   # retired at Gate 4N-I28BH-B-ARCHITECTURAL-ADJUDICATION
+    ("2026-08-10T06:00:00Z", "2026-08-11T04:00:00Z"),   # retired at the Phase-4 expiry-authorization pin remediation
 )
 
 
@@ -483,7 +484,26 @@ def test_the_active_pair_is_exactly_the_authorized_i28r_window():
     point — the maximum is a ceiling, never a target.
     """
     pair = ea.active_pair()
-    assert pair["issuance_utc"] == "2026-08-10T06:00:00Z"
-    assert pair["expiry_utc"] == "2026-08-11T04:00:00Z"
+    assert pair["issuance_utc"] == "2026-08-12T05:00:00Z"
+    assert pair["expiry_utc"] == "2026-08-13T03:00:00Z"
     assert pair["duration_seconds"] == 79200, "22h in seconds"
     assert pair["duration_seconds"] <= ea.MAX_DURATION.total_seconds()
+
+
+def test_gen_bootstrap_operator_policy_has_no_issuance_cli_escape_hatch():
+    """The window is bounded from the reviewed ACTIVE_ISSUANCE_UTC pin, never from a
+    caller-supplied issuance. gen_bootstrap_operator_policy therefore exposes only --hash and
+    --expiry; a --issuance flag would let a caller move the lower bound and manufacture an
+    arbitrarily long window past the pin. argparse rejects the unknown flag with exit 2.
+    """
+    import subprocess
+
+    valid_expiry = _shift(ea.ACTIVE_ISSUANCE_UTC, hours=6)
+    rv = subprocess.run(
+        [sys.executable, "scripts/gen_bootstrap_operator_policy.py",
+         "--expiry", valid_expiry, "--issuance", ea.ACTIVE_ISSUANCE_UTC],
+        cwd=REPO_ROOT, capture_output=True, text=True)
+    assert rv.returncode != 0, (
+        "gen_bootstrap_operator_policy accepted a --issuance flag; the executor window must be "
+        "bounded from the reviewed pin, not from caller input")
+    assert "unrecognized arguments" in rv.stderr or "issuance" in rv.stderr

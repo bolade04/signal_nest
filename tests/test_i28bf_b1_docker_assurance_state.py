@@ -32,8 +32,8 @@ def test_fresh_state_is_complete_and_valid():
 
 def test_state_binds_the_authorization_pair_the_prior_per_site_state_did_not():
     auth = _plain()["authorization"]
-    assert auth["issuance"] == "2026-08-10T06:00:00Z"
-    assert auth["expiry"] == "2026-08-11T04:00:00Z"
+    assert auth["issuance"] == "2026-08-12T05:00:00Z"
+    assert auth["expiry"] == "2026-08-13T03:00:00Z"
     assert auth["duration_seconds"] == 79200
     assert auth["pair_digest"] == ca.digest(
         {k: auth[k] for k in ("issuance", "expiry", "duration_seconds")})
