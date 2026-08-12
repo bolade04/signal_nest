@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic generator for the SignalNestBoundaryBootstrapOperator policy (Gate 4N-I7).
+"""Deterministic generator for the SignalNestBoundaryBootstrapOp policy (Gate 4N-I7).
 
 THE DEFECT THIS CLOSES. The Gate 4N-I6 rollout assigned 12 of 15 operations to this
 principal while its exact policy bytes existed nowhere — not in AWS, not in the
