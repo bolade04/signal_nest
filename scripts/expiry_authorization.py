@@ -196,8 +196,17 @@ MIN_DURATION = datetime.timedelta(minutes=15)
 # boundary-bootstrap executor policy — the EXPIRY AUTHORIZATION BASELINE STALE condition. This restamp
 # advances the reviewed window to a current instant so the B-1 Phase-A executor policy can be generated
 # and provisioned within it. Supplied by the operator, not derived. 22h, within the 24-hour maximum.
-ACTIVE_ISSUANCE_UTC = "2026-08-12T05:00:00Z"
-ACTIVE_EXPIRY_UTC = "2026-08-13T03:00:00Z"
+# RESTAMPED AT the INFRA-9 B-1 Phase-B authorization-window restamp. The superseded pair
+# (2026-08-12T05:00:00Z / 2026-08-13T03:00:00Z, 22h) authorized the B-1 Phase-A executor
+# materialization, which COMPLETED inside it: the SignalNestBoundaryBootstrapOp permission set
+# was created, its reviewed inline policy attached byte-exactly (canonical 6dad91ac…), the
+# operator assigned and the reserved role materialized. Every Allow in that executor policy
+# lapses at the old expiry, so Phase B — the separately authorized boundary create + attach —
+# cannot run inside the window that Phase A consumed. This pair authorizes THAT next gate,
+# not more of the last one. Supplied by the operator, not derived. 22h, within the 24-hour
+# maximum.
+ACTIVE_ISSUANCE_UTC = "2026-08-13T01:00:00Z"
+ACTIVE_EXPIRY_UTC = "2026-08-13T23:00:00Z"
 
 PURPOSES = ("stage_a_operator", "role_bootstrap", "boundary_bootstrap", "readonly_verifier")
 
