@@ -459,3 +459,111 @@ def test_the_reserved_sso_role_is_named_as_a_real_arn_with_its_path():
     resource = by_id(graph(), "verify_reserved_role_exists")["resource"]
     assert resource.startswith("arn:aws:iam::")
     assert "aws-reserved/sso.amazonaws.com/" in resource
+
+
+# --- Canonical-name contract (B-2A verifier rename, 2026-08-13) -------------------------
+#
+# IAM Identity Center caps permission-set names at 32 characters, and CreatePermissionSet
+# rejects longer names SERVER-SIDE — proven live by the B-1 executor rename (2026-08-12).
+# The verifier's original 39-character spelling could never have been created, and its
+# reserved role AWSReservedSSO_<name>_<16-hex> would also have exceeded IAM's 64-character
+# role-name cap. The superseded spelling below is built from two halves so the repo-wide
+# scan can never match its own definition.
+
+import re as _re
+
+import gen_role_bootstrap_policy as _rb  # noqa: E402
+import signalnest_identity as _identity  # noqa: E402
+
+_SUPERSEDED_VERIFIER_NAME = "SignalNestRoleBootstrapReadOnly" + "Verifier"
+
+# Every permission-set name the REPOSITORY creates through its own lifecycle/rollout code.
+# Derived from the authoritative constants, never restated as string literals.
+_REPOSITORY_CREATED_PERMISSION_SETS = {
+    "boundary_bootstrap_executor": _identity.BOOTSTRAP_OPERATOR_NAME,
+    "role_bootstrap_operator": _rb.ROLE_BOOTSTRAP_OPERATOR_NAME,
+    "role_bootstrap_readonly_verifier": verifier.PERMISSION_SET_NAME,
+}
+
+# The AWS pattern for CreatePermissionSet.Name (Service Authorization Reference). Matched
+# with re.ASCII: AWS's \w is ASCII, Python's is Unicode — without the flag a name carrying
+# an accented character would pass here and be rejected server-side.
+_PS_NAME_PATTERN = r"[\w+=,.@-]+"
+
+
+def test_every_repository_created_permission_set_name_fits_identity_center():
+    for label, name in _REPOSITORY_CREATED_PERMISSION_SETS.items():
+        assert 1 <= len(name) <= _identity.PERMISSION_SET_NAME_MAX, (
+            f"{label}: {name!r} is {len(name)} characters; Identity Center caps "
+            f"CreatePermissionSet.Name at {_identity.PERMISSION_SET_NAME_MAX}")
+        assert _re.fullmatch(_PS_NAME_PATTERN, name, _re.ASCII), (
+            f"{label}: {name!r} does not match the AWS name pattern {_PS_NAME_PATTERN}")
+
+
+def test_every_derived_reserved_role_name_fits_iam():
+    # Identity Center materializes AWSReservedSSO_<permission-set-name>_<16-hex-suffix>;
+    # IAM role names cap at 64 characters.
+    for label, name in _REPOSITORY_CREATED_PERMISSION_SETS.items():
+        derived = len(f"AWSReservedSSO_{name}_") + 16
+        assert derived <= 64, (
+            f"{label}: reserved role for {name!r} would be {derived} characters (cap 64)")
+
+
+def test_the_verifier_name_is_the_reviewed_canonical_spelling():
+    assert verifier.PERMISSION_SET_NAME == "SignalNestRoleBootstrapROVerify"
+
+
+def test_the_lifecycle_principals_are_single_sourced_from_their_generators():
+    # Value correctness first: the graph targets the generators' current names.
+    assert lc.VERIFIER_PS == verifier.PERMISSION_SET_NAME
+    assert lc.BOOTSTRAP_PS == _rb.ROLE_BOOTSTRAP_OPERATOR_NAME
+    # STRUCTURAL single-sourcing, checked on the AST. An `is` comparison cannot detect a
+    # reintroduced duplicate literal: CPython interns identifier-shaped string constants, so
+    # a second literal with the same value IS the same object until the values diverge —
+    # which is exactly when plain equality would fire anyway. The Gate 4N-I7 Defect-1 shape
+    # (synchronized duplicates that later drift in one place) is caught only by proving the
+    # module carries NO literal spelling of either canonical name at all.
+    import ast as _ast
+    import inspect as _inspect
+
+    module_ast = _ast.parse(_inspect.getsource(lc))
+    literal_offenders = [
+        node.value for node in _ast.walk(module_ast)
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str)
+        and node.value in (verifier.PERMISSION_SET_NAME, _rb.ROLE_BOOTSTRAP_OPERATOR_NAME)
+    ]
+    assert not literal_offenders, (
+        f"role_bootstrap_lifecycle.py restates canonical permission-set name(s) as "
+        f"literal(s) {literal_offenders}; both must be imported from their generators")
+    assigns = {
+        target.id: node.value
+        for node in _ast.walk(module_ast) if isinstance(node, _ast.Assign)
+        for target in node.targets if isinstance(target, _ast.Name)
+        and target.id in ("BOOTSTRAP_PS", "VERIFIER_PS")
+    }
+    assert set(assigns) == {"BOOTSTRAP_PS", "VERIFIER_PS"}
+    for name, value_node in assigns.items():
+        assert isinstance(value_node, _ast.Attribute), (
+            f"{name} must be assigned from a generator attribute, not a "
+            f"{type(value_node).__name__}")
+
+
+def test_the_superseded_verifier_name_is_gone_from_active_code_and_contracts():
+    # The scan walks EVERY git-tracked file, so a reintroduction in a .yaml workflow, an
+    # infra/ document, or any future tree area cannot slip through a glob list. Untracked
+    # and ignored files are out of scope: they cannot reach a commit.
+    import subprocess as _subprocess
+
+    tracked = _subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, check=True,
+    ).stdout.decode("utf-8").split("\0")
+    offenders = []
+    for rel in tracked:
+        if not rel:
+            continue
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        if _SUPERSEDED_VERIFIER_NAME in path.read_text(encoding="utf-8", errors="ignore"):
+            offenders.append(rel)
+    assert not offenders, f"superseded verifier name still present in: {offenders}"

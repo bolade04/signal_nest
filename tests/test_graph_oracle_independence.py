@@ -62,8 +62,15 @@ def test_the_canonical_fixture_is_tracked_by_git():
 
     rel = "tests/fixtures/lifecycle-canonical-sha256.txt"
     state = tracked_state.state_of(rel)
-    assert state in (tracked_state.STAGED_ADDITION, tracked_state.TRACKED_IN_HEAD), (
-        f"the canonical-hash anchor is {state}; it must be at least staged for addition")
+    # STAGED_MODIFICATION was added at B-2A: the pin is deliberately REGENERATED whenever the
+    # lifecycle graph legitimately changes, so while that change is staged the anchor is a
+    # staged modification of a file already in HEAD — strictly STRONGER than STAGED_ADDITION
+    # against the 'no history, no review trail' weakness this check excludes, since the file
+    # has history. The property that actually matters is the predicted-commit-tree assertion
+    # below, which holds in every one of these states.
+    assert state in (tracked_state.STAGED_ADDITION, tracked_state.STAGED_MODIFICATION,
+                     tracked_state.TRACKED_IN_HEAD), (
+        f"the canonical-hash anchor is {state}; it must be at least staged")
     predicted = tracked_state.predicted_commit_tree()
     assert rel in predicted["entries"], (
         "the anchor would not be part of the commit this branch would produce")

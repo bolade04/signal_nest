@@ -105,7 +105,10 @@ IDENTITY_CENTRE_ADMIN_ACTIONS = {
 }
 
 ROLE_ARNS = rb.TARGET_ROLE_ARNS
-BOOTSTRAP_PS = "SignalNestRoleBootstrapOperator"
+# Both principal names are SINGLE-SOURCED from their generators. The bootstrap name was a
+# second literal here — the Gate 4N-I7 Defect 1 duplication shape — until the B-2A
+# canonical-name contract; renaming a generator's constant now cannot leave this graph behind.
+BOOTSTRAP_PS = rb.ROLE_BOOTSTRAP_OPERATOR_NAME
 VERIFIER_PS = verifier.PERMISSION_SET_NAME
 
 

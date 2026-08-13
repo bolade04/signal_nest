@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SignalNestRoleBootstrapReadOnlyVerifier — policy generator (Gate 4N-I16, Defect 5).
+"""SignalNestRoleBootstrapROVerify — policy generator (Gate 4N-I16, Defect 5).
 
 THE DEFECT. The lifecycle graph assigned twelve steps and eleven distinct AWS actions to a
 principal called READ_ONLY_VERIFIER. That principal existed in exactly two files — the graph
@@ -60,7 +60,13 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import signalnest_identity as identity  # noqa: E402
 
-PERMISSION_SET_NAME = "SignalNestRoleBootstrapReadOnlyVerifier"
+# IAM Identity Center caps permission-set names at 32 characters (CreatePermissionSet
+# rejects longer names server-side — proven live by the B-1 executor rename, 2026-08-12).
+# The original 39-character "…ReadOnlyVerifier" spelling could never have been created, and
+# its reserved role AWSReservedSSO_<name>_<16-hex> would have exceeded IAM's 64-character
+# role-name cap as well. This is the single source for the verifier's name; the lifecycle
+# graph and every consumer import it rather than restating it.
+PERMISSION_SET_NAME = "SignalNestRoleBootstrapROVerify"
 
 # Every action this principal holds, and the lifecycle question each one answers.
 IDENTITY_CENTRE_READS = {
