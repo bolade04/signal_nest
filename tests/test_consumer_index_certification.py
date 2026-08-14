@@ -314,7 +314,10 @@ def test_git_ls_files_does_not_establish_history(synthetic_states):
     # legitimately checkout-dependent (STAGED_MODIFICATION while a change is staged, TRACKED_IN_HEAD
     # in a clean checkout), so a fixed transient expectation for it would be true only under an
     # accidental precondition — the exact defect shape this module exists to remove.
-    ("tests/fixtures/lifecycle-canonical-sha256.txt", ts.TRACKED_IN_HEAD),
+    # lifecycle-canonical-sha256.txt was DROPPED at B-2A for the identical reason: it is a
+    # deliberately-regenerated pin, so it is STAGED_MODIFICATION while a graph change is staged
+    # and TRACKED_IN_HEAD in a clean checkout. Its trackedness is still enforced
+    # checkout-independently by tests/test_graph_oracle_independence.py.
     ("tests/fixtures/expected-writable-roles.json", ts.TRACKED_IN_HEAD),
     ("scripts/action_classifier.py", ts.TRACKED_IN_HEAD),
     ("infra/aws/live-resource-inventory.json", ts.IGNORED),
