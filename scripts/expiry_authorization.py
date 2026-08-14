@@ -205,8 +205,17 @@ MIN_DURATION = datetime.timedelta(minutes=15)
 # cannot run inside the window that Phase A consumed. This pair authorizes THAT next gate,
 # not more of the last one. Supplied by the operator, not derived. 22h, within the 24-hour
 # maximum.
-ACTIVE_ISSUANCE_UTC = "2026-08-13T01:00:00Z"
-ACTIVE_EXPIRY_UTC = "2026-08-13T23:00:00Z"
+# RESTAMPED AT the INFRA-9 B-2 authorization-window restamp. The superseded pair
+# (2026-08-13T01:00:00Z / 2026-08-13T23:00:00Z, 22h) authorized B-1 Phase B and the OP-15
+# executor retirement, both of which COMPLETED inside it: the reviewed boundary policy was
+# created and attached to all five module roles byte-exactly, and the temporary executor
+# permission set was retired with the boundary attachments preserved. That pair has lapsed by
+# wall clock, and an expired window is never reused. B-2 — the separately authorized
+# role-bootstrap lifecycle under the shortened canonical names — needs its own current reviewed
+# window. This pair authorizes THAT next gate, not more of the last one. Supplied by the
+# operator, not derived. 22h, within the 24-hour maximum.
+ACTIVE_ISSUANCE_UTC = "2026-08-14T12:00:00Z"
+ACTIVE_EXPIRY_UTC = "2026-08-15T10:00:00Z"
 
 PURPOSES = ("stage_a_operator", "role_bootstrap", "boundary_bootstrap", "readonly_verifier")
 
