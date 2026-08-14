@@ -306,6 +306,7 @@ SUPERSEDED_PAIRS = (
     ("2026-08-10T00:00:00Z", "2026-08-10T22:00:00Z"),   # retired at Gate 4N-I28BH-B-ARCHITECTURAL-ADJUDICATION
     ("2026-08-10T06:00:00Z", "2026-08-11T04:00:00Z"),   # retired at the Phase-4 expiry-authorization pin remediation
     ("2026-08-12T05:00:00Z", "2026-08-13T03:00:00Z"),   # retired at the B-1 Phase-B authorization-window restamp
+    ("2026-08-13T01:00:00Z", "2026-08-13T23:00:00Z"),   # retired at the INFRA-9 B-2 authorization-window restamp
 )
 
 
@@ -485,8 +486,8 @@ def test_the_active_pair_is_exactly_the_authorized_i28r_window():
     point — the maximum is a ceiling, never a target.
     """
     pair = ea.active_pair()
-    assert pair["issuance_utc"] == "2026-08-13T01:00:00Z"
-    assert pair["expiry_utc"] == "2026-08-13T23:00:00Z"
+    assert pair["issuance_utc"] == "2026-08-14T12:00:00Z"
+    assert pair["expiry_utc"] == "2026-08-15T10:00:00Z"
     assert pair["duration_seconds"] == 79200, "22h in seconds"
     assert pair["duration_seconds"] <= ea.MAX_DURATION.total_seconds()
 

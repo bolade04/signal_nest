@@ -680,7 +680,7 @@ jobs:
           # window outside the 24-hour authorized maximum.
           python3 scripts/expiry_authorization.py
           python3 scripts/gen_readonly_verifier_policy.py \
-            --issuance 2026-08-13T01:00:00Z --expiry 2026-08-13T23:00:00Z
+            --issuance 2026-08-14T12:00:00Z --expiry 2026-08-15T10:00:00Z
 
       - name: Independent ReadOnlyVerifier ceiling (decisive, not the self-derived Deny)
         id: verifier_ceiling
