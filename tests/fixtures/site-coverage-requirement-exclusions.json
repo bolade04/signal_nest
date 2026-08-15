@@ -552,6 +552,17 @@
       "exclusion_reason": "No graded CLI guard reads this key (closure text-search and env-var audit both negative). Consumed by pytest suite / non-graded tooling: ['pytest_config_contract.py(pytest)']. Test-baseline / meta / self-referential.",
       "owner_family": "SESSION_GUARD"
     },
+    "reader-trust-golden.json::trust": {
+      "fixture": "reader-trust-golden.json",
+      "key": "trust",
+      "consumers": [
+        "test_reader_trust_golden.py(pytest)",
+        "trust_binding.tftest.hcl(tofu-test)"
+      ],
+      "reads_by_cli_guard": false,
+      "exclusion_reason": "No graded CLI guard validates this key: reader-trust-golden.json is not referenced in .github/workflows/ci.yml at all. The trust object (publisher/runner/execution) is the golden-trust parity fixture; its corruption is caught only by pytest (test_reader_trust_golden.py compares it byte-for-byte to scripts/trust_policies.py output and asserts the reviewed Sids + synthetic account) and by the OpenTofu module test (trust_binding.tftest.hcl compares each module-rendered assume_role_policy to trust.{publisher,runner,execution}). Suite/tofu-test enforcement, not a graded CLI guard.",
+      "owner_family": "AWS_IAM_AUTHORIZATION"
+    },
     "required-production-checks.json::required_checks": {
       "fixture": "required-production-checks.json",
       "key": "required_checks",

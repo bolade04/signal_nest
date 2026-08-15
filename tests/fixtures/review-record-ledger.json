@@ -9,7 +9,7 @@
     "security-assurance-registry.json": "sha256:8a7bdd7f562712bf9d2fcb6dc920ece61ce173555200e55907d31f992328b46c",
     "site-coverage-function-assurance.json": "sha256:0d0ea1fcf48d424eb81c9002164e2d84fbd31667cfffae3cd6f4a18d8cae1392",
     "site-coverage-matrix.json": "sha256:1af2edce4c36ec5d1efd099395c81323de17a4b2380af78afb9be620daa8bacb",
-    "site-coverage-requirement-exclusions.json": "sha256:7be13a1ed3fa71d5a56ac107ab7ce2dd8b96ad7665d3688d0db4658c754a5948"
+    "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
     "REV-2026-08-10-BH-B-ARCH-BASELINE": {
