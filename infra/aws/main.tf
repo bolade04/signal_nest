@@ -28,7 +28,10 @@
 #   cost     : independent (budgets)
 #
 # The eight-tag common set is applied to every taggable resource automatically by
-# the provider's default_tags (providers.tf), so it is NOT passed into any module.
+# the provider's default_tags (providers.tf), so it is NOT passed into any module —
+# EXCEPT module.revision_reader, which composes under the aliased no-default-tags
+# provider so its out-of-band-created IAM roles adopt without tag drift; reader
+# resources carry exactly {"Name"} (see providers.tf).
 
 # §26.11 ordinary (non-secret) environment, composed at the root: only values
 # that must differ from safe application defaults, plus the three capability
@@ -250,6 +253,24 @@ module "cost" {
 # inert value, so this composition provisions nothing until a later authorized gate.
 module "revision_reader" {
   source = "./modules/revision_reader"
+
+  # No default_tags: the reader's IAM roles are executor-created with exactly {"Name"}
+  # and must adopt diff-free (see the aliased provider's note in providers.tf). The
+  # eight-tag common set is passed EXPLICITLY instead, and the module applies it to every
+  # reader resource EXCEPT the three roles, which pin their tags literally.
+  #
+  # INFRA-9 B-3 REQUIREMENT (see infra/aws/README.md → "root-wiring regression
+  # protection") — deleting this providers map silently falls back to the tagged
+  # default provider (valid HCL, the exact TagRole drift the B-2 barrier refused).
+  # `tofu validate` does NOT catch it, but `tofu graph` distinguishes the mapping
+  # with no credentials, so B-3 must add a CI graph/plan assertion that this module
+  # resolves to aws.revision_reader (and the alias carries only {alias, region})
+  # before any future apply. This comment is a pointer; the durable record is the
+  # README section, which survives deletion of these lines.
+  providers = {
+    aws = aws.revision_reader
+  }
+  tags = local.common_tags
 
   publication_bootstrap_enabled = var.enable_revision_reader_publication_bootstrap
   runtime_enabled               = var.enable_revision_reader_runtime

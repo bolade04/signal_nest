@@ -101,11 +101,13 @@ resource "terraform_data" "boundary_mode_precondition" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  account_id = data.aws_caller_identity.current.account_id
-
+  # Byte-parity with scripts/trust_policies.py ecs_tasks_trust() INCLUDING the Sid: the
+  # reader roles are created out-of-band by the role-bootstrap executor from that authoritative
+  # rendering, and adoption into this module must plan NO trust rewrite (B-2 finding, 2026-08-15).
   ecs_tasks_trust = jsonencode({
     Version = "2012-10-17"
     Statement = [{
+      Sid       = "EcsTasksInThisAccountOnly"
       Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
       Action    = "sts:AssumeRole"
@@ -117,14 +119,18 @@ locals {
 }
 
 # --- ECS task execution role ---------------------------------------------------------
+# Starts the revision-reader task: pull the reader image, inject DATABASE_URL, write reader
+# logs. Nothing else. NO description argument: the role is created out-of-band by the
+# role-bootstrap executor with trust+boundary+tags only, and adoption must plan no UpdateRole.
 resource "aws_iam_role" "reader_execution" {
   count = local.create_runtime
 
   permissions_boundary = local.effective_permissions_boundary
   name                 = "${var.name_prefix}-revision-reader-execution"
-  description          = "Starts the revision-reader task: pull the reader image, inject DATABASE_URL, write reader logs. Nothing else."
   assume_role_policy   = local.ecs_tasks_trust
-  tags                 = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-execution" })
+  # Literal, NOT merge(var.tags, ...): the executor creates this role with exactly {"Name"}
+  # (gen_role_bootstrap_policy aws:TagKeys ceiling) and adoption must plan no TagRole.
+  tags = { Name = "${var.name_prefix}-revision-reader-execution" }
 }
 
 resource "aws_iam_role_policy" "reader_execution" {
@@ -214,11 +220,16 @@ locals {
   publisher_sub = "repo:${var.github_repository}:environment:staging-reader-publish"
   runner_sub    = "repo:${var.github_repository}:environment:staging-reader-run"
 
+  # Byte-parity with scripts/trust_policies.py oidc_trust() INCLUDING the Sid — see the
+  # ecs_tasks_trust note above. A Sid-less rendering here made adoption of the executor-created
+  # publisher role plan an UpdateAssumeRolePolicy of hash-verified reviewed trust (B-2 barrier
+  # REFUSE, 2026-08-15).
   oidc_trust = {
     for k, sub in { publisher = local.publisher_sub, runner = local.runner_sub } :
     k => jsonencode({
       Version = "2012-10-17"
       Statement = [{
+        Sid       = "GitHubOidcExactRepositoryAndEnvironment"
         Effect    = "Allow"
         Principal = { Federated = var.github_oidc_provider_arn }
         Action    = "sts:AssumeRoleWithWebIdentity"
@@ -234,14 +245,16 @@ locals {
 }
 
 # --- reader publisher role: pushes the reader repository and nothing else ------------
+# CI identity that publishes the reader image. Scoped to the reader ECR repository; cannot
+# reach the api or worker repositories. NO description argument — see reader_execution.
 resource "aws_iam_role" "reader_publisher" {
   count = local.create_oidc_publisher
 
   permissions_boundary = local.effective_permissions_boundary
   name                 = "${var.name_prefix}-revision-reader-publisher"
-  description          = "CI identity that publishes the reader image. Scoped to the reader ECR repository; cannot reach the api or worker repositories."
   assume_role_policy   = local.oidc_trust["publisher"]
-  tags                 = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-publisher" })
+  # Literal — see reader_execution.
+  tags = { Name = "${var.name_prefix}-revision-reader-publisher" }
 }
 
 resource "aws_iam_role_policy" "reader_publisher" {
@@ -290,14 +303,17 @@ resource "aws_iam_role_policy" "reader_publisher" {
 }
 
 # --- reader runner role: runs the exact revision and reads its log stream -------------
+# CI identity that invokes the reader task and reads its log stream. Cannot register task
+# definitions, create services, push images, or read secrets. NO description argument — see
+# reader_execution.
 resource "aws_iam_role" "reader_runner" {
   count = local.create_oidc_runner
 
   permissions_boundary = local.effective_permissions_boundary
   name                 = "${var.name_prefix}-revision-reader-runner"
-  description          = "CI identity that invokes the reader task and reads its log stream. Cannot register task definitions, create services, push images, or read secrets."
   assume_role_policy   = local.oidc_trust["runner"]
-  tags                 = merge(var.tags, { Name = "${var.name_prefix}-revision-reader-runner" })
+  # Literal — see reader_execution.
+  tags = { Name = "${var.name_prefix}-revision-reader-runner" }
 }
 
 resource "aws_iam_role_policy" "reader_runner" {

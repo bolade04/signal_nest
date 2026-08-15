@@ -1,8 +1,10 @@
 # versions.tf — revision_reader module tool + provider requirements
 #
-# The child module declares no `provider "aws"` block, so it composes under the root's
-# single provider configuration. It DOES declare a version constraint, and this module
-# is the only one under modules/ that does.
+# The child module declares no `provider "aws"` block. The root passes it the aliased
+# no-default-tags provider (aws.revision_reader) through a providers map, so reader
+# resources carry exactly the tags their configuration states — the executor-created
+# IAM roles adopt with zero tag drift. It DOES declare a version constraint, and this
+# module is the only one under modules/ that does.
 #
 # WHY THIS MODULE DIFFERS (Gate 4N-I5). The sibling modules are only ever initialized
 # through the root, which owns the authoritative constraint and the committed

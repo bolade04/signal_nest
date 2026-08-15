@@ -133,6 +133,7 @@ resource "aws_vpc_security_group_egress_rule" "reader_to_postgres" {
   to_port                      = 5432
   ip_protocol                  = "tcp"
   description                  = "Reader -> RDS PostgreSQL. The only data-plane egress."
+  tags                         = var.tags
 }
 
 resource "aws_vpc_security_group_egress_rule" "reader_https" {
@@ -144,6 +145,7 @@ resource "aws_vpc_security_group_egress_rule" "reader_https" {
   to_port           = 443
   ip_protocol       = "tcp"
   description       = "HTTPS for ECR pull, Secrets Manager injection and CloudWatch Logs (NAT baseline). VPC endpoints remain a separately authorized improvement."
+  tags              = var.tags
 }
 
 # NOTE: no Redis egress. The reader has no cache dependency and must not acquire one.
@@ -168,4 +170,5 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_reader" {
   to_port                      = 5432
   ip_protocol                  = "tcp"
   description                  = "RDS PostgreSQL ingress from the revision-reader task SG only, TCP 5432. Owned by revision_reader (runtime-gated); api/worker/migration ingress is owned by ecs."
+  tags                         = var.tags
 }

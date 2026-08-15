@@ -277,8 +277,11 @@ spending; no budget action, SNS topic, or IAM resource is created), and the
 ## 7. Root-file responsibilities
 
 - `versions.tf` — OpenTofu + AWS provider compatibility ranges (no lock).
-- `providers.tf` — default AWS provider; region via `var.aws_region`; default
-  tags via `local.common_tags`. No credentials/profile/role/account/alias.
+- `providers.tf` — default AWS provider (region via `var.aws_region`; default
+  tags via `local.common_tags`) plus the aliased `aws.revision_reader` provider
+  (same region, NO default_tags) consumed only by `module.revision_reader` so its
+  executor-created IAM roles adopt without tag drift. No credentials/profile/
+  role/account values in either block.
 - `backend.tf` — empty S3 backend declaration; **no** values.
 - `variables.tf` — typed inputs; no secret/account/ARN/CIDR variables.
 - `locals.tf` — deterministic name prefix + the eight-tag set (§A).
@@ -292,6 +295,36 @@ spending; no budget action, SNS topic, or IAM resource is created), and the
   the later-authorized live bootstrap.
 - `bootstrap/` — the one-time state-backend root (§3 carve-out; own README,
   own committed lockfile, local one-time state; configuration only).
+
+### INFRA-9 B-3 requirement — root-wiring regression protection (unenforced today)
+
+Deleting `module.revision_reader`'s `providers = { aws = aws.revision_reader }`
+map, or adding `default_tags`/`assume_role`/`ignore_tags` to the aliased provider
+block, silently reintroduces the TagRole drift (or a credential/tag reroute) that
+the B-2 Stage-A barrier refused. `tofu validate` does **not** catch this (proven
+2026-08-15: it reports `Success!` for the correctly-wired form, the
+providers-map-deleted form, AND an aliased block carrying a literal `default_tags`).
+There is no in-repo test today — a prior hand-rolled HCL-scanner guard was removed
+after six review rounds found successive fail-open evasions.
+
+Two distinct checks are required, because no single command covers both halves:
+
+1. **Providers-map wiring** — `tofu graph` distinguishes it with **no credentials**:
+   reader resources edge to `provider[...].revision_reader`, and that alias node
+   vanishes (resources re-edge to the default provider) when the map is dropped.
+   Caveat: `tofu init -backend=false` alone still errors `Backend initialization
+   required`; graph runs only after the committed `backend.tf` S3 block is overridden
+   to a local/absent backend. Provider install is needed (CI-available); credentials
+   are not.
+2. **Aliased-block argument set** — `tofu graph` CANNOT see this (a literal
+   `default_tags` in the aliased block yields byte-identical graph output; only a
+   `local.common_tags` *reference* edge shows). Assert `{alias, region}` exactly via
+   `tofu plan -json` `configuration.provider_config`, or an HCL/config-level check.
+
+**B-3 must add a CI check** combining both (an uncredentialed `tofu graph` wiring
+assertion plus a plan-JSON/config argument-set assertion) before any future reader
+apply. Root `main.tf`/`providers.tf` also have no `tofu validate`/`fmt` CI gate today
+(CI runs `tofu` only under `modules/{iam,revision_reader}`); add one alongside.
 
 ## 8. Remote-state design (configuration authored, not initialized)
 

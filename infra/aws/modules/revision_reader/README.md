@@ -288,10 +288,17 @@ Ranked compensating controls (defence in depth, not the primary boundary):
 - Supplying a digest while disabled yields `null`, not a plan error.
 
 ## 11. Tests
-`reader_contract.tftest.hcl` — offline, fully mocked provider, run by the
-`revision-reader` CI job. It pins every absence (no `entryPoint`, no `command`,
-no task role, one secret, no `CreateLogGroup`, no publisher `RunTask`) and every
-exact scope, because absences do not fail loudly when they stop holding.
+Three offline tftest files, fully mocked provider, all run by the unfiltered
+`tofu test` in the `revision-reader` CI job:
+- `reader_contract.tftest.hcl` — pins every absence (no `entryPoint`, no
+  `command`, no task role, one secret, no `CreateLogGroup`, no publisher
+  `RunTask`) and every exact scope, because absences do not fail loudly when
+  they stop holding.
+- `boundary_state_matrix.tftest.hcl` — the orthogonal three-axis boundary
+  state matrix (mode x ARN x bootstrap flag), nine cells.
+- `trust_binding.tftest.hcl` — binds the module's rendered trust documents to
+  the authoritative golden fixture shared with `scripts/trust_policies.py`
+  (see tests/test_reader_trust_golden.py for the python half).
 
 ## 12. Status
 Authored and offline-validated. `tofu fmt`, `tofu validate` and `tofu test` pass.

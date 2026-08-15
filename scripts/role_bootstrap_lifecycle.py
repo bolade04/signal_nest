@@ -219,8 +219,9 @@ def steps() -> list[dict]:
         _s(18, "verify_reserved_role_exists", VERIFIER, "iam:GetRole",
            verifier.RESERVED_SSO_ROLE_GLOB, depends_on=["poll_provisioning_to_terminal"],
            readback="role present", evidence="reserved role ARN", needs_assignment=False,
-           note="the materialized role lives under aws-reserved/sso.amazonaws.com/<region>/ "
-                "— Gate 4N-I15 named a bare AWSReservedSSO_* string that is not an ARN"),
+           note="the materialized role lives under aws-reserved/sso.amazonaws.com/ with NO "
+                "region segment (proven live at B-2, finding D-1) — Gate 4N-I15 named a bare "
+                "AWSReservedSSO_* string that is not an ARN"),
 
         _s(19, "operator_sso_login", BOOTSTRAP, None, None,
            depends_on=["verify_reserved_role_exists"], evidence="session start time",
