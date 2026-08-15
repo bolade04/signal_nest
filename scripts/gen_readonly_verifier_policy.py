@@ -123,7 +123,25 @@ def is_mutating(action: str) -> bool:
 # The roles this verifier inspects: exactly the eight the composition manages, plus the
 # materialized Identity Center role for the bootstrap operator.
 TARGET_ROLE_ARNS = [identity.iam_role_arn(n) for n in identity.ALL_ROLE_NAMES]
+# NO region segment in the reserved-role path. THIS account's reserved roles
+# materialize at /aws-reserved/sso.amazonaws.com/ directly — proven live 2026-08-15
+# during B-2, when the region-bearing form of this glob matched NOTHING and the
+# verifier's own reserved-role GetRole was denied while an identically-scoped read
+# through the region-less path succeeded (finding D-1). The region-bearing form is
+# NOT universally wrong — Identity Center emits it in some instance/region
+# configurations — which is exactly why the compat form below exists. But a PRIMARY
+# grant must name the path this account actually uses.
 RESERVED_SSO_ROLE_GLOB = (
+    f"arn:{identity.PARTITION}:iam::{identity.ACCOUNT}:role/aws-reserved/"
+    f"sso.amazonaws.com/AWSReservedSSO_*")
+
+# Defensive second form carrying the region segment. The two path forms are DISJOINT
+# (the literal after sso.amazonaws.com/ differs), so listing both is a resilience
+# measure, not a widening: if Identity Center ever materializes a reserved role under
+# a region-bearing path, the verifier's reads keep working instead of failing
+# mid-window. Consumed ONLY by the policy resources below — the lifecycle's step-18
+# resource stays on the primary region-less form the live account actually uses.
+RESERVED_SSO_ROLE_GLOB_REGION_COMPAT = (
     f"arn:{identity.PARTITION}:iam::{identity.ACCOUNT}:role/aws-reserved/"
     f"sso.amazonaws.com/{identity.REGION}/AWSReservedSSO_*")
 
@@ -183,7 +201,8 @@ def readonly_verifier_policy(expiry: str, *, issuance: str | None = None) -> dic
                 "Sid": "VerifierRoleReadsExact",
                 "Effect": "Allow",
                 "Action": sorted(IAM_READS),
-                "Resource": TARGET_ROLE_ARNS + [RESERVED_SSO_ROLE_GLOB],
+                "Resource": TARGET_ROLE_ARNS + [RESERVED_SSO_ROLE_GLOB,
+                                                RESERVED_SSO_ROLE_GLOB_REGION_COMPAT],
                 "Condition": expiring(),
             },
             {

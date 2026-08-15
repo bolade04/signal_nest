@@ -1,0 +1,62 @@
+{
+  "_classification": "NON_PRODUCTION_TEST_FIXTURE",
+  "_purpose": "Golden reader trust documents rendered by scripts/trust_policies.py under TIER_1_SYNTHETIC. Two consumers bind to these SAME bytes: tests/test_reader_trust_golden.py proves trust_policies.py still renders them, and modules/revision_reader/trust_binding.tftest.hcl proves the module renders identical documents. Regenerate ONLY by re-running the python side under the synthetic tier.",
+  "trust": {
+    "execution": {
+      "Statement": [
+        {
+          "Action": "sts:AssumeRole",
+          "Condition": {
+            "StringEquals": {
+              "aws:SourceAccount": "111122223333"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "Service": "ecs-tasks.amazonaws.com"
+          },
+          "Sid": "EcsTasksInThisAccountOnly"
+        }
+      ],
+      "Version": "2012-10-17"
+    },
+    "publisher": {
+      "Statement": [
+        {
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+              "token.actions.githubusercontent.com:sub": "repo:bolade04/signal_nest:environment:staging-reader-publish"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+          },
+          "Sid": "GitHubOidcExactRepositoryAndEnvironment"
+        }
+      ],
+      "Version": "2012-10-17"
+    },
+    "runner": {
+      "Statement": [
+        {
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+              "token.actions.githubusercontent.com:sub": "repo:bolade04/signal_nest:environment:staging-reader-run"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+          },
+          "Sid": "GitHubOidcExactRepositoryAndEnvironment"
+        }
+      ],
+      "Version": "2012-10-17"
+    }
+  }
+}
