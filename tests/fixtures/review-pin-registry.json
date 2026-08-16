@@ -34,7 +34,7 @@
    "collection_id": "allow_model.py::TARGETS",
    "ordered": false,
    "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
-   "reviewed_digest": "sha256:306d2a4416267e0a0321fb6bed8eba9870006ac5ef17e060491046de07bfcc7b",
+   "reviewed_digest": "sha256:c89b508124ccb5b0ab98e207f79602c9f69f50f3d82e32e1881b99a1736bdba3",
    "source": "live"
   },
   "anchor_loader.py::REQUIRED_FIELDS": {
@@ -468,7 +468,7 @@
    "collection_id": "gen_operator_policies.py::W0_APPLY_CLOSURE",
    "ordered": false,
    "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
-   "reviewed_digest": "sha256:c8e7936c8bb77282af02f68a683f0ddcc7679949cd4ec42f28cc94967faa9908",
+   "reviewed_digest": "sha256:b6369201e176ecad875208ba64d3c5cf5b6c3c99d4a5277d7d7bfce01522a5cb",
    "source": "live"
   },
   "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": {

@@ -562,7 +562,8 @@ def prove_ceiling(name: str, policy: dict, context: dict, probe_resource) -> dic
 
 
 def prove_no_losses(name: str, policy: dict, context: dict, probe_resource,
-                    required: dict[str, str] | None = None) -> dict:
+                    required: dict[str, str] | None = None,
+                    probe_overrides: dict[str, str] | None = None) -> dict:
     """0 losses: the ceiling must not remove a capability the design requires.
 
     A scoped capability is probed on the resource its exemption names. The generic probe
@@ -577,7 +578,8 @@ def prove_no_losses(name: str, policy: dict, context: dict, probe_resource,
     for action, provenance in sorted((required if required is not None
                                       else required_actions()).items()):
         spec = exemptions.get(action)
-        resource = spec["in_scope"]() if spec else probe_resource(action)
+        resource = (spec["in_scope"]() if spec
+                    else (probe_overrides or {}).get(action) or probe_resource(action))
         ctx = {**context, **(spec.get("context", dict)() or {})} if spec else context
         result = iam_eval.decide(policy, action, resource, ctx)
         if result.decision is Decision.EXPLICIT_DENY:
@@ -663,8 +665,14 @@ def run() -> dict:
             entry.update(prove_no_losses(name, policy, context, probe,
                                          required=temporary_required_actions()))
         elif name == "permanent_w0":
-            entry.update(prove_no_losses(name, policy, context, probe,
-                                         required=w0_required_actions()))
+            # ecs:TagResource is fenced but NOT forbidden, so it has no EXEMPTIONS entry to
+            # supply an in-scope probe; the generic ecs probe ("*") lands on the fence BY
+            # DESIGN. Probe it at the resource the closure grants. (Conditioned grants —
+            # kms:GenerateDataKey, ecs:DescribeTaskDefinition — evaluate MISSING_CONTEXT
+            # here and are proven positively by the pytest suite with real contexts.)
+            entry.update(prove_no_losses(
+                name, policy, context, probe, required=w0_required_actions(),
+                probe_overrides={"ecs:TagResource": gen.TASK_DEFINITION_FAMILY_ARNS[0]}))
         report["policies"][name] = entry
 
     report["totals"] = {

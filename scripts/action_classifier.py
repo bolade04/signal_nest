@@ -267,6 +267,9 @@ CURATED_REMAINDER = {
     "ecr:PutLifecyclePolicy": (MUTATING,),
     "ecr:TagResource": (MUTATING,),
     "ecs:CreateCluster": (MUTATING,),
+    # INFRA-9 B-3 permissions-lane finding 3: tag-on-create authorization surface for the
+    # apply identity's task-definition registration.
+    "ecs:TagResource": (MUTATING,),
     "ecs:CreateTaskSet": (MUTATING, EXECUTION_TRIGGERING),
     "ecs:DeleteCluster": (MUTATING, DESTRUCTIVE),
     "ecs:DeleteService": (MUTATING, DESTRUCTIVE),

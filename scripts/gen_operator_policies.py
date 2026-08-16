@@ -313,7 +313,13 @@ W0_APPLY_CLOSURE = {
     # the operator's behalf; W0 itself never calls KMS directly for backend work, so a direct
     # out-of-band Decrypt of the state blob stays dead even with the fence deleted.
     "state_cmk_use": ["kms:Decrypt", "kms:GenerateDataKey"],
-    "task_definition_register": ["ecs:RegisterTaskDefinition"],
+    # ecs:TagResource travels WITH registration: the composition registers every task
+    # definition carrying tags, and ECS tag-on-create performs an additional ecs:TagResource
+    # authorization (Service Reference: TagResource covers the task-definition resource;
+    # RegisterTaskDefinition carries aws:RequestTag/aws:TagKeys). Six-lane permissions-lane
+    # finding; evidence retained in the operator evidence directory
+    # (b3-part-a-live-readback/ecs-action-truth-evidence.md).
+    "task_definition_register": ["ecs:RegisterTaskDefinition", "ecs:TagResource"],
     # AWS supports NO resource scoping on DescribeTaskDefinition (Service Reference,
     # Part-A adjudication) -> Resource "*" with the region condition.
     "task_definition_describe": ["ecs:DescribeTaskDefinition"],
@@ -332,20 +338,26 @@ W0_SCOPED_CAPABILITIES = frozenset({
     "dynamodb:DeleteItem",       # state lock release, exact lock table
     "kms:Decrypt",               # state CMK only, ViaService-conditioned
     "ecs:RegisterTaskDefinition",  # the four composition families only
+    # ecs:TagResource and kms:GenerateDataKey are NOT here: neither is in the
+    # PERMANENT_DENY/FORBIDDEN union, so there is nothing to subtract — but both are still
+    # FENCED below so every apply-surface action is re-denied off-scope uniformly
+    # (six-lane permissions-lane finding 4).
 })
 
-# Both ARN forms per family: the Service Reference authorizes RegisterTaskDefinition against
-# the family-form task-definition ARN; the revision-suffixed form is included defensively so
-# an authorization-shape difference cannot produce a mid-apply AccessDenied (the partial-apply
-# failure mode Stage-A guards exist for). Families come from the composition declarations —
-# the reader family is IMPORTED (never rebuilt; the Gate 4N-I2 lesson), the other three are
-# pinned to the module source by tests/test_operator_policies.py.
+# The `family:*` ARN form ONLY. The Service Reference's task-definition ARNFormats entry is
+# REVISION-BEARING (task-definition/${Family}:${Revision}), and this account's own CloudTrail
+# shows the RegisterTaskDefinition authorization resource in exactly that form (the
+# 2026-07-28T01:38:31Z AccessDenied names task-definition/<family>:*). A bare-family entry
+# never matches the documented format and would be dead weight in both the Allow and the
+# fence. Evidence retained: b3-part-a-live-readback/ecs-action-truth-evidence.md.
+# Families come from the composition declarations — the reader family is IMPORTED (never
+# rebuilt; the Gate 4N-I2 lesson); api/worker/migration are constructed from PREFIX here and
+# pinned to the module source by tests/test_operator_policies.py (the asymmetry vs a NAMES
+# import is acknowledged; the .tf-text pin is the drift control).
 TASK_DEFINITION_FAMILY_ARNS = [
-    arn
+    f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:*"
     for family in sorted((f"{PREFIX}-api", f"{PREFIX}-migration",
                           f"{PREFIX}-worker", READER_TASK_DEFINITION_FAMILY))
-    for arn in (f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}",
-                f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:*")
 ]
 
 PERMANENT_DENY = sorted(
@@ -506,9 +518,11 @@ def permanent_w0_policy() -> dict:
             {"Sid": "DenyLockItemsOutsideTheLockTable", "Effect": "Deny",
              "Action": w["state_lock"], "NotResource": ARN["lock"]},
             # kms:Decrypt reaches the SECRETS CMK too unless fenced, and that CMK protects
-            # the database credential this principal must never read.
-            {"Sid": "DenyDecryptOutsideTheStateCmk", "Effect": "Deny",
-             "Action": ["kms:Decrypt"], "NotResource": ARN["cmk_state"]},
+            # the database credential this principal must never read. kms:GenerateDataKey is
+            # fenced with it (permissions-lane finding 4): it is not forbidden, but the
+            # apply surface's "re-denied everywhere else" property is kept uniform.
+            {"Sid": "DenyStateCmkUseOutsideTheStateCmk", "Effect": "Deny",
+             "Action": w["state_cmk_use"], "NotResource": ARN["cmk_state"]},
             {"Sid": "DenyTaskDefinitionRegistrationOutsideTheFamilies", "Effect": "Deny",
              "Action": w["task_definition_register"], "NotResource": TASK_DEFINITION_FAMILY_ARNS},
         ],

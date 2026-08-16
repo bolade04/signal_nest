@@ -63,8 +63,16 @@ def test_the_two_sources_cannot_express_each_other(mappings):
     for service in ("s3:", "iam:", "ec2:", "kms:"):
         assert service not in graph_src, "SOURCE 1 must carry no AWS actions"
     verifier = (REPO_ROOT / "scripts" / "verify_closure.py").read_text(encoding="utf-8")
-    assert "REFRESH_CLOSURE" not in verifier, (
-        "the verifier must never use the generator's action list as its authority"
+    # INFRA-9 B-3 (architect-lane finding 1): the generator now carries TWO Allow-source
+    # closures; the independence property must name both, and any future closure symbol
+    # matching the generator's *_CLOSURE convention is caught by the pattern assertion.
+    for closure_symbol in ("REFRESH_CLOSURE", "W0_APPLY_CLOSURE"):
+        assert closure_symbol not in verifier, (
+            "the verifier must never use the generator's action list as its authority"
+        )
+    import re as _re
+    assert not _re.search(r"gen_operator_policies\.\w*_CLOSURE", verifier), (
+        "no gen_operator_policies closure symbol may appear in the verifier"
     )
 
 

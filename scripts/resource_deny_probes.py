@@ -123,10 +123,18 @@ PROBES = [
      "lock release outside the lock table"),
     ("permanent_w0", "kms:Decrypt", gen.ARN["cmk_secrets"], gen.ARN["cmk_state"],
      "decrypt outside the state CMK"),
+    ("permanent_w0", "kms:GenerateDataKey", gen.ARN["cmk_secrets"], None,
+     "data-key generation outside the state CMK (outside probe omitted: the in-scope Allow "
+     "is ViaService-conditioned, so a contextless outside probe cannot distinguish the fence "
+     "from the condition; the conditioned in-scope allow is proven by the pytest suite)"),
     ("permanent_w0", "ecs:RegisterTaskDefinition",
-     f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil",
+     f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:*",
      gen.TASK_DEFINITION_FAMILY_ARNS[0],
      "task-definition registration outside the four composition families"),
+    ("permanent_w0", "ecs:TagResource",
+     f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:*",
+     gen.TASK_DEFINITION_FAMILY_ARNS[0],
+     "task-definition tag-on-create outside the four composition families"),
     # --- temporary operator fences -----------------------------------------------------
     ("temporary_operator", "s3:PutObject", f"{gb.STATE_BUCKET}/other/object",
      gen.ARN["state_object"], "state writes outside the exact state object"),

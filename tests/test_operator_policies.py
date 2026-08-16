@@ -181,7 +181,7 @@ def test_every_iam_role_sets_a_permissions_boundary():
     ("s3:GetObjectVersion", gen.ARN["state_object"], "DenyDangerous"),
     ("dynamodb:PutItem", f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/other", "DenyLockItemsOutsideTheLockTable"),
     ("dynamodb:DeleteItem", f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/other", "DenyLockItemsOutsideTheLockTable"),
-    ("kms:Decrypt", gen.ARN["cmk_secrets"], "DenyDecryptOutsideTheStateCmk"),
+    ("kms:Decrypt", gen.ARN["cmk_secrets"], "DenyStateCmkUseOutsideTheStateCmk"),
     ("iam:CreateRole", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
     ("iam:PutRolePolicy", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
     ("iam:TagRole", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
@@ -260,15 +260,30 @@ def test_permanent_w0_covers_the_stage_b_task_definition_closure(permanent, cont
 
 def test_state_cmk_use_is_dead_without_the_backend_via_service(permanent):
     """The ViaService condition is load-bearing: a DIRECT kms call by the operator's own
-    credentials (context lacking or naming another service) must never reach an Allow."""
+    credentials (context lacking or naming another service) must never reach an Allow.
+
+    EXACT decisions, consumed (permissions-lane finding 5): an absent key is MISSING_CONTEXT;
+    a wrong-service value fails the condition and, the fence not matching at the state CMK,
+    lands on IMPLICIT_DENY — an EXPLICIT deny off the state CMK is asserted separately."""
     for ctx, want in ((PERM_CTX, iam_eval.Decision.MISSING_CONTEXT),
                       (dict(PERM_CTX, **{"kms:ViaService": f"lambda.{gen.REGION}.amazonaws.com"}),
-                       iam_eval.Decision.EXPLICIT_DENY)):
+                       iam_eval.Decision.IMPLICIT_DENY)):
         got = iam_eval.decide(permanent, "kms:GenerateDataKey", gen.ARN["cmk_state"], ctx).decision
-        assert got is not iam_eval.Decision.EXPLICIT_ALLOW, ctx
-    # kms:Decrypt additionally stays EXPLICITLY denied off the state CMK whatever the context
-    iam_eval.require_explicit_deny(permanent, "kms:Decrypt", gen.ARN["cmk_secrets"],
-                                   W0_CMK_CTX_S3, sid="DenyDecryptOutsideTheStateCmk")
+        assert got is want, (ctx, got)
+    # off the state CMK, BOTH cmk-use actions stay EXPLICITLY denied whatever the context
+    for action in ("kms:Decrypt", "kms:GenerateDataKey"):
+        iam_eval.require_explicit_deny(permanent, action, gen.ARN["cmk_secrets"],
+                                       W0_CMK_CTX_S3, sid="DenyStateCmkUseOutsideTheStateCmk")
+
+
+def test_the_scoped_capability_set_is_exactly_the_forbidden_subset_of_the_apply_closure():
+    """PROVENANCE_CORRESPONDENCE, implemented (architect-lane finding 3): the carve-out set
+    must equal flatten(W0_APPLY_CLOSURE) ∩ the flat-ceiling union — a member with no paired
+    Allow, or an apply-closure forbidden action left un-carved, both fail here."""
+    from must_not_contract import FORBIDDEN_CAPABILITIES
+    flat_union = set(gen.PERMANENT_DENY) | set(FORBIDDEN_CAPABILITIES)
+    apply_actions = {a for group in gen.W0_APPLY_CLOSURE.values() for a in group}
+    assert gen.W0_SCOPED_CAPABILITIES == apply_actions & flat_union
 
 
 def test_task_definition_families_match_the_composition():
@@ -283,8 +298,12 @@ def test_task_definition_families_match_the_composition():
     families = {arn.rsplit("/", 1)[-1].split(":")[0] for arn in gen.TASK_DEFINITION_FAMILY_ARNS}
     assert families == {f"{gen.PREFIX}-api", f"{gen.PREFIX}-worker",
                         f"{gen.PREFIX}-migration", f"{gen.PREFIX}-revision-reader"}
-    # both ARN forms per family, so an authorization-shape difference cannot break mid-apply
-    assert len(gen.TASK_DEFINITION_FAMILY_ARNS) == 8
+    # the family:* form ONLY — the Service Reference ARNFormats entry is revision-bearing and
+    # this account's CloudTrail names the authorization resource in exactly that form
+    # (retained: b3-part-a-live-readback/ecs-action-truth-evidence.md); a bare-family entry
+    # never matches and must not reappear.
+    assert len(gen.TASK_DEFINITION_FAMILY_ARNS) == 4
+    assert all(arn.endswith(":*") for arn in gen.TASK_DEFINITION_FAMILY_ARNS)
 
 
 # --- permanent W0 vs the INDEPENDENT contract ---------------------------------------

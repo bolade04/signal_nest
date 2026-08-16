@@ -46,7 +46,7 @@ LOCK = gen.ARN["lock"]
 DENY_SID = "DenyDangerous"
 FENCE_STATE_OBJECT = "DenyStateObjectAccessOutsideTheStateObject"
 FENCE_LOCK = "DenyLockItemsOutsideTheLockTable"
-FENCE_STATE_CMK = "DenyDecryptOutsideTheStateCmk"
+FENCE_STATE_CMK = "DenyStateCmkUseOutsideTheStateCmk"
 FENCE_TASK_DEF = "DenyTaskDefinitionRegistrationOutsideTheFamilies"
 
 OTHER_TABLE = f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"
@@ -98,11 +98,13 @@ MANDATORY_PERMANENT_DENIES = [
     # B-3 carved: decrypt is FENCED — denied at every key except the state CMK (the secrets
     # CMK protects the database credential).
     ("kms:Decrypt", gen.ARN["cmk_secrets"], FENCE_STATE_CMK),
+    ("kms:GenerateDataKey", gen.ARN["cmk_secrets"], FENCE_STATE_CMK),
     ("secretsmanager:GetSecretValue", "*", DENY_SID),
     ("secretsmanager:PutSecretValue", "*", DENY_SID),
     # B-3 carved: registration is FENCED — the "*" probe matches the fence because "*" is
     # not one of the four family ARNs, so the universal-invariant posture is preserved.
     ("ecs:RegisterTaskDefinition", "*", FENCE_TASK_DEF),
+    ("ecs:TagResource", "*", FENCE_TASK_DEF),
     ("ecs:CreateService", "*", DENY_SID),
     ("ecs:RunTask", "*", DENY_SID),
     ("sts:AssumeRole", "*", DENY_SID),
