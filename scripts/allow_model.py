@@ -593,7 +593,12 @@ def prove_no_losses(name: str, policy: dict, context: dict, probe_resource,
             if action in ([acts] if isinstance(acts, str) else acts):
                 res = statement.get("Resource", [])
                 granted.extend([res] if isinstance(res, str) else res)
-        if resource not in granted:
+        # PATTERN match, not literal membership (adversarial-lane round-3 delta 1): the
+        # granted values are wildcard patterns, and literal membership would force the probe
+        # to be the pattern itself — the string-identity weakness finding 10 removed
+        # elsewhere. fnmatch keeps the point (verifiable against the policy) while
+        # permitting the stronger concrete-revision probe.
+        if not any(resource == g or fnmatch.fnmatch(resource, g) for g in granted):
             losses.append({"policy": name, "action": action, "resource": resource,
                            "provenance": "probe override",
                            "note": "OVERRIDE REJECTED: names a resource the emitted Allow "
@@ -696,7 +701,8 @@ def run() -> dict:
             # here and are proven positively by the pytest suite with real contexts.)
             entry.update(prove_no_losses(
                 name, policy, context, probe, required=w0_required_actions(),
-                probe_overrides={"ecs:TagResource": gen.TASK_DEFINITION_FAMILY_ARNS[0]}))
+                probe_overrides={
+                    "ecs:TagResource": gen.TASK_DEFINITION_FAMILY_ARNS[0][:-1] + "1"}))
         report["policies"][name] = entry
 
     report["totals"] = {
