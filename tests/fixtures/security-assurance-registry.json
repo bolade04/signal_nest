@@ -20,7 +20,7 @@
     "permanent_w0::dynamodb:DeleteItem": "state lock release on exactly the lock table (INFRA-9 B-3)",
     "permanent_w0::dynamodb:GetItem": "state lock inspect on exactly the lock table (INFRA-9 B-3)",
     "permanent_w0::dynamodb:PutItem": "state lock acquire on exactly the lock table (INFRA-9 B-3)",
-    "permanent_w0::ecs:RegisterTaskDefinition": "registration on exactly the four composition families; no PassRole added because RegisterTaskDefinition performs no PassRole check (INFRA-9 B-3)",
+    "permanent_w0::ecs:RegisterTaskDefinition": "registration on exactly the four composition families; no PassRole surface added \u2014 whether registration performs a PassRole check is recorded DISPUTED (contract _no_passrole_note; mandatory Part-B canary gate), and zero surface is the fail-closed direction (INFRA-9 B-3)",
     "permanent_w0::kms:Decrypt": "state CMK only and only via the S3/DynamoDB backend services (kms:ViaService); the secrets CMK stays fenced (INFRA-9 B-3)",
     "permanent_w0::s3:GetObject": "the apply identity reads the encrypted state object; state_backend_closure.read (INFRA-9 B-3)",
     "permanent_w0::s3:PutObject": "the apply identity writes the new state object on apply; state_backend_closure.write_apply_only (INFRA-9 B-3)",

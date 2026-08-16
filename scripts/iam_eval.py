@@ -139,6 +139,13 @@ ACTION_CONDITION_KEYS: dict[str, set[str]] = {
     # boundary-conditioned statement as a dead grant.
     "iam:DeleteRolePolicy": {"iam:PermissionsBoundary"},
     "iam:PutRolePermissionsBoundary": {"iam:PermissionsBoundary"},
+    # INFRA-9 B-3 (adversarial-lane finding 4): the apply identity's state-CMK statement
+    # conditions these two actions on kms:ViaService; entering them here puts the delta's
+    # only new condition under the same dead-grant detector Gate 4N-I2 motivated. Both
+    # support the key per the AWS Service Authorization Reference (KMS actions accept
+    # kms:ViaService), retained alongside the B-3 evidence.
+    "kms:Decrypt": {"kms:ViaService"},
+    "kms:GenerateDataKey": {"kms:ViaService"},
     # GATE 4N-I11 DEFECT 14. This previously asserted the DISPUTED reading as fact: the
     # table's own docstring says it encodes "what AWS actually supports ... used to reject a
     # policy that conditions an action on a key AWS will never populate", while

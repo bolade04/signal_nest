@@ -327,9 +327,11 @@ W0_APPLY_CLOSURE = {
 
 # The forbidden capabilities W0 now holds SCOPED. Subtracted from the flat DenyDangerous
 # union and re-denied by NotResource fences, exactly as TEMP_SCOPED_CAPABILITIES is for the
-# temporary operator. iam:PassRole is deliberately NOT here: RegisterTaskDefinition performs
-# no PassRole check (it is enforced at RunTask/CreateService by different principals), so the
-# B-3 delta adds no PassRole surface and W0's flat PassRole deny is preserved.
+# temporary operator. iam:PassRole is deliberately NOT here: whether RegisterTaskDefinition
+# performs a PassRole authorization check is recorded DISPUTED (the contract's
+# _no_passrole_note and the retained evidence file carry both sides); the B-3 delta adds no
+# PassRole surface either way — the fail-closed direction — and W0's flat PassRole deny is
+# preserved. Resolution is a mandatory Part-B pre-flight gate, not an assumption here.
 W0_SCOPED_CAPABILITIES = frozenset({
     "s3:GetObject",              # state_backend_closure.read, exact state object
     "s3:PutObject",              # state_backend_closure.write_apply_only, exact state object

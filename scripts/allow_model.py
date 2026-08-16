@@ -197,11 +197,16 @@ EXEMPTIONS = {
         },
         "ecs:RegisterTaskDefinition": {
             "reason": "registers task-definition revisions for exactly the four composition "
-                      "families (Stage A reader; Stage B api/worker/migration); no PassRole "
-                      "is added because RegisterTaskDefinition performs no PassRole check",
-            "in_scope": lambda: gen.TASK_DEFINITION_FAMILY_ARNS[0],
+                      "families (all Stage-B-gated); no PassRole is added — whether "
+                      "registration performs a PassRole check is recorded DISPUTED "
+                      "(contract _no_passrole_note), and zero surface is the fail-closed "
+                      "direction pending the mandatory Part-B canary gate",
+            # A CONCRETE revision, not the family:* pattern itself: AWS authorizes against
+            # a revision-bearing ARN, and probing the pattern with the pattern succeeds by
+            # string identity without exercising the match (architect-lane finding 10).
+            "in_scope": lambda: gen.TASK_DEFINITION_FAMILY_ARNS[0][:-1] + "1",
             "out_of_scope": lambda: [
-                f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil",
+                f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:1",
                 f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/anything:9"],
         },
     },
@@ -575,6 +580,25 @@ def prove_no_losses(name: str, policy: dict, context: dict, probe_resource,
     """
     losses = []
     exemptions = EXEMPTIONS.get(name, {})
+    # A probe override must name a resource the emitted policy ACTUALLY grants for that
+    # action — otherwise the thing being proved supplies its own unverified probe, the
+    # shape Gate 4N-I27O hardened PERMITTED_WILDCARDS against (architect-lane finding 9).
+    # A rejected override is reported as a loss, never silently believed.
+    for action, resource in sorted((probe_overrides or {}).items()):
+        granted: list = []
+        for statement in policy["Statement"]:
+            if statement.get("Effect") != "Allow":
+                continue
+            acts = statement.get("Action", [])
+            if action in ([acts] if isinstance(acts, str) else acts):
+                res = statement.get("Resource", [])
+                granted.extend([res] if isinstance(res, str) else res)
+        if resource not in granted:
+            losses.append({"policy": name, "action": action, "resource": resource,
+                           "provenance": "probe override",
+                           "note": "OVERRIDE REJECTED: names a resource the emitted Allow "
+                                   "does not grant — an override must be verifiable against "
+                                   "the policy, not merely asserted by the caller"})
     for action, provenance in sorted((required if required is not None
                                       else required_actions()).items()):
         spec = exemptions.get(action)

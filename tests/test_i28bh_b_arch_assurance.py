@@ -281,7 +281,12 @@ def test_flatten_union_with_no_union_members_is_malformed(registry, pins, ledger
     cid = "gen_operator_policies.py::REFRESH_CLOSURE"
     entry = dict(registry["assurance"][cid])
     ctx = {"pins": pins, "ledger": ledger, "consumers": {}}
-    for broken in (None, [], "gen_operator_policies.py::W0_APPLY_CLOSURE"):
+    for broken in (None, [], "gen_operator_policies.py::W0_APPLY_CLOSURE",
+                   # adversarial-lane finding 6: self-reference and duplication are
+                   # meaningless under set union and must refuse, never silently ACCEPT
+                   [cid],
+                   ["gen_operator_policies.py::W0_APPLY_CLOSURE",
+                    "gen_operator_policies.py::W0_APPLY_CLOSURE"]):
         mutated = dict(entry)
         if broken is None:
             mutated.pop("union_with", None)

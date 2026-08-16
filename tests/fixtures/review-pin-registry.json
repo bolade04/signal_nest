@@ -13,7 +13,7 @@
    "collection_id": "allow_model.py::EXEMPTIONS",
    "ordered": false,
    "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
-   "reviewed_digest": "sha256:fb764ecc92bb8ec1d1c2f472293847863fe07f1ad9bf0d28f856246305c03f6d",
+   "reviewed_digest": "sha256:8e2a9a36ccee2f7d678779ce0f2b1fb326b2c3a5ad50a5b9448814a0de49d5bd",
    "source": "live"
   },
   "allow_model.py::EXTRA_REQUIRED_SOURCES": {
@@ -488,8 +488,8 @@
   "iam_eval.py::ACTION_CONDITION_KEYS": {
    "collection_id": "iam_eval.py::ACTION_CONDITION_KEYS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:2cc02e882221af5ca580d3841ef1b99a2db717719c9d4d561bfff04a7134e1af",
+   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
+   "reviewed_digest": "sha256:326a655b9f699b858ef1a2a741ae5fb30a664e89d6bb83ee41a5c1bf343aaf59",
    "source": "live"
   },
   "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {

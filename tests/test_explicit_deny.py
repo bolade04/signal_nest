@@ -223,6 +223,13 @@ def test_every_fence_is_unconditional_and_mirrors_its_allow_scope(permanent):
         allow_actions = set(allow["Action"] if isinstance(allow["Action"], list) else [allow["Action"]])
         assert fence_actions <= allow_actions, (
             f"{fence_sid} fences an action {allow_sid} does not grant")
+    # Adversarial-lane finding 1 (the take-now half): bind the ECS statement's Resource to
+    # the collection whose lineage is INDEPENDENT of the generator's statement text — the
+    # family set is pinned to the .tf module source by test_operator_policies. A coordinated
+    # Allow+fence widening of the ECS scope must now move this assertion, not just the pin.
+    # (The three backend scopes' authored ceiling is a recorded Part-B follow-up.)
+    assert by_sid["TaskDefinitionFamiliesRegister"]["Resource"] == gen.TASK_DEFINITION_FAMILY_ARNS
+    assert by_sid[FENCE_TASK_DEF]["NotResource"] == gen.TASK_DEFINITION_FAMILY_ARNS
 
 
 def test_a_competing_allow_cannot_override_the_safety_deny(permanent):

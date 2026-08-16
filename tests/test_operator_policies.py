@@ -250,6 +250,10 @@ def test_permanent_w0_covers_the_stage_b_task_definition_closure(permanent, cont
     stage_b = contract["stage_b_task_definition_closure"]
     for action in stage_b["register"]:
         for arn in gen.TASK_DEFINITION_FAMILY_ARNS:
+            # probe a CONCRETE revision — the pattern matching itself by string identity
+            # would not exercise the match (architect-lane finding 10)
+            concrete = arn[:-1] + "1"
+            assert allowed(permanent, action, concrete, PERM_CTX), f"{action} on {concrete}"
             assert allowed(permanent, action, arn, PERM_CTX), f"{action} on {arn}"
     for action in stage_b["describe_star"]:
         assert allowed(permanent, action, "*", PERM_CTX), action

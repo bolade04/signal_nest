@@ -338,6 +338,13 @@ def _h_generated(collection_id: str, entry: dict, ctx: dict) -> dict:
             if not isinstance(union_refs, list) or not union_refs:
                 return {"verdict": "REFUSED_MALFORMED",
                         "detail": f"{collection_id}: FLATTEN_UNION names no union_with collections"}
+            # Adversarial-lane finding 6: a self-referencing or duplicated member is
+            # meaningless under set union and would previously ACCEPT silently — an
+            # undocumented acceptance is how a malformed registry edit slips review.
+            if collection_id in union_refs or len(set(union_refs)) != len(union_refs):
+                return {"verdict": "REFUSED_MALFORMED",
+                        "detail": f"{collection_id}: union_with must not repeat members or "
+                                  "name the primary collection"}
         flat = set()
         for members in live_value.values():
             flat.update(members)
