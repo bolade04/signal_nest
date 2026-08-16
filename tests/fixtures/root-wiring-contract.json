@@ -1,0 +1,47 @@
+{
+  "_classification": "SECURITY_CRITICAL — INFRA-9 B-3 root-wiring contract; SYNTHETIC, non-production; no live account id, ARN, secret, backend value, state, or credential",
+  "_purpose": "Authored contract for scripts/root_wiring_check.py: the exact provider wiring the composition root must exhibit in OpenTofu's own plan-JSON/graph representation. The checker consumes ONLY OpenTofu-generated artifacts; this file supplies the expected values, so a wiring regression is a CONTRACT mismatch, never a parser judgement call.",
+  "_why_exact_sets": "Every surface here is asserted as an EXACT set, not a subset: a new aliased-provider argument, a new aws provider config, a new reader resource, or a second reader module call is a governed change that must arrive by editing this reviewed contract, never silently.",
+  "_provenance": "Values proven against origin/main 622784a5 with tofu 1.12.5 / provider aws 6.55.0 on 2026-08-15: offline stub-STS plan, `tofu show -json` configuration, `tofu graph` DOT.",
+  "provider_source": "registry.opentofu.org/hashicorp/aws",
+  "provider_version": "6.55.0",
+  "alias_key": "aws.revision_reader",
+  "alias_name": "revision_reader",
+  "alias_allowed_expression_keys": ["region"],
+  "alias_region_references": ["var.aws_region"],
+  "default_provider_expression_keys": ["default_tags", "region"],
+  "aws_provider_config_universe": ["aws", "aws.revision_reader"],
+  "reader_module_name": "revision_reader",
+  "reader_module_source": "./modules/revision_reader",
+  "reader_resource_roster": [
+    {"address": "module.revision_reader.aws_cloudwatch_log_group.reader", "mode": "managed"},
+    {"address": "module.revision_reader.aws_ecr_lifecycle_policy.reader", "mode": "managed"},
+    {"address": "module.revision_reader.aws_ecr_repository.reader", "mode": "managed"},
+    {"address": "module.revision_reader.aws_ecs_task_definition.reader", "mode": "managed"},
+    {"address": "module.revision_reader.aws_iam_role.reader_execution", "mode": "managed"},
+    {"address": "module.revision_reader.aws_iam_role.reader_publisher", "mode": "managed"},
+    {"address": "module.revision_reader.aws_iam_role.reader_runner", "mode": "managed"},
+    {"address": "module.revision_reader.aws_iam_role_policy.reader_execution", "mode": "managed"},
+    {"address": "module.revision_reader.aws_iam_role_policy.reader_publisher", "mode": "managed"},
+    {"address": "module.revision_reader.aws_iam_role_policy.reader_runner", "mode": "managed"},
+    {"address": "module.revision_reader.aws_security_group.reader", "mode": "managed"},
+    {"address": "module.revision_reader.aws_vpc_security_group_egress_rule.reader_https", "mode": "managed"},
+    {"address": "module.revision_reader.aws_vpc_security_group_egress_rule.reader_to_postgres", "mode": "managed"},
+    {"address": "module.revision_reader.aws_vpc_security_group_ingress_rule.rds_from_reader", "mode": "managed"},
+    {"address": "module.revision_reader.data.aws_caller_identity.current", "mode": "data"}
+  ],
+  "forbidden_alias_arguments_documented": [
+    "default_tags", "assume_role", "assume_role_with_web_identity", "ignore_tags",
+    "profile", "access_key", "secret_key", "token", "shared_config_files",
+    "shared_credentials_files", "endpoints", "allowed_account_ids",
+    "forbidden_account_ids", "skip_credentials_validation", "skip_requesting_account_id",
+    "skip_metadata_api_check", "skip_region_validation", "custom_ca_bundle",
+    "http_proxy", "https_proxy", "no_proxy", "sts_region"
+  ],
+  "_forbidden_alias_arguments_note": "Documentation of the threat class only. The CONTROL is exact-set equality on alias_allowed_expression_keys — ANY key beyond `region` fails, listed here or not.",
+  "plan_json_format_versions": ["1.2"],
+  "stub": {
+    "allowed_action": "GetCallerIdentity",
+    "synthetic_account": "000000000000"
+  }
+}

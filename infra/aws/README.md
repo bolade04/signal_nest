@@ -296,7 +296,7 @@ spending; no budget action, SNS topic, or IAM resource is created), and the
 - `bootstrap/` — the one-time state-backend root (§3 carve-out; own README,
   own committed lockfile, local one-time state; configuration only).
 
-### INFRA-9 B-3 requirement — root-wiring regression protection (unenforced today)
+### INFRA-9 B-3 — root-wiring regression protection (ENFORCED in CI)
 
 Deleting `module.revision_reader`'s `providers = { aws = aws.revision_reader }`
 map, or adding `default_tags`/`assume_role`/`ignore_tags` to the aliased provider
@@ -304,27 +304,50 @@ block, silently reintroduces the TagRole drift (or a credential/tag reroute) tha
 the B-2 Stage-A barrier refused. `tofu validate` does **not** catch this (proven
 2026-08-15: it reports `Success!` for the correctly-wired form, the
 providers-map-deleted form, AND an aliased block carrying a literal `default_tags`).
-There is no in-repo test today — a prior hand-rolled HCL-scanner guard was removed
-after six review rounds found successive fail-open evasions.
+A prior hand-rolled HCL-scanner guard was removed after six review rounds found
+successive fail-open evasions, so the enforced guard parses **no HCL**.
 
-Two distinct checks are required, because no single command covers both halves:
+**Enforcement**: the graded CI step `root_wiring` (job *Revision reader*) runs
+`scripts/root_wiring_check.py --mode full` on every PR. OpenTofu itself is the
+configuration oracle: the checker copies the git-tracked `infra/aws` tree (excluding
+`bootstrap/`) into a disposable digest-bound work directory, overrides the backend to
+`local` **inside the copy only**, installs the pinned provider from a
+filesystem mirror verified against the committed `.terraform.lock.hcl` h1 hashes and
+`provider-binary-pin.json` (no registry download, no network fallback), runs
+`tofu fmt -check` (before the override exists) and `tofu validate`, completes an
+offline `tofu plan -refresh=false` against a localhost-only synthetic STS stub that
+answers exactly one `GetCallerIdentity` shape, and then asserts BOTH halves over
+OpenTofu-generated artifacts only:
 
-1. **Providers-map wiring** — `tofu graph` distinguishes it with **no credentials**:
-   reader resources edge to `provider[...].revision_reader`, and that alias node
-   vanishes (resources re-edge to the default provider) when the map is dropped.
-   Caveat: `tofu init -backend=false` alone still errors `Backend initialization
-   required`; graph runs only after the committed `backend.tf` S3 block is overridden
-   to a local/absent backend. Provider install is needed (CI-available); credentials
-   are not.
-2. **Aliased-block argument set** — `tofu graph` CANNOT see this (a literal
-   `default_tags` in the aliased block yields byte-identical graph output; only a
-   `local.common_tags` *reference* edge shows). Assert `{alias, region}` exactly via
-   `tofu plan -json` `configuration.provider_config`, or an HCL/config-level check.
+1. **Providers-map wiring + roster** — `tofu show -json` `configuration`: the exact
+   15-resource `aws_*` reader roster carries `provider_config_key == "aws.revision_reader"`
+   (the module's two `terraform_data` guards are outside the aws provider surface),
+   the alias leaks nowhere else, every non-reader `aws_*` resource stays on the
+   default provider, exactly one module call sources `./modules/revision_reader`,
+   and the aws provider-config universe is closed. `tofu graph` is the secondary
+   independent witness (reader nodes reference exactly the alias node; the alias
+   node references exactly `var.aws_region`).
+2. **Aliased-block argument set** — the alias's expression-key surface must equal
+   `{region}` exactly and the default provider must keep `{default_tags, region}`,
+   via the same plan JSON (the graph is blind to literal provider arguments —
+   proven byte-identical DOT — which is why the plan-JSON control is primary).
 
-**B-3 must add a CI check** combining both (an uncredentialed `tofu graph` wiring
-assertion plus a plan-JSON/config argument-set assertion) before any future reader
-apply. Root `main.tf`/`providers.tf` also have no `tofu validate`/`fmt` CI gate today
-(CI runs `tofu` only under `modules/{iam,revision_reader}`); add one alongside.
+The step is graded through the *Gate 4N guard results* aggregation and runs a
+**positive control plus a complete in-run negative mutation battery** (map removed /
+redirected, rogue `default_tags`/`ignore_tags`/`assume_role`/`profile`/credentials/
+account/endpoint routing, duplicate-alias shadow provider, an in-module provider
+block, a `configuration_aliases` passthrough escaping one reader resource to the
+tagged default provider, shadow module, roster grow/shrink, post-bind fixture
+substitution, unexpected stub action): every doctored
+copy must fail at its designated stage with its expected signature, so JSON/DOT
+format drift or a fail-open regression in the checker itself fails the job. The
+expected values live in the reviewed contract
+`tests/fixtures/root-wiring-contract.json`; the probe inputs in
+`tests/fixtures/root-wiring-synthetic.tfvars.example` are synthetic and never applied. This
+same step gives root `main.tf`/`providers.tf` their `tofu fmt`/`tofu validate` CI
+gate (previously module-only). The committed S3 `backend.tf` is never initialized by
+any of this. Configuration wiring only: it does not verify live-state adoption and
+does not replace the B-2/B-3 import/plan/apply gating.
 
 ## 8. Remote-state design (configuration authored, not initialized)
 

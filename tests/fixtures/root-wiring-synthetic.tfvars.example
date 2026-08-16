@@ -1,0 +1,34 @@
+# SYNTHETIC probe inputs for scripts/root_wiring_check.py — NON-PRODUCTION.
+# Every value is a structurally valid placeholder (zero-account ARNs, example.com,
+# documentation-style names). No real account id, domain, bucket, certificate,
+# zone, secret, backend value, or credential appears here, and the offline probe
+# plan these feed is never applied. New required root variables must be added
+# here (a governed, visible change) or the positive control P1 fails closed with
+# "No value for required variable".
+vpc_cidr             = "10.255.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b"]
+web_fqdn             = "synthetic.example.com"
+hosted_zone_id       = "ZSYNTH00000000000000"
+acm_certificate_arn  = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000"
+api_certificate_arn  = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000001"
+app_bucket_name      = "synthetic-probe-bucket-000000"
+db_engine_version    = "16.4"
+db_name              = "synthetic"
+db_master_username   = "synthetic_admin"
+redis_engine_version = "7.1"
+llm_provider         = "anthropic"
+monthly_budget_limit = 1
+
+budget_notification_email = "probe@example.com"
+role_boundary_mode        = "disabled"
+
+alarm_thresholds = {
+  ecs_cpu_high_percent          = 80
+  ecs_memory_high_percent       = 80
+  log_error_count_per_period    = 1
+  rds_cpu_high_percent          = 80
+  rds_free_storage_low_bytes    = 1000000000
+  rds_freeable_memory_low_bytes = 100000000
+  redis_cpu_high_percent        = 80
+  redis_memory_high_percent     = 80
+}

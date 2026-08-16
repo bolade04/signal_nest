@@ -153,7 +153,7 @@ def test_consolidated_bh_a_universe():
     381 = 256 + 125 (Gate 4N-I28BH-B added 6 assurance-validator collections, disjoint from BH-A)."""
     import itertools, critical_list_inventory as cli
     allids = {c["id"] for c in cli.discover_collections()}
-    assert len(allids) == 411  # BH-C-E1: +1 (collection_completeness::COMPLETENESS_REQUIRING_KINDS, NON_SECURITY)  # BH-C F8: +29 discovery-recovered collections (derived/comprehension forms)
+    assert len(allids) == 414  # INFRA-9-B3: +3 (root_wiring_check.py BATTERY/CACHE_ROOTS/_CONTRACT_REQUIRED_KEYS)  # BH-C-E1: +1 (collection_completeness::COMPLETENESS_REQUIRING_KINDS, NON_SECURITY)  # BH-C F8: +29 discovery-recovered collections (derived/comprehension forms)
     sets = {
         "A1": set(CONTRACT["a1a_adjudication"]) | set(CONTRACT["a1b_adjudication"]) | set(CONTRACT["a1c_adjudication"]),
         "A2": set(CONTRACT["a2a_adjudication"]) | set(CONTRACT["a2b_adjudication"]) | set(CONTRACT["a2c_adjudication"]),
@@ -171,7 +171,7 @@ def test_consolidated_bh_a_universe():
     framework_new = {i for i in allids if i.startswith("completeness_framework.py::")}
     assert len(framework_new) == 124  # BH-C F8: +5 completeness_framework derived collections
     assert not (framework_new & union)               # framework tranche is disjoint from BH-A
-    assert len(allids - union) == 256  # BH-C-E1: +1  # BH-C F8: +29 (2 new SECURITY + 27 NON_SECURITY derived/internal)                 # 101 pre-BH-A + 119 B0a-SLICE2 framework + 6 BH-B assurance-validator constants
+    assert len(allids - union) == 259  # INFRA-9-B3: +3 (the three root_wiring_check.py collections; none joins the BH-A union)  # BH-C-E1: +1  # BH-C F8: +29 (2 new SECURITY + 27 NON_SECURITY derived/internal)                 # 101 pre-BH-A + 119 B0a-SLICE2 framework + 6 BH-B assurance-validator constants
     assert (allids - union) <= set(CLASSIFICATIONS)  # all non-BH-A ids (pre-BH-A + framework) are classified
 
 

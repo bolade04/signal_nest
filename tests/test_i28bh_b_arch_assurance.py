@@ -71,13 +71,13 @@ def test_inventory_is_complete_zero_ungoverned():
     assert result["unclassified"] == []
     assert result["stale_classifications"] == []
     assert result["stale_assurance"] == []
-    assert result["security_critical_count"] == 178  # BH-C: +2 discovery-recovered SECURITY roots
+    assert result["security_critical_count"] == 180  # BH-C: +2 discovery-recovered SECURITY roots  # INFRA-9-B3: +2 (BATTERY, CACHE_ROOTS)
 
 
 def test_every_assignment_accepts_at_baseline():
     result = sca.assess()
     assert result["clean"], result["problems"][:5]
-    assert result["assigned"] == result["accepted"] == 178  # BH-C: +2
+    assert result["assigned"] == result["accepted"] == 180  # BH-C: +2  # INFRA-9-B3: +2 (BATTERY review_pin, CACHE_ROOTS exclusion D1)
 
 
 def test_assignment_covers_exactly_the_security_collections(registry):

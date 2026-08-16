@@ -3,15 +3,21 @@
   "_note": "A digest pin is honoured only while it cites an ACTIVE record here. Superseding a record instantly REDs every pin that cited it until re-reviewed.",
   "_root_of_trust": "This ledger is the smallest independently-reviewable surface. It pins the canonical digests of the two authored maps (assurance registry + review-pin registry) that decide what is governed and against what baseline; changing either without re-reviewing this file fails closed. Reviewed end-to-end on every change.",
   "governed_files": {
-    "critical-list-contract.json": "sha256:f5c852aa29d293ae6e183c4cc7efef774f25470181bc24ba708513f4d8d58e3b",
+    "critical-list-contract.json": "sha256:ae846c0d398d2061d12e87aced30671e3736c8e13269bf9cd19cb10e71bccae2",
     "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
-    "review-pin-registry.json": "sha256:2503f7889d94e9ad393cddc035bb9b5227572ab2930431130a4c78fd0cff2d37",
-    "security-assurance-registry.json": "sha256:8a7bdd7f562712bf9d2fcb6dc920ece61ce173555200e55907d31f992328b46c",
-    "site-coverage-function-assurance.json": "sha256:0d0ea1fcf48d424eb81c9002164e2d84fbd31667cfffae3cd6f4a18d8cae1392",
-    "site-coverage-matrix.json": "sha256:1af2edce4c36ec5d1efd099395c81323de17a4b2380af78afb9be620daa8bacb",
+    "review-pin-registry.json": "sha256:ea154b9bbd72644659863ae47489a8623f583c5a0106ad684626738b605e4a1d",
+    "security-assurance-registry.json": "sha256:7f7adeeefcb207c579f7eadee909c7df144a6b9a1ccdd1225efa200c3098ba63",
+    "site-coverage-function-assurance.json": "sha256:757f86d692dd0529e4de63e34de1c2c2e30bba27064316ecbcce72fb8bbf150d",
+    "site-coverage-matrix.json": "sha256:8572ccd2a571a044931f05e2f82b2751786cae140f83aeef6ba8e3607b33b87e",
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-08-15-INFRA9-B3-ROOT-WIRING": {
+      "approver": "INFRA-9-B3-ROOT-WIRING-GUARD-IMPLEMENTATION",
+      "established": "2026-08-15",
+      "scope": "INFRA-9 B-3 root-wiring guard additions only: scripts/root_wiring_check.py collections CACHE_ROOTS (D1 exclusion: verified provider-mirror source roots, mirroring check_toolchain_integrity EXPECTED_CACHE_ROOTS) and BATTERY (authored pure-data negative-mutation table; id-set independently pinned by tests/test_root_wiring_check.py), reviewed under the 2026-08-15 B-3 repository-only authorization and bound to its six-lane review.",
+      "status": "ACTIVE"
+    },
     "REV-2026-08-10-BH-B-ARCH-BASELINE": {
       "approver": "gate-4N-I28BH-B-ARCHITECTURAL-ADJUDICATION",
       "established": "2026-08-10",

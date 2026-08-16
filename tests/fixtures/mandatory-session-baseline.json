@@ -42,6 +42,12 @@
    "mandatory_node_set_changed": false,
    "what_changed": "protected_module_set_sha256 re-pinned",
    "why": "ADV-I28AL-03 required reverify and pytest_sessionfinish to become critical callables, and executed_code_provenance was added to the protected set because stubbing its verify defeated that fix one level down. Mandatory node set UNCHANGED."
+  },
+  {
+   "gate": "INFRA-9-B3",
+   "mandatory_node_set_changed": true,
+   "what_changed": "registry_sha256 re-pinned; mandatory nodes 12 -> 14 (ids updated)",
+   "why": "INFRA-9 B-3 root-wiring guard: adds tests/test_root_wiring_check.py::test_battery_covers_every_required_defect_class_exactly (the negative battery id-set cannot silently shrink while the graded step stays green) and ::test_ci_graded_step_is_pinned_to_mode_full (the graded step cannot silently downgrade to the fast contract-validation default mode). New layer LAYER_5_ROOT_WIRING_GUARD; guard/bootstrap/provenance pins UNCHANGED."
   }
  ],
  "executed_code_provenance_sha256": "fc8d353fd5c60c9a08c12f6e572d77c978444ebf35f9e5bfff1ea2419ee1d2a5",
@@ -49,7 +55,7 @@
  "guard_class_qualname": "MandatorySessionGuard",
  "guard_sha256": "283cafef6a13a9079df85918b17692d286d9ff3d1b9da14a79fb1430c45fafbe",
  "guard_version": "4N-I28AB.1",
- "mandatory_node_count": 12,
+ "mandatory_node_count": 14,
  "mandatory_node_ids": [
   "tests/test_i28ab_guard_identity.py::test_the_registered_guard_is_the_genuine_implementation",
   "tests/test_i28ae_executed_provenance.py::test_executed_code_matches_the_authorized_package",
@@ -62,8 +68,10 @@
   "tests/test_i28w_assertion_reachability.py::test_the_authored_registry_matches_its_pinned_baseline",
   "tests/test_i28w_assertion_reachability.py::test_the_meta_contract_holds",
   "tests/test_i28y_mandatory_session.py::test_the_mandatory_registry_matches_its_pinned_baseline",
-  "tests/test_i28y_mandatory_session.py::test_the_session_guard_is_active_in_this_session"
+  "tests/test_i28y_mandatory_session.py::test_the_session_guard_is_active_in_this_session",
+  "tests/test_root_wiring_check.py::test_battery_covers_every_required_defect_class_exactly",
+  "tests/test_root_wiring_check.py::test_ci_graded_step_is_pinned_to_mode_full"
  ],
  "protected_module_set_sha256": "37b21b89405c7cbd62fa5414a1c1263a1fb86a89550bda17394cca61977d8f0c",
- "registry_sha256": "0f25e961f88d86d48abf9a48ca14d0f3654342525c249430d9d6e221b18df8f7"
+ "registry_sha256": "5691e8dff2071659cf8a89ec2b0661b845e5aa274625f87b345110164b0f5973"
 }

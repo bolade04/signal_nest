@@ -264,6 +264,44 @@
    "why_mandatory": "Gate 4N-I28AC finding ACC-I28AC-01: sitecustomize pre-seeding of sys.modules made the guard and every verifier resolve the same substituted module while every disk-reading check reported the legitimate staged file",
    "proving_bypass_mutation": "sitecustomize pre-seeds sys.modules with a guard whose sessionfinish never sets exitstatus: 2906 passed / 0 failed with four control modules absent, before this gate",
    "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_root_wiring_check.py::test_battery_covers_every_required_defect_class_exactly",
+   "protected_invariant": "the INFRA-9 B-3 root-wiring negative mutation battery covers the complete authorized defect class set — providers-map removal/redirection, rogue aliased-provider arguments (default_tags/ignore_tags/assume_role/profile/credentials/account/endpoint), duplicate-alias shadow provider, in-module provider block, configuration_aliases passthrough, shadow module, roster grow/shrink, fixture substitution, unexpected stub action",
+   "owning_layer": "LAYER_5_ROOT_WIRING_GUARD",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "the battery table is the negative half of the graded root_wiring step; a silently shrunk battery leaves the guard green while a whole defect class goes unexercised — this node pins the id set against an independent authored copy in the test, so shrinkage is a visible two-file edit",
+   "proving_bypass_mutation": "delete the shadow_module row from root_wiring_check.BATTERY: the graded step still passes (every remaining row behaves) while the shadow-module defect class is no longer proven; only this node goes red",
+   "category": "CI_RELEASE_TEST_CONTROL"
+  },
+  {
+   "node_id": "tests/test_root_wiring_check.py::test_ci_graded_step_is_pinned_to_mode_full",
+   "protected_invariant": "the graded ci.yml step `root_wiring` invokes scripts/root_wiring_check.py with --mode full (positive control + complete negative battery), never the fast contract-validation default",
+   "owning_layer": "LAYER_5_ROOT_WIRING_GUARD",
+   "required_phase": "call",
+   "acceptable_outcome": "passed",
+   "prohibited_outcomes": [
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "error",
+    "not_collected",
+    "deselected"
+   ],
+   "why_mandatory": "the checker's no-argument default is the fast fixture-validation mode the site-coverage matrix executes; dropping --mode full from the workflow would silently downgrade the graded control from an OpenTofu-oracle battery to a JSON shape check while every step stayed green",
+   "proving_bypass_mutation": "remove '--mode full' from the root_wiring step's run line: ci_invocation_model still sees the script INVOKED and the step still exits 0, so only this node goes red",
+   "category": "CI_RELEASE_TEST_CONTROL"
   }
  ]
 }

@@ -560,6 +560,18 @@
       },
       "status": "ASSURED"
     },
+    "root_wiring_check.py": {
+      "fn_count": 28,
+      "detector": "tests/test_root_wiring_check.py",
+      "detector_kind": "GRADED_PYTEST",
+      "probe": {
+        "representative_fn": "assert_plan_json",
+        "baseline_exit": 0,
+        "neutralized_exit": 1,
+        "detected": true
+      },
+      "status": "ASSURED"
+    },
     "security_collection_assurance.py": {
       "fn_count": 25,
       "detector": "tests/test_i28bh_b_arch_assurance.py",
