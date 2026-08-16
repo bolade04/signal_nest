@@ -830,6 +830,19 @@
         "scripts/site_coverage.py"
       ],
       "test_path": "tests/test_i28bh_e2_ci_guard_repairs.py"
+    },
+    {
+      "canary": "deleting module.revision_reader's providers map, or adding default_tags/assume_role/ignore_tags/profile/credential/account/endpoint routing to the aliased aws.revision_reader block, is valid HCL that tofu validate accepts and silently reintroduces the TagRole drift the B-2 Stage-A barrier refused (2026-08-15); a prior hand-rolled HCL-scanner guard fell to six rounds of fail-open evasions.",
+      "expected_control": "graded step root_wiring runs scripts/root_wiring_check.py --mode full: digest-bound copy of the git-tracked infra/aws tree, mirror-only pinned provider install, offline stub-STS plan, plan-JSON + graph-witness wiring assertions, positive control P1 plus the complete negative mutation battery (each row must fail at its designated stage with its expected signature); the unit suite pins the battery id-set and the --mode full invocation as mandatory nodes.",
+      "family": "INFRA_ROOT_WIRING_REGRESSION",
+      "gate": "INFRA-9-B3",
+      "source_paths": [
+        ".github/workflows/ci.yml",
+        "infra/aws/README.md",
+        "scripts/root_wiring_check.py",
+        "tests/fixtures/root-wiring-contract.json"
+      ],
+      "test_path": "tests/test_root_wiring_check.py"
     }
   ]
 }

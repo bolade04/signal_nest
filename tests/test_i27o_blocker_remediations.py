@@ -94,7 +94,7 @@ def test_every_graded_step_still_satisfies_the_contract():
     """The repair must not break the forty-four steps it protects."""
     result = inv.check()
     assert result["clean"], result["problems"]
-    assert result["graded_in_workflow"] == result["graded_in_contract"] == 45  # +1: Gate 4N-I28BH-B added the security_collection_assurance graded step
+    assert result["graded_in_workflow"] == result["graded_in_contract"] == 46  # +1: Gate 4N-I28BH-B added the security_collection_assurance graded step  # INFRA-9-B3: +1 (root_wiring graded step)
 
 
 # =====================================================================================

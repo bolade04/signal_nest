@@ -479,7 +479,8 @@ def test_rc_s3_no_root_is_created_by_textual_matching():
     roots = st.release_roots()
     # GATE 4N-I28W: without this guard the loop below is vacuous when the root set is empty, and
     # the test would pass while asserting nothing. The reachability model surfaced exactly that.
-    assert len(roots) == 42, f"the root set moved to {len(roots)}; the loop below would otherwise " \
+    # INFRA-9-B3: +1 root (root_wiring_check.py, graded root_wiring step)
+    assert len(roots) == 43, f"the root set moved to {len(roots)}; the loop below would otherwise " \
                              "pass vacuously on an empty or truncated set"
     for root in roots:
         assert root["release_entry_points"] != ["UNSTEPPED"], (

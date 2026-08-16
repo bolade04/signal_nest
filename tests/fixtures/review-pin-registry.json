@@ -744,6 +744,20 @@
    "reviewed_digest": "sha256:d79d6f77d64a62e3927b9ebea6d2ad76f13f20be37453e19bd156bc494ed4e9c",
    "source": "live"
   },
+  "root_wiring_check.py::BATTERY": {
+   "collection_id": "root_wiring_check.py::BATTERY",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-15-INFRA9-B3-ROOT-WIRING",
+   "reviewed_digest": "sha256:007060874b7ddcf446c7f6a8e75b86c1aa855642d6678d6f1abc626aeeab366b",
+   "source": "live"
+  },
+  "root_wiring_check.py::CACHE_ROOTS": {
+   "collection_id": "root_wiring_check.py::CACHE_ROOTS",
+   "ordered": true,
+   "review_record_id": "REV-2026-08-15-INFRA9-B3-ROOT-WIRING",
+   "reviewed_digest": "sha256:5793d5b263f6e25f367a6c41cf258769448d4ffd8e6ed1e8e2fa75a740418321",
+   "source": "live"
+  },
   "shell_command_model.py::COMMAND_PREFIXES": {
    "collection_id": "shell_command_model.py::COMMAND_PREFIXES",
    "ordered": false,

@@ -228,6 +228,12 @@
    ],
    "run_form": "single"
   },
+  "root_wiring": {
+   "must_invoke": [
+    "scripts/root_wiring_check.py"
+   ],
+   "run_form": "single"
+  },
   "toolchain_post": {
    "must_invoke": [
     "scripts/check_toolchain_integrity.py"
@@ -345,8 +351,8 @@
   }
  },
  "totals": {
-  "graded_steps": 45,
+  "graded_steps": 46,
   "multiline_run_blocks": 7,
-  "single_line_run": 38
+  "single_line_run": 39
  }
 }

@@ -103,7 +103,7 @@ def test_c02_the_adv_i28ap_03_mutation_shapes_are_impossible(label, mutate, warm
 def test_c03_the_exact_reported_escape_no_longer_reproduces(warm_caches):
     """The finding verbatim: roots 41 -> 0 with every layer clean. Now it cannot even be staged."""
     before = len(st.release_roots())
-    assert before == 42, f"expected the reported 42 release roots, derived {before}"  # Gate 4N-I28BH-B: +1 (security_collection_assurance graded step)
+    assert before == 43, f"expected the reported 43 release roots, derived {before}"  # Gate 4N-I28BH-B: +1 (security_collection_assurance graded step)  # INFRA-9-B3: +1 (root_wiring)
     with pytest.raises((AttributeError, TypeError)):
         st._DERIVED["resolved_roots"].clear()
     assert len(st.release_roots()) == before, "the root set moved despite the mutation failing"
@@ -161,7 +161,7 @@ def test_c07_the_fresh_derivation_does_not_consult_the_cache(warm_caches):
     poisoned = ca.deep_freeze([])
     st._DERIVED["resolved_roots"] = poisoned
     fresh = ca.fresh_taxonomy()
-    assert fresh["release_root_count"] == 42, (  # Gate 4N-I28BH-B: +1 root (security_collection_assurance)
+    assert fresh["release_root_count"] == 43, (  # Gate 4N-I28BH-B: +1 root (security_collection_assurance)  # INFRA-9-B3: +1 (root_wiring)
         "fresh_taxonomy() returned the poisoned answer, so it consulted the cache it exists to "
         "check. This is the tautology the layer is built to avoid.")
 
@@ -411,7 +411,7 @@ def test_c29_the_attestation_carries_the_layers_result():
     record = attestation.get("cache_authority")
     assert record is not None, "establish() produced no cache-authority record"
     assert record["clean"] is True, record["problems"][:3]
-    assert record["fresh"]["release_root_count"] == 42  # Gate 4N-I28BH-B: +1 root (security_collection_assurance)
+    assert record["fresh"]["release_root_count"] == 43  # Gate 4N-I28BH-B: +1 root (security_collection_assurance)  # INFRA-9-B3: +1 (root_wiring)
     assert record["policy_sha256"]
 
 
@@ -528,7 +528,7 @@ def test_c35_a_fresh_interpreter_agrees_with_this_sessions_derivation():
                                   PYTHONPATH=str(REPO_ROOT / "scripts")))
     assert out.returncode == 0, out.stderr[-2000:]
     fresh = json.loads(out.stdout)
-    assert fresh["roots"] == len(st.release_roots()) == 42
+    assert fresh["roots"] == len(st.release_roots()) == 43  # INFRA-9-B3: +1 (root_wiring)
     # GATE 4N-I28BH-B0a-SLICE2: 494 -> 746 (+252). The signed completeness verifier landed as
     # scripts/completeness_framework.py, reached from the graded release root
     # scripts/collection_completeness.py; its functions are production/control sites by the same rule
@@ -543,7 +543,7 @@ def test_c35_a_fresh_interpreter_agrees_with_this_sessions_derivation():
     # Established by IDENTITY against START_TREE 45eb4d72: exactly these 33 sites (1 graded_step + 34
     # functions) were ADDED and ZERO were removed; site_taxonomy resolves them (unresolved_calls==0).
     assert fresh["production"] == len(
-        {s["canonical_site_id"] for s in st.production_control_function_sites()}) == 793  # BH-C-E1: +1 (completeness_applicable)  # BH-C: +1 (_collection_value; roots unchanged at 42)  # E2: +9 site_coverage/ci_env_dataflow/ci_harness helpers (roots unchanged at 42)
+        {s["canonical_site_id"] for s in st.production_control_function_sites()}) == 821  # BH-C-E1: +1 (completeness_applicable)  # BH-C: +1 (_collection_value; roots unchanged at 42)  # E2: +9 site_coverage/ci_env_dataflow/ci_harness helpers (roots unchanged at 42)  # INFRA-9-B3: +28 (root_wiring_check.py function sites; new graded root)
 
 
 # --------------------------------------------------------------------- 10. measured obligations

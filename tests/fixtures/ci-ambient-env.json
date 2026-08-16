@@ -26,6 +26,11 @@
       "provider": "npm toolchain (runner)",
       "read_site": "npm_authority.py:557 os.environ.get(\"NPM_CONFIG_USERCONFIG\", default)",
       "defensive_default": true
+    },
+    "RUNNER_TEMP": {
+      "provider": "GitHub Actions runner",
+      "read_site": "root_wiring_check.py:main os.environ.get(\"RUNNER_TEMP\") with a tempfile.gettempdir() fallback — selects only WHERE the disposable work directory is created (never inside the repository), so an absent value is safe",
+      "defensive_default": true
     }
   }
 }

@@ -315,4 +315,4 @@ def test_the_clean_workflow_is_still_accepted():
     assert result["masked_lines"] == 0, result["problems"]
     assert result["unknown_lines"] == 0, result["problems"]
     assert result["clean"] is True, result["problems"]
-    assert result["graded_steps"] == 45  # +1: Gate 4N-I28BH-B security_collection_assurance step
+    assert result["graded_steps"] == 46  # +1: Gate 4N-I28BH-B security_collection_assurance step  # INFRA-9-B3: +1 (root_wiring)

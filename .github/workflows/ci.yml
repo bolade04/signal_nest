@@ -530,6 +530,31 @@ jobs:
         if: always() && steps.toolchain_pre.outcome != 'skipped'
         run: python3 scripts/check_toolchain_integrity.py
 
+      # INFRA-9 B-3. Root-wiring regression guard: OpenTofu itself is the configuration
+      # oracle (no HCL parsing — a prior hand-rolled scanner fell to six rounds of
+      # fail-open evasions). The checker copies the git-tracked infra/aws tree into
+      # $RUNNER_TEMP (digest-bound both before AND after the plan), overrides the
+      # backend to `local` inside the copy only, installs the pinned provider from a
+      # filesystem mirror built from the module-test cache the steps above created
+      # (verified against the committed root lockfile h1 set and provider-binary-pin;
+      # no registry download, no network fallback), then completes an offline
+      # `tofu plan -refresh=false` against a 127.0.0.1-only synthetic STS stub and
+      # asserts the provider wiring in `tofu show -json` (primary) and `tofu graph`
+      # (independent witness): aws.revision_reader carries exactly {region}; the full
+      # 15-resource aws_* reader roster binds to it; nothing else does; the default provider
+      # keeps {default_tags, region}; exactly one module call sources the reader.
+      # --mode full additionally runs the complete negative mutation battery on
+      # doctored copies — every battery row must fail at its designated stage with its
+      # expected signature, so plan-JSON/DOT format drift fails closed instead of
+      # going silently green. This step also gives root main.tf/providers.tf their
+      # fmt/validate gate. The committed S3 backend is NEVER initialized; the
+      # subprocess environment is constructed from an allowlist (synthetic
+      # credentials, IMDS disabled, localhost endpoint), never inherited.
+      - name: Root wiring — reader provider mapping and aliased-surface guard
+        id: root_wiring
+        if: always()
+        run: python3 scripts/root_wiring_check.py --mode full
+
       - name: IAM role permissions-boundary coverage (fail-closed)
         id: boundaries
         if: always()
@@ -966,6 +991,7 @@ jobs:
                    "module_tests=${{ steps.module_tests.outcome }}" \
                    "iam_module_tests=${{ steps.iam_module_tests.outcome }}" \
                    "toolchain_post=${{ steps.toolchain_post.outcome }}" \
+                   "root_wiring=${{ steps.root_wiring.outcome }}" \
                    "boundaries=${{ steps.boundaries.outcome }}" \
                    "closure=${{ steps.closure.outcome }}" \
                    "anchor_tier=${{ steps.anchor_tier.outcome }}" \

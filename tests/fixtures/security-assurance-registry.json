@@ -778,6 +778,20 @@
    "positive_control": "construct a lifecycle step whose action is an Identity-Center admin action but owner != ROOT and assert the lifecycle rejects it; a non-ROOT-owned admin action passing fails closed",
    "subtype": "D3"
   },
+  "root_wiring_check.py::BATTERY": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "root_wiring_check.py::CACHE_ROOTS": {
+   "assurance_kind": "EXCLUSION_POLICY_ASSURANCE",
+   "control": "exclusion",
+   "justifications": {
+    "infra/aws": "the root OpenTofu module directory whose local init cache may hold the pinned, lock-verified provider the mirror is built from",
+    "infra/aws/modules/iam": "a module CI legitimately inits for its offline contract tests; its cache is a verified mirror source on ephemeral runners",
+    "infra/aws/modules/revision_reader": "a module CI legitimately inits for its offline contract tests; its cache is a verified mirror source on ephemeral runners"
+   },
+   "subtype": "D1"
+  },
   "shell_command_model.py::COMMAND_PREFIXES": {
    "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
    "control": "review_pin"

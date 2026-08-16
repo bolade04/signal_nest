@@ -295,6 +295,104 @@
       "key": "review_records",
       "mutate_to": {}
     },
+    "root-wiring-contract.json::alias_allowed_expression_keys": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "alias_allowed_expression_keys",
+      "mutate_to": [],
+      "attributable_token": "alias_allowed_expression_keys"
+    },
+    "root-wiring-contract.json::alias_key": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "alias_key",
+      "mutate_to": "aws.other",
+      "attributable_token": "alias_key"
+    },
+    "root-wiring-contract.json::alias_name": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "alias_name",
+      "mutate_to": "",
+      "attributable_token": "alias_name"
+    },
+    "root-wiring-contract.json::alias_region_references": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "alias_region_references",
+      "mutate_to": [],
+      "attributable_token": "alias_region_references"
+    },
+    "root-wiring-contract.json::aws_provider_config_universe": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "aws_provider_config_universe",
+      "mutate_to": [],
+      "attributable_token": "aws_provider_config_universe"
+    },
+    "root-wiring-contract.json::default_provider_expression_keys": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "default_provider_expression_keys",
+      "mutate_to": [],
+      "attributable_token": "default_provider_expression_keys"
+    },
+    "root-wiring-contract.json::forbidden_alias_arguments_documented": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "forbidden_alias_arguments_documented",
+      "mutate_to": [],
+      "attributable_token": "forbidden_alias_arguments_documented"
+    },
+    "root-wiring-contract.json::plan_json_format_versions": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "plan_json_format_versions",
+      "mutate_to": [],
+      "attributable_token": "plan_json_format_versions"
+    },
+    "root-wiring-contract.json::provider_source": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "provider_source",
+      "mutate_to": "registry.example.com/foo/bar",
+      "attributable_token": "provider_source"
+    },
+    "root-wiring-contract.json::provider_version": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "provider_version",
+      "mutate_to": "0.0.0",
+      "attributable_token": "provider_version"
+    },
+    "root-wiring-contract.json::reader_module_name": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "reader_module_name",
+      "mutate_to": "other",
+      "attributable_token": "reader_module_name"
+    },
+    "root-wiring-contract.json::reader_module_source": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "reader_module_source",
+      "mutate_to": "./modules/nonexistent",
+      "attributable_token": "reader_module_source"
+    },
+    "root-wiring-contract.json::reader_resource_roster": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "reader_resource_roster",
+      "mutate_to": [],
+      "attributable_token": "reader_resource_roster"
+    },
+    "root-wiring-contract.json::stub": {
+      "fixture": "root-wiring-contract.json",
+      "guard": "root_wiring_check.py",
+      "key": "stub",
+      "mutate_to": {},
+      "attributable_token": "stub"
+    },
     "security-assurance-registry.json::assurance": {
       "fixture": "security-assurance-registry.json",
       "guard": "collection_completeness.py",
