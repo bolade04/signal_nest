@@ -71,13 +71,13 @@ def test_inventory_is_complete_zero_ungoverned():
     assert result["unclassified"] == []
     assert result["stale_classifications"] == []
     assert result["stale_assurance"] == []
-    assert result["security_critical_count"] == 180  # BH-C: +2 discovery-recovered SECURITY roots  # INFRA-9-B3: +2 (BATTERY, CACHE_ROOTS)
+    assert result["security_critical_count"] == 182  # BH-C: +2 discovery-recovered SECURITY roots  # INFRA-9-B3: +2 (BATTERY, CACHE_ROOTS)  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
 
 
 def test_every_assignment_accepts_at_baseline():
     result = sca.assess()
     assert result["clean"], result["problems"][:5]
-    assert result["assigned"] == result["accepted"] == 180  # BH-C: +2  # INFRA-9-B3: +2 (BATTERY review_pin, CACHE_ROOTS exclusion D1)
+    assert result["assigned"] == result["accepted"] == 182  # BH-C: +2  # INFRA-9-B3: +2 (BATTERY review_pin, CACHE_ROOTS exclusion D1)  # INFRA-9-B3 apply-identity: +2 review_pin (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
 
 
 def test_assignment_covers_exactly_the_security_collections(registry):
@@ -260,6 +260,73 @@ def test_generated_mismatch_fails_closed(registry, pins, ledger, monkeypatch):
     monkeypatch.setattr(go, "REFRESH_CLOSURE", injected)
     ctx = {"pins": pins, "ledger": ledger, "consumers": {}}
     assert sca._h_generated(cid, entry, ctx)["verdict"] == "REFUSED_GENERATOR_MISMATCH"
+
+
+# --- INFRA-9 B-3: the FLATTEN_UNION mode is itself a control and gets its own battery ------
+
+
+def test_flatten_union_accepts_the_shipped_configuration(registry, pins, ledger):
+    cid = "gen_operator_policies.py::REFRESH_CLOSURE"
+    entry = registry["assurance"][cid]
+    assert entry["mode"] == "FLATTEN_UNION_EQUALS_POLICY_ALLOW"
+    assert entry["union_with"] == ["gen_operator_policies.py::W0_APPLY_CLOSURE"]
+    ctx = {"pins": pins, "ledger": ledger, "consumers": {}}
+    assert sca._h_generated(cid, entry, ctx)["verdict"] == rpc.ACCEPT
+
+
+def test_flatten_union_with_no_union_members_is_malformed(registry, pins, ledger):
+    """A UNION row must NAME its members; silence must never downgrade to the single-closure
+    equality (which would report every W0 apply grant as only-policy drift — or worse, pass
+    if someone also re-inlined the closure)."""
+    cid = "gen_operator_policies.py::REFRESH_CLOSURE"
+    entry = dict(registry["assurance"][cid])
+    ctx = {"pins": pins, "ledger": ledger, "consumers": {}}
+    for broken in (None, [], "gen_operator_policies.py::W0_APPLY_CLOSURE"):
+        mutated = dict(entry)
+        if broken is None:
+            mutated.pop("union_with", None)
+        else:
+            mutated["union_with"] = broken
+        assert sca._h_generated(cid, mutated, ctx)["verdict"] == "REFUSED_MALFORMED", broken
+
+
+def test_flatten_union_member_injection_fails_closed(registry, pins, ledger, monkeypatch):
+    """Injecting an escalation action into the UNION member must be caught exactly as the
+    primary-closure injection is: by the flatten equality (only-closure drift)."""
+    cid = "gen_operator_policies.py::REFRESH_CLOSURE"
+    entry = registry["assurance"][cid]
+    import gen_operator_policies as go
+    injected = copy.deepcopy(dict(go.W0_APPLY_CLOSURE))
+    injected["attacker_group"] = ["iam:PassRole"]
+    monkeypatch.setattr(go, "W0_APPLY_CLOSURE", injected)
+    ctx = {"pins": pins, "ledger": ledger, "consumers": {}}
+    assert sca._h_generated(cid, entry, ctx)["verdict"] == "REFUSED_GENERATOR_MISMATCH"
+
+
+def test_flatten_union_member_without_a_pin_fails_closed(registry, pins, ledger):
+    """Every contributing closure needs its own review-pin drop-backstop — the tautology
+    argument (BH-C F4) applies per member, not just to the primary."""
+    cid = "gen_operator_policies.py::REFRESH_CLOSURE"
+    entry = registry["assurance"][cid]
+    stripped = {"pins": {k: v for k, v in pins["pins"].items()
+                         if k != "gen_operator_policies.py::W0_APPLY_CLOSURE"}}
+    ctx = {"pins": stripped, "ledger": ledger, "consumers": {}}
+    assert sca._h_generated(cid, entry, ctx)["verdict"] == "REFUSED_NO_DROP_BACKSTOP"
+
+
+def test_flatten_union_member_content_drift_fails_the_member_pin(registry, pins, ledger, monkeypatch):
+    """A union member whose content moved without re-review must RED via ITS pin even when the
+    flatten equality still balances (coordinated closure+generator edit)."""
+    cid = "gen_operator_policies.py::REFRESH_CLOSURE"
+    entry = registry["assurance"][cid]
+    import gen_operator_policies as go
+    moved = copy.deepcopy(dict(go.W0_APPLY_CLOSURE))
+    # move an action between groups: flatten() unchanged, canonical content changed
+    moved["state_lock"] = [a for a in moved["state_lock"] if a != "dynamodb:GetItem"]
+    moved["state_bucket_read"] = sorted(moved["state_bucket_read"] + ["dynamodb:GetItem"])
+    monkeypatch.setattr(go, "W0_APPLY_CLOSURE", moved)
+    ctx = {"pins": pins, "ledger": ledger, "consumers": {}}
+    assert sca._h_generated(cid, entry, ctx)["verdict"] == rpc.REFUSED_DIGEST_DRIFT
 
 
 def test_runtime_invariant_violation_fails_closed(registry, pins, ledger, monkeypatch):

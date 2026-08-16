@@ -161,7 +161,7 @@ def test_a3_string_projection_matches_classifications():
 
 
 def test_a1_a2_non_regression():
-    assert len(CONTRACT["a1a_adjudication"]) == 34 and len(CONTRACT["a1b_adjudication"]) == 22
+    assert len(CONTRACT["a1a_adjudication"]) == 36 and len(CONTRACT["a1b_adjudication"]) == 22  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert len(CONTRACT["a1c_adjudication"]) == 23 and len(CONTRACT["a2a_adjudication"]) == 10
     assert len(CONTRACT["a2b_adjudication"]) == 15 and len(CONTRACT["a2c_adjudication"]) == 18
 

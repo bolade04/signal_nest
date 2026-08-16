@@ -206,7 +206,7 @@
     "_gate_4n_i9_note": "iam_create was REMOVED from this section in Gate 4N-I9 and moved to role_bootstrap_closure. Stage-A now consumes PRE-EXISTING roles and holds no role authoring capability of any kind."
   },
   "state_backend_closure": {
-    "_note": "Required by tofu init/plan/apply against the S3 backend. Held by the temporary operator only; permanent W0 has none of it.",
+    "_note": "Required by tofu init/plan/apply against the S3 backend. Held by the temporary operator AND — since INFRA-9 B-3 (2026-08-16) — by permanent W0, which the Stage-A barrier established as the apply identity. In both principals every capability is scoped to the exact backend resource and re-denied everywhere else by a NotResource fence; W0 additionally conditions the CMK use on kms:ViaService (s3/dynamodb) so the state blob cannot be decrypted by a direct KMS call.",
     "read": [
       "s3:GetObject",
       "s3:ListBucket",
@@ -227,7 +227,20 @@
       "kms:DescribeKey"
     ],
     "_cmk_note": "GenerateDataKey and Decrypt are PROVEN REQUIRED: the state bucket has BucketKeyEnabled and the lock table is encrypted with the SAME CMK, with CloudTrail showing both encryption contexts. kms:Encrypt was never observed and is excluded.",
-    "_use_lockfile_hazard": "UNRESOLVED. infra/aws/backend.tf is a partial backend; whether use_lockfile is set is not knowable from the repository, and the trail has no S3 data events so it cannot be inferred. If use_lockfile is enabled, locking additionally needs s3:PutObject and s3:DeleteObject on <key>.tflock, which this contract does NOT grant. Read the operator backend config before any apply."
+    "_use_lockfile_hazard": "RESOLVED (INFRA-9 B-3 Part A, 2026-08-16). The operator-held backend config was read in-process during the Part-A adjudication: use_lockfile is NOT set, so locking is DynamoDB-only and no <key>.tflock object operations exist. s3:DeleteObject stays excluded. If an operator ever enables use_lockfile, this closure is WRONG until re-adjudicated — the hazard text above is retained so that condition is checked, not assumed."
+  },
+  "stage_b_task_definition_closure": {
+    "_scope": "INFRA-9 B-3 apply-identity delta (2026-08-16): task-definition registration by permanent W0, the apply identity. Stage A registers module.revision_reader's reader family (image digest pinned); Stage B (deploy_workload = true) registers the api, worker and migration families declared by module ecs.",
+    "register": [
+      "ecs:RegisterTaskDefinition"
+    ],
+    "_register_note": "Resource-scoped to the four composition family ARNs, in BOTH ARN forms (family and family:revision-wildcard) — the AWS Service Reference authorizes RegisterTaskDefinition against the family-form task-definition ARN; the suffixed form is carried defensively so an authorization-shape difference cannot produce a mid-apply AccessDenied after earlier resources exist (the partial-apply failure mode the Stage-A guards exist for). aws:RequestTag/aws:TagKeys/ecs:task-cpu/ecs:task-memory/privileged condition keys are supported by AWS and deliberately NOT used: their values are module-variable-owned and a wrong literal deadens the grant exactly when it is needed; family scoping plus the role boundary and image-publication controls carry that risk instead. Recorded for the six-lane review.",
+    "_no_passrole_note": "iam:PassRole is NOT required and NOT granted: the RegisterTaskDefinition API performs no PassRole authorization check on the execution/task role ARNs it stores — PassRole is enforced at RunTask/CreateService time, which belong to DIFFERENT principals. W0's flat PassRole deny is preserved by the delta.",
+    "describe_star": [
+      "ecs:DescribeTaskDefinition"
+    ],
+    "_describe_note": "Read-back after registration. AWS supports NO resource-level scoping for DescribeTaskDefinition (Service Reference, current) -> Resource \"*\" with the aws:RequestedRegion condition, the same documented-limitation posture as rds:DescribeDBInstances.",
+    "_excluded": "ecs:TagResource and ecs:DeregisterTaskDefinition are excluded: the delta covers create-only registration; revision replacement/retirement is a separate future adjudication. dynamodb:UpdateItem, dynamodb:DescribeTable and kms:Encrypt — present in the LIVE 2026-07-27 policy — are excluded as proven unused by the OpenTofu 1.12.5 backend (Part-A adjudication)."
   },
   "explicitly_not_required": {
     "audit_bucket_mutation": "s3:PutBucketPolicy and s3:PutBucketPublicAccessBlock on the audit bucket are NOT required for the current Gate 4N plan. Live evidence: the trail has been logging since 2026-07-27 and is delivering; the audit bucket policy and PAB are already converged and were read successfully by the reference refresh. Gate 4N-I3 granted them unnecessarily, covering only 2 of the 6 module-owned observability resources, and thereby opened a path to halt log delivery without calling cloudtrail:StopLogging.",

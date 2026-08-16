@@ -12,8 +12,8 @@
   "allow_model.py::EXEMPTIONS": {
    "collection_id": "allow_model.py::EXEMPTIONS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:060c6c8cc9a87d547a3b79d2fb6d15ec12e4e6914a996bfc3dc9ccd0a8f3e364",
+   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
+   "reviewed_digest": "sha256:fb764ecc92bb8ec1d1c2f472293847863fe07f1ad9bf0d28f856246305c03f6d",
    "source": "live"
   },
   "allow_model.py::EXTRA_REQUIRED_SOURCES": {
@@ -33,8 +33,8 @@
   "allow_model.py::TARGETS": {
    "collection_id": "allow_model.py::TARGETS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:8817e53acfda9815563d5528502e54e5c8923a636f0e2782421ad80bcd987e32",
+   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
+   "reviewed_digest": "sha256:306d2a4416267e0a0321fb6bed8eba9870006ac5ef17e060491046de07bfcc7b",
    "source": "live"
   },
   "anchor_loader.py::REQUIRED_FIELDS": {
@@ -462,6 +462,20 @@
    "ordered": false,
    "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
    "reviewed_digest": "sha256:d5a30da8bb2506334078e0180a72f47c5f77dcd1e4deb8496c95b0df6e392b2e",
+   "source": "live"
+  },
+  "gen_operator_policies.py::W0_APPLY_CLOSURE": {
+   "collection_id": "gen_operator_policies.py::W0_APPLY_CLOSURE",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
+   "reviewed_digest": "sha256:c8e7936c8bb77282af02f68a683f0ddcc7679949cd4ec42f28cc94967faa9908",
+   "source": "live"
+  },
+  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": {
+   "collection_id": "gen_operator_policies.py::W0_SCOPED_CAPABILITIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
+   "reviewed_digest": "sha256:69e2c0c8052ec407d0af566442bb471cc90fccc2da9be26f65fcf039d777e822",
    "source": "live"
   },
   "gen_role_bootstrap_policy.py::CEILING_EXCEPTIONS": {

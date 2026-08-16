@@ -3,8 +3,14 @@
 
 Gate 4N-I3. Two policies are generated:
 
-  permanent-w0     the standing SignalNestStagingW0Operator inline policy — read-only
-                   diagnostics. No state access, no mutation of any kind.
+  permanent-w0     the standing SignalNestStagingW0Operator inline policy. Read-mostly
+                   diagnostics PLUS — since INFRA-9 B-3 (2026-08-16) — the exact-scoped,
+                   fenced apply surface: the S3/DynamoDB/KMS state-backend closure on the
+                   exact backend resources and ecs:RegisterTaskDefinition on the four
+                   composition task-definition families. Every carved capability is
+                   re-denied everywhere else by a NotResource fence (the same idiom the
+                   temporary operator uses), so the universal Resource-"*" probes still
+                   resolve EXPLICIT_DENY.
 
   bootstrap-temp   a SEPARATE, EXPIRING permission set that performs planning and the
                    remaining bootstrap mutations. It is standalone: it carries its own
@@ -284,6 +290,64 @@ TEMP_SCOPED_CAPABILITIES = frozenset({
     "iam:PutRolePolicy",
 })
 
+# --- INFRA-9 B-3 (2026-08-16): the permanent apply identity -------------------------------
+#
+# The Stage-A barrier established that the APPLY identity is W0 itself, not another expiring
+# operator, so W0 carries the state-backend closure and the Stage-A/B task-definition
+# registration — exact-scoped and fenced. Two collections, deliberately SEPARATE from
+# REFRESH_CLOSURE: action_classifier.REFRESH_OBSERVED_READS flattens REFRESH_CLOSURE into
+# zero-write observation evidence, so a write action inserted there would classify READ_ONLY
+# on false provenance and trip the forbidden-conflict detector (HAZARD 1 of the B-3 ownership
+# sweep). The union of both closures is what security_collection_assurance now compares
+# against the emitted policy (FLATTEN_UNION_EQUALS_POLICY_ALLOW).
+#
+# The action content is the ADJUDICATED minimal set from the Part-A capability adjudication
+# (OpenTofu 1.12.5 vs the operator backend config, use_lockfile NOT set): the live 2026-07-27
+# policy's extras — dynamodb:UpdateItem, dynamodb:DescribeTable, kms:Encrypt — are NOT
+# carried. kms:DescribeKey is already granted by KmsReadExact and is not repeated here.
+W0_APPLY_CLOSURE = {
+    "state_bucket_read": ["s3:GetBucketLocation", "s3:ListBucket"],
+    "state_object_rw": ["s3:GetObject", "s3:PutObject"],
+    "state_lock": ["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem"],
+    # ViaService-conditioned in the statement: S3 (BucketKeyEnabled) and DynamoDB call KMS on
+    # the operator's behalf; W0 itself never calls KMS directly for backend work, so a direct
+    # out-of-band Decrypt of the state blob stays dead even with the fence deleted.
+    "state_cmk_use": ["kms:Decrypt", "kms:GenerateDataKey"],
+    "task_definition_register": ["ecs:RegisterTaskDefinition"],
+    # AWS supports NO resource scoping on DescribeTaskDefinition (Service Reference,
+    # Part-A adjudication) -> Resource "*" with the region condition.
+    "task_definition_describe": ["ecs:DescribeTaskDefinition"],
+}
+
+# The forbidden capabilities W0 now holds SCOPED. Subtracted from the flat DenyDangerous
+# union and re-denied by NotResource fences, exactly as TEMP_SCOPED_CAPABILITIES is for the
+# temporary operator. iam:PassRole is deliberately NOT here: RegisterTaskDefinition performs
+# no PassRole check (it is enforced at RunTask/CreateService by different principals), so the
+# B-3 delta adds no PassRole surface and W0's flat PassRole deny is preserved.
+W0_SCOPED_CAPABILITIES = frozenset({
+    "s3:GetObject",              # state_backend_closure.read, exact state object
+    "s3:PutObject",              # state_backend_closure.write_apply_only, exact state object
+    "dynamodb:GetItem",          # state lock inspect, exact lock table
+    "dynamodb:PutItem",          # state lock acquire, exact lock table
+    "dynamodb:DeleteItem",       # state lock release, exact lock table
+    "kms:Decrypt",               # state CMK only, ViaService-conditioned
+    "ecs:RegisterTaskDefinition",  # the four composition families only
+})
+
+# Both ARN forms per family: the Service Reference authorizes RegisterTaskDefinition against
+# the family-form task-definition ARN; the revision-suffixed form is included defensively so
+# an authorization-shape difference cannot produce a mid-apply AccessDenied (the partial-apply
+# failure mode Stage-A guards exist for). Families come from the composition declarations —
+# the reader family is IMPORTED (never rebuilt; the Gate 4N-I2 lesson), the other three are
+# pinned to the module source by tests/test_operator_policies.py.
+TASK_DEFINITION_FAMILY_ARNS = [
+    arn
+    for family in sorted((f"{PREFIX}-api", f"{PREFIX}-migration",
+                          f"{PREFIX}-worker", READER_TASK_DEFINITION_FAMILY))
+    for arn in (f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}",
+                f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:*")
+]
+
 PERMANENT_DENY = sorted(
     [
         # role minting and the escalation set
@@ -373,8 +437,18 @@ PERMANENT_DENY = sorted(
 
 
 def permanent_w0_policy() -> dict:
-    """Read-only diagnostics. No state access. No mutation. See the Phase F decision."""
+    """Read-mostly diagnostics PLUS the exact-scoped, fenced apply surface.
+
+    The Phase F decision ("no state access, no mutation of any kind") was superseded by the
+    INFRA-9 B-3 apply-identity adjudication (2026-08-16): the Stage-A barrier established
+    that the apply identity is W0 itself, so W0 carries the state-backend closure and
+    task-definition registration — on exactly the backend resources and composition
+    families, with every carved capability re-denied everywhere else by a NotResource
+    fence. The flat DenyDangerous ceiling stays unconditional and global over everything
+    NOT deliberately carved.
+    """
     c = REFRESH_CLOSURE
+    w = W0_APPLY_CLOSURE
     return {
         "Version": "2012-10-17",
         "Statement": [
@@ -398,13 +472,45 @@ def permanent_w0_policy() -> dict:
             {"Sid": "AuditTrailReadExact", "Effect": "Allow", "Action": c["cloudtrail_read_exact"], "Resource": ARN["trail"]},
             {"Sid": "AuditTrailListStar", "Effect": "Allow", "Action": c["cloudtrail_read_star"], "Resource": "*", "Condition": REGION_COND},
             {"Sid": "BudgetsRead", "Effect": "Allow", "Action": c["budgets"], "Resource": f"arn:aws:budgets::{ACCOUNT}:budget/*"},
+            # --- INFRA-9 B-3: the apply surface. Exact backend resources; no expiry — this
+            # is the PERMANENT apply identity, reviewed as such. -----------------------------
+            {"Sid": "StateBucketRead", "Effect": "Allow", "Action": w["state_bucket_read"], "Resource": ARN["state_bucket"]},
+            {"Sid": "StateObjectReadWrite", "Effect": "Allow", "Action": w["state_object_rw"], "Resource": ARN["state_object"]},
+            {"Sid": "StateLock", "Effect": "Allow", "Action": w["state_lock"], "Resource": ARN["lock"]},
+            # ViaService: only S3 (BucketKeyEnabled) and DynamoDB may use the state CMK on
+            # W0's behalf. A direct kms:Decrypt of the state blob by the operator's own
+            # credentials never matches this statement.
+            {"Sid": "StateCmkUseViaBackendServices", "Effect": "Allow", "Action": w["state_cmk_use"], "Resource": ARN["cmk_state"],
+             "Condition": {"StringEquals": {"kms:ViaService": [
+                 f"dynamodb.{REGION}.amazonaws.com", f"s3.{REGION}.amazonaws.com"]}}},
+            {"Sid": "TaskDefinitionFamiliesRegister", "Effect": "Allow", "Action": w["task_definition_register"], "Resource": TASK_DEFINITION_FAMILY_ARNS},
+            {"Sid": "TaskDefinitionDescribeStar", "Effect": "Allow", "Action": w["task_definition_describe"], "Resource": "*", "Condition": REGION_COND},
             # Union with the must-not contract. The hand-maintained PERMANENT_DENY list
             # scored 37/39 on the Allow-axis proof: rds:RestoreDBInstanceFromDBSnapshot and
-            # secretsmanager:DeleteSecret were absent. W0 has no scoped exemptions — it is
-            # a permanent principal, so every contract capability is denied flatly.
+            # secretsmanager:DeleteSecret were absent.
+            #
+            # INFRA-9 B-3: W0 now has scoped exemptions — W0_SCOPED_CAPABILITIES is
+            # subtracted from the flat ceiling and re-denied by the NotResource fences
+            # below, exactly as TempDenyEscalation does with TEMP_SCOPED_CAPABILITIES.
+            # Everything else remains denied flatly, unconditionally, at Resource "*".
             {"Sid": "DenyDangerous", "Effect": "Deny",
-             "Action": sorted(set(PERMANENT_DENY) | set(FORBIDDEN_CAPABILITIES)),
+             "Action": sorted((set(PERMANENT_DENY) | set(FORBIDDEN_CAPABILITIES))
+                              - W0_SCOPED_CAPABILITIES),
              "Resource": "*"},
+            # --- NotResource fences for the carved capabilities. A flat Deny would kill the
+            # capability; a bare Allow would leave it implicit-denied elsewhere, which another
+            # attached policy could lift. The fence is the idiom that does neither, and it is
+            # what keeps the universal Resource-"*" invariant probes at EXPLICIT_DENY. -------
+            {"Sid": "DenyStateObjectAccessOutsideTheStateObject", "Effect": "Deny",
+             "Action": w["state_object_rw"], "NotResource": ARN["state_object"]},
+            {"Sid": "DenyLockItemsOutsideTheLockTable", "Effect": "Deny",
+             "Action": w["state_lock"], "NotResource": ARN["lock"]},
+            # kms:Decrypt reaches the SECRETS CMK too unless fenced, and that CMK protects
+            # the database credential this principal must never read.
+            {"Sid": "DenyDecryptOutsideTheStateCmk", "Effect": "Deny",
+             "Action": ["kms:Decrypt"], "NotResource": ARN["cmk_state"]},
+            {"Sid": "DenyTaskDefinitionRegistrationOutsideTheFamilies", "Effect": "Deny",
+             "Action": w["task_definition_register"], "NotResource": TASK_DEFINITION_FAMILY_ARNS},
         ],
     }
 

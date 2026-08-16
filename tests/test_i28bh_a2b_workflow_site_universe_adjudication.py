@@ -120,7 +120,7 @@ def test_downgrades_have_proving_exclusion_arguments():
 
 
 def test_a1_a2a_non_regression():
-    assert len(CONTRACT["a1a_adjudication"]) == 34
+    assert len(CONTRACT["a1a_adjudication"]) == 36  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert len(CONTRACT["a1b_adjudication"]) == 22
     assert len(CONTRACT["a1c_adjudication"]) == 23
     assert len(CONTRACT["a2a_adjudication"]) == 10

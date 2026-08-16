@@ -153,7 +153,7 @@ def test_consolidated_bh_a_universe():
     381 = 256 + 125 (Gate 4N-I28BH-B added 6 assurance-validator collections, disjoint from BH-A)."""
     import itertools, critical_list_inventory as cli
     allids = {c["id"] for c in cli.discover_collections()}
-    assert len(allids) == 414  # INFRA-9-B3: +3 (root_wiring_check.py BATTERY/CACHE_ROOTS/_CONTRACT_REQUIRED_KEYS)  # BH-C-E1: +1 (collection_completeness::COMPLETENESS_REQUIRING_KINDS, NON_SECURITY)  # BH-C F8: +29 discovery-recovered collections (derived/comprehension forms)
+    assert len(allids) == 417  # INFRA-9-B3 apply-identity: +3 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES, TASK_DEFINITION_FAMILY_ARNS)  # INFRA-9-B3: +3 (root_wiring_check.py BATTERY/CACHE_ROOTS/_CONTRACT_REQUIRED_KEYS)  # BH-C-E1: +1 (collection_completeness::COMPLETENESS_REQUIRING_KINDS, NON_SECURITY)  # BH-C F8: +29 discovery-recovered collections (derived/comprehension forms)
     sets = {
         "A1": set(CONTRACT["a1a_adjudication"]) | set(CONTRACT["a1b_adjudication"]) | set(CONTRACT["a1c_adjudication"]),
         "A2": set(CONTRACT["a2a_adjudication"]) | set(CONTRACT["a2b_adjudication"]) | set(CONTRACT["a2c_adjudication"]),
@@ -161,17 +161,17 @@ def test_consolidated_bh_a_universe():
         "A4": set(CONTRACT["a4_adjudication"]),
         "A5": set(CONTRACT["a5_adjudication"]),
     }
-    assert [len(sets[k]) for k in ("A1", "A2", "A3", "A4", "A5")] == [79, 43, 25, 5, 3]
+    assert [len(sets[k]) for k in ("A1", "A2", "A3", "A4", "A5")] == [81, 43, 25, 5, 3]  # INFRA-9-B3 apply-identity: A1 79+2
     for a, b in itertools.combinations(sets, 2):
         assert not (sets[a] & sets[b]), (a, b, sets[a] & sets[b])
     union = set().union(*sets.values())
-    assert len(union) == 155 and union <= allids
+    assert len(union) == 157 and union <= allids  # INFRA-9-B3 apply-identity: 155+2
     # The B0a-SLICE2 framework-landing tranche: exactly 119 completeness_framework.py collections,
     # disjoint from the BH-A universe, all classified.
     framework_new = {i for i in allids if i.startswith("completeness_framework.py::")}
     assert len(framework_new) == 124  # BH-C F8: +5 completeness_framework derived collections
     assert not (framework_new & union)               # framework tranche is disjoint from BH-A
-    assert len(allids - union) == 259  # INFRA-9-B3: +3 (the three root_wiring_check.py collections; none joins the BH-A union)  # BH-C-E1: +1  # BH-C F8: +29 (2 new SECURITY + 27 NON_SECURITY derived/internal)                 # 101 pre-BH-A + 119 B0a-SLICE2 framework + 6 BH-B assurance-validator constants
+    assert len(allids - union) == 260  # INFRA-9-B3 apply-identity: +1 (TASK_DEFINITION_FAMILY_ARNS, non-BH-A config)  # INFRA-9-B3: +3 (the three root_wiring_check.py collections; none joins the BH-A union)  # BH-C-E1: +1  # BH-C F8: +29 (2 new SECURITY + 27 NON_SECURITY derived/internal)                 # 101 pre-BH-A + 119 B0a-SLICE2 framework + 6 BH-B assurance-validator constants
     assert (allids - union) <= set(CLASSIFICATIONS)  # all non-BH-A ids (pre-BH-A + framework) are classified
 
 
@@ -183,7 +183,7 @@ def test_bh_a_open_findings_preserved():
 
 
 def test_a1_a2_a3_a4_non_regression():
-    assert [len(CONTRACT[b]) for b in ("a1a_adjudication", "a1b_adjudication", "a1c_adjudication")] == [34, 22, 23]
+    assert [len(CONTRACT[b]) for b in ("a1a_adjudication", "a1b_adjudication", "a1c_adjudication")] == [36, 22, 23]  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert [len(CONTRACT[b]) for b in ("a2a_adjudication", "a2b_adjudication", "a2c_adjudication")] == [10, 15, 18]
     assert len(CONTRACT["a3_adjudication"]) == 25 and len(CONTRACT["a4_adjudication"]) == 5
 
@@ -239,9 +239,9 @@ def test_A5_20_consolidated_universe_drop_detected():
     union = (set(CONTRACT["a1a_adjudication"]) | set(CONTRACT["a1b_adjudication"]) | set(CONTRACT["a1c_adjudication"])
              | set(CONTRACT["a2a_adjudication"]) | set(CONTRACT["a2b_adjudication"]) | set(CONTRACT["a2c_adjudication"])
              | set(CONTRACT["a3_adjudication"]) | set(CONTRACT["a4_adjudication"]) | set(CONTRACT["a5_adjudication"]))
-    assert len(union) == 155                        # the authored roster is complete
+    assert len(union) == 157                        # the authored roster is complete  # INFRA-9-B3 apply-identity: 155+2
     tampered = union - {CA_CL}                      # drop one collection from the roster
-    assert len(tampered) == 154 != 155              # reconciliation notices the missing member
+    assert len(tampered) == 156 != 157              # reconciliation notices the missing member  # INFRA-9-B3 apply-identity
 
 
 def test_A5_30_ownership_disjoint():

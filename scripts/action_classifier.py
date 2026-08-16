@@ -249,6 +249,10 @@ CURATED_REMAINDER = {
     "logs:StartQuery": (READ_ONLY,),          # "Start" names a query, not a mutation
     "cloudfront:GetDistribution": (READ_ONLY_CONFIGURATION,),
     "cloudfront:GetOriginAccessControl": (READ_ONLY_CONFIGURATION,),
+    # INFRA-9 B-3: registration read-back by the apply identity. A read whose service has no
+    # resource-level scoping for it; never observed in the zero-write refresh (no task
+    # definition existed to describe), so it is curated rather than observation-classified.
+    "ecs:DescribeTaskDefinition": (READ_ONLY_CONFIGURATION,),
 
     # Reads that return CONTENT. Not mutations, but not ordinary reads either: a read-only
     # verifier has no business reading log bodies or secret material.
