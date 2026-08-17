@@ -159,6 +159,12 @@ EXPECTED_MATRIX = {
     "iam:PutRolePolicy": {"iam:PermissionsBoundary"},
     "iam:DeleteRolePolicy": {"iam:PermissionsBoundary"},
     "iam:PutRolePermissionsBoundary": {"iam:PermissionsBoundary"},
+    # INFRA-9 B-3 (adversarial-lane round-3 delta 2): the delta's own additions must not
+    # rest on the live table asserting itself. Verified against the AWS Service
+    # Authorization Reference (KMS actions accept kms:ViaService), retained with the B-3
+    # evidence (b3-part-a-live-readback/ecs-action-truth-evidence.md sources).
+    "kms:Decrypt": {"kms:ViaService"},
+    "kms:GenerateDataKey": {"kms:ViaService"},
     # GATE 4N-I11 DEFECT 14. iam:DeleteRolePermissionsBoundary was asserted here as
     # SUPPORTING the key. Whether AWS POPULATES it for the Delete action is disputed and
     # unproven, and the evaluator asserting the optimistic reading meant the dead-grant

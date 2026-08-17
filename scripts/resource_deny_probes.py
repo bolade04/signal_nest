@@ -108,6 +108,33 @@ PROBES = [
      f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/signalnest-staging-api:1",
      f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/signalnest-staging-revision-reader:1",
      "RunTask on anything but the reader revision"),
+    # --- permanent W0 fences (INFRA-9 B-3: the apply identity's carved capabilities) ----
+    # Each fence is probed at a resource it must deny (inside) and at the carved resource it
+    # must NOT deny (outside), so a fence that widens or a fence that is deleted both move.
+    ("permanent_w0", "s3:GetObject", APP_BUCKET + "/x", gen.ARN["state_object"],
+     "state reads outside the exact state object"),
+    ("permanent_w0", "s3:PutObject", f"{gb.STATE_BUCKET}/other/object",
+     gen.ARN["state_object"], "state writes outside the exact state object"),
+    ("permanent_w0", "dynamodb:GetItem", OTHER_TABLE, gen.ARN["lock"],
+     "lock reads outside the lock table"),
+    ("permanent_w0", "dynamodb:PutItem", OTHER_TABLE, gen.ARN["lock"],
+     "lock items outside the lock table"),
+    ("permanent_w0", "dynamodb:DeleteItem", OTHER_TABLE, gen.ARN["lock"],
+     "lock release outside the lock table"),
+    ("permanent_w0", "kms:Decrypt", gen.ARN["cmk_secrets"], gen.ARN["cmk_state"],
+     "decrypt outside the state CMK"),
+    ("permanent_w0", "kms:GenerateDataKey", gen.ARN["cmk_secrets"], None,
+     "data-key generation outside the state CMK (outside probe omitted: the in-scope Allow "
+     "is ViaService-conditioned, so a contextless outside probe cannot distinguish the fence "
+     "from the condition; the conditioned in-scope allow is proven by the pytest suite)"),
+    ("permanent_w0", "ecs:RegisterTaskDefinition",
+     f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:*",
+     gen.TASK_DEFINITION_FAMILY_ARNS[0],
+     "task-definition registration outside the four composition families"),
+    ("permanent_w0", "ecs:TagResource",
+     f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:*",
+     gen.TASK_DEFINITION_FAMILY_ARNS[0],
+     "task-definition tag-on-create outside the four composition families"),
     # --- temporary operator fences -----------------------------------------------------
     ("temporary_operator", "s3:PutObject", f"{gb.STATE_BUCKET}/other/object",
      gen.ARN["state_object"], "state writes outside the exact state object"),

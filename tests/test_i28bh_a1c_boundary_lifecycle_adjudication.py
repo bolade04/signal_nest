@@ -114,7 +114,7 @@ def test_a1c_no_downward_reclassification():
 
 
 def test_a1a_and_a1b_non_regression():
-    assert len(CONTRACT["a1a_adjudication"]) == 34
+    assert len(CONTRACT["a1a_adjudication"]) == 36  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert len(CONTRACT["a1b_adjudication"]) == 22
 
 
@@ -305,6 +305,6 @@ def test_battery_has_28_arms():
 # ---- consolidated A1 reconciliation ----
 def test_consolidated_a1_union_is_exactly_79():
     a1a = set(CONTRACT["a1a_adjudication"]); a1b = set(CONTRACT["a1b_adjudication"]); a1c = set(ADJ)
-    assert len(a1a) == 34 and len(a1b) == 22 and len(a1c) == 23
+    assert len(a1a) == 36 and len(a1b) == 22 and len(a1c) == 23  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert a1a & a1b == set() and a1a & a1c == set() and a1b & a1c == set(), "no overlap between sub-gates"
-    assert len(a1a | a1b | a1c) == 79, "A1a ∪ A1b ∪ A1c must equal the full 79-member A1 scope"
+    assert len(a1a | a1b | a1c) == 81, "A1a ∪ A1b ∪ A1c must equal the full 81-member A1 scope"  # INFRA-9-B3 apply-identity: 79+2

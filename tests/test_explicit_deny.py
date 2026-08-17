@@ -43,45 +43,72 @@ TEMP_CTX = {
 STATE_OBJECT = gen.ARN["state_object"]
 LOCK = gen.ARN["lock"]
 
-# The mandatory safety set. Every entry must be an EXPLICIT Deny from the named Sid, and
-# every entry is mutation-tested below. Adding an action here without it being denied
-# breaks the suite, which is the point.
-MANDATORY_PERMANENT_DENIES = [
-    ("iam:PassRole", "*"),
-    ("iam:CreateRole", gen.READER_ROLE_ARNS[0]),
-    ("iam:PutRolePolicy", gen.READER_ROLE_ARNS[0]),
-    ("iam:DeleteRole", gen.READER_ROLE_ARNS[0]),
-    ("iam:DeleteRolePolicy", gen.READER_ROLE_ARNS[0]),
-    ("iam:TagRole", gen.READER_ROLE_ARNS[0]),
-    ("iam:UntagRole", gen.READER_ROLE_ARNS[0]),
-    ("iam:PutRolePermissionsBoundary", gen.READER_ROLE_ARNS[0]),
-    ("iam:UpdateAssumeRolePolicy", gen.READER_ROLE_ARNS[0]),
-    ("cloudtrail:StopLogging", gen.ARN["trail"]),
-    ("cloudtrail:DeleteTrail", gen.ARN["trail"]),
-    ("cloudtrail:UpdateTrail", gen.ARN["trail"]),
-    ("cloudtrail:PutEventSelectors", gen.ARN["trail"]),
-    ("s3:GetObject", STATE_OBJECT),
-    ("s3:PutObject", STATE_OBJECT),
-    ("s3:DeleteObject", STATE_OBJECT),
-    ("s3:GetObjectVersion", STATE_OBJECT),
-    ("s3:PutBucketPolicy", gen.ARN["state_bucket"]),
-    ("s3:PutBucketVersioning", gen.ARN["state_bucket"]),
-    ("dynamodb:PutItem", LOCK),
-    ("dynamodb:DeleteItem", LOCK),
-    ("dynamodb:UpdateItem", LOCK),
-    ("kms:ScheduleKeyDeletion", gen.ARN["cmk_state"]),
-    ("kms:DisableKey", gen.ARN["cmk_state"]),
-    ("kms:CreateGrant", gen.ARN["cmk_secrets"]),
-    ("kms:PutKeyPolicy", gen.ARN["cmk_secrets"]),
-    ("secretsmanager:GetSecretValue", "*"),
-    ("secretsmanager:PutSecretValue", "*"),
-    ("ecs:RegisterTaskDefinition", "*"),
-    ("ecs:CreateService", "*"),
-    ("ecs:RunTask", "*"),
-    ("sts:AssumeRole", "*"),
-]
-
 DENY_SID = "DenyDangerous"
+FENCE_STATE_OBJECT = "DenyStateObjectAccessOutsideTheStateObject"
+FENCE_LOCK = "DenyLockItemsOutsideTheLockTable"
+FENCE_STATE_CMK = "DenyStateCmkUseOutsideTheStateCmk"
+FENCE_TASK_DEF = "DenyTaskDefinitionRegistrationOutsideTheFamilies"
+
+OTHER_TABLE = f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"
+AUDIT_OBJECT = gen.ARN["audit_bucket"] + "/AWSLogs/o.json.gz"
+
+# The mandatory safety set: (action, resource, sid). Every entry must be an EXPLICIT Deny
+# from the named Sid, and every entry is mutation-tested below. Adding an action here
+# without it being denied breaks the suite, which is the point.
+#
+# INFRA-9 B-3 (2026-08-16), the governance re-authoring the ownership sweep called HAZARD 2:
+# permanent W0 became the APPLY IDENTITY, so the state-object/lock/decrypt/registration
+# capabilities are carved out of the flat DenyDangerous ceiling and re-denied by NotResource
+# FENCES. The carved rows therefore assert the fence Sid at an OUT-OF-SCOPE resource — the
+# safety property is now "denied everywhere EXCEPT the exact backend resource", and the
+# in-scope allows are asserted positively in tests/test_operator_policies.py.
+MANDATORY_PERMANENT_DENIES = [
+    ("iam:PassRole", "*", DENY_SID),
+    ("iam:CreateRole", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:PutRolePolicy", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:DeleteRole", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:DeleteRolePolicy", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:TagRole", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:UntagRole", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:PutRolePermissionsBoundary", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("iam:UpdateAssumeRolePolicy", gen.READER_ROLE_ARNS[0], DENY_SID),
+    ("cloudtrail:StopLogging", gen.ARN["trail"], DENY_SID),
+    ("cloudtrail:DeleteTrail", gen.ARN["trail"], DENY_SID),
+    ("cloudtrail:UpdateTrail", gen.ARN["trail"], DENY_SID),
+    ("cloudtrail:PutEventSelectors", gen.ARN["trail"], DENY_SID),
+    # B-3 carved: state-object read/write is FENCED — denied at every object except the
+    # exact state object.
+    ("s3:GetObject", AUDIT_OBJECT, FENCE_STATE_OBJECT),
+    ("s3:PutObject", AUDIT_OBJECT, FENCE_STATE_OBJECT),
+    # Deletion and version reads stay flatly denied, INCLUDING at the state object itself.
+    ("s3:DeleteObject", STATE_OBJECT, DENY_SID),
+    ("s3:GetObjectVersion", STATE_OBJECT, DENY_SID),
+    ("s3:PutBucketPolicy", gen.ARN["state_bucket"], DENY_SID),
+    ("s3:PutBucketVersioning", gen.ARN["state_bucket"], DENY_SID),
+    # B-3 carved: lock items are FENCED — denied at every table except the lock table.
+    ("dynamodb:GetItem", OTHER_TABLE, FENCE_LOCK),
+    ("dynamodb:PutItem", OTHER_TABLE, FENCE_LOCK),
+    ("dynamodb:DeleteItem", OTHER_TABLE, FENCE_LOCK),
+    # UpdateItem stays flatly denied, INCLUDING at the lock table (adjudicated unused).
+    ("dynamodb:UpdateItem", LOCK, DENY_SID),
+    ("kms:ScheduleKeyDeletion", gen.ARN["cmk_state"], DENY_SID),
+    ("kms:DisableKey", gen.ARN["cmk_state"], DENY_SID),
+    ("kms:CreateGrant", gen.ARN["cmk_secrets"], DENY_SID),
+    ("kms:PutKeyPolicy", gen.ARN["cmk_secrets"], DENY_SID),
+    # B-3 carved: decrypt is FENCED — denied at every key except the state CMK (the secrets
+    # CMK protects the database credential).
+    ("kms:Decrypt", gen.ARN["cmk_secrets"], FENCE_STATE_CMK),
+    ("kms:GenerateDataKey", gen.ARN["cmk_secrets"], FENCE_STATE_CMK),
+    ("secretsmanager:GetSecretValue", "*", DENY_SID),
+    ("secretsmanager:PutSecretValue", "*", DENY_SID),
+    # B-3 carved: registration is FENCED — the "*" probe matches the fence because "*" is
+    # not one of the four family ARNs, so the universal-invariant posture is preserved.
+    ("ecs:RegisterTaskDefinition", "*", FENCE_TASK_DEF),
+    ("ecs:TagResource", "*", FENCE_TASK_DEF),
+    ("ecs:CreateService", "*", DENY_SID),
+    ("ecs:RunTask", "*", DENY_SID),
+    ("sts:AssumeRole", "*", DENY_SID),
+]
 
 
 @pytest.fixture(scope="module")
@@ -149,11 +176,11 @@ def test_require_explicit_deny_rejects_implicit_deny():
 # --- Phase C: explicit-Deny assertions ---------------------------------------------
 
 
-@pytest.mark.parametrize("action,resource", MANDATORY_PERMANENT_DENIES,
-                         ids=[f"{a}@{r.rsplit(':', 1)[-1][:24]}" for a, r in MANDATORY_PERMANENT_DENIES])
-def test_permanent_w0_explicitly_denies(permanent, action, resource):
+@pytest.mark.parametrize("action,resource,sid", MANDATORY_PERMANENT_DENIES,
+                         ids=[f"{a}@{r.rsplit(':', 1)[-1][:24]}" for a, r, _ in MANDATORY_PERMANENT_DENIES])
+def test_permanent_w0_explicitly_denies(permanent, action, resource, sid):
     """EXPLICIT_DENY from the named Sid — implicit denial fails this test."""
-    iam_eval.require_explicit_deny(permanent, action, resource, PERM_CTX, sid=DENY_SID)
+    iam_eval.require_explicit_deny(permanent, action, resource, PERM_CTX, sid=sid)
 
 
 def test_the_deny_statement_is_unconditional_and_global(permanent):
@@ -165,9 +192,49 @@ def test_the_deny_statement_is_unconditional_and_global(permanent):
     assert "NotAction" not in deny[0] and "NotResource" not in deny[0]
 
 
+# INFRA-9 B-3: fence sid -> the Allow sid whose exact Resource scope it must mirror. This is
+# the shape contract for the carve-outs: a fence that widens beyond its paired Allow's scope
+# breaks a legitimate capability; one that narrows leaves the capability implicit elsewhere.
+FENCE_PAIRING = {
+    FENCE_STATE_OBJECT: "StateObjectReadWrite",
+    FENCE_LOCK: "StateLock",
+    FENCE_STATE_CMK: "StateCmkUseViaBackendServices",
+    FENCE_TASK_DEF: "TaskDefinitionFamiliesRegister",
+}
+
+
+def test_every_fence_is_unconditional_and_mirrors_its_allow_scope(permanent):
+    """Each NotResource fence must carve EXACTLY the resources its paired Allow grants.
+
+    Part of the B-3 governance re-authoring: the old single-Deny shape assertion survives
+    for the flat ceiling above; this is the new shape assertion for the fences.
+    """
+    by_sid = {s.get("Sid"): s for s in permanent["Statement"]}
+    deny_sids = [s.get("Sid") for s in permanent["Statement"] if s["Effect"] == "Deny"]
+    assert deny_sids == [DENY_SID, *FENCE_PAIRING], (
+        "the Deny statements must be exactly the flat ceiling plus the four B-3 fences")
+    for fence_sid, allow_sid in FENCE_PAIRING.items():
+        fence, allow = by_sid[fence_sid], by_sid[allow_sid]
+        assert "Condition" not in fence, fence_sid
+        assert "Resource" not in fence and "NotAction" not in fence, fence_sid
+        assert fence["NotResource"] == allow["Resource"], (
+            f"{fence_sid} must carve exactly what {allow_sid} grants")
+        fence_actions = set(fence["Action"] if isinstance(fence["Action"], list) else [fence["Action"]])
+        allow_actions = set(allow["Action"] if isinstance(allow["Action"], list) else [allow["Action"]])
+        assert fence_actions <= allow_actions, (
+            f"{fence_sid} fences an action {allow_sid} does not grant")
+    # Adversarial-lane finding 1 (the take-now half): bind the ECS statement's Resource to
+    # the collection whose lineage is INDEPENDENT of the generator's statement text — the
+    # family set is pinned to the .tf module source by test_operator_policies. A coordinated
+    # Allow+fence widening of the ECS scope must now move this assertion, not just the pin.
+    # (The three backend scopes' authored ceiling is a recorded Part-B follow-up.)
+    assert by_sid["TaskDefinitionFamiliesRegister"]["Resource"] == gen.TASK_DEFINITION_FAMILY_ARNS
+    assert by_sid[FENCE_TASK_DEF]["NotResource"] == gen.TASK_DEFINITION_FAMILY_ARNS
+
+
 def test_a_competing_allow_cannot_override_the_safety_deny(permanent):
     """Explicit Deny must win even against a maximally broad Allow."""
-    for action, resource in MANDATORY_PERMANENT_DENIES:
+    for action, resource, _sid in MANDATORY_PERMANENT_DENIES:
         widened = copy.deepcopy(permanent)
         widened["Statement"].insert(0, {"Sid": "Sneak", "Effect": "Allow",
                                         "Action": action, "Resource": "*"})
@@ -184,10 +251,11 @@ MUTATIONS = ["remove_action", "misspell_action", "flip_effect_to_allow",
              "rename_sid", "delete_statement"]
 
 
-def _mutate(policy: dict, action: str, kind: str) -> dict:
+def _mutate(policy: dict, action: str, kind: str, sid: str = DENY_SID) -> dict:
     out = copy.deepcopy(policy)
     stmts = out["Statement"]
-    target = next(s for s in stmts if s.get("Sid") == DENY_SID)
+    target = next(s for s in stmts if s.get("Sid") == sid)
+    fence = "NotResource" in target
     if kind == "remove_action":
         target["Action"] = [a for a in target["Action"] if a != action]
     elif kind == "misspell_action":
@@ -195,7 +263,15 @@ def _mutate(policy: dict, action: str, kind: str) -> dict:
     elif kind == "flip_effect_to_allow":
         target["Effect"] = "Allow"
     elif kind == "narrow_resource":
-        target["Resource"] = "arn:aws:iam::000000000000:role/nothing-matches-this"
+        # For the flat ceiling: scope it to an ARN nothing matches. For a fence the
+        # equivalent evasion is carving out the PROBED resource — the fence still exists
+        # but no longer denies the thing the row protects.
+        if fence:
+            existing = target["NotResource"]
+            existing = existing if isinstance(existing, list) else [existing]
+            target["NotResource"] = existing + ["*"]
+        else:
+            target["Resource"] = "arn:aws:iam::000000000000:role/nothing-matches-this"
     elif kind == "add_notresource_escape":
         target.pop("Resource", None)
         target["NotResource"] = "*"          # excludes everything -> deny never applies
@@ -204,24 +280,25 @@ def _mutate(policy: dict, action: str, kind: str) -> dict:
     elif kind == "rename_sid":
         target["Sid"] = "RenamedDeny"
     elif kind == "delete_statement":
-        out["Statement"] = [s for s in stmts if s.get("Sid") != DENY_SID]
+        out["Statement"] = [s for s in stmts if s.get("Sid") != sid]
     else:  # pragma: no cover
         raise AssertionError(kind)
     return out
 
 
-@pytest.mark.parametrize("action,resource", MANDATORY_PERMANENT_DENIES,
-                         ids=[a for a, _ in MANDATORY_PERMANENT_DENIES])
+@pytest.mark.parametrize("action,resource,sid", MANDATORY_PERMANENT_DENIES,
+                         ids=[a for a, _, _ in MANDATORY_PERMANENT_DENIES])
 @pytest.mark.parametrize("kind", MUTATIONS)
-def test_every_mandatory_deny_is_mutation_protected(permanent, action, resource, kind):
+def test_every_mandatory_deny_is_mutation_protected(permanent, action, resource, sid, kind):
     """Each mutation must break the safety assertion for THIS action.
 
     `add_expiring_condition` is included because a Deny that lapses is not a Deny; the
-    evaluated context is inside the window only for the Allow statements.
+    evaluated context is inside the window only for the Allow statements. For fence rows the
+    mutations target the FENCE statement — the carved capability's only out-of-scope control.
     """
-    mutated = _mutate(permanent, action, kind)
+    mutated = _mutate(permanent, action, kind, sid=sid)
     with pytest.raises(AssertionError):
-        iam_eval.require_explicit_deny(mutated, action, resource, PERM_CTX, sid=DENY_SID)
+        iam_eval.require_explicit_deny(mutated, action, resource, PERM_CTX, sid=sid)
 
 
 def test_the_passrole_regression_is_caught(permanent):
@@ -241,7 +318,7 @@ def test_the_passrole_regression_is_caught(permanent):
 def test_mutation_coverage_is_total_over_the_mandatory_set(permanent):
     """No mandatory action may be silently exempt from mutation testing."""
     denied = {a for s in permanent["Statement"] if s["Effect"] == "Deny" for a in s["Action"]}
-    missing = [a for a, _ in MANDATORY_PERMANENT_DENIES if a not in denied]
+    missing = [a for a, _, _ in MANDATORY_PERMANENT_DENIES if a not in denied]
     assert not missing, f"mandatory safety actions absent from the Deny: {missing}"
 
 

@@ -455,7 +455,10 @@
   "signalnest_identity.py::ALL_ROLE_NAMES": "NON_SECURITY_CONFIGURATION",
   "trust_policies.py::_BY_SUFFIX": "NON_SECURITY_CONFIGURATION",
   "security_collection_assurance.py::_GOVERNED_FILES": "NON_SECURITY_CONFIGURATION",
-  "collection_completeness.py::COMPLETENESS_REQUIRING_KINDS": "NON_SECURITY_CONFIGURATION"
+  "collection_completeness.py::COMPLETENESS_REQUIRING_KINDS": "NON_SECURITY_CONFIGURATION",
+  "gen_operator_policies.py::W0_APPLY_CLOSURE": "SECURITY_CRITICAL_LIST",
+  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
+  "gen_operator_policies.py::TASK_DEFINITION_FAMILY_ARNS": "NON_SECURITY_CONFIGURATION"
  },
  "completeness_consumers": {
   "reviewer_retrieval_state.py::STATES": {
@@ -857,7 +860,9 @@
   "reviewer_retrieval_state.py::DEFINITIONS": "documentation-only: emitted by contract(), read by no decision path",
   "cache_authority.py::CLASSIFICATIONS": "an enforced security universe: cache-authority-closed-enum",
   "cache_authority.py::_PINS": "a runtime identity registry (empty-at-rest), not an enforced authored universe",
-  "leak_scan.py::NON_LIVE_CLASSIFICATIONS": "an enforced security universe: leak-suppression-closed-enum"
+  "leak_scan.py::NON_LIVE_CLASSIFICATIONS": "an enforced security universe: leak-suppression-closed-enum",
+  "gen_operator_policies.py::W0_APPLY_CLOSURE": "BH-A1a shape, added INFRA-9 B-3: SECURITY_CRITICAL_SOURCE (allow). The apply-surface closure driving permanent W0's new Allow statements; widening is caught by the INDEPENDENT operator-closure-contract sections (state_backend_closure, stage_b_task_definition_closure) plus the FLATTEN_UNION generated-contract equality and the review pin.",
+  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": "BH-A1a shape, added INFRA-9 B-3: SECURITY_CRITICAL_DERIVED (derived). Carves the apply capabilities OUT of permanent W0's flat DenyDangerous ceiling; adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence) plus the review pin."
  },
  "a1a_adjudication": {
   "gen_bootstrap_operator_policy.py::BOUNDARY_ATTACH_ACTIONS": {
@@ -1633,6 +1638,51 @@
     "effect": "Allow",
     "spec_needed": true,
     "independent_ceiling": "must_not_contract.py::FORBIDDEN_CAPABILITIES + allow_model.py allow-axis exemption proof (independent; FORBIDDEN is derived from the contract, not from these lists)",
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::W0_APPLY_CLOSURE": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "allow",
+   "generator": "gen_operator_policies.py::permanent_w0_policy",
+   "emitted": {
+    "effect": "Allow",
+    "sid": "StateBucketRead+StateObjectReadWrite+StateLock+StateCmkUseViaBackendServices+TaskDefinitionFamiliesRegister+TaskDefinitionDescribeStar"
+   },
+   "oracle_family": "AUTHORED_CONTRACT",
+   "expected_authority": "infra/aws/operator-closure-contract.json sections state_backend_closure + stage_b_task_definition_closure (a separate source gen_operator_policies never reads; compared by tests/test_operator_policies.py)",
+   "observed_authority": "emitted apply-surface Allow actions of gen_operator_policies.py::permanent_w0_policy()",
+   "independence": "adding a member widens the apply identity's granted privilege; the widening is caught by the INDEPENDENT closure contract, the FLATTEN_UNION generated-contract equality, and the review-pin drop-backstop; expected root != the source list",
+   "comparison": "EXACT (emitted apply Allow == the two contract sections)",
+   "positive_presence": "INVALID_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "INFRA-9 B-3 (2026-08-16): the apply-surface closure, deliberately SEPARATE from REFRESH_CLOSURE so REFRESH_OBSERVED_READS cannot absorb a write action (HAZARD 1).",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "effect": "Allow",
+    "spec_needed": true,
+    "independent_ceiling": "infra/aws/operator-closure-contract.json sections state_backend_closure + stage_b_task_definition_closure",
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": {
+   "cls": "SECURITY_CRITICAL_DERIVED",
+   "kind": "derived",
+   "generator": "gen_operator_policies.py::permanent_w0_policy",
+   "emitted": null,
+   "oracle_family": "PROVENANCE_DERIVATION",
+   "expected_authority": "the apply identity's own Allow-source closure (W0_APPLY_CLOSURE upstream) + must_not_contract",
+   "observed_authority": "emitted policy of gen_operator_policies.py::permanent_w0_policy(): each excepted action in an Allow Sid AND absent from the flat Deny Sid AND re-denied by its NotResource fence",
+   "independence": "carves exceptions OUT of the FORBIDDEN deny (derived from must_not_contract); adding a member REMOVES that action from the flat deny -> widens. Verified by emitted-policy correspondence: every excepted action must be simultaneously Allowed on its exact resource, absent from the flat Deny, and fenced",
+   "comparison": "PROVENANCE_CORRESPONDENCE (exception set == the forbidden subset of the apply closure) + EMITTED_POLICY(in Allow AND not in flat Deny AND fenced)",
+   "positive_presence": "CONDITIONALLY_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "INFRA-9 B-3 (2026-08-16): frozenset of capabilities excluded from the flat ceiling (DenyDangerous) and re-denied by NotResource fences; the permanent-W0 analogue of TEMP_SCOPED_CAPABILITIES.",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "spec_needed": true,
     "complexity": "MEDIUM"
    }
   }

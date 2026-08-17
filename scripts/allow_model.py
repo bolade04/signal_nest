@@ -148,6 +148,68 @@ EXEMPTIONS = {
         # needs it at RUNTIME and is a different principal. stage_a_create_closure requires
         # only CreateRole, PutRolePolicy and TagRole, so PassRole stays flatly forbidden.
     },
+    # INFRA-9 B-3 (2026-08-16): permanent W0 is the APPLY IDENTITY. It holds the
+    # state-backend closure and task-definition registration SCOPED — each capability
+    # allowed on exactly the backend resource / composition families the closure contract
+    # names, and explicitly denied everywhere else by its NotResource fence. The proof
+    # below requires both directions for every entry, so a fence that silently widens or
+    # an allow that silently narrows is an escape or a loss, never a pass.
+    "permanent_w0": {
+        "s3:GetObject": {
+            "reason": "reads the encrypted state object; state_backend_closure.read "
+                      "(B-3 apply-identity adjudication)",
+            "in_scope": lambda: gen.ARN["state_object"],
+            "out_of_scope": lambda: [f"{gen.ARN['audit_bucket']}/AWSLogs/x",
+                                     f"{identity.s3_bucket_arn(identity.APP_BUCKET_NAME)}/x"],
+        },
+        "s3:PutObject": {
+            "reason": "writes the new state object on apply; state_backend_closure."
+                      "write_apply_only (B-3 apply-identity adjudication)",
+            "in_scope": lambda: gen.ARN["state_object"],
+            "out_of_scope": lambda: [f"{gen.ARN['audit_bucket']}/AWSLogs/x",
+                                     f"{gen.ARN['state_bucket']}/other/object"],
+        },
+        "dynamodb:GetItem": {
+            "reason": "inspects the state lock before acquiring it",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "dynamodb:PutItem": {
+            "reason": "acquires the Terraform state lock",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "dynamodb:DeleteItem": {
+            "reason": "releases the Terraform state lock it acquired",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "kms:Decrypt": {
+            "reason": "decrypts the state object under the state CMK, and ONLY via the S3 "
+                      "and DynamoDB backend services (kms:ViaService); the SECRETS CMK is "
+                      "fenced off because it protects the database credential",
+            "context": lambda: {"kms:ViaService": f"s3.{gen.REGION}.amazonaws.com"},
+            "in_scope": lambda: gen.ARN["cmk_state"],
+            "out_of_scope": lambda: [gen.ARN["cmk_secrets"]],
+        },
+        "ecs:RegisterTaskDefinition": {
+            "reason": "registers task-definition revisions for exactly the four composition "
+                      "families (all Stage-B-gated); no PassRole is added — whether "
+                      "registration performs a PassRole check is recorded DISPUTED "
+                      "(contract _no_passrole_note), and zero surface is the fail-closed "
+                      "direction pending the mandatory Part-B canary gate",
+            # A CONCRETE revision, not the family:* pattern itself: AWS authorizes against
+            # a revision-bearing ARN, and probing the pattern with the pattern succeeds by
+            # string identity without exercising the match (architect-lane finding 10).
+            "in_scope": lambda: gen.TASK_DEFINITION_FAMILY_ARNS[0][:-1] + "1",
+            "out_of_scope": lambda: [
+                f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:1",
+                f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/anything:9"],
+        },
+    },
     "bootstrap_operator": {
         "iam:CreatePolicy": {
             "reason": "creates the reviewed boundary policy ONCE under Operating Model 1; it "
@@ -230,15 +292,40 @@ def contract() -> dict:
 
 def required_actions() -> dict[str, str]:
     """REQUIRED, derived from the closure contract — never from the policy under test."""
+    # INFRA-9 B-3: stage_b_task_definition_closure joined the requirement sections when
+    # permanent W0 became the apply identity.
+    return _sections_required(("refresh_closure", "stage_a_create_closure",
+                               "state_backend_closure", "stage_b_task_definition_closure"))
+
+
+def _sections_required(sections: tuple) -> dict[str, str]:
     doc = contract()
     out: dict[str, str] = {}
-    for section in ("refresh_closure", "stage_a_create_closure", "state_backend_closure"):
+    for section in sections:
         for group, actions in doc[section].items():
             if group.startswith("_") or not isinstance(actions, list):
                 continue
             for action in actions:
                 out[action] = f"{section}.{group}"
     return out
+
+
+def temporary_required_actions() -> dict[str, str]:
+    """The temporary operator's OWN requirement set — unchanged by INFRA-9 B-3. The Stage-B
+    task-definition closure belongs to permanent W0 alone; the temporary operator explicitly
+    DENIES ecs:RegisterTaskDefinition, and demanding it here would report that deliberate
+    ceiling as a loss."""
+    return _sections_required(("refresh_closure", "stage_a_create_closure",
+                               "state_backend_closure"))
+
+
+def w0_required_actions() -> dict[str, str]:
+    """Permanent W0's OWN requirement set (INFRA-9 B-3): the refresh closure plus the apply
+    surface. stage_a_create_closure is deliberately excluded — ECR/IAM create-path reads
+    belong to the temporary operator, and demanding them of W0 would report every flat
+    ceiling hit as a loss."""
+    return _sections_required(("refresh_closure", "state_backend_closure",
+                               "stage_b_task_definition_closure"))
 
 
 def optional_actions() -> dict[str, str]:
@@ -479,18 +566,49 @@ def prove_ceiling(name: str, policy: dict, context: dict, probe_resource) -> dic
             "score": f"{scored}/{len(FORBIDDEN_CAPABILITIES)}"}
 
 
-def prove_no_losses(name: str, policy: dict, context: dict, probe_resource) -> dict:
+def prove_no_losses(name: str, policy: dict, context: dict, probe_resource,
+                    required: dict[str, str] | None = None,
+                    probe_overrides: dict[str, str] | None = None) -> dict:
     """0 losses: the ceiling must not remove a capability the design requires.
 
     A scoped capability is probed on the resource its exemption names. The generic probe
     returns a deliberately out-of-scope ARN — that is what makes the escape half strict —
     so using it here would report every fenced capability as a loss.
+
+    `required` selects the principal's OWN requirement set (INFRA-9 B-3): the full
+    contract for the temporary operator, w0_required_actions() for permanent W0.
     """
     losses = []
     exemptions = EXEMPTIONS.get(name, {})
-    for action, provenance in sorted(required_actions().items()):
+    # A probe override must name a resource the emitted policy ACTUALLY grants for that
+    # action — otherwise the thing being proved supplies its own unverified probe, the
+    # shape Gate 4N-I27O hardened PERMITTED_WILDCARDS against (architect-lane finding 9).
+    # A rejected override is reported as a loss, never silently believed.
+    for action, resource in sorted((probe_overrides or {}).items()):
+        granted: list = []
+        for statement in policy["Statement"]:
+            if statement.get("Effect") != "Allow":
+                continue
+            acts = statement.get("Action", [])
+            if action in ([acts] if isinstance(acts, str) else acts):
+                res = statement.get("Resource", [])
+                granted.extend([res] if isinstance(res, str) else res)
+        # PATTERN match, not literal membership (adversarial-lane round-3 delta 1): the
+        # granted values are wildcard patterns, and literal membership would force the probe
+        # to be the pattern itself — the string-identity weakness finding 10 removed
+        # elsewhere. fnmatch keeps the point (verifiable against the policy) while
+        # permitting the stronger concrete-revision probe.
+        if not any(resource == g or fnmatch.fnmatch(resource, g) for g in granted):
+            losses.append({"policy": name, "action": action, "resource": resource,
+                           "provenance": "probe override",
+                           "note": "OVERRIDE REJECTED: names a resource the emitted Allow "
+                                   "does not grant — an override must be verifiable against "
+                                   "the policy, not merely asserted by the caller"})
+    for action, provenance in sorted((required if required is not None
+                                      else required_actions()).items()):
         spec = exemptions.get(action)
-        resource = spec["in_scope"]() if spec else probe_resource(action)
+        resource = (spec["in_scope"]() if spec
+                    else (probe_overrides or {}).get(action) or probe_resource(action))
         ctx = {**context, **(spec.get("context", dict)() or {})} if spec else context
         result = iam_eval.decide(policy, action, resource, ctx)
         if result.decision is Decision.EXPLICIT_DENY:
@@ -570,9 +688,21 @@ def run() -> dict:
         }
         # Loss analysis applies only to principals that must perform the closure. The
         # boundary caps ROLES, which never run tofu, so the closure contract is not its
-        # requirement set.
+        # requirement set. INFRA-9 B-3: permanent W0 became the apply identity, so it is
+        # loss-proved over ITS requirement set (refresh + backend + Stage-B registration).
         if name == "temporary_operator":
-            entry.update(prove_no_losses(name, policy, context, probe))
+            entry.update(prove_no_losses(name, policy, context, probe,
+                                         required=temporary_required_actions()))
+        elif name == "permanent_w0":
+            # ecs:TagResource is fenced but NOT forbidden, so it has no EXEMPTIONS entry to
+            # supply an in-scope probe; the generic ecs probe ("*") lands on the fence BY
+            # DESIGN. Probe it at the resource the closure grants. (Conditioned grants —
+            # kms:GenerateDataKey, ecs:DescribeTaskDefinition — evaluate MISSING_CONTEXT
+            # here and are proven positively by the pytest suite with real contexts.)
+            entry.update(prove_no_losses(
+                name, policy, context, probe, required=w0_required_actions(),
+                probe_overrides={
+                    "ecs:TagResource": gen.TASK_DEFINITION_FAMILY_ARNS[0][:-1] + "1"}))
         report["policies"][name] = entry
 
     report["totals"] = {

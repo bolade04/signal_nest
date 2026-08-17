@@ -171,43 +171,143 @@ def test_every_iam_role_sets_a_permissions_boundary():
 # --- permanent W0: forbidden capabilities -------------------------------------------
 
 
-@pytest.mark.parametrize("action,resource", [
-    ("s3:GetObject", gen.ARN["state_object"]),
-    ("s3:PutObject", gen.ARN["state_object"]),
-    ("s3:GetObjectVersion", gen.ARN["state_object"]),
-    ("dynamodb:PutItem", gen.ARN["lock"]),
-    ("dynamodb:DeleteItem", gen.ARN["lock"]),
-    ("iam:CreateRole", gen.READER_ROLE_ARNS[0]),
-    ("iam:PutRolePolicy", gen.READER_ROLE_ARNS[0]),
-    ("iam:TagRole", gen.READER_ROLE_ARNS[0]),
-    ("iam:PutRolePermissionsBoundary", gen.READER_ROLE_ARNS[0]),
-    ("iam:PassRole", "*"),
-    ("cloudtrail:StopLogging", gen.ARN["trail"]),
-    ("cloudtrail:DeleteTrail", gen.ARN["trail"]),
-    ("s3:PutBucketPolicy", gen.ARN["audit_bucket"]),
-    ("s3:PutBucketPolicy", gen.ARN["state_bucket"]),
-    ("rds:ModifyDBInstance", gen.ARN["db"]),
-    ("secretsmanager:GetSecretValue", "*"),
-    ("kms:ScheduleKeyDeletion", gen.ARN["cmk_secrets"]),
-    ("kms:CreateGrant", gen.ARN["cmk_secrets"]),
-    # the capability set the entire 4N-H saga was about
-    ("ecs:RegisterTaskDefinition", "*"),
-    ("ecs:CreateService", "*"),
-    ("ecs:RunTask", "*"),
+# INFRA-9 B-3 (2026-08-16): permanent W0 is the APPLY IDENTITY. Four capability groups are
+# carved out of the flat DenyDangerous ceiling and re-denied by NotResource fences, so the
+# carved rows below assert the FENCE Sid at an out-of-scope resource. The in-scope allows
+# are asserted positively further down.
+@pytest.mark.parametrize("action,resource,sid", [
+    ("s3:GetObject", gen.ARN["audit_bucket"] + "/AWSLogs/x", "DenyStateObjectAccessOutsideTheStateObject"),
+    ("s3:PutObject", gen.ARN["audit_bucket"] + "/AWSLogs/x", "DenyStateObjectAccessOutsideTheStateObject"),
+    ("s3:GetObjectVersion", gen.ARN["state_object"], "DenyDangerous"),
+    ("dynamodb:PutItem", f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/other", "DenyLockItemsOutsideTheLockTable"),
+    ("dynamodb:DeleteItem", f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/other", "DenyLockItemsOutsideTheLockTable"),
+    ("kms:Decrypt", gen.ARN["cmk_secrets"], "DenyStateCmkUseOutsideTheStateCmk"),
+    ("iam:CreateRole", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
+    ("iam:PutRolePolicy", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
+    ("iam:TagRole", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
+    ("iam:PutRolePermissionsBoundary", gen.READER_ROLE_ARNS[0], "DenyDangerous"),
+    ("iam:PassRole", "*", "DenyDangerous"),
+    ("cloudtrail:StopLogging", gen.ARN["trail"], "DenyDangerous"),
+    ("cloudtrail:DeleteTrail", gen.ARN["trail"], "DenyDangerous"),
+    ("s3:PutBucketPolicy", gen.ARN["audit_bucket"], "DenyDangerous"),
+    ("s3:PutBucketPolicy", gen.ARN["state_bucket"], "DenyDangerous"),
+    ("rds:ModifyDBInstance", gen.ARN["db"], "DenyDangerous"),
+    ("secretsmanager:GetSecretValue", "*", "DenyDangerous"),
+    ("kms:ScheduleKeyDeletion", gen.ARN["cmk_secrets"], "DenyDangerous"),
+    ("kms:CreateGrant", gen.ARN["cmk_secrets"], "DenyDangerous"),
+    # the capability set the entire 4N-H saga was about. RegisterTaskDefinition is now
+    # FENCED (the B-3 carve-out); RunTask/CreateService/friends stay flatly denied.
+    ("ecs:RegisterTaskDefinition", "*", "DenyTaskDefinitionRegistrationOutsideTheFamilies"),
+    ("ecs:RegisterTaskDefinition",
+     f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil",
+     "DenyTaskDefinitionRegistrationOutsideTheFamilies"),
+    ("ecs:CreateService", "*", "DenyDangerous"),
+    ("ecs:RunTask", "*", "DenyDangerous"),
 ])
-def test_permanent_w0_denies_dangerous_actions(permanent, action, resource):
+def test_permanent_w0_denies_dangerous_actions(permanent, action, resource, sid):
     """EXPLICIT Deny, not merely 'not allowed'.
 
     Gate 4N-I6 left this as `not allowed(...)`, which IMPLICIT_DENY satisfies — removing
     iam:PassRole from the Deny left this file at 57/57 passed. It now requires the real
     control to be present.
     """
-    iam_eval.require_explicit_deny(permanent, action, resource, PERM_CTX, sid="DenyDangerous")
+    iam_eval.require_explicit_deny(permanent, action, resource, PERM_CTX, sid=sid)
 
 
 def test_permanent_w0_deny_is_unconditional(permanent):
+    """INFRA-9 B-3 re-authoring (the ownership sweep's HAZARD 2): every Deny is still
+    UNCONDITIONAL, and every Deny is either the flat Resource-"*" ceiling or one of the four
+    NotResource fences whose carve is asserted statement-by-statement in
+    tests/test_explicit_deny.py::test_every_fence_is_unconditional_and_mirrors_its_allow_scope."""
     for stmt in [s for s in permanent["Statement"] if s["Effect"] == "Deny"]:
-        assert "Condition" not in stmt and stmt.get("Resource") == "*"
+        assert "Condition" not in stmt, stmt.get("Sid")
+        assert stmt.get("Resource") == "*" or "NotResource" in stmt, stmt.get("Sid")
+
+
+# --- permanent W0: the B-3 apply surface (positive assertions) ----------------------
+
+
+W0_CMK_CTX_S3 = dict(PERM_CTX, **{"kms:ViaService": f"s3.{gen.REGION}.amazonaws.com"})
+W0_CMK_CTX_DDB = dict(PERM_CTX, **{"kms:ViaService": f"dynamodb.{gen.REGION}.amazonaws.com"})
+
+
+def test_permanent_w0_has_the_state_backend_closure(permanent, contract):
+    """INFRA-9 B-3: W0 is the apply identity, so the SAME contract section the temporary
+    operator is measured against now measures W0 — kms actions under the ViaService context
+    the statement requires (S3/DynamoDB calling KMS on the operator's behalf)."""
+    sb = contract["state_backend_closure"]
+    for action in sb["read"] + sb["write_apply_only"]:
+        resource = gen.ARN["state_object"] if "Object" in action else gen.ARN["state_bucket"]
+        assert allowed(permanent, action, resource, PERM_CTX), action
+    for action in sb["lock"]:
+        assert allowed(permanent, action, gen.ARN["lock"], PERM_CTX), action
+    for action in sb["cmk"]:
+        assert allowed(permanent, action, gen.ARN["cmk_state"], W0_CMK_CTX_S3), action
+        assert allowed(permanent, action, gen.ARN["cmk_state"], W0_CMK_CTX_DDB), action
+
+
+def test_permanent_w0_covers_the_stage_b_task_definition_closure(permanent, contract):
+    stage_b = contract["stage_b_task_definition_closure"]
+    for action in stage_b["register"]:
+        for arn in gen.TASK_DEFINITION_FAMILY_ARNS:
+            # probe a CONCRETE revision — the pattern matching itself by string identity
+            # would not exercise the match (architect-lane finding 10)
+            concrete = arn[:-1] + "1"
+            assert allowed(permanent, action, concrete, PERM_CTX), f"{action} on {concrete}"
+            assert allowed(permanent, action, arn, PERM_CTX), f"{action} on {arn}"
+    for action in stage_b["describe_star"]:
+        assert allowed(permanent, action, "*", PERM_CTX), action
+    assert "iam:PassRole" not in json.dumps(
+        [s for s in permanent["Statement"] if s["Effect"] == "Allow"]), (
+        "the B-3 delta must add NO PassRole surface")
+
+
+def test_state_cmk_use_is_dead_without_the_backend_via_service(permanent):
+    """The ViaService condition is load-bearing: a DIRECT kms call by the operator's own
+    credentials (context lacking or naming another service) must never reach an Allow.
+
+    EXACT decisions, consumed (permissions-lane finding 5): an absent key is MISSING_CONTEXT;
+    a wrong-service value fails the condition and, the fence not matching at the state CMK,
+    lands on IMPLICIT_DENY — an EXPLICIT deny off the state CMK is asserted separately."""
+    for ctx, want in ((PERM_CTX, iam_eval.Decision.MISSING_CONTEXT),
+                      (dict(PERM_CTX, **{"kms:ViaService": f"lambda.{gen.REGION}.amazonaws.com"}),
+                       iam_eval.Decision.IMPLICIT_DENY)):
+        got = iam_eval.decide(permanent, "kms:GenerateDataKey", gen.ARN["cmk_state"], ctx).decision
+        assert got is want, (ctx, got)
+    # off the state CMK, BOTH cmk-use actions stay EXPLICITLY denied whatever the context
+    for action in ("kms:Decrypt", "kms:GenerateDataKey"):
+        iam_eval.require_explicit_deny(permanent, action, gen.ARN["cmk_secrets"],
+                                       W0_CMK_CTX_S3, sid="DenyStateCmkUseOutsideTheStateCmk")
+
+
+def test_the_scoped_capability_set_is_exactly_the_forbidden_subset_of_the_apply_closure():
+    """PROVENANCE_CORRESPONDENCE, implemented (architect-lane finding 3): the carve-out set
+    must equal flatten(W0_APPLY_CLOSURE) ∩ the flat-ceiling union — a member with no paired
+    Allow, or an apply-closure forbidden action left un-carved, both fail here."""
+    from must_not_contract import FORBIDDEN_CAPABILITIES
+    flat_union = set(gen.PERMANENT_DENY) | set(FORBIDDEN_CAPABILITIES)
+    apply_actions = {a for group in gen.W0_APPLY_CLOSURE.values() for a in group}
+    assert gen.W0_SCOPED_CAPABILITIES == apply_actions & flat_union
+
+
+def test_task_definition_families_match_the_composition():
+    """The three workload families are pinned to the module source (the reader family is
+    imported from signalnest_identity, exactly as the reader role names are)."""
+    ecs_module = _module_text("modules/ecs/main.tf")
+    for family_expr in ('"${var.name_prefix}-api"', '"${var.name_prefix}-worker"',
+                       '"${var.name_prefix}-migration"'):
+        assert f"family                   = {family_expr}" in ecs_module, family_expr
+    assert 'family    = "${var.name_prefix}-revision-reader"' in _module_text(
+        "modules/revision_reader/main.tf")
+    families = {arn.rsplit("/", 1)[-1].split(":")[0] for arn in gen.TASK_DEFINITION_FAMILY_ARNS}
+    assert families == {f"{gen.PREFIX}-api", f"{gen.PREFIX}-worker",
+                        f"{gen.PREFIX}-migration", f"{gen.PREFIX}-revision-reader"}
+    # the family:* form ONLY — the Service Reference ARNFormats entry is revision-bearing and
+    # this account's CloudTrail names the authorization resource in exactly that form
+    # (retained: b3-part-a-live-readback/ecs-action-truth-evidence.md); a bare-family entry
+    # never matches and must not reappear.
+    assert len(gen.TASK_DEFINITION_FAMILY_ARNS) == 4
+    assert all(arn.endswith(":*") for arn in gen.TASK_DEFINITION_FAMILY_ARNS)
 
 
 # --- permanent W0 vs the INDEPENDENT contract ---------------------------------------
@@ -542,9 +642,11 @@ def test_a_placeholder_or_malformed_expiry_cannot_reach_a_generated_artifact():
 
 
 def test_permanent_and_temporary_must_be_separate_principals(permanent, temporary):
-    # iam:CreateRole is no longer held by EITHER principal (Gate 4N-I9), so the separation
-    # is demonstrated on the state write, which the temporary operator still legitimately has.
-    for action, resource in (("s3:PutObject", gen.ARN["state_object"]),):
+    # INFRA-9 B-3: the state write is now legitimately held by BOTH principals (W0 became
+    # the apply identity), so the separation is demonstrated on inline-policy authoring —
+    # the temporary operator holds it boundary-conditioned on the declared roles, and
+    # permanent W0 denies it flatly.
+    for action, resource in (("iam:PutRolePolicy", gen.INLINE_POLICY_ROLE_ARNS[0]),):
         assert allowed(temporary, action, resource, TEMP_CTX)
         iam_eval.require_explicit_deny(permanent, action, resource, PERM_CTX)
 

@@ -17,6 +17,13 @@
     "boundary::kms:Decrypt": "the same roles decrypt those secrets under the SECRETS CMK; STATE CMK stays denied",
     "boundary::s3:GetObject": "api/worker task roles read the application bucket",
     "boundary::secretsmanager:GetSecretValue": "ecs-execution/reader-execution roles read the secrets their task defs reference; blanket deny breaks startup (in_scope bounds to those roles)",
+    "permanent_w0::dynamodb:DeleteItem": "state lock release on exactly the lock table (INFRA-9 B-3)",
+    "permanent_w0::dynamodb:GetItem": "state lock inspect on exactly the lock table (INFRA-9 B-3)",
+    "permanent_w0::dynamodb:PutItem": "state lock acquire on exactly the lock table (INFRA-9 B-3)",
+    "permanent_w0::ecs:RegisterTaskDefinition": "registration on exactly the four composition families; no PassRole surface added \u2014 whether registration performs a PassRole check is recorded DISPUTED (contract _no_passrole_note; mandatory Part-B canary gate), and zero surface is the fail-closed direction (INFRA-9 B-3)",
+    "permanent_w0::kms:Decrypt": "state CMK only and only via the S3/DynamoDB backend services (kms:ViaService); the secrets CMK stays fenced (INFRA-9 B-3)",
+    "permanent_w0::s3:GetObject": "the apply identity reads the encrypted state object; state_backend_closure.read (INFRA-9 B-3)",
+    "permanent_w0::s3:PutObject": "the apply identity writes the new state object on apply; state_backend_closure.write_apply_only (INFRA-9 B-3)",
     "role_bootstrap_operator::iam:CreateRole": "creating exactly the three reader roles is its only purpose; trust bytes controlled by read-back not IAM",
     "role_bootstrap_operator::iam:DeleteRole": "reverts a role whose trust document fails read-back; detect-without-revert is an alert not a control",
     "temporary_operator::dynamodb:DeleteItem": "releases the state lock it acquired",
@@ -434,9 +441,20 @@
    "assurance_kind": "GENERATED_CONTRACT_ASSURANCE",
    "control": "generated",
    "generator": "gen_operator_policies.py::permanent_w0_policy",
-   "mode": "FLATTEN_EQUALS_POLICY_ALLOW"
+   "mode": "FLATTEN_UNION_EQUALS_POLICY_ALLOW",
+   "union_with": [
+    "gen_operator_policies.py::W0_APPLY_CLOSURE"
+   ]
   },
   "gen_operator_policies.py::TEMP_SCOPED_CAPABILITIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::W0_APPLY_CLOSURE": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": {
    "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
    "control": "review_pin"
   },

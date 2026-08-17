@@ -125,7 +125,7 @@ def test_no_a1b_downward_reclassification_from_security():
 def test_a1a_non_regression_still_present():
     """A1b must not disturb A1a: the a1a_adjudication section and its 34 ids remain intact."""
     a1a = CONTRACT["a1a_adjudication"]
-    assert len(a1a) == 34
+    assert len(a1a) == 36  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     for cid in a1a:
         assert cid in CLASSIFICATIONS
 

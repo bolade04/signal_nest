@@ -17,7 +17,7 @@
       "status": "ASSURED"
     },
     "allow_model.py": {
-      "fn_count": 15,
+      "fn_count": 18,
       "detector": "tests/test_allow_axis.py",
       "detector_kind": "GRADED_PYTEST",
       "probe": {

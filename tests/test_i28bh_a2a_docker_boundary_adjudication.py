@@ -112,7 +112,7 @@ def test_a2a_no_unclassified_and_all_production_authority():
 
 
 def test_a1_non_regression():
-    assert len(CONTRACT["a1a_adjudication"]) == 34
+    assert len(CONTRACT["a1a_adjudication"]) == 36  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert len(CONTRACT["a1b_adjudication"]) == 22
     assert len(CONTRACT["a1c_adjudication"]) == 23
 

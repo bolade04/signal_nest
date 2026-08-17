@@ -319,15 +319,46 @@ def _h_generated(collection_id: str, entry: dict, ctx: dict) -> dict:
         live_value = rpc.load_collection(collection_id)
     except Exception as exc:
         return {"verdict": rpc.REFUSED_UNLOADABLE, "detail": f"{collection_id}: {exc}"}
-    if mode == "FLATTEN_EQUALS_POLICY_ALLOW":
+    if mode in ("FLATTEN_EQUALS_POLICY_ALLOW", "FLATTEN_UNION_EQUALS_POLICY_ALLOW"):
         # The collection is a grouped closure whose flattened action union must equal the Allow
         # actions of the policy the generator emits from it — i.e. the closure faithfully drives the
         # generated artifact, with nothing added or dropped in generation.
+        #
+        # INFRA-9 B-3: FLATTEN_UNION_EQUALS_POLICY_ALLOW extends this to a policy emitted from
+        # SEVERAL closures (permanent W0 = REFRESH_CLOSURE ∪ W0_APPLY_CLOSURE). The union members
+        # are named in `union_with` as DATA; each must itself be a mapping AND carry its own
+        # review-pin drop-backstop — the tautology argument below applies to every contributing
+        # closure, not just the primary. A UNION row with no union_with is malformed, never a
+        # silent downgrade to the single-closure equality.
         if not isinstance(live_value, dict):
             return {"verdict": "REFUSED_MALFORMED", "detail": f"{collection_id}: expected a mapping"}
+        union_refs = []
+        if mode == "FLATTEN_UNION_EQUALS_POLICY_ALLOW":
+            union_refs = entry.get("union_with")
+            if not isinstance(union_refs, list) or not union_refs:
+                return {"verdict": "REFUSED_MALFORMED",
+                        "detail": f"{collection_id}: FLATTEN_UNION names no union_with collections"}
+            # Adversarial-lane finding 6: a self-referencing or duplicated member is
+            # meaningless under set union and would previously ACCEPT silently — an
+            # undocumented acceptance is how a malformed registry edit slips review.
+            if collection_id in union_refs or len(set(union_refs)) != len(union_refs):
+                return {"verdict": "REFUSED_MALFORMED",
+                        "detail": f"{collection_id}: union_with must not repeat members or "
+                                  "name the primary collection"}
         flat = set()
         for members in live_value.values():
             flat.update(members)
+        for ref in union_refs:
+            try:
+                other = rpc.load_collection(ref)
+            except Exception as exc:
+                return {"verdict": rpc.REFUSED_UNLOADABLE,
+                        "detail": f"{collection_id}: union_with {ref}: {exc}"}
+            if not isinstance(other, dict):
+                return {"verdict": "REFUSED_MALFORMED",
+                        "detail": f"{collection_id}: union_with {ref} is not a mapping"}
+            for members in other.values():
+                flat.update(members)
         allow = _policy_allow_actions(produced)
         if flat != allow:
             return {"verdict": "REFUSED_GENERATOR_MISMATCH",
@@ -337,16 +368,20 @@ def _h_generated(collection_id: str, entry: dict, ctx: dict) -> dict:
         # TAUTOLOGICAL — it proves faithful generation, never that the closure CONTENT is reviewed.
         # Injecting an escalation action into the closure passes the equality while the emitted policy
         # genuinely grants it. A review-pin drop-backstop is therefore mandatory: any content change
-        # to the closure (add or drop) REDs until an independent review re-approves it.
-        if collection_id not in ctx["pins"].get("pins", {}):
-            return {"verdict": "REFUSED_NO_DROP_BACKSTOP",
-                    "detail": f"{collection_id}: a self-referential FLATTEN generated row must carry a "
-                              "review-pin so closure content changes cannot pass unseen; none registered"}
-        pin_result = _h_review_pin(collection_id, entry, ctx)
-        if pin_result["verdict"] != rpc.ACCEPT:
-            return pin_result
+        # to the closure (add or drop) REDs until an independent review re-approves it. For a UNION
+        # row the same holds for EVERY contributing closure.
+        for pinned_id in [collection_id, *union_refs]:
+            if pinned_id not in ctx["pins"].get("pins", {}):
+                return {"verdict": "REFUSED_NO_DROP_BACKSTOP",
+                        "detail": f"{pinned_id}: a self-referential FLATTEN generated row must carry a "
+                                  "review-pin so closure content changes cannot pass unseen; none registered"}
+            pin_result = _h_review_pin(pinned_id, entry, ctx)
+            if pin_result["verdict"] != rpc.ACCEPT:
+                return pin_result
         return {"verdict": rpc.ACCEPT,
-                "detail": f"{collection_id}: flatten(closure) == {generator} Allow actions ({len(flat)}) + pin"}
+                "detail": f"{collection_id}: flatten(closure"
+                          + (f" ∪ {len(union_refs)} union" if union_refs else "")
+                          + f") == {generator} Allow actions ({len(flat)}) + pin(s)"}
     if rpc.canonical_digest(collection_id, produced, isinstance(produced, (list, tuple))) != \
             rpc.canonical_digest(collection_id, live_value, isinstance(live_value, (list, tuple))):
         return {"verdict": "REFUSED_GENERATOR_MISMATCH",
