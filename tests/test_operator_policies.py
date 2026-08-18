@@ -706,3 +706,332 @@ def test_the_synthetic_zone_is_marked_synthetic():
     assert "route53" in fixture, "the synthetic inventory has no route53 block"
     assert "_synthetic" in fixture["route53"], "the synthetic zone carries no synthetic marker"
     assert fixture["route53"]["hosted_zone_id"].startswith("ZSYNTH")
+
+
+# =====================================================================================
+# INFRA-9 B-3 Part-B remediation (2026-08-17): the ICPermAdmin provisioning delta.
+#
+# One statement, one action, one exact reserved-role resource, one condition — the
+# OD-R1..OD-R5 adjudication. The tests below are the STRUCTURAL enforcement the
+# adjudication substitutes for live negative probes (OD-R5: an identical-byte
+# PutRolePolicy still alters attribution and is mutation-class, so nothing here ever
+# touches AWS): every prohibited expansion — condition removal, aws:ViaAWSService
+# substitution, action expansion, resource/suffix wildcarding, self-scope, other-role
+# scope, a dropped permanent-assignment invariant — either fails generation, fails
+# validate_policy, or is demonstrated as the exact risk the shipped shape refuses.
+# =====================================================================================
+
+_DELTA_SUFFIX = "0123456789abcdef"
+
+
+def _w0_reserved_role_arn(suffix: str = _DELTA_SUFFIX, *, region_segment: bool = True,
+                          ps_name: str | None = None, account: str | None = None) -> str:
+    name = ps_name if ps_name is not None else gen._w0_permission_set_name()
+    segment = f"{gen.REGION}/" if region_segment else ""
+    return (f"arn:aws:iam::{account or gen.ACCOUNT}:role/aws-reserved/sso.amazonaws.com/"
+            f"{segment}AWSReservedSSO_{name}_{suffix}")
+
+
+_FAS_CTX = {"aws:CalledViaFirst": "sso.amazonaws.com"}
+
+
+@pytest.fixture(scope="module")
+def delta() -> dict:
+    return gen.icpermadmin_provisioning_delta(_w0_reserved_role_arn())
+
+
+def test_icpermadmin_delta_is_exactly_the_adjudicated_statement(delta):
+    """Shape pin: one statement, one action, one exact resource, one condition, stable Sid."""
+    assert delta["Version"] == "2012-10-17"
+    assert len(delta["Statement"]) == 1
+    stmt = delta["Statement"][0]
+    assert stmt["Sid"] == gen.ICPERMADMIN_DELTA_SID == "IcProvisionW0ReservedRoleInlinePolicyWrite"
+    assert stmt["Effect"] == "Allow"
+    assert stmt["Action"] == ["iam:PutRolePolicy"], "OD-R1: single-action minimality"
+    assert isinstance(stmt["Resource"], str), "OD-R2: one exact resource, never a list or pattern"
+    assert stmt["Resource"] == _w0_reserved_role_arn()
+    assert stmt["Condition"] == {
+        "StringEquals": {"aws:CalledViaFirst": "sso.amazonaws.com"}}, (
+        "OD-R3: exactly the CalledViaFirst condition — no ViaAWSService, no alternative "
+        "service principal, no unconditioned form")
+    assert iam_eval.validate_policy(delta) == []
+
+
+def test_icpermadmin_delta_exact_fas_context_is_the_only_eligible_context(delta):
+    """OD-R3 positive direction plus every near-miss, each at its EXACT decision."""
+    arn = _w0_reserved_role_arn()
+    assert allowed(delta, "iam:PutRolePolicy", arn, _FAS_CTX)
+    near_misses = {
+        # a different forwarding service is a value mismatch, not missing context
+        ("wrong service", "cloudformation.amazonaws.com"): iam_eval.Decision.IMPLICIT_DENY,
+        ("padded value", " sso.amazonaws.com"): iam_eval.Decision.IMPLICIT_DENY,
+        ("uppercase value", "SSO.AMAZONAWS.COM"): iam_eval.Decision.IMPLICIT_DENY,
+    }
+    for (label, value), want in near_misses.items():
+        got = iam_eval.decide(delta, "iam:PutRolePolicy", arn,
+                              {"aws:CalledViaFirst": value}).decision
+        assert got is want, (label, got)
+    # aws:ViaAWSService alone — a FAS request the CalledVia key did not accompany — must
+    # NOT satisfy the statement: the key the condition names is absent, so it fails closed.
+    got = iam_eval.decide(delta, "iam:PutRolePolicy", arn,
+                          {"aws:ViaAWSService": "true"}).decision
+    assert got is iam_eval.Decision.MISSING_CONTEXT, got
+
+
+def test_icpermadmin_delta_direct_call_context_remains_denied(delta):
+    """OD-R3/OD-R5: a direct operator call carries no CalledVia key and fails closed."""
+    arn = _w0_reserved_role_arn()
+    assert iam_eval.decide(delta, "iam:PutRolePolicy", arn, {}).decision \
+        is iam_eval.Decision.MISSING_CONTEXT
+    # and the delta grants NOTHING on any other role, whatever the context
+    for other in (gen.READER_ROLE_ARNS[0],
+                  f"arn:aws:iam::{gen.ACCOUNT}:role/{gen.PREFIX}-ecs-execution",
+                  _w0_reserved_role_arn(suffix="fedcba9876543210")):
+        assert iam_eval.decide(delta, "iam:PutRolePolicy", other, _FAS_CTX).decision \
+            is iam_eval.Decision.IMPLICIT_DENY, other
+
+
+def test_condition_removal_would_make_the_grant_unconditional(delta):
+    """The risk the shape pin refuses: without the condition, a direct call is allowed."""
+    broken = _mutate(delta, gen.ICPERMADMIN_DELTA_SID, lambda s: s.pop("Condition", None))
+    assert allowed(broken, "iam:PutRolePolicy", _w0_reserved_role_arn(), {}), (
+        "with the condition removed the grant becomes a standing direct-write capability — "
+        "which is exactly what OD-R3 exists to prevent")
+    assert "Condition" in delta["Statement"][0], "the shipped delta must carry it"
+
+
+def test_via_aws_service_substitution_is_flagged_as_a_dead_grant(delta):
+    """OD-R3: aws:ViaAWSService is not implemented, and a substituted mutant must not
+    validate clean — the dead-grant detector (ACTION_CONDITION_KEYS) refuses it, so the
+    substitution requires the separately reviewed delta the adjudication demands."""
+    broken = _mutate(delta, gen.ICPERMADMIN_DELTA_SID,
+                     lambda s: s.__setitem__("Condition",
+                                             {"Bool": {"aws:ViaAWSService": "true"}}))
+    problems = iam_eval.validate_policy(broken)
+    assert any("does not support condition key aws:ViaAWSService" in p for p in problems), problems
+
+
+def test_action_expansion_grants_nothing_in_the_shipped_delta(delta):
+    """The mutant demonstrates the risk; the shipped shape refuses it (OD-R1)."""
+    arn = _w0_reserved_role_arn()
+    broken = _mutate(delta, gen.ICPERMADMIN_DELTA_SID,
+                     lambda s: s.__setitem__("Action",
+                                             ["iam:PutRolePolicy", "iam:DeleteRolePolicy"]))
+    assert allowed(broken, "iam:DeleteRolePolicy", arn, _FAS_CTX), (
+        "the expanded mutant grants the extra action — the risk")
+    assert iam_eval.decide(delta, "iam:DeleteRolePolicy", arn, _FAS_CTX).decision \
+        is iam_eval.Decision.IMPLICIT_DENY, "the shipped delta grants ONLY iam:PutRolePolicy"
+
+
+@pytest.mark.parametrize("bad_arn", [
+    "*",
+    _w0_reserved_role_arn(suffix="*"),
+    _w0_reserved_role_arn(suffix="0123456789abcde?"),
+    f"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/*",
+    _w0_reserved_role_arn() + "*",
+])
+def test_resource_and_suffix_wildcarding_is_refused(bad_arn):
+    """OD-R2: a pattern would silently cover a role nobody reviewed; suffix rotation must
+    fail closed instead of being survived."""
+    with pytest.raises(ValueError):
+        gen.require_valid_w0_reserved_role_arn(bad_arn)
+
+
+@pytest.mark.parametrize("bad_suffix", [
+    "0123456789abcde",      # 15 hex
+    "0123456789abcdef0",    # 17 hex
+    "0123456789ABCDEF",     # uppercase
+    "0123456789abcdez",     # non-hex
+    "",                     # missing
+])
+def test_suffix_shape_is_enforced(bad_suffix):
+    with pytest.raises(ValueError):
+        gen.require_valid_w0_reserved_role_arn(_w0_reserved_role_arn(suffix=bad_suffix))
+
+
+def test_self_scope_and_other_permission_sets_are_refused():
+    """OD-R2: ICPermAdmin must never gain the write on its OWN reserved role (self-scope
+    plus PutInlinePolicyToPermissionSet would be full self-modification), nor on any other
+    permission set's role."""
+    import anchor_loader
+    sets = anchor_loader.load(anchor_loader.declared_tier()).anchor["permission_sets"]
+    for key in ("ICPermAdmin", "ReadOnly"):
+        other = sets[key].get("name") or sets[key].get("permission_set_name")
+        with pytest.raises(ValueError):
+            gen.require_valid_w0_reserved_role_arn(_w0_reserved_role_arn(ps_name=other))
+
+
+@pytest.mark.parametrize("bad_arn", [
+    # a non-reserved-path role in this account
+    lambda: gen.READER_ROLE_ARNS[0],
+    # the right name pattern in the WRONG account
+    lambda: _w0_reserved_role_arn(account="999988887777"),
+    # the wrong partition
+    lambda: _w0_reserved_role_arn().replace("arn:aws:", "arn:aws-cn:", 1),
+    # a wrong region path segment
+    lambda: _w0_reserved_role_arn(region_segment=False).replace(
+        "sso.amazonaws.com/", "sso.amazonaws.com/eu-west-3/", 1),
+    # placeholders and non-strings
+    lambda: "<RESERVED-ROLE-ARN>",
+    lambda: "",
+    lambda: None,
+    lambda: 42,
+])
+def test_other_role_scopes_and_placeholders_are_refused(bad_arn):
+    with pytest.raises(ValueError):
+        gen.require_valid_w0_reserved_role_arn(bad_arn())
+
+
+def test_both_documented_reserved_path_forms_are_accepted():
+    """DOC-2: the region path segment is absent when the identity source is in us-east-1.
+    Both exact forms are valid; the operator-held live read decides which is real."""
+    for form in (_w0_reserved_role_arn(region_segment=True),
+                 _w0_reserved_role_arn(region_segment=False)):
+        doc = gen.icpermadmin_provisioning_delta(form)
+        assert doc["Statement"][0]["Resource"] == form
+
+
+def test_icpermadmin_delta_generation_is_deterministic_and_the_arn_reaches_the_bytes():
+    a = _w0_reserved_role_arn()
+    b = _w0_reserved_role_arn(suffix="fedcba9876543210")
+    assert gen.canonical(gen.icpermadmin_provisioning_delta(a)) == \
+        gen.canonical(gen.icpermadmin_provisioning_delta(a))
+    assert gen.canonical(gen.icpermadmin_provisioning_delta(a)) != \
+        gen.canonical(gen.icpermadmin_provisioning_delta(b))
+
+
+def test_the_reserved_role_arn_pin_gate_fails_closed():
+    """OD-R2 re-pin gate: a rotated suffix no longer matches the operator-held pin, and a
+    missing or malformed pin is a refusal, never a default."""
+    import hashlib as _hashlib
+    arn = _w0_reserved_role_arn()
+    pin = _hashlib.sha256(arn.encode("utf-8")).hexdigest()
+    assert gen.require_pinned_w0_reserved_role_arn(arn, pin) == arn
+    rotated = _w0_reserved_role_arn(suffix="fedcba9876543210")
+    with pytest.raises(ValueError):
+        gen.require_pinned_w0_reserved_role_arn(rotated, pin)
+    for bad_pin in (None, "", "abc", pin.upper(), 42):
+        with pytest.raises(ValueError):
+            gen.require_pinned_w0_reserved_role_arn(arn, bad_pin)
+
+
+def test_merge_appends_exactly_the_delta_and_preserves_the_captured_statements():
+    captured = {"Version": "2012-10-17", "Statement": [
+        {"Sid": "ExistingA", "Effect": "Allow",
+         "Action": ["sso:DescribePermissionSet"], "Resource": "*"},
+        {"Effect": "Deny", "Action": ["iam:CreateUser"], "Resource": "*"},
+    ]}
+    before = gen.canonical(captured)
+    merged = gen.merge_icpermadmin_delta(copy.deepcopy(captured), _w0_reserved_role_arn())
+    assert len(merged["Statement"]) == len(captured["Statement"]) + 1
+    assert merged["Statement"][-1] == gen.icpermadmin_provisioning_delta(
+        _w0_reserved_role_arn())["Statement"][0]
+    assert gen.canonical({**merged, "Statement": merged["Statement"][:-1]}) == before, (
+        "the captured statements must be preserved byte-for-byte, in order")
+
+
+def test_merge_refuses_a_document_already_carrying_the_delta_sid():
+    captured = {"Version": "2012-10-17", "Statement": [
+        {"Sid": "ExistingA", "Effect": "Allow",
+         "Action": ["sso:DescribePermissionSet"], "Resource": "*"}]}
+    merged = gen.merge_icpermadmin_delta(captured, _w0_reserved_role_arn())
+    with pytest.raises(ValueError):
+        gen.merge_icpermadmin_delta(merged, _w0_reserved_role_arn())
+
+
+@pytest.mark.parametrize("bad_captured", [
+    "not a dict",
+    {"Version": "2008-10-17", "Statement": [{"Effect": "Allow"}]},
+    {"Version": "2012-10-17", "Statement": []},
+    {"Version": "2012-10-17"},
+    {"Version": "2012-10-17", "Statement": [{"Sid": "NoEffect"}]},
+    {"Version": "2012-10-17", "Statement": ["not a statement"]},
+])
+def test_merge_refuses_a_malformed_captured_document(bad_captured):
+    with pytest.raises(ValueError):
+        gen.merge_icpermadmin_delta(bad_captured, _w0_reserved_role_arn())
+
+
+def test_the_delta_reliance_on_called_via_first_is_recorded_disputed():
+    """OD-R3 honesty: SUPPORT is documented (the key is in ACTION_CONDITION_KEYS, so the
+    dead-grant detector does not refuse the reviewed shape), but POPULATION by Identity
+    Center's provisioning write is unproven and must be REPORTED — the live positive
+    control (an authorized ProvisionPermissionSet reaching SUCCEEDED) is what settles it,
+    and the simulator is explicitly insufficient."""
+    pairing = ("iam:PutRolePolicy", "aws:CalledViaFirst")
+    assert pairing in iam_eval.DISPUTED_RUNTIME_CONTEXT
+    assert "Unproven" in iam_eval.DISPUTED_RUNTIME_CONTEXT[pairing]
+    assert "aws:CalledViaFirst" in iam_eval.ACTION_CONDITION_KEYS["iam:PutRolePolicy"]
+    doc = gen.icpermadmin_provisioning_delta(_w0_reserved_role_arn())
+    reported = iam_eval.disputed_pairings(doc)
+    assert reported and "aws:CalledViaFirst" in reported[0], (
+        "the delta's reliance on the disputed key must be visible, never silent")
+
+
+def test_the_permanent_w0_assignment_invariant_is_pinned(contract):
+    """OD-R2: dropping the invariant text is a contract regression, not a cleanup."""
+    section = contract["ic_provisioning_closure"]
+    invariant = section["_permanent_assignment_invariant"]
+    for required_phrase in ("at least one", "suffix", "re-pin", "fails closed"):
+        assert required_phrase in invariant, required_phrase
+    assert section["provision_role_write"] == ["iam:PutRolePolicy"]
+
+
+def test_the_ic_provisioning_closure_never_joins_the_operator_requirement_sets():
+    """The delta's principal is ICPermAdmin. If its section leaked into the W0/temporary
+    requirement joins, the loss proof would demand a capability those principals must
+    never hold."""
+    import allow_model
+    assert "iam:PutRolePolicy" not in allow_model.w0_required_actions()
+    assert "iam:PutRolePolicy" not in allow_model.temporary_required_actions()
+    assert "iam:PutRolePolicy" not in allow_model.required_actions()
+
+
+def test_the_delta_stays_out_of_the_principal_policy_inventory():
+    """The delta is a FRAGMENT merged into an operator-held document, deliberately outside
+    policy_inventory (which would call it with a discovery expiry and report a generation
+    failure) and outside allow_model.TARGETS (a fragment has no deny ceiling to prove)."""
+    import allow_model
+    import policy_inventory
+    assert not any("icpermadmin" in key.lower() for key in policy_inventory.discover()), (
+        "the fragment builder must not satisfy the *_policy discovery convention")
+    assert "icpermadmin" not in json.dumps(sorted(allow_model.TARGETS)).lower()
+
+
+def test_the_delta_cli_pin_gate_and_merge_print_digests_only(tmp_path):
+    """The CLI path is what an operator actually runs: a wrong pin refuses before any
+    output exists, and the merge prints digests and counts ONLY — never the ARN, never
+    policy content — and writes the merged file 0600 without overwriting."""
+    import hashlib as _hashlib
+    import os as _os
+    arn = _w0_reserved_role_arn()
+    pin = _hashlib.sha256(arn.encode("utf-8")).hexdigest()
+    captured_path = tmp_path / "captured.json"
+    captured_path.write_text(json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Sid": "ExistingA", "Effect": "Allow",
+         "Action": ["sso:DescribePermissionSet"], "Resource": "*"}]}), encoding="utf-8")
+    output_path = tmp_path / "merged.json"
+    cli = [sys.executable, str(REPO_ROOT / "scripts" / "gen_operator_policies.py"),
+           "--emit", "icpermadmin-provisioning-delta", "--reserved-role-arn", arn]
+
+    wrong = subprocess.run([*cli, "--reserved-role-arn-pin", "0" * 64],
+                           capture_output=True, text=True)
+    assert wrong.returncode != 0 and not output_path.exists()
+
+    merge = subprocess.run([*cli, "--reserved-role-arn-pin", pin,
+                            "--merge-captured", str(captured_path),
+                            "--merge-output", str(output_path)],
+                           capture_output=True, text=True)
+    assert merge.returncode == 0, merge.stderr
+    assert "arn:" not in merge.stdout and _DELTA_SUFFIX not in merge.stdout, (
+        "the merge path must never print the reserved-role ARN or policy content")
+    assert "merged_canonical" in merge.stdout and "statements          1 -> 2" in merge.stdout
+    assert _os.stat(output_path).st_mode & 0o777 == 0o600
+    merged = json.loads(output_path.read_text(encoding="utf-8"))
+    assert merged["Statement"][-1]["Sid"] == gen.ICPERMADMIN_DELTA_SID
+
+    again = subprocess.run([*cli, "--reserved-role-arn-pin", pin,
+                            "--merge-captured", str(captured_path),
+                            "--merge-output", str(output_path)],
+                           capture_output=True, text=True)
+    assert again.returncode != 0, "an existing output must never be overwritten"

@@ -125,11 +125,34 @@ DISPUTED_RUNTIME_CONTEXT = {
         "this key for the Delete action; the lead read it as populated with the currently "
         "attached boundary per the permissions-boundary delegation pattern. Unproven either "
         "way, so critical rollback must not depend on it.",
+    # INFRA-9 B-3 Part-B remediation (OD-R3, 2026-08-17). The ICPermAdmin provisioning
+    # delta conditions iam:PutRolePolicy on aws:CalledViaFirst = sso.amazonaws.com. The AWS
+    # FAS documentation states the CalledVia keys are populated with the initiating service
+    # principal "when FAS requests are made" (retained: part-b/remediation-doc-evidence.md
+    # DOC-1), and both terminal-FAILED provisioning denials prove Identity Center makes the
+    # write with the caller's credentials — but no retained observation proves the key is
+    # populated for THIS path, and the per-service support table was not retrievable
+    # (DOC-3). Unproven, so recorded DISPUTED: the later authorized ProvisionPermissionSet
+    # run is the live positive control; the designed failure mode is a repeat of today's
+    # exact denial (fail closed, no widening), and any relaxation is a SEPARATE reviewed
+    # delta, never an in-place fallback.
+    ("iam:PutRolePolicy", "aws:CalledViaFirst"):
+        "Unproven whether Identity Center's forward-access iam:PutRolePolicy write during "
+        "ProvisionPermissionSet populates aws:CalledViaFirst. The FAS documentation says "
+        "FAS requests populate it; no retained observation confirms it for this path. The "
+        "authorized live provisioning run is the positive control; failure fails closed.",
 }
 
 ACTION_CONDITION_KEYS: dict[str, set[str]] = {
     "iam:CreateRole": {"aws:RequestTag/${TagKey}", "aws:TagKeys", "iam:PermissionsBoundary"},
-    "iam:PutRolePolicy": {"iam:PermissionsBoundary"},
+    # INFRA-9 B-3 Part-B remediation (2026-08-17): aws:CalledViaFirst is a GLOBAL condition
+    # key usable with any action (it is not in _GLOBAL_KEYS below because that set means
+    # "always PRESENT in the request context", and the CalledVia keys exist only on
+    # forward-access requests). SUPPORT is documented (FAS doc, retained DOC-1);
+    # POPULATION on IC's provisioning write is a separate, unproven question recorded in
+    # DISPUTED_RUNTIME_CONTEXT above — support here keeps validate_policy from calling the
+    # reviewed delta dead, the DISPUTED entry keeps the reliance visible.
+    "iam:PutRolePolicy": {"iam:PermissionsBoundary", "aws:CalledViaFirst"},
     "iam:TagRole": {"aws:RequestTag/${TagKey}", "aws:TagKeys"},
     "iam:UntagRole": {"aws:TagKeys"},
     "iam:DeleteRole": set(),

@@ -156,7 +156,15 @@ EXPECTED_MATRIX = {
     "iam:CreateRole": {"aws:RequestTag/${TagKey}", "aws:TagKeys", "iam:PermissionsBoundary"},
     "iam:TagRole": {"aws:RequestTag/${TagKey}", "aws:TagKeys"},
     "iam:UntagRole": {"aws:TagKeys"},
-    "iam:PutRolePolicy": {"iam:PermissionsBoundary"},
+    # INFRA-9 B-3 Part-B remediation (2026-08-17): aws:CalledViaFirst joined the
+    # PutRolePolicy row for the ICPermAdmin provisioning delta. SUPPORT is documented (a
+    # global condition key; the AWS FAS user guide states the CalledVia keys are populated
+    # with the initiating service principal on forward-access requests — retained verbatim
+    # in the operator evidence directory, remediation-doc-evidence DOC-1); POPULATION on
+    # Identity Center's provisioning write is UNPROVEN and lives in
+    # DISPUTED_RUNTIME_CONTEXT, asserted by
+    # test_operator_policies.test_the_delta_reliance_on_called_via_first_is_recorded_disputed.
+    "iam:PutRolePolicy": {"iam:PermissionsBoundary", "aws:CalledViaFirst"},
     "iam:DeleteRolePolicy": {"iam:PermissionsBoundary"},
     "iam:PutRolePermissionsBoundary": {"iam:PermissionsBoundary"},
     # INFRA-9 B-3 (adversarial-lane round-3 delta 2): the delta's own additions must not

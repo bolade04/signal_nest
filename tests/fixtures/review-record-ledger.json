@@ -5,13 +5,19 @@
   "governed_files": {
     "critical-list-contract.json": "sha256:7bd9a5662ea12eeba5e5ca005f08ddbccc2e10fac131698fc272be7c6e3ef3cc",
     "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
-    "review-pin-registry.json": "sha256:454ab2c4dd5e5dbcf1bc29f6ea567bc88749dddcd982e8da33dd898d6644fa4a",
+    "review-pin-registry.json": "sha256:1062182db0d923d5358e73f51af700a2282f52c66b9fb21dd43cad4e48fabfb0",
     "security-assurance-registry.json": "sha256:0283b0fd560b321053dfad92cf8034419866e1f8157dbed3ceddea842bbfe2af",
     "site-coverage-function-assurance.json": "sha256:332afc74ad5f6bd5c6a88af9b4925caf702de46b2976f76507dbc9e6a09dd728",
     "site-coverage-matrix.json": "sha256:8572ccd2a571a044931f05e2f82b2751786cae140f83aeef6ba8e3607b33b87e",
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+  "REV-2026-08-17-INFRA9-B3-ICPERMADMIN-DELTA": {
+   "approver": "INFRA-9-B3-PART-B-REMEDIATION-REPO-ONLY",
+   "established": "2026-08-17",
+   "scope": "INFRA-9 B-3 Part-B remediation, REPOSITORY PART ONLY (AWS_MUTATIONS=NONE; no permission-set edit, no provisioning, no live probe of any kind): the ICPermAdmin provisioning delta. One generated statement (gen_operator_policies.icpermadmin_provisioning_delta, Sid IcProvisionW0ReservedRoleInlinePolicyWrite): iam:PutRolePolicy only (OD-R1 deny-driven minimality), the EXACT operator-held W0 reserved-role ARN validated against the anchor-resolved name and bound by an operator-held sha256 pin (OD-R2 — no wildcard, no self-scope; the permanent-assignment invariant is pinned in operator-closure-contract.json ic_provisioning_closure), and StringEquals aws:CalledViaFirst=sso.amazonaws.com (OD-R3 — support documented per the retained FAS-doc evidence, population by IC's provisioning write recorded DISPUTED with the authorized live ProvisionPermissionSet as the mandatory positive control; the simulator is explicitly insufficient; aws:ViaAWSService and unconditioned forms are refused and require a separate reviewed delta). Bound to this record: the ACTION_CONDITION_KEYS row extension for iam:PutRolePolicy (aws:CalledViaFirst) and the DISPUTED_RUNTIME_CONTEXT entry for that pairing, their EXPECTED_MATRIX second-lineage pin, the capture-merge-canonicalize-digest procedure (merge_icpermadmin_delta + the digests-only CLI merge path with the O_EXCL 0600 output), the ic_provisioning_closure contract section (denial provenance, minimality, exact scope, condition hypothesis, suffix-rotation/permanent-assignment invariant, bootstrap circularity, exclusions, separate-review fallback posture), and the structural enforcement battery in tests/test_operator_policies.py substituting for live negative probes per OD-R5. The delta is a FRAGMENT for operator-side merge into the operator-held ICPermAdmin permission-set document: it deliberately joins neither policy_inventory nor allow_model.TARGETS nor any operator requirement section.",
+   "status": "ACTIVE"
+  },
     "REV-2026-08-15-INFRA9-B3-ROOT-WIRING": {
       "approver": "INFRA-9-B3-ROOT-WIRING-GUARD-IMPLEMENTATION",
       "established": "2026-08-15",
