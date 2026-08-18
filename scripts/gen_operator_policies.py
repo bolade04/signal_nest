@@ -768,9 +768,11 @@ def bootstrap_temp_policy(expiry: str, *, issuance: str | None = None) -> dict:
 # The aws:CalledViaFirst population by IC's provisioning write is a HYPOTHESIS, recorded
 # DISPUTED in iam_eval.DISPUTED_RUNTIME_CONTEXT: the AWS FAS documentation states the key
 # is populated for forward-access requests, but no retained observation proves it for this
-# path. The later authorized ProvisionPermissionSet run is the live positive control; a
-# failure repeats today's exact posture (no widening) and any relaxation is a SEPARATE
-# reviewed delta — never an in-place fallback.
+# path. The positive control is the CloudTrail iam:PutRolePolicy Allowed action-truth
+# event bound to the authorized probe under the sole-grant premise (OD-R4 rev-3.1) — a
+# SUCCEEDED provisioning status alone proves nothing, because IC may diff-and-skip the
+# write under parity; a failure repeats today's exact posture (no widening) and any
+# relaxation is a SEPARATE reviewed delta — never an in-place fallback.
 
 ICPERMADMIN_DELTA_SID = "IcProvisionW0ReservedRoleInlinePolicyWrite"
 IC_FORWARDING_SERVICE = "sso.amazonaws.com"

@@ -496,7 +496,7 @@
    "collection_id": "iam_eval.py::DISPUTED_RUNTIME_CONTEXT",
    "ordered": false,
    "review_record_id": "REV-2026-08-17-INFRA9-B3-ICPERMADMIN-DELTA",
-   "reviewed_digest": "sha256:41b7ed897db5d9ab227a1044261a8efbebfe7309b99cb24f4f9d3d945c4f57fc",
+   "reviewed_digest": "sha256:674b7e233bf83b912a03b72d94081c6bd07995f6d02eb7505118159481e375f7",
    "source": "live"
   },
   "iam_eval.py::SUPPORTED_SEMANTICS": {
