@@ -488,15 +488,15 @@
   "iam_eval.py::ACTION_CONDITION_KEYS": {
    "collection_id": "iam_eval.py::ACTION_CONDITION_KEYS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
-   "reviewed_digest": "sha256:326a655b9f699b858ef1a2a741ae5fb30a664e89d6bb83ee41a5c1bf343aaf59",
+   "review_record_id": "REV-2026-08-17-INFRA9-B3-ICPERMADMIN-DELTA",
+   "reviewed_digest": "sha256:63599212a0b8843f64c57e4624b9939a9921923a458b87a80186781756ef852a",
    "source": "live"
   },
   "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {
    "collection_id": "iam_eval.py::DISPUTED_RUNTIME_CONTEXT",
    "ordered": false,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:77549a3833c9c254decfc7dd01cd9da6770b432014cecea524aa4a22fe1c3e24",
+   "review_record_id": "REV-2026-08-17-INFRA9-B3-ICPERMADMIN-DELTA",
+   "reviewed_digest": "sha256:41b7ed897db5d9ab227a1044261a8efbebfe7309b99cb24f4f9d3d945c4f57fc",
    "source": "live"
   },
   "iam_eval.py::SUPPORTED_SEMANTICS": {

@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -736,6 +737,156 @@ def bootstrap_temp_policy(expiry: str, *, issuance: str | None = None) -> dict:
     }
 
 
+# --- INFRA-9 B-3 Part-B remediation (2026-08-17): the ICPermAdmin provisioning delta -------
+#
+# ROOT CAUSE (retained: the Part-B evidence record and remediation design in the operator
+# evidence directory): in this account Identity Center performs the reserved-role
+# iam:PutRolePolicy write of ProvisionPermissionSet with the CALLER's credentials (a
+# forward-access request), and ICPermAdmin does not hold that action — two independent
+# terminal-FAILED provisioning denials (B-1 2026-08-13, B-3 Part-B M2 2026-08-17) name it
+# exactly. This delta is the adjudicated minimum repair (OD-R1..OD-R5, 2026-08-17):
+#
+#   ONE statement. ONE action (iam:PutRolePolicy — nothing else was ever denied, and every
+#   further IC-side need must arrive as its own denial and its own reviewed delta). ONE
+#   exact resource (the current W0 reserved-role ARN — never a suffix or path wildcard,
+#   never another role, never ICPermAdmin's own role). ONE condition
+#   (aws:CalledViaFirst = sso.amazonaws.com — the write is eligible only when Identity
+#   Center is the forwarding service; a direct operator call stays denied).
+#
+# The delta is a FRAGMENT, not a principal policy: it is merged operator-side into the
+# operator-held ICPermAdmin permission-set document (capture -> merge -> canonicalize ->
+# digest below), so it deliberately does not join policy_inventory/TARGETS, and the live
+# document is never committed or printed — the merge path emits digests only.
+#
+# The reserved-role ARN is an AWS-assigned identifier and NEVER appears in the repository:
+# it arrives at generation time from the approved operator-held inputs (the live get-role
+# read), is validated fail-closed against the anchor-resolved W0 permission-set name, and
+# is bound by a caller-supplied sha256 pin (the OD-R2 re-pin gate: assignment removal +
+# recreation rotates the suffix, the pinned ARN goes dead, and a NEW reviewed pin is the
+# only way forward — DOC-2 in the retained remediation-doc-evidence).
+#
+# The aws:CalledViaFirst population by IC's provisioning write is a HYPOTHESIS, recorded
+# DISPUTED in iam_eval.DISPUTED_RUNTIME_CONTEXT: the AWS FAS documentation states the key
+# is populated for forward-access requests, but no retained observation proves it for this
+# path. The later authorized ProvisionPermissionSet run is the live positive control; a
+# failure repeats today's exact posture (no widening) and any relaxation is a SEPARATE
+# reviewed delta — never an in-place fallback.
+
+ICPERMADMIN_DELTA_SID = "IcProvisionW0ReservedRoleInlinePolicyWrite"
+IC_FORWARDING_SERVICE = "sso.amazonaws.com"
+
+
+def _w0_permission_set_name() -> str:
+    """The W0 permission-set name, anchor-resolved (never a repository literal)."""
+    import anchor_loader
+    entry = anchor_loader.load(anchor_loader.declared_tier()).anchor[
+        "permission_sets"]["W0Operator"]
+    name = entry.get("name") or entry.get("permission_set_name")
+    if not name:
+        raise ValueError("the anchor's W0Operator permission set declares no name")
+    return name
+
+
+def require_valid_w0_reserved_role_arn(arn: object) -> str:
+    """Fail-closed validation of the operator-supplied W0 reserved-role ARN (OD-R2).
+
+    Accepts EXACTLY the two documented reserved-role ARN forms (with and without the
+    region path segment — the segment is absent when the identity source is hosted in
+    us-east-1), for exactly the anchor-resolved W0 permission-set name, in exactly this
+    account, with exactly a 16-lowercase-hex unique suffix. Everything else is refused:
+    wildcards of any kind (a suffix wildcard would silently survive an assignment
+    remove/recreate suffix rotation, which MUST fail closed instead), other permission
+    sets (including ICPermAdmin's own reserved role — self-scope is a separately
+    adjudicated trust decision, refused here), non-reserved-path roles, other accounts,
+    and placeholder inputs. Error text deliberately never echoes the supplied value.
+    """
+    if not isinstance(arn, str) or not arn:
+        raise ValueError("the reserved-role ARN is REQUIRED and must be a non-empty string")
+    # Placeholder vocabulary is FUNCTION-LOCAL by design (the I28BH-E2 lesson: a closed
+    # vocabulary used in one function must not become a module-level collection).
+    if any(marker in arn for marker in ("<", ">", "{", "}", "$", "PLACEHOLDER")):
+        raise ValueError("the reserved-role ARN input carries a placeholder marker")
+    if any(ch in arn for ch in "*?["):
+        raise ValueError(
+            "the reserved-role ARN must be EXACT: wildcard characters are refused, because a "
+            "pattern would silently cover a role nobody reviewed (suffix rotation fails "
+            "closed by design)")
+    pattern = (
+        rf"arn:{re.escape(identity.PARTITION)}:iam::{re.escape(ACCOUNT)}:"
+        rf"role/aws-reserved/sso\.amazonaws\.com/(?:{re.escape(REGION)}/)?"
+        rf"AWSReservedSSO_{re.escape(_w0_permission_set_name())}_[0-9a-f]{{16}}"
+    )
+    if not re.fullmatch(pattern, arn):
+        raise ValueError(
+            "the supplied ARN is not the exact W0 reserved-role ARN this delta is "
+            "adjudicated for (account, reserved path, anchor-resolved W0 permission-set "
+            "name, 16-lowercase-hex suffix)")
+    return arn
+
+
+def require_pinned_w0_reserved_role_arn(arn: str, pin_sha256: object) -> str:
+    """The OD-R2 re-pin gate: the ARN must match a separately supplied sha256 pin.
+
+    The pin is operator-held (like the anchor hash), never committed: committing it would
+    put a brute-forceable digest of a protected identifier into history. A suffix rotation
+    changes the ARN, the pin no longer matches, and this refuses until a consciously
+    re-adjudicated pin is supplied.
+    """
+    arn = require_valid_w0_reserved_role_arn(arn)
+    if not isinstance(pin_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", pin_sha256):
+        raise ValueError("the reserved-role ARN pin is REQUIRED: 64 lowercase hex characters")
+    if hashlib.sha256(arn.encode("utf-8")).hexdigest() != pin_sha256:
+        raise ValueError(
+            "the reserved-role ARN does not match the supplied pin — if the W0 assignment "
+            "was removed and recreated the suffix has rotated, and that requires a "
+            "separately reviewed re-pin, not a retry")
+    return arn
+
+
+def icpermadmin_provisioning_delta(reserved_role_arn: str) -> dict:
+    """The single adjudicated delta statement, as a standalone reviewable document."""
+    arn = require_valid_w0_reserved_role_arn(reserved_role_arn)
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": ICPERMADMIN_DELTA_SID,
+                "Effect": "Allow",
+                "Action": ["iam:PutRolePolicy"],
+                "Resource": arn,
+                "Condition": {"StringEquals": {"aws:CalledViaFirst": IC_FORWARDING_SERVICE}},
+            }
+        ],
+    }
+
+
+def merge_icpermadmin_delta(captured: object, reserved_role_arn: str) -> dict:
+    """Append the delta statement to the operator-captured ICPermAdmin document.
+
+    The captured document is OPERATOR-HELD live policy content: only its SHAPE is
+    validated here (it is not modelled by iam_eval and must never be committed or
+    printed), its statements are preserved byte-for-byte in order, and the delta is
+    appended LAST. A document already carrying the delta Sid is refused — re-running the
+    merge starts from a fresh capture, never from a previous merge output.
+    """
+    if not isinstance(captured, dict):
+        raise ValueError("the captured document must be a JSON object")
+    if captured.get("Version") != "2012-10-17":
+        raise ValueError("the captured document does not declare policy Version 2012-10-17")
+    statements = captured.get("Statement")
+    if not isinstance(statements, list) or not statements:
+        raise ValueError("the captured document carries no Statement list")
+    for index, stmt in enumerate(statements):
+        if not isinstance(stmt, dict) or stmt.get("Effect") not in ("Allow", "Deny"):
+            raise ValueError(f"captured statement {index} is malformed (missing/invalid Effect)")
+        if stmt.get("Sid") == ICPERMADMIN_DELTA_SID:
+            raise ValueError(
+                "the captured document already carries the delta Sid — merge from a FRESH "
+                "capture, never from a previous merge output")
+    delta_statement = icpermadmin_provisioning_delta(reserved_role_arn)["Statement"][0]
+    return {**captured, "Statement": [*statements, delta_statement]}
+
+
 def require_valid_expiry(expiry: object) -> None:
     """Reject a missing, placeholder or malformed expiry at GENERATION time."""
     if expiry is None or expiry == "":
@@ -749,7 +900,9 @@ def canonical(doc: dict) -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--emit", choices=["permanent-w0", "bootstrap-temp"], default="permanent-w0")
+    parser.add_argument("--emit",
+                        choices=["permanent-w0", "bootstrap-temp", "icpermadmin-provisioning-delta"],
+                        default="permanent-w0")
     # GATE 4N-I10 DEFECT 4. This CLI still defaulted to "<EXPIRY-ISO8601>". Gate 4N-I8
     # removed the placeholder from the FUNCTION signature and I reported the defect closed —
     # but the command-line path, which is what actually writes reviewed artifacts to disk,
@@ -758,12 +911,55 @@ def main() -> int:
     parser.add_argument("--expiry", default=None,
                         help="RFC 3339 UTC expiry; REQUIRED with --emit bootstrap-temp")
     parser.add_argument("--hash", action="store_true", help="print canonical + file-byte hashes only")
+    # INFRA-9 B-3 Part-B remediation: the ICPermAdmin delta takes the exact W0 reserved-role
+    # ARN from the approved operator-held inputs at generation time (the bootstrap-temp
+    # --expiry precedent: operator-supplied, validated, refused-if-placeholder) plus the
+    # OD-R2 sha256 pin. The merge path combines the delta with operator-captured
+    # permission-set bytes and NEVER prints policy content — digests only.
+    parser.add_argument("--reserved-role-arn", default=None,
+                        help="exact W0 reserved-role ARN (operator-held input); REQUIRED "
+                             "with --emit icpermadmin-provisioning-delta")
+    parser.add_argument("--reserved-role-arn-pin", default=None,
+                        help="sha256 of the reserved-role ARN (operator-held pin); REQUIRED "
+                             "with --emit icpermadmin-provisioning-delta")
+    parser.add_argument("--merge-captured", default=None,
+                        help="path to operator-captured ICPermAdmin permission-set JSON; "
+                             "only with --emit icpermadmin-provisioning-delta")
+    parser.add_argument("--merge-output", default=None,
+                        help="path to write the merged document (created 0600, never "
+                             "overwritten); required with --merge-captured")
+
     args = parser.parse_args()
+
+    if args.emit != "icpermadmin-provisioning-delta":
+        for flag, value in (("--reserved-role-arn", args.reserved_role_arn),
+                            ("--reserved-role-arn-pin", args.reserved_role_arn_pin),
+                            ("--merge-captured", args.merge_captured),
+                            ("--merge-output", args.merge_output)):
+            if value is not None:
+                parser.error(f"{flag} is only meaningful with --emit icpermadmin-provisioning-delta")
 
     if args.emit == "bootstrap-temp":
         if args.expiry is None:
             parser.error("--expiry is REQUIRED with --emit bootstrap-temp; there is no default")
         doc = bootstrap_temp_policy(args.expiry)
+    elif args.emit == "icpermadmin-provisioning-delta":
+        if args.expiry is not None:
+            parser.error("--expiry is meaningless for the ICPermAdmin delta; the grant is "
+                         "permanent and reviewed as such")
+        if args.reserved_role_arn is None or args.reserved_role_arn_pin is None:
+            parser.error("--reserved-role-arn and --reserved-role-arn-pin are BOTH required "
+                         "with --emit icpermadmin-provisioning-delta; there are no defaults")
+        try:
+            arn = require_pinned_w0_reserved_role_arn(
+                args.reserved_role_arn, args.reserved_role_arn_pin)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if (args.merge_captured is None) != (args.merge_output is None):
+            parser.error("--merge-captured and --merge-output must be supplied together")
+        if args.merge_captured is not None:
+            return _merge_cli(arn, args.merge_captured, args.merge_output)
+        doc = icpermadmin_provisioning_delta(arn)
     else:
         if args.expiry is not None:
             parser.error("--expiry is meaningless for the PERMANENT policy; it does not expire")
@@ -777,6 +973,31 @@ def main() -> int:
         return 0
 
     sys.stdout.write(rendered)
+    return 0
+
+
+def _merge_cli(arn: str, captured_path: str, output_path: str) -> int:
+    """Capture -> merge -> canonicalize -> digest. Prints DIGESTS AND COUNTS ONLY.
+
+    The captured and merged documents are operator-held live policy content: neither is
+    ever printed, and the output file is created 0600 and never overwritten (an existing
+    output must be removed deliberately, not clobbered)."""
+    import os
+
+    captured_bytes = Path(captured_path).read_bytes()
+    captured = json.loads(captured_bytes)
+    merged = merge_icpermadmin_delta(captured, arn)
+    delta_statement = icpermadmin_provisioning_delta(arn)["Statement"][0]
+    rendered = json.dumps(merged, indent=2, ensure_ascii=True) + "\n"
+    fd = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(rendered)
+    print(f"captured_file_byte  {hashlib.sha256(captured_bytes).hexdigest()}")
+    print(f"captured_canonical  {hashlib.sha256(canonical(captured)).hexdigest()}")
+    print(f"delta_canonical     {hashlib.sha256(canonical(delta_statement)).hexdigest()}")
+    print(f"merged_canonical    {hashlib.sha256(canonical(merged)).hexdigest()}")
+    print(f"merged_file_byte    {hashlib.sha256(rendered.encode('utf-8')).hexdigest()}")
+    print(f"statements          {len(captured['Statement'])} -> {len(merged['Statement'])}")
     return 0
 
 
