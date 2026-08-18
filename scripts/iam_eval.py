@@ -132,15 +132,19 @@ DISPUTED_RUNTIME_CONTEXT = {
     # DOC-1), and both terminal-FAILED provisioning denials prove Identity Center makes the
     # write with the caller's credentials — but no retained observation proves the key is
     # populated for THIS path, and the per-service support table was not retrievable
-    # (DOC-3). Unproven, so recorded DISPUTED: the later authorized ProvisionPermissionSet
-    # run is the live positive control; the designed failure mode is a repeat of today's
-    # exact denial (fail closed, no widening), and any relaxation is a SEPARATE reviewed
-    # delta, never an in-place fallback.
+    # (DOC-3). Unproven, so recorded DISPUTED: the positive control is the CloudTrail
+    # iam:PutRolePolicy Allowed action-truth event bound to the authorized probe under the
+    # sole-grant premise (OD-R4 rev-3.1) — a SUCCEEDED provisioning status alone proves
+    # nothing, because IC may diff-and-skip the write under parity; the designed failure
+    # mode is a repeat of today's exact denial (fail closed, no widening), and any
+    # relaxation is a SEPARATE reviewed delta, never an in-place fallback.
     ("iam:PutRolePolicy", "aws:CalledViaFirst"):
         "Unproven whether Identity Center's forward-access iam:PutRolePolicy write during "
         "ProvisionPermissionSet populates aws:CalledViaFirst. The FAS documentation says "
         "FAS requests populate it; no retained observation confirms it for this path. The "
-        "authorized live provisioning run is the positive control; failure fails closed.",
+        "positive control is the CloudTrail iam:PutRolePolicy Allowed action-truth event "
+        "bound to the authorized probe under the sole-grant premise — a SUCCEEDED "
+        "provisioning status alone proves nothing; failure fails closed.",
 }
 
 ACTION_CONDITION_KEYS: dict[str, set[str]] = {

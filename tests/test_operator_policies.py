@@ -955,9 +955,10 @@ def test_merge_refuses_a_malformed_captured_document(bad_captured):
 def test_the_delta_reliance_on_called_via_first_is_recorded_disputed():
     """OD-R3 honesty: SUPPORT is documented (the key is in ACTION_CONDITION_KEYS, so the
     dead-grant detector does not refuse the reviewed shape), but POPULATION by Identity
-    Center's provisioning write is unproven and must be REPORTED — the live positive
-    control (an authorized ProvisionPermissionSet reaching SUCCEEDED) is what settles it,
-    and the simulator is explicitly insufficient."""
+    Center's provisioning write is unproven and must be REPORTED. What settles it is the
+    live CloudTrail iam:PutRolePolicy ALLOWED action-truth event (OD-R4 rev-3.1) — NOT a
+    terminal ProvisionPermissionSet SUCCEEDED status alone, which can diff-and-skip the
+    downstream write under parity; the simulator is explicitly insufficient."""
     pairing = ("iam:PutRolePolicy", "aws:CalledViaFirst")
     assert pairing in iam_eval.DISPUTED_RUNTIME_CONTEXT
     assert "Unproven" in iam_eval.DISPUTED_RUNTIME_CONTEXT[pairing]
@@ -975,6 +976,269 @@ def test_the_permanent_w0_assignment_invariant_is_pinned(contract):
     for required_phrase in ("at least one", "suffix", "re-pin", "fails closed"):
         assert required_phrase in invariant, required_phrase
     assert section["provision_role_write"] == ["iam:PutRolePolicy"]
+
+
+# --------------------------------------------------------------------------------------- #
+# OD-R4 rev-3.1 CLASS-LEVEL anti-reintroduction guard. The adversarial lane proved an
+# exact-string absence check inert (a reworded reintroduction stayed green), so the guard
+# below is structural: it scans EVERY sentence of EVERY governed prose surface — the whole
+# ic_provisioning_closure contract section, every DISPUTED_RUNTIME_CONTEXT entry, every
+# ACTIVE review-record scope, and the generator/evaluator commentary — for the CLASS of
+# unsafe claims, and it pins the machine-checkable standard the prose must agree with.
+# The structured fields are the authority; the sentence scans keep the prose from ever
+# contradicting them, wherever and however the superseded inference is reworded.
+# --------------------------------------------------------------------------------------- #
+_ODR31_SUCCESS_TOKENS = frozenset(
+    {"succeeded", "succeeds", "successful", "success"})
+_ODR31_PROOF_TOKENS = frozenset(
+    {"prove", "proves", "proven", "proof", "sufficient", "suffices", "settles", "settle",
+     "confirms", "confirm", "establishes", "establish", "demonstrates", "demonstrate",
+     "satisfies", "satisfy", "guarantees", "guarantee", "verifies", "verify", "evidences"})
+_ODR31_NEGATION_TOKENS = frozenset(
+    {"not", "no", "never", "nothing", "none", "insufficient", "cannot", "without",
+     "indeterminate", "unproven"})
+_ODR31_OPTIONAL_MARKERS = (
+    "optional", "recommended", "preferabl", "best effort", "best-effort",
+    "where practical", "when practical", "if available", "when available",
+    "where possible", "if possible", "advisory", "not required", "need not",
+    "if desired", "unless")
+_ODR31_COMMENTARY_SOURCES = ("scripts/iam_eval.py", "scripts/gen_operator_policies.py")
+
+
+def _odr31_normalize(text: str) -> str:
+    """Lowercase; underscores to spaces (so PROVISIONAL_CONDITION_DEAD reads as words);
+    every other non-word character to a space. Hyphens survive (sole-grant stays one
+    token). Rewording that only changes case, punctuation or identifier style therefore
+    cannot dodge the scans."""
+    return re.sub(r"[^a-z0-9\s-]", " ", text.lower().replace("_", " "))
+
+
+def _odr31_sentences(text: str) -> list:
+    # A '.' or ';' ends a sentence only before whitespace/end-of-text, so dotted
+    # identifiers (userIdentity.sessionContext, test_operator_policies.py,
+    # sso.amazonaws.com) never fracture the sentence they sit in.
+    return [_odr31_normalize(part)
+            for part in re.split(r"[.;](?=\s|$)", text) if part.strip()]
+
+
+def _odr31_prose_surfaces(contract) -> dict:
+    """Every governed prose surface of the OD-R4 rev-3.1 correction, so a reintroduction
+    RELOCATED to another contract field, a disputed-context entry, or a review-record
+    scope fails exactly like one in _condition_hypothesis."""
+    surfaces = {}
+
+    def walk(prefix, node):
+        if isinstance(node, str):
+            surfaces[prefix] = node
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                walk(f"{prefix}.{key}", value)
+        elif isinstance(node, (list, tuple)):
+            for index, value in enumerate(node):
+                walk(f"{prefix}[{index}]", value)
+
+    walk("ic_provisioning_closure", contract["ic_provisioning_closure"])
+    for pairing, why in iam_eval.DISPUTED_RUNTIME_CONTEXT.items():
+        surfaces[f"DISPUTED_RUNTIME_CONTEXT[{pairing}]"] = why
+    ledger = json.loads(
+        (REPO_ROOT / "tests" / "fixtures" / "review-record-ledger.json")
+        .read_text(encoding="utf-8"))
+    for record_id, record in ledger["review_records"].items():
+        if record.get("status") == "ACTIVE":
+            surfaces[f"review-record-ledger:{record_id}"] = record.get("scope", "")
+    return surfaces
+
+
+def _odr31_commentary_texts() -> dict:
+    """The generator/evaluator source files, comments included, so the superseded framing
+    cannot survive (or return) as commentary either."""
+    return {relative: (REPO_ROOT / relative).read_text(encoding="utf-8")
+            for relative in _ODR31_COMMENTARY_SOURCES}
+
+
+def test_no_governed_surface_claims_succeeded_proves_the_condition(contract):
+    """OD-R4 rev-3.1, class-level: a terminal ProvisionPermissionSet SUCCEEDED status does
+    NOT prove aws:CalledViaFirst was present or matched — Identity Center may diff-and-skip
+    the downstream iam:PutRolePolicy write under parity, so a SUCCEEDED status without an
+    exercised write proves nothing. ANY sentence on ANY governed surface that pairs a
+    provisioning-success term with a proof/sufficiency term and carries no negating or
+    limiting term is the superseded inference — original bytes, reworded, or relocated —
+    and fails here."""
+    offending = []
+    for name, text in _odr31_prose_surfaces(contract).items():
+        for sentence in _odr31_sentences(text):
+            words = frozenset(sentence.split())
+            if (words & _ODR31_SUCCESS_TOKENS and words & _ODR31_PROOF_TOKENS
+                    and not words & _ODR31_NEGATION_TOKENS):
+                offending.append((name, sentence.strip()))
+    assert not offending, (
+        "superseded 'SUCCEEDED proves the condition' inference reintroduced: "
+        f"{offending}")
+    # The prose correction itself must stay present, not merely the claim absent.
+    hyp = contract["ic_provisioning_closure"]["_condition_hypothesis"].lower()
+    assert "succeeded" in hyp and "does not by itself prove" in hyp
+
+
+def test_condition_hypothesis_pins_the_corrected_structured_standard(contract):
+    """The machine-checkable form of the correction. SUCCEEDED-without-write is
+    INDETERMINATE_WRITE_NOT_EXERCISED, never CONDITION_LIVE; observations never upgrade;
+    disagreement is CONFLICTING_OBSERVATIONS; documentation stays insufficient."""
+    section = contract["ic_provisioning_closure"]
+    std = section["_condition_liveness_evidence_standard"]
+    assert std["succeeded_alone_proves_condition"] is False
+    assert "cloudtrail" in std["condition_live_requires"].lower()
+    assert "allowed" in std["condition_live_requires"].lower()
+    assert std["lookup_events_reveals_calledviafirst"] is False
+    assert std["invokedby_is_condition_key_proof"] is False
+    assert std["succeeded_without_write_event"] == "INDETERMINATE_WRITE_NOT_EXERCISED"
+    assert std["single_controlled_denial"] == "PROVISIONAL_CONDITION_DEAD"
+    assert std["single_denial_may_authorize_fallback"] is False
+    assert std["confirmation_requires_separate_authorization_and_window"] is True
+    assert std["later_observations_non_upgrading"] is True
+    assert std["disagreement_class"] == "CONFLICTING_OBSERVATIONS"
+    assert std["disagreement_can_yield_condition_live"] is False
+    assert std["retry_or_same_window_disambiguation_exists"] is False
+    assert std["documentation_status"] == "DOCUMENTATION_INSUFFICIENT"
+    # The prose must carry the load-bearing corrected terms too (belt and braces).
+    hyp = section["_condition_hypothesis"]
+    for phrase in ("INDETERMINATE_WRITE_NOT_EXERCISED", "PROVISIONAL_CONDITION_DEAD",
+                   "CONFLICTING_OBSERVATIONS", "action-truth", "invokedBy",
+                   "lookup-events", "DOCUMENTATION_INSUFFICIENT"):
+        assert phrase in hyp, phrase
+    # The grant itself is untouched by this correction.
+    assert section["provision_role_write"] == ["iam:PutRolePolicy"]
+
+
+def test_positive_control_is_the_cloudtrail_allowed_event_not_the_run(contract):
+    """The positive control is the CloudTrail iam:PutRolePolicy Allowed action-truth
+    event — NEVER the provisioning run or its terminal status. Structured pin plus a
+    class-level scan: any sentence anywhere on the governed surfaces (commentary
+    included) that frames a positive control/artifact without CloudTrail, or frames it
+    around the run/status without a negating term, restores the superseded framing and
+    fails here."""
+    std = contract["ic_provisioning_closure"]["_condition_liveness_evidence_standard"]
+    assert std.get("positive_control_artifact") == \
+        "cloudtrail_iam_putrolepolicy_allowed_action_truth_event"
+    assert std.get("positive_control_is_provisioning_run") is False
+    surfaces = dict(_odr31_prose_surfaces(contract))
+    surfaces.update(_odr31_commentary_texts())
+    offending = []
+    for name, text in surfaces.items():
+        for sentence in _odr31_sentences(text):
+            if "positive control" not in sentence and "positive artifact" not in sentence:
+                continue
+            words = frozenset(sentence.split())
+            if "cloudtrail" not in words:
+                offending.append((name, "positive control without CloudTrail",
+                                  sentence.strip()))
+            elif (words & {"run", "runs", "provisioning", "succeeded", "status"}
+                    and not words & _ODR31_NEGATION_TOKENS):
+                offending.append((name, "run/status-framed positive control with no "
+                                        "negating term", sentence.strip()))
+    assert not offending, f"superseded positive-control framing: {offending}"
+
+
+def test_condition_live_requires_the_bound_allowed_event_and_sole_grant_premise(contract):
+    """CONDITION_LIVE takes a CloudTrail Allowed event BOUND to the probe submission,
+    caller/session context, exact hashed target role and event time, under the REQUIRED
+    sole-grant premise — an unbound Allowed event proves nothing (any broader grant could
+    have authorized it). Deleting the premise, detaching it from CONDITION_LIVE, or
+    weakening it to optional fails here."""
+    std = contract["ic_provisioning_closure"]["_condition_liveness_evidence_standard"]
+    assert std.get("condition_live_requires_cloudtrail_allowed_event") is True
+    assert std.get("condition_live_requires_sole_grant_premise") is True
+    assert set(std.get("allowed_event_required_bindings") or []) == {
+        "probe_submission", "caller_session_context", "exact_hashed_target_role",
+        "event_time", "sole_grant_premise"}, (
+        "the Allowed event's mandatory bindings changed — an event accepted without "
+        "target/session/request binding is not attributable evidence")
+    requirement = std["condition_live_requires"].lower()
+    for needed in ("cloudtrail", "allowed", "bound", "sole-grant premise"):
+        assert needed in requirement, needed
+    # The prose sentence DEFINING CONDITION_LIVE must itself bind event and premise.
+    hyp = contract["ic_provisioning_closure"]["_condition_hypothesis"]
+    defining = [s for s in _odr31_sentences(hyp)
+                if "condition live" in s and "requires" in s]
+    assert defining, "the hypothesis no longer defines what CONDITION_LIVE requires"
+    assert any("cloudtrail" in s and "allowed" in s and "bound" in s and "sole-grant" in s
+               for s in defining), (
+        "the CONDITION_LIVE definition lost the bound Allowed event or the sole-grant "
+        f"premise: {defining}")
+    # The premise is REQUIRED on every surface — never optional, advisory or best-effort.
+    surfaces = dict(_odr31_prose_surfaces(contract))
+    surfaces.update(_odr31_commentary_texts())
+    weakened = [
+        (name, sentence.strip())
+        for name, text in surfaces.items()
+        for sentence in _odr31_sentences(text)
+        if ("sole-grant" in sentence or "sole grant" in sentence)
+        and any(marker in sentence for marker in _ODR31_OPTIONAL_MARKERS)]
+    assert not weakened, f"sole-grant premise weakened from required: {weakened}"
+
+
+def test_condition_dead_requires_denial_source_discrimination(contract):
+    """PROVISIONAL_CONDITION_DEAD may be assigned ONLY to a denial that survives BOTH
+    explicit-deny discrimination and sole-grant discrimination. A denial attributable to
+    an SCP, a permissions boundary, a session policy, a stale authorization plane, a
+    wrong target, a wrong caller, or another grant is INDETERMINATE — never
+    condition-dead. Dropping any discrimination, or accepting a bare AccessDenied as
+    condition-dead, fails here."""
+    section = contract["ic_provisioning_closure"]
+    std = section["_condition_liveness_evidence_standard"]
+    required = {
+        "cloudtrail_access_denied_action_truth_event",
+        "explicit_deny_discrimination",
+        "scp_attribution_excluded",
+        "permissions_boundary_attribution_excluded",
+        "session_policy_attribution_excluded",
+        "sole_grant_discrimination",
+        "stale_authorization_plane_excluded",
+        "wrong_target_excluded",
+        "wrong_caller_excluded",
+        "other_grant_attribution_excluded"}
+    actual = set(std.get("provisional_condition_dead_requires") or [])
+    assert required <= actual, (
+        f"condition-dead lost mandatory discriminations: {sorted(required - actual)}")
+    assert std.get("explicit_deny_attributable_denial_class") == "INDETERMINATE"
+    assert std.get("alternate_cause_attributable_denial_class") == "INDETERMINATE"
+    prose = _odr31_normalize(section["_condition_hypothesis"] + " "
+                             + section["_fallback_posture"])
+    for cause in ("accessdenied", "scp", "permissions boundary", "session policy",
+                  "stale", "wrong target", "wrong caller", "another grant"):
+        assert cause in prose, f"denial-source discrimination lost from prose: {cause}"
+    assert "indeterminate" in prose and "never" in prose
+    # No prose sentence may hand out condition-dead unconditionally.
+    unconditional = [
+        sentence.strip()
+        for field in ("_condition_hypothesis", "_fallback_posture")
+        for sentence in _odr31_sentences(section[field])
+        if "provisional condition dead" in sentence
+        and not frozenset(sentence.split()) & {"only", "never", "not", "discrimination",
+                                               "discriminations", "discriminated"}]
+    assert not unconditional, f"unconditional condition-dead assignment: {unconditional}"
+
+
+def test_condition_liveness_standard_forbids_a_single_denial_widening(contract):
+    """A single controlled denial (PROVISIONAL_CONDITION_DEAD) may never, by itself,
+    authorize aws:ViaAWSService, condition removal, resource widening, or another IAM
+    action — it takes a separate authorization, a separate window, and a non-upgrading
+    confirmation. Pins that no path treats one denial as licence to widen."""
+    section = contract["ic_provisioning_closure"]
+    std = section["_condition_liveness_evidence_standard"]
+    assert std["single_denial_may_authorize_fallback"] is False
+    assert std["confirmation_requires_separate_authorization_and_window"] is True
+    assert std["retry_or_same_window_disambiguation_exists"] is False
+    # And the standing fallback posture still forbids in-place relaxation.
+    assert "separate reviewed delta" in section["_condition_hypothesis"].lower()
+    # Class-level: every ViaAWSService mention must refuse, sever or separately review it.
+    permissive = [
+        (field, sentence.strip())
+        for field in ("_condition_hypothesis", "_fallback_posture", "_excluded")
+        for sentence in _odr31_sentences(section[field])
+        if "viaawsservice" in sentence
+        and not frozenset(sentence.split()) & {"not", "never", "separate", "separately",
+                                               "excluded", "refused"}]
+    assert not permissive, f"ViaAWSService mentioned permissively: {permissive}"
 
 
 def test_the_ic_provisioning_closure_never_joins_the_operator_requirement_sets():
