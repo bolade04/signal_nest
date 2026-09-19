@@ -18,6 +18,54 @@ citation. No claim is inherited from a historical document without revalidation.
 
 ---
 
+## 0. Recorded operator decisions (binding)
+
+Two scope-setting decisions were **RESOLVED by the operator on 2026-09-19**, after this
+plan's first draft. They are recorded here, at the top, because they govern every scope
+statement below and because an earlier draft carried them as open and blocking.
+
+### `P6-D01` — RESOLVED: `PHASE_6_DOES_NOT_SUBSUME_PHASE_5A_THROUGH_5E`
+
+> **Phase 6 excludes the unimplemented Project Phase 5A–5E guided-action product work.**
+
+**Consequence.** Phase 6 is a **production-readiness and pilot-readiness phase for the
+product foundation that currently exists** — the Phase 1–4 scouting → scored, explainable
+opportunities loop. Phase 5A–5E (recommendation briefs, approvals, text creative
+generation, output-side content review, the normalized jurisdiction axis, notifications,
+server-side analytics, audited export) remain **separately scoped future product work**
+under their own plan set and their own future authorization. Phase 6 must not implement
+them, must not partially implement them, and must not absorb their scope by increment.
+Their unbuilt status is **not** a Phase-6 obligation.
+
+This does not change Phase 6's role as their *precondition*: the Phase-5 plan's own §10
+gates 5A/5C/5E activation on the retention policy, provider selection and infrastructure
+completion that Phase 6 delivers. Precondition ≠ inclusion.
+
+### `P6-D02` — RESOLVED: `FIRST_EXTERNAL_LAUNCH = UNPAID_PILOT`
+
+> **Initial external release target: unpaid design-partner pilot.**
+
+**Consequences.**
+
+- Billing is **not** a Phase-6 pilot launch gate.
+- Payment-provider integration is **not** required for the first pilot, unless some
+  separate existing repository requirement independently mandates it. None was found in
+  the audit: every billing reference in the repository defers it (§4.11).
+- Ad spend and customer charging are **not authorized**.
+- Pilot readiness must **still** satisfy, in full: security, tenant and workspace
+  isolation, **real data**, reliability, authentication and account lifecycle, privacy
+  and retention, monitoring that reaches a human, and a production environment that
+  exists. Unpaid narrows the commercial surface, **not** the safety surface.
+
+### What these decisions do NOT relax
+
+`P6-D02` removes exactly one thing from the launch path: monetization. Every P0 item in
+§4 remains P0. In particular `P6-PRIV-1` (retention/deletion) stays a launch blocker —
+pilot users are still data subjects — and `P6-DATA-1`/`P6-DATA-2` stay launch blockers,
+because a pilot that shows a design partner fictional coffee-shop data is not a pilot.
+
+---
+
 ## 1. Predecessor state
 
 ### 1.1 What the operator has declared closed
@@ -83,11 +131,12 @@ service a legal request, and launch controls — such that **one real external c
 onboard their team, configure their market, receive real opportunities about their own
 business, recover from their own mistakes, and be operated safely by someone on call.
 
-**Scope note (binding).** Target B as defined here is **design-partner / unpaid-pilot
-ready**. It deliberately excludes billing, subscriptions and metering (§4.11), which
-remain out of Phase-6 scope. A **paid** launch is Target B **plus** §4.11 and is gated on
-operator decision `P6-D02`. This distinction is stated because an earlier draft defined
-Target B as "one real paying customer", which Phase 6 as scoped cannot deliver.
+**Scope note (binding, settled by `P6-D02`).** Target B is **design-partner /
+unpaid-pilot ready**. It excludes billing, subscriptions and metering (§4.11). A **paid**
+launch is Target B **plus** §4.11 and is explicitly **out of Phase 6** under the resolved
+decision — it is a later phase, not a variant of this one. Unpaid narrows the commercial
+surface only; every security, isolation, real-data, reliability, privacy and
+observability requirement in §19 applies unchanged.
 
 **Current assessment: EARLY.** Denominator: the one-external-customer threshold above.
 
@@ -128,7 +177,7 @@ Effort: S ≤ 1 day, M ≤ 1 week, L > 1 week, XL > 2 weeks.
 
 | ID | Item | Current state | Evidence | LB? | Dep | Effort | Risk |
 |---|---|---|---|---|---|---|---|
-| `P6-DATA-1` | **The product has no real data source** | `get_connector()` returns `FixtureConnector()` whenever no live connector resolves. The only live connector is RSS, which is `False` by default. The RSS connector **is committed at HEAD** (8 files, 676 lines) but performs no egress; the live-egress work sits in unmerged CONFLICTING draft PR #34 (13 files, +1,901/−0) | `apps/api/app/scouting_requests/connectors.py:55-72`; `apps/api/app/core/config.py:235` | **Yes** | Legal/ToS sign-off; egress allow-list; SSRF guard | L | A paying customer's dashboard fills with invented posts about a fictional coffee chain |
+| `P6-DATA-1` | **The product has no real data source** | `get_connector()` returns `FixtureConnector()` whenever no live connector resolves. The only live connector is RSS, which is `False` by default. The RSS connector **is committed at HEAD** (8 files, 676 lines) but performs no egress; the live-egress work sits in unmerged CONFLICTING draft PR #34 (13 files, +1,901/−0) | `apps/api/app/scouting_requests/connectors.py:55-72`; `apps/api/app/core/config.py:235` | **Yes** | Legal/ToS sign-off; egress allow-list; SSRF guard | L | A pilot design partner's dashboard fills with invented posts about a fictional coffee chain |
 | `P6-DATA-2` | Any market outside 4 hard-coded cities silently returns nothing | `fixtures_for_market()` substring-matches `{Dallas TX, London UK, Lagos NG, Nairobi KE}` and `return []` otherwise — no error, no explanation | `apps/api/app/scouting_requests/fixtures.py:156-167` | **Yes** | `P6-DATA-1` | L | A Berlin customer's scout completes *successfully* with zero signals; indistinguishable from "broken" |
 | `P6-DATA-3` | Geocoder is 7 hard-coded cities; 404 otherwise | Fixture geocoder | `apps/api/app/geography/geocoder.py:10-19,33`; `apps/api/app/locations/routes.py:33` | **Yes** | Provider selection + egress | M | Multi-location is unusable outside 7 cities |
 | `P6-DATA-4` | RSS connector performs no HTTP egress even when enabled | Complete parse/normalize/attribute path; feed bytes come from `sample_feeds`; `is_simulated = True` | `apps/api/app/connectors/rss.py:5-15,62,70` | **Yes** | `P6-DATA-1` | M | The flag cannot produce live data |
@@ -161,6 +210,7 @@ Effort: S ≤ 1 day, M ≤ 1 week, L > 1 week, XL > 2 weeks.
 | `P6-PLAT-7` | Two empty packages shadow real modules | `app/business_profiles/` and `app/clustering/` contain only 0-byte `__init__.py`; real code is in `brands/` and `intelligence/clustering.py` | `find` | No | none | S | Navigation confusion |
 | `P6-PLAT-8` | Campaign↔location binding is an unvalidated JSON array | `location_ids` and `eligible_location_ids` are `JSON` columns with **no FK and no membership validation** — a campaign can reference a location in another workspace | `apps/api/app/campaign_context/models.py:84,125`; schemas `:55,87` | **Yes** | none | M | **A live integrity defect in shipped Phase 1–2 code**, on the same cross-location isolation invariant as `P6-DATA-6`. Phase 5D would *harden* it; it is broken in `main` today |
 | `P6-PLAT-9` | Campaign-context rows cannot be edited | All **9** context collections expose `GET`+`POST` on the collection and `DELETE /{item_id}` — and **no `PUT`/`PATCH` on any of them** (6 PUT operations exist elsewhere in the API, so this is specific to these collections) | `apps/api/openapi.json`; `apps/api/app/campaign_context/routes.py` | **Yes** | none | M | A customer who typos a competitor must delete and recreate, losing the row id and any referential history |
+| `P6-PLAT-12` | No cursor pagination on customer-facing lists | Every list is `limit`-bounded, but only internal/operator lists and feedback accept `offset`. Customer lists (opportunities, audit-logs, campaign context, scout-requests) cannot page past their cap | `apps/api/app/opportunities/routes.py:59`; `apps/api/app/audit/routes.py:18` | No (bounded, so not a stability risk) — but it is the backend half of `P6-UI-022` | none | M | A workspace with >100 opportunities silently loses rows in the UI |
 | `P6-PLAT-11` | Weak-secret detection is literal-match only | Config rejects only the literal default and empty string | `docs/security/phase-3a-4b-security-review.md:53-60` (F-4) | No | none | S | A trivially weak but non-default secret passes |
 | `P6-PLAT-10` | Three empty workspace packages | `packages/{config,shared,ui}` contain **0 files**, while `README.md` and `docs/architecture.md` describe them as holding shared types | `find packages -type f` → 0 | No | none | S | Decide: populate or delete |
 
@@ -221,8 +271,8 @@ Effort: S ≤ 1 day, M ≤ 1 week, L > 1 week, XL > 2 weeks.
 |---|---|---|---|---|---|---|---|
 | `P6-PRIV-1` | **No retention/deletion policy for any data class; no mechanism to enforce one** | Operator decision O-5 `UNDECIDED_RESERVED_TO_OPERATOR_LEGAL`. **No soft-delete column exists anywhere**; no purge worker; no account-deletion endpoint; no DSAR/export path | `docs/project-phase-5-plan.md` §12; `apps/api/app/scouting_requests/schedules.py:529` — "no soft-delete column exists" | **Yes** for any GDPR/CCPA-exposed launch | Operator + legal | L | Neither erasure nor portability can be serviced |
 | `P6-PRIV-2` | No policy on prompts sent to third-party LLM providers | No DPA record, no retention position | O-7 unresolved | **Yes** | `P6-LLM-6` | M | Tenant data may be retained by a third party under unknown terms |
-| `P6-PRIV-3` | Audit immutability is app-layer only | Single `record_audit` seam, but `action` is an open `str` with no enum; no DB-level immutability; the app role owns the database | `apps/api/app/audit/service.py:10-23` | Yes if compliance review is a launch requirement | DB role authority | M | Append-only is bypassable by anything holding `DATABASE_URL` |
-| `P6-PRIV-5` | Audit **coverage** is thin (distinct from immutability) | Exactly **19** `record_audit` call sites; **zero** on the 27 campaign-context operations, on workspace creation, or on onboarding. There is also no frontend consumer — `apps/web/src/api/queryKeys.ts:69` defines an `auditLogs` key with no endpoint function and no caller | `grep 'record_audit('` → 19 | Yes if compliance review is a launch requirement | none | M | An audit-spine claim fails on **coverage** before it ever reaches immutability |
+| `P6-PRIV-3` | Audit immutability is app-layer only | Single `record_audit` seam, but `action` is an open `str` with no enum; no DB-level immutability; the app role owns the database | `apps/api/app/audit/service.py:10-23` | **No for the pilot** (`P6-D02`); **P1 — before GA** | DB role authority | M | Append-only is bypassable by anything holding `DATABASE_URL` |
+| `P6-PRIV-5` | Audit **coverage** is thin (distinct from immutability) | Exactly **19** `record_audit` call sites; **zero** on the 27 campaign-context operations, on workspace creation, or on onboarding. There is also no frontend consumer — `apps/web/src/api/queryKeys.ts:69` defines an `auditLogs` key with no endpoint function and no caller | `grep 'record_audit('` → 19 | **No for the pilot** (`P6-D02`); **P1 — before GA** | none | M | An audit-spine claim fails on **coverage** before it ever reaches immutability |
 | `P6-PRIV-4` | No scraped-source provenance/ToS record or takedown path | Dark today | `apps/api/app/connectors/` | **Yes** with `P6-DATA-1` | Legal | M | Per-source ToS exposure |
 
 ### 4.9 Capability governance
@@ -233,7 +283,12 @@ Effort: S ≤ 1 day, M ≤ 1 week, L > 1 week, XL > 2 weeks.
 | `P6-CAP-2` | `FeatureFlagsOut` reflects 1 of 3 flags | A client cannot learn scheduling or RSS is dark without probing and receiving a 503 | `apps/api/app/system/routes.py:40-52` | No | `P6-CAP-1` | S | Contradicts the reflection's stated purpose |
 | `P6-CAP-3` | `future_activation_phase="4B"` on all three, consumed by nothing | Factually wrong for RSS (blocked on legal, not Phase 4B) | `apps/api/app/capabilities/registry.py:70-72,95,104,116` | No | none | S | No test can catch the drift |
 
-### 4.10 Product surface (Phase-5 scope — **out of Phase-6 scope**, recorded for completeness)
+### 4.10 Product surface (Phase-5A–5E scope — **excluded by resolved `P6-D01`**, recorded for completeness only)
+
+> **`OUTSIDE_PHASE_6__PHASE_5A_5E_FUTURE_PRODUCT_WORK`.** Nothing in this subsection is a
+> Phase-6 obligation, a Phase-6 exit condition, or an input to the Phase-6 critical path.
+> It is listed so that the absence of these surfaces is a known, recorded fact rather
+> than a discovery during a founder walkthrough.
 
 > Two items that an earlier draft filed here — the unvalidated campaign `location_ids`
 > and the create+delete-only campaign-context collections — are **live defects in shipped
@@ -255,7 +310,7 @@ Effort: S ≤ 1 day, M ≤ 1 week, L > 1 week, XL > 2 weeks.
 
 | ID | Item | State | Evidence |
 |---|---|---|---|
-| `P6-COM-1` | Billing, subscriptions, metering, entitlements, invoicing | NOT_STARTED | Zero implementation; the only `subscription` hits in `apps/` are coffee-shop demo fixtures. Explicitly excluded by Phase-5 §2; deferred to `docs/phase-3-plan.md` §K / Phase 3G. **Required for a paid launch; not required for a dark or design-partner launch** |
+| `P6-COM-1` | Billing, subscriptions, metering, entitlements, invoicing | NOT_STARTED | Zero implementation; the only `subscription` hits in `apps/` are coffee-shop demo fixtures. Explicitly excluded by Phase-5 §2; deferred to `docs/phase-3-plan.md` §K / Phase 3G. **Out of Phase 6 under resolved `P6-D02`** — required before any paid launch, not before the unpaid pilot |
 
 ---
 
@@ -317,7 +372,281 @@ and a retention policy are exogenous; nothing in Lanes A or B shortens them, and
 `P6-DATA-1`, `P6-LLM-6` and `P6-PRIV-1` each block a launch outright.
 
 **Cheapest risk reduction (all `S`, no dependencies):** `P6-CI-1`, `P6-INF-4`,
-`P6-INF-8`, `P6-GOV-1`, `P6-AUTH-3`, `P6-CI-7`(PR #163), `P6-PLAT-2`.
+`P6-INF-8`, `P6-GOV-1`, `P6-AUTH-3`, `P6-CI-7`(PR #163), `P6-PLAT-2`, and — added by
+`P6-UI-0` — `P6-UI-001`, `P6-UI-002`, `P6-UI-008`, `P6-UI-010`.
+
+### 5.1 Four parallel lanes (refined after `P6-UI-0`)
+
+```
+Lane U — FOUNDER-VISIBLE PRODUCT / PILOT UX        (repo-only, no deps, start now)
+   6U-1  P6-UI-001 error envelope ─┐
+         P6-UI-002 schedule gate ──┤ all four are S, independent, and
+         P6-UI-008 demo creds ─────┤ together remove every "looks broken"
+         P6-UI-010 stale phase copy┘ artefact from a founder demo
+   6U-2  P6-UI-004/009/011..015    (after 6B/6C land the backend halves)
+
+Lane P — PLATFORM CORRECTNESS / AUTH / DATA        (repo-only, no deps, start now)
+   6B    P6-AUTH-3 ─► P6-AUTH-6 ;  P6-AUTH-1 ─► unmasks P6-AUTH-3
+         P6-AUTH-2 (needs P6-D11 email transport)
+   6C    P6-PLAT-1/2/4 · P6-LLM-2/3/4/5 · P6-CAP-1
+         └─ P6-CAP-1 is the backend half of P6-UI-005/006
+   6D    P6-CI-2/3/4/5/6/7 · P6-CI-11
+
+Lane I — INFRASTRUCTURE / PRODUCTION               (AWS-authorized, serialized)
+   6E    P6-INF-15 ─► P6-INF-10(canary, with tags) ─► APPLY-1 ─► APPLY-2
+           ─► APPLY-3 ─► P6-INF-9 ─► workload apply
+         P6-INF-4 ─► P6-INF-5 ─► P6-INF-6
+         P6-INF-3 ─► P6-INF-2 ─► P6-INF-7
+   6G    P6-INF-1 ─► P6-INF-11 ─► P6-INF-12 ─► LAUNCH GATE
+
+Lane S — SECURITY / OPERATIONS                     (spans P and I)
+   6A    P6-GOV-1/4 · P6-CI-1 · P6-CI-7
+   6F    P6-PRIV-1 (needs P6-D05) · P6-PRIV-2 (needs P6-D04)
+         P6-DATA-1 (needs P6-D03 legal) ─► P6-DATA-2/4 ─► P6-CI-11 rework
+```
+
+**Lane dependencies that matter.**
+- Lane U is **fully independent of Lanes I and S** and needs no operator input. It is the
+  only lane that can start, finish and be seen by the founder immediately.
+- `P6-UI-005`/`P6-UI-006` are UI *symptoms* of `P6-CAP-1` (Lane P). Do not patch them in
+  Lane U — fixing the resolver fixes both.
+- `P6-UI-004` cannot be fully closed until `P6-DATA-2` lands, because the honest empty
+  state depends on the backend distinguishing "no signals found" from "market not
+  covered". Lane U can ship the copy change; Lane S makes it true.
+- `P6-CI-11` must be reworked **in the same tranche as** `P6-DATA-1/2`, or real data will
+  turn a required merge context red (risk `RK-15`).
+
+**Sequencing rule (binding).** Lane U must not displace Lane I or Lane S work: a
+good-looking UI is not production readiness. Equally, Lane I must not bury Lane U: four
+`S`-sized UI defects currently make a working product look broken, and leaving them
+behind months of infrastructure work is the wrong trade. **They run in parallel.**
+
+---
+
+## 5A. `P6-UI-0` — Current product UI reality check (executed 2026-09-19)
+
+**Status: COMPLETE.** This was executed as the first Phase-6 product activity, ahead of
+extended backend and infrastructure work, so that what the founder can actually use today
+is established fact rather than inference. It audits the UI that already exists. **It is
+not Phase 5A–5E implementation and changed no product code.**
+
+### 5A.1 How it was run
+
+The existing local development configuration, unmodified: `npm run bootstrap` →
+`npm run demo:setup` → API on `127.0.0.1:8000`, Vite on `localhost:5173`. SQLite,
+in-process queue, in-memory cache, fixture connectors, **mock LLM**. No AWS, no paid
+provider, no external egress, no secrets, no flag changes. Verified at runtime:
+`GET /health` → `{"status":"ok","mode":"local"}`; local Alembic at head `98289430a3ec`.
+
+`CURRENT_UI_LAUNCH_RESULT = PASS`.
+
+**Method limitation, disclosed:** the browser automation extension was not connected, so
+no visual screenshot pass was possible. Findings below come from full source reading of
+every route plus **live API verification against the running server**. Layout assessments
+are therefore derived from the responsive class structure, not from rendered pixels, and
+are marked as such. A visual pass remains worth doing.
+
+### 5A.2 Headline result
+
+The application runs, and the core loop — sign in → workspace → locations → scout
+requests → scored opportunities → evidence — is **genuinely usable end to end on seeded
+demo data**. It is a real product, not a shell.
+
+Two things qualify that, and neither is cosmetic:
+
+1. **Everything the founder will see is fixture data** — and, to the product's credit, it
+   says so (§5A.4).
+2. **A cluster of small, cheap UI defects makes shipped-and-working features look broken**
+   — chiefly `P6-UI-001`, which discards every backend error message in the product.
+
+### 5A.3 Route inventory
+
+12 declared routes plus a catch-all (`apps/web/src/App.tsx:21-41`); 8 sidebar entries, one
+operator-only (`apps/web/src/components/layout/nav.ts`).
+
+| Route | Page | Auth | Role | In nav | Backend dependency | Flag | State |
+|---|---|---|---|---|---|---|---|
+| `/sign-in` | `pages/auth/SignIn.tsx` | no | — | — | `POST /auth/login` | — | **WORKING** |
+| `/register` | `pages/auth/Register.tsx` | no | — | — | `POST /auth/register` | — | **WORKING** |
+| `/` | `pages/Overview.tsx` | yes | any | ✅ | opportunities + scout-requests | — | **WORKING_WITH_FIXTURE_DATA** |
+| `/onboarding` | `pages/Onboarding.tsx` | yes | any | ✅ | `POST /workspaces/{id}/onboarding` | — | **WORKING** |
+| `/context` | `pages/CampaignContext.tsx` | yes | any | ✅ | 9 context collections (27 ops) | — | **PARTIAL** — create + delete only; no edit (`P6-PLAT-9`) |
+| `/locations` | `pages/Locations.tsx` | yes | any | ✅ | locations + geo-coverage | — | **WORKING** |
+| `/scout-requests` | `pages/ScoutRequests.tsx` | yes | any | ✅ | scout-requests | — | **WORKING_WITH_FIXTURE_DATA** |
+| `/scout-requests/:id` | `pages/ScoutRequestDetail.tsx` | yes | any | — | scout-request, runs, schedule | `scout_scheduling_enabled` | **PARTIAL** — run history empty; schedule panel clickable and always fails (`P6-UI-002`) |
+| `/opportunities` | `pages/Opportunities.tsx` | yes | any | ✅ | opportunities | — | **WORKING_WITH_FIXTURE_DATA** |
+| `/opportunities/:id` | `pages/OpportunityDetail.tsx` | yes | any | — | opportunity, intelligence, feedback | `opportunity_feedback_enabled` | **WORKING_WITH_FIXTURE_DATA**; feedback correctly invisible |
+| `/settings` | `pages/Settings.tsx` | yes | any | ✅ | `/auth/me`, workspaces, runtime | — | **PARTIAL** — roles card inert (`P6-UI-007`) |
+| `/operations` | `pages/operations/Operations.tsx` | yes | **operator** | ✅ (operator) | 11 `/internal/system/*` | — | **WORKING**, but misreports 2 of 3 capabilities (`P6-UI-005/006`) |
+| `*` | `pages/NotFound.tsx` | yes | any | — | — | — | **WORKING** |
+
+**Verified live** against the seeded workspace: 4 locations (Dallas, London, Lagos,
+Nairobi), 4 scout requests all `completed`, **12 opportunities — every one
+`is_simulated: true`**, business-profile 200, audit-logs `[]`, jobs `total: 0`,
+runs `total: 0`, schedule `404 "This request has no schedule."`, feedback
+`503 capability_unavailable`.
+
+**`MISSING_EXPECTED_ROUTE`** — routes a pilot user would reasonably expect and that do not
+exist: forgot-password · email verification · change password · team/member management ·
+notifications centre · analytics · exports · account security · billing. Team management
+*appears* to exist as a Settings card and is inert.
+
+### 5A.4 Fixture / simulation boundary — the product is honest
+
+This was the single most important thing to check, and the answer is good. The UI labels
+simulated data **prominently and in six places**:
+
+- `components/common/badges.tsx:50-54` — a `Simulated` warning badge, tooltip "Generated
+  from fixture data, not a live source".
+- Rendered on `Overview.tsx:241`, `opportunities/OpportunityCardView.tsx:44`,
+  `OpportunityDetail.tsx:133`, `opportunities/IntelligencePanel.tsx:286`.
+- `OpportunityDetail.tsx:167-174` — a full warning callout: **"Simulated opportunity.
+  Generated from fixture connectors for demonstration — not sourced from a live feed."**
+- `ScoutRequestDetail.tsx:92-99` — **"Simulated sources.** This build uses fixture
+  connectors. Generated signals are clearly labeled and not from live feeds."
+- Stated *in advance* at `Onboarding.tsx:342` and `scouts/ScoutRequestDialog.tsx:208`.
+
+**Consequence for the plan.** `P6-DATA-1` remains a launch blocker — the product still has
+no real data source — but the "customer is misled into thinking fixtures are real
+intelligence" risk is **materially lower than the completion audit implied**. The audit's
+wording that simulated rows are "marked internally but presented as opportunities" is
+corrected here: the marking is surfaced, prominently, on every view that shows them.
+
+The genuine misleading case is narrower and is `P6-UI-004`: a user outside the four
+fixture markets whose scout completes successfully with zero signals.
+
+### 5A.5 `FOUNDER_INTERACTIVE_UI_NOW`
+
+**Fully interactive** — sign in · register · onboarding wizard · business profile ·
+locations (create, edit, geo-coverage) · campaign context (create/delete across 9
+collections) · scout request create/list/detail · opportunity feed with filters, search
+and sort · opportunity detail with evidence and intelligence panel · opportunity status
+change · workspace create/switch · theme · operator console (queue, workers, schedules,
+telemetry, capability registry and overrides).
+
+**Partially interactive** — scout scheduling (panel renders, buttons enabled, every
+mutation 503s) · campaign context (no edit path) · operator capability overrides (writes
+succeed but 2 of 3 capabilities ignore them).
+
+**View-only** — Organizations & roles · runtime status · notifications bell (permanent
+"You're all caught up").
+
+**Not currently demonstrable** — recommendations · approvals · creative generation ·
+notifications with content · server-side analytics · exports · jurisdiction controls ·
+team invites · password reset · billing. All are either Phase 5A–5E (§4.10, excluded by
+`P6-D01`) or unbuilt account-lifecycle work (`P6-AUTH-1`, `P6-AUTH-2`).
+
+### 5A.6 UI gap register
+
+| UI ID | Screen / flow | Current state | User impact | Pilot blocker? | Backend dep | Tranche |
+|---|---|---|---|---|---|---|
+| `P6-UI-001` | **Every error toast, app-wide** | `api/client.ts:120-123` builds messages from `humanizeValidation(payload)`, which only reads a top-level `detail` key (`:41-62`). The API's sole envelope is `{"error":{"code","message","request_id"}}` (`app/core/errors.py:212`). No API error carries `detail`, so the fallback `Request failed (${status})` always fires | The server's secret-free, well-written messages — "Opportunity feedback is not available yet.", "This request has no schedule." — **never reach a human**. Every failure in the product is a bare HTTP code | **UI-P0 — YES** | none | **6U-1** |
+| `P6-UI-002` | Scout request detail → schedule | `SchedulePanel` mounts unconditionally (`ScoutRequestDetail.tsx:160`) and renders enabled "Schedule daily"/"Schedule weekly" (`SchedulePanel.tsx:123-131`); backend 503s the POST (`scouting_requests/routes.py:75,389`). Root cause: `scout_scheduling_enabled` is absent from `FeatureFlagsOut`, so the client cannot know | The most prominent unbuilt feature is presented as working. Click → opaque failure (compounded by `P6-UI-001`) → user concludes the product is broken | **UI-P0 — YES** | `P6-CAP-2` | **6U-1** |
+| `P6-UI-003` | Sign-in | No "Forgot password?" link exists anywhere (`SignIn.tsx:105-128`); no reset route server-side | A forgotten password means permanent loss of the org, its workspaces and all data. Only recourse is registering a new account, which creates a new org | **UI-P0 — YES** | `P6-AUTH-2` | **6B** |
+| `P6-UI-004` | Opportunities empty state | `Opportunities.tsx:293-297` shows "No opportunities yet — Run a scout request to generate…" — identical whether the user has never run a scout or ran one that returned zero signals (the guaranteed outcome outside the 4 fixture markets, `fixtures.py:156-167`) | The app advises the user to do the thing they just did. This is the one place fixtures genuinely mislead | **UI-P1 — YES** | `P6-DATA-2` | **6U-2** |
+| `P6-UI-005` | Operations → capability overrides (feedback) | `system/routes.py:96` reflects the **raw global flag**, while `feedback/routes.py:85-91` decides via `resolve_capability` | An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI** in the product | **UI-P1** | `P6-CAP-1` | **6C** |
+| `P6-UI-006` | Operations → capability overrides (scheduling) | `scouting_requests/routes.py:75` reads the raw global flag and never calls `resolve_capability` | Operator sees "Enabled · Workspace override"; every schedule mutation still 503s. **Misreports** rather than under-reports | **UI-P1** | `P6-CAP-1` | **6C** |
+| `P6-UI-007` | Settings → Organizations & roles | Static row + read-only `Badge` (`Settings.tsx:129-144`); no invite, role change or remove, and no explanatory empty state — unlike the Workspaces card directly beneath it, which does have `+ New` | Looks like team management, does nothing. A pilot user hunts for the invite button and finds none | **UI-P1** | `P6-AUTH-1` | **6B** |
+| `P6-UI-008` | Sign-in | Live demo credentials printed in plain text (`SignIn.tsx:126-128`) plus a one-click "Use demo account" button (`:110-118`). Verified live: that account has **`is_operator: true`** | Anyone reaching the sign-in page gets the full operator console, **including capability-override write controls**. Fine locally; disqualifying for an externally reachable pilot | **UI-P1 — YES for any external exposure** | none | **6U-1** |
+| `P6-UI-009` | Scout request detail → run history | 4 requests show `completed`, but `/jobs` returns `total: 0` and `/runs` returns `total: 0` — the seed creates completed requests without durable job records | The founder clicks into a completed scout and sees an empty run history. Looks like data loss | **UI-P1** | seed only | **6U-2** |
+| `P6-UI-010` | Sidebar + auth layout | Hard-coded customer-facing copy: "**Phase 1 & 2** — Scouting to explainable opportunities. **Creative generation arrives in Phase 3.**" (`sidebar.tsx:68-72`) and "Phase 1 & 2" (`auth/AuthLayout.tsx:54-56`) | Internal roadmap vocabulary on a customer surface, and stale — "Phase 3" shipped; creative generation is now Phase 5C and unbuilt | **UI-P1** | none | **6U-1** |
+| `P6-UI-011` | Header, 768–1023px band | Hamburger + two fixed-width switchers (150px + 180px, `context-switchers.tsx:28,41`) + breadcrumbs with **no `min-w-0`/`truncate`** (`breadcrumbs.tsx:32-33`) + theme + bell + full user name, in a `h-14 px-4` row. The `overflow-x-auto` compact strip is `md:hidden` (`app-shell.tsx:83`) — disabled exactly in this band | Cramped or clipped header on portrait tablet. **Derived from class structure, not a rendered check** | **UI-P2** | none | **6U-2** |
+| `P6-UI-012` | Dialogs on mobile | `dialog.tsx:31` is `w-full` with no `mx-*`; close button at `right-4 top-4` (`:39`) | At 390px the dialog is edge-to-edge with the close button against the screen edge. *(Height is fine — `:32` does carry `max-h-[90vh] overflow-y-auto`; an earlier draft of this audit claimed otherwise and was wrong.)* | **UI-P2** | none | **6U-2** |
+| `P6-UI-013` | Session expiry | 401 clears the token (`AuthContext.tsx:67-70`) and redirects (`ProtectedRoute.tsx:24-26`); no "session expired" notice | After 12h the user is bounced to a blank sign-in mid-task. Softened by `intendedPath` preservation | **UI-P2** | `P6-AUTH-4` | **6U-2** |
+| `P6-UI-018` | **Scout Requests → "Run now"** | `POST .../run` flips the request to `queued` and enqueues a durable job. **The worker is a separate process** (`apps/api/app/jobs/worker.py:756`) and `app/main.py`'s `lifespan` never starts one — `scripts/dev.sh` has **zero** references to it. Verified live: `GET /internal/system/workers` → `{"active_count":0,"workers":[]}`. The toast meanwhile promises "A background job is processing this scout" (`useScoutActions.ts:43`) | **The primary action of the product's primary screen is a dead end under `npm run dev`.** The card flips to Queued and stays there forever; retrying is rejected with "Request is already queued or running." The founder will conclude the product is broken | **UI-P0 — YES for the walkthrough** | none — `npm run worker` is a third process (§5A.7) | **6U-1** |
+| `P6-UI-019` | Overview / Scout list / Scout detail — "N signals" | Frontend reads `stats.signals_processed` (`Overview.tsx:99`, `ScoutRequests.tsx:120`, `ScoutRequestDetail.tsx:68`); the API returns `scanned` / `noise_filtered` / `signals_analyzed` / `opportunities`. Verified live: `{"scanned":9,"noise_filtered":1,"signals_analyzed":7,"opportunities":3}` | **Every "signals" figure in the product renders 0** despite real values existing. Overview shows "4 noise filtered · 0 signals" | **UI-P1 — YES** | none | **6U-1** |
+| `P6-UI-020` | Overview — "Active scout requests" | Counts only `running\|queued\|paused` (`Overview.tsx:94`); all 4 seeded scouts are `completed` | Renders **0** directly beside the hint "4 total". Reads as broken | **UI-P1** | none | **6U-1** |
+| `P6-UI-021` | Header global search → Opportunities | `GlobalSearch` navigates to `/opportunities?search=…` (`global-search.tsx:17`), but `Opportunities.tsx:89-92` reads `searchParams` only in a `useState` **initializer**. Navigating within the same route does not remount, so the term is ignored — and the effect at `:114-117` then **rewrites the URL back**, erasing what the user typed | Global search silently fails whenever the user is already on Opportunities | **UI-P1** | none | **6U-2** |
+| `P6-UI-022` | Opportunities pagination | `limit: 100` hard-coded, no pagination control and no truncation warning; the aria-live count reports the returned length | Beyond 100 opportunities the user silently loses rows while the UI confidently reports "100 opportunities" | **UI-P1** | `P6-PLAT-12` (cursor pagination) | **6U-2** |
+| `P6-UI-023` | Locations | No delete or deactivate control — and no backend route to call | A mistyped location is permanent | **UI-P2** | backend route needed | **6U-2** |
+| `P6-UI-024` | 404 handling | The catch-all sits **inside** `ProtectedRoute` (`App.tsx:24,38`) | An unauthenticated user hitting a bad URL is bounced to `/sign-in` and never sees a 404 | **UI-P2** | none | **6U-2** |
+| `P6-UI-014` | Notifications bell | Permanent "You're all caught up. Live alerts arrive in a later phase." (`notifications.tsx:10-27`) | A control that can never do anything. Honest, but dead chrome | **UI-P2** | Phase 5E | **defer** |
+| `P6-UI-015` | Search | `hidden lg:block` (`global-search.tsx:13`) with no tablet/mobile substitute | Search unavailable below 1024px | **UI-P2** | none | **6U-2** |
+| `P6-UI-016` | Roles vocabulary | Six roles mapped in `lib/labels.ts:162-169`; only `owner` is ever assigned, so role-gate `false` branches (`SchedulePanel.tsx:132-136`) are unreachable | Dead presentation code; the UI will never show a non-owner role | **UI-P2** | `P6-AUTH-1` | **6B** |
+| `P6-UI-017` | Settings → Account | Two read-only rows; no password change. User menu offers two entries that both go to `/settings` (`user-menu.tsx:61-66`) | No self-serve credential management | **UI-P2** | `P6-AUTH-2` | **6B** |
+
+**What is genuinely right and should not be disturbed:** `opportunity_feedback_enabled` is
+the reference dark-capability implementation — a pre-request client gate
+(`useFeedback.ts:27-37`, `FeedbackPanel.tsx:80,102`) means **no request is ever issued
+while dark**, and nothing renders. The operator surface is correctly non-enumerable
+(`sidebar.tsx:34-36` filters; `RequireOperator.tsx:32-34` renders the 404 page in place
+rather than redirecting, so existence is not leaked). Empty, error and loading states
+exist as shared primitives (`components/common/states.tsx`). There is **no `<table>` and
+no fixed page width** anywhere, so the responsive bones are sound.
+
+### 5A.7 Founder walkthrough
+
+Local only. **Three processes are required, not two** — this is the single most important
+practical finding of `P6-UI-0`:
+
+```bash
+npm run bootstrap     # once
+npm run demo:setup    # once — migrate + seed
+npm run dev           # terminal 1 — API (127.0.0.1:8000) + web (localhost:5173)
+npm run worker        # terminal 2 — REQUIRED, or "Run now" does nothing (P6-UI-018)
+```
+
+Then `http://localhost:5173`, sign in `demo@signalnest.dev` / `demo1234`.
+
+`scripts/dev.sh` contains **zero** references to the worker, and the README quickstart does
+not mention `npm run worker`. Without it the product's primary action silently dead-ends.
+
+| # | Step | What works | What is simulated | Intentionally unavailable |
+|---|---|---|---|---|
+| 1 | Sign in | Full | — | No "forgot password" (`P6-UI-003`) |
+| 2 | Overview | Stat cards, classification chart, by-market chart, recent opportunities, recent activity | All 12 opportunities, each badged **Simulated** | Two stat values render wrong — "0 signals" (`P6-UI-019`) and "Active 0 / 4 total" (`P6-UI-020`) |
+| 3 | Locations | View 4 cities, create, edit, set geo-coverage radius | The 4 seeded cities | Jurisdiction controls (Phase 5D) |
+| 4 | Campaign Context | Create/delete across 9 collections | — | **Editing** — delete and recreate only (`P6-PLAT-9`) |
+| 5 | Scout Requests | List 4 completed requests, create a new one. **"Run now" works only if `npm run worker` is running** (`P6-UI-018`) | Fixture connectors, flagged in the create dialog | Live sources; edit; delete/archive |
+| 6 | Scout detail | Request config, "Simulated sources" banner | Sources | **Run history is empty** (`P6-UI-009`); schedule buttons render and always fail (`P6-UI-002`) |
+| 7 | Opportunities | Filter (verified live: `classification=early`→8, `min_score=61`→4, `search=Dallas`→3), sort, change status | All rows badged **Simulated** | Header global search fails when already on this page (`P6-UI-021`); no pagination past 100 (`P6-UI-022`) |
+| 8 | Opportunity detail | Scores, why-it-matters, evidence/inference split, intelligence panel, explicit "Simulated opportunity" callout | The whole record | Feedback (correctly invisible); recommendations, approvals, creative (Phase 5) |
+| 9 | Settings | Account read-only, theme, workspace create/switch, runtime status | — | Roles card inert (`P6-UI-007`); no password change |
+| 10 | Operations *(operator)* | Capability registry, queue health, worker fleet, schedules, telemetry, override read/write | — | Overrides don't bind for 2 of 3 capabilities (`P6-UI-005/006`) |
+
+### 5A.8 Verdict
+
+`UI-READY-2` — `CURRENT_SIGNALNEST_UI_RUNS_BUT_REQUIRES_SMALL_UI_REMEDIATION_BEFORE_FOUNDER_WALKTHROUGH`
+
+The founder can walk the product today and it will demo well **provided `npm run worker`
+is running**. Fix `P6-UI-018`, `P6-UI-001`, `P6-UI-002`, `P6-UI-019` and `P6-UI-020`
+first: together they are the difference between "a real product with a dark feature" and
+"a product that appears broken on its primary screen". All five are `S`, repo-only, need
+no operator input and no AWS, and none of them touches Phase 5A–5E scope.
+
+---
+
+## 5B. First Phase-6 implementation tranche after PR #167 merges
+
+`FIRST_PHASE6_IMPLEMENTATION_TRANCHE = 6U-1 — Founder-visible UI truthfulness`
+**run in parallel with** `6A — Baseline truth & gate closure`.
+
+**Rationale.** The original recommendation was 6A alone (governance truth + CI gate
+closure). `P6-UI-0` changed that, for a reason that is not cosmetic: **six independent
+defects currently make a working product look broken**, all of them repo-only, `S`-sized,
+requiring no operator decision, no AWS, no credentials and no Phase-5 scope:
+
+| Item | One-line fix |
+|---|---|
+| `P6-UI-018` | Start the worker in `scripts/dev.sh` (or detect zero workers and say so) |
+| `P6-UI-001` | Read `payload.error.message` in `api/client.ts:120-123` |
+| `P6-UI-019` | Read `signals_analyzed`, not `signals_processed`, in 3 files |
+| `P6-UI-020` | Count `completed` in the Overview "active" tile, or relabel it |
+| `P6-UI-002` | Add `scout_scheduling_enabled` to `FeatureFlagsOut`; gate `SchedulePanel` like `FeedbackPanel` |
+| `P6-UI-010` | Replace the stale "Creative generation arrives in Phase 3" chrome |
+
+6A stays first-equal because `P6-CI-1` (promoting the two security contexts) and
+`P6-GOV-1` (the tracked-doc contradiction) are prerequisites for trusting **any**
+subsequent merge, and both are operator-side or `S`-sized.
+
+**Why not lead with infrastructure.** Lane I cannot start until `P6-D03`/`P6-D04`/`P6-D05`
+are answered and a fresh AWS authorization exists. Lane U and Lane P need none of that.
+Starting them immediately keeps founder-visible progress moving while the external
+prerequisites are obtained — which is exactly the parallelism §5.1 is built for.
+
+**Explicitly not in the first tranche:** anything in §4.10 (`P6-D01`), anything in §4.11
+(`P6-D02`), any AWS action, any flag activation, and `P6-UI-005`/`P6-UI-006`, whose real
+fix is `P6-CAP-1` in Lane P rather than a UI patch.
 
 ---
 
@@ -351,8 +680,9 @@ product capability. Where it adds code, that code closes a gap between what the 
 
 ### 7.2 OUT OF SCOPE
 
-- **The Phase 5A–5E guided-action product loop** (§4.10). It is specified, frozen, and
-  unbuilt. It has its own plan set, its own resolved operator decisions O-1…O-11, its own
+- **The Phase 5A–5E guided-action product loop** (§4.10) — **excluded by resolved
+  operator decision `P6-D01` (§0)**, not merely by this plan's recommendation. It is
+  specified, frozen, and unbuilt. It has its own plan set, its own resolved operator decisions O-1…O-11, its own
   open O-12, and its own 26-working-day ceiling. Folding it into Phase 6 would make Phase
   6 an unbounded container and would obscure the readiness work. **Phase 5 implementation
   remains a separate, separately-authorized track.** Phase 6 is its precondition: the
@@ -361,9 +691,10 @@ product capability. Where it adds code, that code closes a gap between what the 
   delivers. **Phase 6 does not deliver the normalized fail-closed jurisdiction axis** —
   it delivers only the fail-open market-matching fix (`P6-DATA-6`). The jurisdiction axis
   (`P6-P5-5`) remains a Phase-5 deliverable and remains an activation gate for 5C and 5D.
-- **Billing, subscriptions, metering, entitlements** (§4.11) — deferred by the roadmap to
-  Phase 3G/§K. Required for a *paid* launch; not required to reach Target B for a design-
-  partner or dark launch. Promoting it into Phase 6 is operator decision `P6-D02`.
+- **Billing, subscriptions, metering, entitlements** (§4.11) — **excluded by resolved
+  operator decision `P6-D02` (§0)**, and independently deferred by the roadmap to Phase
+  3G/§K. The audit found no repository requirement that independently mandates billing
+  for a pilot. Not revisited inside Phase 6.
 - **Connector breadth beyond the first live source** (`P6-DATA-5`) — each additional
   source carries its own ToS review; Phase 6 proves the *pattern* with one.
 - **Website intelligence** (`docs/phase-3-plan.md` §H / Phase 3D).
@@ -398,6 +729,8 @@ earlier draft listed it in both places; 6E governs.
 | **6E** | Infrastructure, observability & deployment | `P6-INF-2..10`, `P6-INF-13`, `P6-INF-14`, `P6-INF-15` | **Yes** | Apply + spend authorization | 6B, 6C, 6D |
 | **6F** | Live data & privacy | `P6-DATA-1..4`, `P6-DATA-6`, `P6-PRIV-1..5`, `P6-LLM-6` | Partly | **Yes — legal/ToS + retention policy** | after 6C |
 | **6G** | Production environment & launch closeout | `P6-INF-1`, `P6-INF-11`, `P6-INF-12` | **Yes** | Spend + launch authorization | after 6E, 6F |
+| **6U-1** | **Founder-visible UI truthfulness** (added by `P6-UI-0`) | `P6-UI-001`, `P6-UI-002`, `P6-UI-008`, `P6-UI-010` | No | No | everything — it is repo-only and tiny |
+| **6U-2** | Founder-visible UI polish | `P6-UI-004`, `P6-UI-009`, `P6-UI-011` … `P6-UI-015` | No | No | 6B, 6C, 6D, 6E |
 
 **Rationale for this shape rather than the suggested 6A–6E labels.** The audit produced
 three natural constraint classes — repo-only work (unblocked, parallel), AWS-authorized
@@ -419,7 +752,7 @@ Phase 6 may begin when all of the following are objectively true:
    heads, all 12 carrying real downgrades — ✅ (computed statically).
 4. Last CI on HEAD green: run `32147377858`, workflow **CI**, `completed/success` — ✅.
 5. This plan reviewed by four independent lanes and merged through the protected workflow.
-6. Operator decisions `P6-D01` and `P6-D02` answered (§11) — they determine scope.
+6. Operator decisions `P6-D01` and `P6-D02` answered — ✅ **RESOLVED 2026-09-19** (§0).
 7. Infrastructure mutation boundaries explicit (§10.2).
 8. Feature-activation boundaries explicit (§10.3).
 
@@ -453,8 +786,8 @@ existing hard ceiling; any change to it is an operator act.
 
 | ID | Question | Options | Technical consequence | Product consequence | Recommendation | Blocking? |
 |---|---|---|---|---|---|---|
-| `P6-D01` | Does Phase 6 subsume the unbuilt Phase 5A–5E product loop? | (a) No — Phase 6 is readiness only, Phase 5 stays a separate track. (b) Yes — one combined phase | (a) keeps tranches reviewable and lanes parallel; (b) creates a 2-month+ phase whose readiness work is hostage to feature work | (a) first customer sees the Phase 1–4 product on real data; (b) first customer sees the full guided-action loop but much later | **(a)** — Phase 5's own §10 gates its activation on the very work Phase 6 does, so (a) is also the correct dependency order | **Yes — sets scope** |
-| `P6-D02` | Is the first launch paid? | (a) Design-partner / unpaid pilot. (b) Paid | (b) pulls all of §4.11 into scope | (a) defers billing entirely; (b) adds a large unscoped workstream | **(a)** for the first cohort; revisit before general availability | **Yes** |
+| `P6-D01` | Does Phase 6 subsume the unbuilt Phase 5A–5E product loop? | — | — | — | **✅ RESOLVED 2026-09-19 — (a) NO.** `PHASE_6_DOES_NOT_SUBSUME_PHASE_5A_THROUGH_5E`. Binding text in §0 | **CLOSED** |
+| `P6-D02` | Is the first launch paid? | — | — | — | **✅ RESOLVED 2026-09-19 — (a) UNPAID PILOT.** `FIRST_EXTERNAL_LAUNCH = UNPAID_PILOT`. Binding text in §0 | **CLOSED** |
 | `P6-D03` | Which live data source goes first, and is its ToS cleared? | RSS (PR #34, already built) vs. another | RSS is the only one with an implementation | Determines what a customer actually sees | **RSS**, conditional on legal sign-off — PR #34 is 13 files and +1,901/−0 of already-written work (the committed connector module itself is 676 lines and already at HEAD) | **Yes — `P6-DATA-1`** |
 | `P6-D04` | LLM provider and credentials (O-7, still `UNDECIDED_RESERVED_TO_OPERATOR`) | OpenAI · Anthropic · both behind the seam | Both adapters exist and are untested | Blocks all generation and all real classification | Choose one for launch; test it properly under `P6-LLM-1` | **Yes** |
 | `P6-D05` | Retention/deletion durations per data class (O-5, `UNDECIDED_RESERVED_TO_OPERATOR_LEGAL`) | Fixed tiers · delete-on-request · jurisdiction-dependent | No soft-delete column exists anywhere; the mechanism must be built either way | GDPR/CCPA erasure and portability are unserviceable until decided | Decide durations early — the mechanism is `L` effort and on the critical path | **Yes** |
@@ -578,12 +911,16 @@ That set is, explicitly: `P6-GOV-1`, `P6-GOV-4`, `P6-DATA-1`, `P6-DATA-2`, `P6-D
 No ellipsis or range appears in that enumeration deliberately: it is binding text, and a
 range is where an omission hides.
 
-**Conditional rows — ruled on explicitly.** `P6-PRIV-3` (DB-level audit immutability) and
-`P6-PRIV-5` (audit coverage) are marked "Yes **if** compliance review is a launch
-requirement". They join the E0 set **unless** operator decision `P6-D02` selects an
-unpaid design-partner launch **and** the operator records that no compliance review gates
-that cohort. If `P6-D02` selects a paid launch, both are in the E0 set unconditionally.
-Silence does not exclude them.
+**Conditional rows — now determinate under `P6-D02`.** `P6-PRIV-3` (DB-level audit
+immutability) and `P6-PRIV-5` (audit coverage) were marked "Yes **if** compliance review
+is a launch requirement". `P6-D02` resolved to an **unpaid design-partner pilot**, and no
+repository authority imposes a compliance review on that cohort. Both therefore sit
+**outside E0 for the pilot** and move to **P1 — required before general availability**.
+
+This is a deliberate, recorded narrowing, not an omission. It does **not** touch
+`P6-PRIV-1` (retention/deletion) or `P6-PRIV-2` (LLM prompt data policy), which remain
+**inside E0**: pilot users are data subjects, and an unpaid pilot does not suspend
+GDPR/CCPA erasure or a third-party data-processing position.
 
 A closeout that demonstrates E1–E13 while any of the above is open is **not** a Phase-6
 closeout. No demonstration substitutes for an open blocker.
