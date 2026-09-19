@@ -280,7 +280,7 @@ Effort: S ≤ 1 day, M ≤ 1 week, L > 1 week, XL > 2 weeks.
 | ID | Item | Current state | Evidence | LB? | Dep | Effort | Risk |
 |---|---|---|---|---|---|---|---|
 | `P6-CAP-1` | **2 of 3 capabilities bypass the resolver** | `resolve_capability` has exactly one **enforcement** consumer — feedback (its other non-test caller, `system/internal_capabilities_routes.py:329`, is an operator *read*). Scheduling and RSS read the raw global flag, so **neither honours a workspace override nor the operator safety ceiling** — though the registry advertises both, and the operator console renders those controls from the registry's booleans | `apps/api/app/feedback/routes.py:85` (sole consumer); `apps/api/app/scouting_requests/routes.py:75`; `apps/api/app/connectors/registry.py:26` | **Yes** | none | M | A documented safety control that silently does not apply |
-| `P6-CAP-2` | `FeatureFlagsOut` reflects 1 of 3 flags | A client cannot learn scheduling or RSS is dark without probing and receiving a 503 | `apps/api/app/system/routes.py:40-52` | No | `P6-CAP-1` | S | Contradicts the reflection's stated purpose |
+| `P6-CAP-2` | `FeatureFlagsOut` reflects 1 of 3 flags — **IN SCOPE for 6U-1, not deferred** | A client cannot learn scheduling or RSS is dark without probing and receiving a 503. **This is the backend half of `P6-UI-002`** (UI-P0): `SchedulePanel` cannot gate itself because `scout_scheduling_enabled` is not reflected. At minimum the scheduling flag must be added | `apps/api/app/system/routes.py:40-52` | **Yes — via `P6-UI-002`** | none | S | Without it the most prominent unbuilt feature stays clickable and always fails |
 | `P6-CAP-3` | `future_activation_phase="4B"` on all three, consumed by nothing | Factually wrong for RSS (blocked on legal, not Phase 4B) | `apps/api/app/capabilities/registry.py:70-72,95,104,116` | No | none | S | No test can catch the drift |
 
 ### 4.10 Product surface (Phase-5A–5E scope — **excluded by resolved `P6-D01`**, recorded for completeness only)
@@ -362,8 +362,8 @@ GATE 0 — TRUTH (no dependencies; unblocks review of everything else)
 
 **Longest chain (blocks production):** `P6-INF-15 → P6-INF-10 → APPLY-1 → APPLY-2 →
 APPLY-3 → P6-INF-9 → workload apply → P6-INF-4/5/6 → P6-INF-3/2/7 → P6-INF-1 →
-P6-INF-11 → P6-INF-12`. **APPLY-1, APPLY-2 and APPLY-3 are three distinct AWS applies,
-each requiring its own authorization** — they are named here because an earlier draft
+P6-INF-11 → P6-INF-12`. **APPLY-1 and APPLY-3 are distinct AWS applies and
+APPLY-2 is a GitHub Actions image publish; all three require their own authorization** — they are named here because an earlier draft
 collapsed them into a single arrow. `P6-INF-8` (GitHub-side) and `P6-INF-10` (AWS-side)
 are independent and may run in parallel, but **both** must complete before APPLY-1.
 
@@ -379,11 +379,15 @@ and a retention policy are exogenous; nothing in Lanes A or B shortens them, and
 
 ```
 Lane U — FOUNDER-VISIBLE PRODUCT / PILOT UX        (repo-only, no deps, start now)
-   6U-1  P6-UI-001 error envelope ─┐
-         P6-UI-002 schedule gate ──┤ all four are S, independent, and
-         P6-UI-008 demo creds ─────┤ together remove every "looks broken"
-         P6-UI-010 stale phase copy┘ artefact from a founder demo
-   6U-2  P6-UI-004/009/011..015    (after 6B/6C land the backend halves)
+   6U-1  P6-UI-018 start the worker ─┐
+         P6-UI-001 error envelope ───┤ seven items, all S, all independent,
+         P6-UI-019 signals key ──────┤ all repo-only. Together they remove
+         P6-UI-020 active-count tile ┤ every "looks broken" artefact from a
+         P6-UI-002 + P6-CAP-2 gate ──┤ founder demo.
+         P6-UI-008 demo creds ───────┤
+         P6-UI-010 stale phase copy ─┘
+   6U-2  P6-UI-004 · 009 · 011 · 012 · 013 · 015 · 021 · 022 · 023 · 024
+         (004 and 022 need their backend halves from Lane P/S first)
 
 Lane P — PLATFORM CORRECTNESS / AUTH / DATA        (repo-only, no deps, start now)
    6B    P6-AUTH-3 ─► P6-AUTH-6 ;  P6-AUTH-1 ─► unmasks P6-AUTH-3
@@ -438,7 +442,9 @@ in-process queue, in-memory cache, fixture connectors, **mock LLM**. No AWS, no 
 provider, no external egress, no secrets, no flag changes. Verified at runtime:
 `GET /health` → `{"status":"ok","mode":"local"}`; local Alembic at head `98289430a3ec`.
 
-`CURRENT_UI_LAUNCH_RESULT = PASS`.
+`CURRENT_UI_LAUNCH_RESULT = PASS` — meaning **the application started and served both
+tiers**. It is a startup result, not a launch-readiness judgement; the readiness verdict
+is §5A.8.
 
 **Method limitation, disclosed:** the browser automation extension was not connected, so
 no visual screenshot pass was possible. Findings below come from full source reading of
@@ -450,7 +456,8 @@ are marked as such. A visual pass remains worth doing.
 
 The application runs, and the core loop — sign in → workspace → locations → scout
 requests → scored opportunities → evidence — is **genuinely usable end to end on seeded
-demo data**. It is a real product, not a shell.
+demo data, provided all three processes are running** (API, web **and worker** — see
+§5A.7; `npm run dev` starts only the first two). It is a real product, not a shell.
 
 Two things qualify that, and neither is cosmetic:
 
@@ -540,21 +547,21 @@ team invites · password reset · billing. All are either Phase 5A–5E (§4.10,
 
 | UI ID | Screen / flow | Current state | User impact | Pilot blocker? | Backend dep | Tranche |
 |---|---|---|---|---|---|---|
-| `P6-UI-001` | **Every error toast, app-wide** | `api/client.ts:120-123` builds messages from `humanizeValidation(payload)`, which only reads a top-level `detail` key (`:41-62`). The API's sole envelope is `{"error":{"code","message","request_id"}}` (`app/core/errors.py:212`). No API error carries `detail`, so the fallback `Request failed (${status})` always fires | The server's secret-free, well-written messages — "Opportunity feedback is not available yet.", "This request has no schedule." — **never reach a human**. Every failure in the product is a bare HTTP code | **UI-P0 — YES** | none | **6U-1** |
+| `P6-UI-001` | **Every error toast, app-wide** | `api/client.ts:120-123` builds messages from `humanizeValidation(payload)`, which only reads a top-level `detail` key (`:41-62`). The **sole envelope for application errors** is `{"error":{"code","message","request_id"}}` (`app/core/errors.py:212`), emitted by all three registered handlers (`:220,224,229,244`) **including** `RequestValidationError`. No application error carries `detail`, so the fallback `Request failed (${status})` always fires. **Two things the fix must handle:** field-level detail lives at `error.details` (**plural**, `:214`) — read `message` **and** `details`, or every 422 collapses to "Request validation failed"; and `StarletteHTTPException` is **not** registered, so an unmatched route or 405 still returns Starlette's `{"detail":…}` and must keep working | The server's secret-free, well-written messages — "Opportunity feedback is not available yet.", "This request has no schedule." — **never reach a human**. Every failure in the product is a bare HTTP code | **UI-P0 — YES** | none | **6U-1** |
 | `P6-UI-002` | Scout request detail → schedule | `SchedulePanel` mounts unconditionally (`ScoutRequestDetail.tsx:160`) and renders enabled "Schedule daily"/"Schedule weekly" (`SchedulePanel.tsx:123-131`); backend 503s the POST (`scouting_requests/routes.py:75,389`). Root cause: `scout_scheduling_enabled` is absent from `FeatureFlagsOut`, so the client cannot know | The most prominent unbuilt feature is presented as working. Click → opaque failure (compounded by `P6-UI-001`) → user concludes the product is broken | **UI-P0 — YES** | `P6-CAP-2` | **6U-1** |
 | `P6-UI-003` | Sign-in | No "Forgot password?" link exists anywhere (`SignIn.tsx:105-128`); no reset route server-side | A forgotten password means permanent loss of the org, its workspaces and all data. Only recourse is registering a new account, which creates a new org | **UI-P0 — YES** | `P6-AUTH-2` | **6B** |
 | `P6-UI-004` | Opportunities empty state | `Opportunities.tsx:293-297` shows "No opportunities yet — Run a scout request to generate…" — identical whether the user has never run a scout or ran one that returned zero signals (the guaranteed outcome outside the 4 fixture markets, `fixtures.py:156-167`) | The app advises the user to do the thing they just did. This is the one place fixtures genuinely mislead | **UI-P1 — YES** | `P6-DATA-2` | **6U-2** |
-| `P6-UI-005` | Operations → capability overrides (feedback) | `system/routes.py:96` reflects the **raw global flag**, while `feedback/routes.py:85-91` decides via `resolve_capability` | An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI** in the product | **UI-P1** | `P6-CAP-1` | **6C** |
+| `P6-UI-005` | Operations → capability overrides (feedback) | Feedback's **enforcement is already correct** — `feedback/routes.py:85-91` decides via `resolve_capability`. The defect is purely the **reflection**: `system/routes.py:94-96` populates `FeatureFlagsOut` from the raw global flag | An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI**, because the client gate reads the global reflection | **UI-P1** | **`P6-CAP-2`** (not `P6-CAP-1` — an earlier draft mis-attributed this; feedback already consumes the resolver) | **6U-1**, with `P6-CAP-2` |
 | `P6-UI-006` | Operations → capability overrides (scheduling) | `scouting_requests/routes.py:75` reads the raw global flag and never calls `resolve_capability` | Operator sees "Enabled · Workspace override"; every schedule mutation still 503s. **Misreports** rather than under-reports | **UI-P1** | `P6-CAP-1` | **6C** |
 | `P6-UI-007` | Settings → Organizations & roles | Static row + read-only `Badge` (`Settings.tsx:129-144`); no invite, role change or remove, and no explanatory empty state — unlike the Workspaces card directly beneath it, which does have `+ New` | Looks like team management, does nothing. A pilot user hunts for the invite button and finds none | **UI-P1** | `P6-AUTH-1` | **6B** |
-| `P6-UI-008` | Sign-in | Live demo credentials printed in plain text (`SignIn.tsx:126-128`) plus a one-click "Use demo account" button (`:110-118`). Verified live: that account has **`is_operator: true`** | Anyone reaching the sign-in page gets the full operator console, **including capability-override write controls**. Fine locally; disqualifying for an externally reachable pilot | **UI-P1 — YES for any external exposure** | none | **6U-1** |
+| `P6-UI-008` | Sign-in | Live demo credentials printed in plain text (`SignIn.tsx:126-128`) plus a one-click "Use demo account" button (`:110-118`). **`SignIn.tsx` carries no environment guard on any of this**, so the constants compile into the production bundle — confirmed, the built `apps/web/dist/assets/index-*.js` contains `demo1234` | Anyone reaching an externally reachable deployment where the demo org was seeded gets a working **OWNER account inside a real tenant**. Blast radius is the demo org — tenant isolation still protects a pilot's own org. **Correction to an earlier draft:** this row previously claimed the account also grants the operator console. That holds only locally — `apps/api/app/db/seed.py:212` sets `demo_is_operator = environment in ("development","test")`, so `is_operator` is **False** in staging/production. The live `is_operator: true` observation came from a dev server. The finding stands on the unguarded credentials alone | **UI-P0 — YES for any external exposure** | none | **6U-1** |
 | `P6-UI-009` | Scout request detail → run history | 4 requests show `completed`, but `/jobs` returns `total: 0` and `/runs` returns `total: 0` — the seed creates completed requests without durable job records | The founder clicks into a completed scout and sees an empty run history. Looks like data loss | **UI-P1** | seed only | **6U-2** |
 | `P6-UI-010` | Sidebar + auth layout | Hard-coded customer-facing copy: "**Phase 1 & 2** — Scouting to explainable opportunities. **Creative generation arrives in Phase 3.**" (`sidebar.tsx:68-72`) and "Phase 1 & 2" (`auth/AuthLayout.tsx:54-56`) | Internal roadmap vocabulary on a customer surface, and stale — "Phase 3" shipped; creative generation is now Phase 5C and unbuilt | **UI-P1** | none | **6U-1** |
 | `P6-UI-011` | Header, 768–1023px band | Hamburger + two fixed-width switchers (150px + 180px, `context-switchers.tsx:28,41`) + breadcrumbs with **no `min-w-0`/`truncate`** (`breadcrumbs.tsx:32-33`) + theme + bell + full user name, in a `h-14 px-4` row. The `overflow-x-auto` compact strip is `md:hidden` (`app-shell.tsx:83`) — disabled exactly in this band | Cramped or clipped header on portrait tablet. **Derived from class structure, not a rendered check** | **UI-P2** | none | **6U-2** |
 | `P6-UI-012` | Dialogs on mobile | `dialog.tsx:31` is `w-full` with no `mx-*`; close button at `right-4 top-4` (`:39`) | At 390px the dialog is edge-to-edge with the close button against the screen edge. *(Height is fine — `:32` does carry `max-h-[90vh] overflow-y-auto`; an earlier draft of this audit claimed otherwise and was wrong.)* | **UI-P2** | none | **6U-2** |
 | `P6-UI-013` | Session expiry | 401 clears the token (`AuthContext.tsx:67-70`) and redirects (`ProtectedRoute.tsx:24-26`); no "session expired" notice | After 12h the user is bounced to a blank sign-in mid-task. Softened by `intendedPath` preservation | **UI-P2** | `P6-AUTH-4` | **6U-2** |
-| `P6-UI-018` | **Scout Requests → "Run now"** | `POST .../run` flips the request to `queued` and enqueues a durable job. **The worker is a separate process** (`apps/api/app/jobs/worker.py:756`) and `app/main.py`'s `lifespan` never starts one — `scripts/dev.sh` has **zero** references to it. Verified live: `GET /internal/system/workers` → `{"active_count":0,"workers":[]}`. The toast meanwhile promises "A background job is processing this scout" (`useScoutActions.ts:43`) | **The primary action of the product's primary screen is a dead end under `npm run dev`.** The card flips to Queued and stays there forever; retrying is rejected with "Request is already queued or running." The founder will conclude the product is broken | **UI-P0 — YES for the walkthrough** | none — `npm run worker` is a third process (§5A.7) | **6U-1** |
-| `P6-UI-019` | Overview / Scout list / Scout detail — "N signals" | Frontend reads `stats.signals_processed` (`Overview.tsx:99`, `ScoutRequests.tsx:120`, `ScoutRequestDetail.tsx:68`); the API returns `scanned` / `noise_filtered` / `signals_analyzed` / `opportunities`. Verified live: `{"scanned":9,"noise_filtered":1,"signals_analyzed":7,"opportunities":3}` | **Every "signals" figure in the product renders 0** despite real values existing. Overview shows "4 noise filtered · 0 signals" | **UI-P1 — YES** | none | **6U-1** |
+| `P6-UI-018` | **Scout Requests → "Run now"** | `POST .../run` flips the request to `queued` and enqueues a durable job. **The worker is a separate process** (`apps/api/app/jobs/worker.py:756`) and `app/main.py`'s `lifespan` never starts one — `scripts/dev.sh` has **zero** references to it. Verified live: `GET /internal/system/workers` → `{"active_count":0,"workers":[]}`. The toast meanwhile promises "A background job is processing this scout" (`useScoutActions.ts:43`). **There is no in-process fallback on this route** — the run path is durable-only (`scouting_requests/routes.py:284` → `enqueue_scout_request` → `job_store.enqueue`). Note one decoy: the legacy `@register_job("run_scout_request")` on the synchronous `InProcessQueue` (`jobs/pipeline.py:97`, `infra/queue.py:41-46`) is **never called by the run route** and is not a fallback | **The primary action of the product's primary screen is a dead end under `npm run dev`.** The card flips to Queued and stays there forever; retrying is rejected with "Request is already queued or running." The founder will conclude the product is broken | **UI-P0 — YES for the walkthrough** | none — `npm run worker` is a third process (§5A.7) | **6U-1** |
+| `P6-UI-019` | Overview / Scout list / Scout detail — "N signals" | Frontend reads `stats.signals_processed` (`Overview.tsx:99`, `ScoutRequests.tsx:120`, `ScoutRequestDetail.tsx:68`); the API returns `scanned` / `noise_filtered` / `signals_analyzed` / `opportunities`. Verified live: `{"scanned":9,"noise_filtered":1,"signals_analyzed":7,"opportunities":3}`. **The correct key is `signals_analyzed`** = `len(normalized)` (`jobs/pipeline.py:301`) — what survived noise **and** dedupe. It must **not** be derived client-side as `scanned − noise_filtered`: 9−1=8 ≠ 7, because one signal was a duplicate | **Every "signals" figure in the product renders 0** despite real values existing. Overview shows "4 noise filtered · 0 signals" | **UI-P1 — YES** | none | **6U-1** |
 | `P6-UI-020` | Overview — "Active scout requests" | Counts only `running\|queued\|paused` (`Overview.tsx:94`); all 4 seeded scouts are `completed` | Renders **0** directly beside the hint "4 total". Reads as broken | **UI-P1** | none | **6U-1** |
 | `P6-UI-021` | Header global search → Opportunities | `GlobalSearch` navigates to `/opportunities?search=…` (`global-search.tsx:17`), but `Opportunities.tsx:89-92` reads `searchParams` only in a `useState` **initializer**. Navigating within the same route does not remount, so the term is ignored — and the effect at `:114-117` then **rewrites the URL back**, erasing what the user typed | Global search silently fails whenever the user is already on Opportunities | **UI-P1** | none | **6U-2** |
 | `P6-UI-022` | Opportunities pagination | `limit: 100` hard-coded, no pagination control and no truncation warning; the aria-live count reports the returned length | Beyond 100 opportunities the user silently loses rows while the UI confidently reports "100 opportunities" | **UI-P1** | `P6-PLAT-12` (cursor pagination) | **6U-2** |
@@ -658,9 +665,14 @@ fix is `P6-CAP-1` in Lane P rather than a UI patch.
 > that onboarding the first real customer is a business decision rather than an
 > engineering risk.
 
-Phase 6 is a **readiness and correctness** phase, not a feature phase. It builds no new
-product capability. Where it adds code, that code closes a gap between what the system
-**claims** and what it **does**.
+Phase 6 is a **readiness and correctness** phase, not a feature phase. Where it adds code,
+that code closes a gap between what the system **claims** and what it **does**.
+
+**One acknowledged exception.** `P6-UI-023` (no way to delete or deactivate a location)
+requires a genuinely new backend route, because none exists. It is the only item in Phase
+6 that adds a product capability rather than closing a claim/behaviour gap, it is rated
+UI-P2, and it is recorded here rather than hidden so the "no new capability" framing stays
+honest.
 
 ---
 
@@ -705,8 +717,7 @@ product capability. Where it adds code, that code closes a gap between what the 
 `P6-DATA-5` connector breadth · `P6-DATA-7` website intelligence · `P6-LLM-7` real
 embedding provider · `P6-CI-9` SHA-pinning · `P6-CI-10` SPA error boundary ·
 `P6-PLAT-5` OpenAPI security schemes · `P6-PLAT-7` empty packages · `P6-PLAT-10` empty
-workspaces · `P6-PLAT-11` weak-secret detection · `P6-CAP-2` flag reflection ·
-`P6-CAP-3` stale registry field · `P6-INF-16` CloudTrail Logs delivery · `P6-INF-17`
+workspaces · `P6-PLAT-11` weak-secret detection · `P6-CAP-3` stale registry field · `P6-INF-16` CloudTrail Logs delivery · `P6-INF-17`
 operator provisioning · `P6-INF-18` docs/Redis/ALB hardening · VPC flow logs and
 endpoints · ECS autoscaling · SSO/OAuth · i18n · accessibility automation ·
 load/performance baseline · independent pentest (recommended immediately post-launch) ·
@@ -723,14 +734,14 @@ earlier draft listed it in both places; 6E governs.
 | WS | Title | Items | Needs AWS? | Needs operator/legal? | Parallel with |
 |---|---|---|---|---|---|
 | **6A** | Baseline truth & gate closure | `P6-GOV-1..7`, `P6-CI-1`, `P6-CI-7` | No | GitHub ruleset action | everything |
-| **6B** | Account lifecycle & authorization | `P6-AUTH-1..7` | No | Email transport choice | 6C, 6D, 6E |
-| **6C** | Platform & AI correctness | `P6-PLAT-1..4`, `P6-PLAT-6`, `P6-PLAT-8`, `P6-PLAT-9`, `P6-LLM-1..5`, `P6-CAP-1` | No | `P6-LLM-6` for 6F only | 6B, 6D, 6E |
+| **6B** | Account lifecycle & authorization | `P6-AUTH-1..7`; UI surfaces `P6-UI-003`, `P6-UI-007`, `P6-UI-016`, `P6-UI-017` | No | Email transport choice | 6C, 6D, 6E |
+| **6C** | Platform & AI correctness | `P6-PLAT-1..4`, `P6-PLAT-6`, `P6-PLAT-8`, `P6-PLAT-9`, `P6-PLAT-12`, `P6-LLM-1..5`, `P6-CAP-1`; UI surface `P6-UI-006` | No | `P6-LLM-6` for 6F only | 6B, 6D, 6E |
 | **6D** | Test & release gates | `P6-CI-2..6`, `P6-CI-8`, `P6-CI-11` | No | No | 6B, 6C, 6E |
 | **6E** | Infrastructure, observability & deployment | `P6-INF-2..10`, `P6-INF-13`, `P6-INF-14`, `P6-INF-15` | **Yes** | Apply + spend authorization | 6B, 6C, 6D |
 | **6F** | Live data & privacy | `P6-DATA-1..4`, `P6-DATA-6`, `P6-PRIV-1..5`, `P6-LLM-6` | Partly | **Yes — legal/ToS + retention policy** | after 6C |
 | **6G** | Production environment & launch closeout | `P6-INF-1`, `P6-INF-11`, `P6-INF-12` | **Yes** | Spend + launch authorization | after 6E, 6F |
-| **6U-1** | **Founder-visible UI truthfulness** (added by `P6-UI-0`) | `P6-UI-001`, `P6-UI-002`, `P6-UI-008`, `P6-UI-010` | No | No | everything — it is repo-only and tiny |
-| **6U-2** | Founder-visible UI polish | `P6-UI-004`, `P6-UI-009`, `P6-UI-011` … `P6-UI-015` | No | No | 6B, 6C, 6D, 6E |
+| **6U-1** | **Founder-visible UI truthfulness** (added by `P6-UI-0`) | `P6-UI-001`, `P6-UI-002` and `P6-UI-005` (+ their shared backend half `P6-CAP-2`), `P6-UI-008`, `P6-UI-010`, `P6-UI-018`, `P6-UI-019`, `P6-UI-020` | No | No | everything — it is repo-only and tiny |
+| **6U-2** | Founder-visible UI polish | `P6-UI-004`, `P6-UI-009`, `P6-UI-011`, `P6-UI-012`, `P6-UI-013`, `P6-UI-015`, `P6-UI-021`, `P6-UI-022`, `P6-UI-023`, `P6-UI-024` | No | No | 6B, 6C, 6D, 6E |
 
 **Rationale for this shape rather than the suggested 6A–6E labels.** The audit produced
 three natural constraint classes — repo-only work (unblocked, parallel), AWS-authorized
@@ -896,8 +907,14 @@ dozen of this plan's own launch blockers remained open.
 
 ### E0 — The binding condition
 
-> **Every item in §4 marked `LB? = Yes` and assigned to a Phase-6 workstream in §8 is
-> closed, each with a cited artifact (merge SHA, test name, or recorded execution).**
+> **(i) Every item in §4 marked `LB? = Yes` and assigned to a Phase-6 workstream in §8,
+> and (ii) every row in §5A.6 marked `UI-P0`, is closed — each with a cited artifact
+> (merge SHA, test name, or recorded execution).**
+
+Limb (ii) exists because the UI gap register lives in §5A.6 and uses a different column
+(`Pilot blocker?`) with different values (`UI-P0`/`UI-P1`). Without it, a closeout could
+satisfy every §4 blocker and all thirteen demonstrations while 6U-1 was never executed —
+shipping a pilot whose sign-in page prints working credentials into a real tenant.
 
 That set is, explicitly: `P6-GOV-1`, `P6-GOV-4`, `P6-DATA-1`, `P6-DATA-2`, `P6-DATA-3`,
 `P6-DATA-4`, `P6-DATA-6`, `P6-AUTH-1`, `P6-AUTH-2`, `P6-AUTH-3`, `P6-AUTH-4`,
@@ -906,7 +923,11 @@ That set is, explicitly: `P6-GOV-1`, `P6-GOV-4`, `P6-DATA-1`, `P6-DATA-2`, `P6-D
 `P6-LLM-5`, `P6-LLM-6`, `P6-CAP-1`, `P6-INF-1`, `P6-INF-2`, `P6-INF-3`, `P6-INF-4`,
 `P6-INF-5`, `P6-INF-6`, `P6-INF-7`, `P6-INF-8`, `P6-INF-9`, `P6-INF-10`, `P6-INF-11`,
 `P6-INF-12`, `P6-INF-14`, `P6-INF-15`, `P6-CI-1`, `P6-CI-2`, `P6-CI-3`, `P6-CI-4`,
-`P6-CI-5`, `P6-CI-6`, `P6-CI-7`, `P6-CI-11`, `P6-PRIV-1`, `P6-PRIV-2`, `P6-PRIV-4`.
+`P6-CI-5`, `P6-CI-6`, `P6-CI-7`, `P6-CI-11`, `P6-PRIV-1`, `P6-PRIV-2`, `P6-PRIV-4`,
+`P6-CAP-2`.
+
+**Limb (ii) — the `UI-P0` set, enumerated:** `P6-UI-001`, `P6-UI-002`, `P6-UI-003`,
+`P6-UI-008`, `P6-UI-018`.
 
 No ellipsis or range appears in that enumeration deliberately: it is binding text, and a
 range is where an omission hides.
@@ -921,6 +942,16 @@ This is a deliberate, recorded narrowing, not an omission. It does **not** touch
 `P6-PRIV-1` (retention/deletion) or `P6-PRIV-2` (LLM prompt data policy), which remain
 **inside E0**: pilot users are data subjects, and an unpaid pilot does not suspend
 GDPR/CCPA erasure or a third-party data-processing position.
+
+**Two couplings recorded rather than left implicit.** (a) `P6-PRIV-5` has a limb that is
+**not** about compliance: zero `record_audit` coverage on workspace creation and on the 27
+campaign-context operations means no application-level incident forensics for pilot users.
+CloudTrail and structured logs cover part of it, which is why deferring is still
+defensible — but the deferral rests on that partial coverage, not on compliance alone. It
+also compounds `P6-AUTH-7` (no role gate on workspace creation) into "any member creates
+workspaces, unlogged" in a pilot that E0 requires to be multi-user (E7). (b) Because
+`P6-PRIV-5` is P1, **E10's deletion demonstration must be independently verifiable** —
+it cannot rely on an audit record that Phase 6 is not required to produce.
 
 A closeout that demonstrates E1–E13 while any of the above is open is **not** a Phase-6
 closeout. No demonstration substitutes for an open blocker.
