@@ -393,7 +393,7 @@ Lane P — PLATFORM CORRECTNESS / AUTH / DATA        (repo-only, no deps, start 
    6B    P6-AUTH-3 ─► P6-AUTH-6 ;  P6-AUTH-1 ─► unmasks P6-AUTH-3
          P6-AUTH-2 (needs P6-D11 email transport)
    6C    P6-PLAT-1/2/4 · P6-LLM-2/3/4/5 · P6-CAP-1
-         └─ P6-CAP-1 is the backend half of P6-UI-005/006
+         └─ P6-CAP-1 is the backend half of P6-UI-006 only
    6D    P6-CI-2/3/4/5/6/7 · P6-CI-11
 
 Lane I — INFRASTRUCTURE / PRODUCTION               (AWS-authorized, serialized)
@@ -412,8 +412,10 @@ Lane S — SECURITY / OPERATIONS                     (spans P and I)
 **Lane dependencies that matter.**
 - Lane U is **fully independent of Lanes I and S** and needs no operator input. It is the
   only lane that can start, finish and be seen by the founder immediately.
-- `P6-UI-005`/`P6-UI-006` are UI *symptoms* of `P6-CAP-1` (Lane P). Do not patch them in
-  Lane U — fixing the resolver fixes both.
+- `P6-UI-006` is a UI *symptom* of `P6-CAP-1` (Lane P, 6C). Do not patch it in Lane U —
+  fixing the resolver fixes it. **`P6-UI-005` is different**: feedback already consumes
+  the resolver, so its defect is reflection-only (`P6-CAP-2`) and it ships in 6U-1
+  alongside `P6-UI-002`, which shares that root cause.
 - `P6-UI-004` cannot be fully closed until `P6-DATA-2` lands, because the honest empty
   state depends on the backend distinguishing "no signals found" from "market not
   covered". Lane U can ship the copy change; Lane S makes it true.
@@ -652,8 +654,16 @@ Starting them immediately keeps founder-visible progress moving while the extern
 prerequisites are obtained — which is exactly the parallelism §5.1 is built for.
 
 **Explicitly not in the first tranche:** anything in §4.10 (`P6-D01`), anything in §4.11
-(`P6-D02`), any AWS action, any flag activation, and `P6-UI-005`/`P6-UI-006`, whose real
-fix is `P6-CAP-1` in Lane P rather than a UI patch.
+(`P6-D02`), any AWS action, any flag activation, and **`P6-UI-006`**, whose real fix is
+`P6-CAP-1` in Lane P (6C) rather than a UI patch.
+
+**`P6-UI-005` IS in the first tranche.** An earlier draft excluded it alongside
+`P6-UI-006` on the assumption that both were `P6-CAP-1`. They are not: feedback already
+enforces correctly through `resolve_capability` (`apps/api/app/feedback/routes.py:85`), so
+`P6-UI-005` is a **reflection-only** defect — i.e. `P6-CAP-2`, which 6U-1 already carries
+for `P6-UI-002`. One change to `FeatureFlagsOut` closes `P6-UI-002` and `P6-UI-005`
+together. `P6-UI-006` is genuinely different: `scouting_requests/routes.py:75` reads the
+raw global flag and never consults the resolver.
 
 ---
 
