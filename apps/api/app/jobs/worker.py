@@ -36,6 +36,13 @@ from logging import ERROR, WARNING
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+# Populate ``Base.metadata`` with *every* ORM model. A handler writes across the
+# domain, and the unit of work sorts tables by foreign key at flush time — so a
+# worker process holding only a subset of the models raises NoReferencedTableError
+# ("could not find table 'organizations'") the moment it flushes, even though
+# ``configure_mappers()`` succeeds. The API gets this transitively via its routes;
+# the worker has no such path and must ask for it explicitly.
+import app.db.models  # noqa: F401 - completes Base.metadata for this process
 from app.core.config import Settings, get_settings
 from app.core.errors import WorkerRegistrationFailedError
 from app.core.lifecycle import graceful_shutdown
@@ -65,17 +72,36 @@ from app.core.tracing import (
 from app.db.session import SessionLocal
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
-from app.jobs.registry import HandlerContext, resolve_handler
+from app.jobs.registry import (
+    HandlerContext,
+    TerminalFailureContext,
+    builtin_job_types,
+    known_job_types,
+    register_builtin_handlers,
+    resolve_handler,
+    resolve_terminal_failure_hook,
+)
 from app.jobs.status import (
     JobError,
     JobErrorCode,
     JobExecutionError,
     JobStatus,
-    JobType,
 )
 from app.jobs.store import DurableJobStore, JobLeaseLostError, job_store, utcnow
 from app.jobs.worker_registry import WorkerRegistry, worker_registry
 from app.jobs.worker_status import WorkerStatus
+
+# Register the built-in handlers at *module scope*, so registration completes
+# while ``app.jobs.worker`` is still being imported — before a Worker can be
+# constructed, before ``validate()`` runs, and therefore before any job can be
+# claimed. This is a call rather than a bare ``import app.jobs.handlers`` so it
+# cannot be mistaken for an unused import and pruned.
+#
+# The worker process has no other path to the handler module: ``app.jobs.service``
+# imports it, but only the API imports the service. (``app.core.lifecycle`` does
+# reach the service — inside ``graceful_shutdown``, i.e. on the way out — which is
+# far too late to execute anything, and is why this must be import-time.)
+register_builtin_handlers()
 
 logger = get_logger("signalnest.jobs.worker")
 
@@ -319,6 +345,57 @@ class JobRunner:
             stop_hb.set()
             hb_thread.join(timeout=1.0)
 
+    #: Terminal statuses that mean "this job will never run again and it failed".
+    #: ``retry_wait`` is deliberately absent: the attempt failed, the job did not.
+    _FINAL_FAILURE_STATUSES = frozenset(
+        {JobStatus.FAILED.value, JobStatus.DEAD_LETTERED.value}
+    )
+
+    def _run_terminal_failure_hook(self, db: Session, job: Job, error: JobError) -> None:
+        """Let the owning domain settle its state after a *final* job failure.
+
+        Best-effort and strictly additive: a job type without a hook is the norm,
+        and a hook that raises must not turn a recorded failure into an
+        unrecorded one. The job's own terminal transition is already applied and
+        is what the caller commits.
+        """
+        if job.status not in self._FINAL_FAILURE_STATUSES:
+            return
+        hook = resolve_terminal_failure_hook(job.job_type)
+        if hook is None:
+            return
+        try:
+            # A SAVEPOINT around the hook: if it fails, only its own writes are
+            # discarded and the job's terminal transition survives to be committed.
+            # Without this, a hook error would poison the session and the recorded
+            # failure would be lost with it.
+            with db.begin_nested():
+                hook(
+                    TerminalFailureContext(
+                        db=db,
+                        context=_context_from_job(job),
+                        payload=dict(job.payload or {}),
+                        job_id=job.id,
+                        job_type=job.job_type,
+                        status=job.status,
+                        error_code=error.code,
+                        attempt=job.attempt_count,
+                        now=self._clock(),
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001 - never lose the recorded job failure
+            # Only the exception class name: a hook message may carry customer
+            # content. The job's failure is still committed by the caller.
+            log_event(
+                logger,
+                "worker.terminal_failure_hook_failed",
+                level=WARNING,
+                component="jobs",
+                outcome="degraded",
+                job_type=job.job_type,
+                error_class=type(exc).__name__,
+            )
+
     def _fail(
         self, db: Session, job: Job, error: JobError, *, worker_id: str, lease_token: str,
         started: float, job_type: str,
@@ -344,6 +421,12 @@ class JobRunner:
                     jitter_seed=job.id,
                     now=self._clock(),
                 )
+                # The job's terminal outcome is now decided but not yet committed.
+                # If this was a *final* failure, let the owning domain reconcile the
+                # state this job was driving, inside the same transaction and under
+                # the same lease fence, so the job's outcome and the domain's state
+                # can never disagree. A retry is not a final failure.
+                self._run_terminal_failure_hook(db, job, error)
                 db.commit()
                 span.set_attribute("job.status", job.status)
                 span.set_attribute("retryable", job.status == JobStatus.RETRY_WAIT.value)
@@ -498,7 +581,23 @@ class Worker:
 
     # -- startup validation -------------------------------------------------
     def validate(self) -> None:
-        """Confirm configuration and that the durable + registry schema is present."""
+        """Confirm configuration, handler coverage, and the durable schema.
+
+        Handler coverage is checked *first* and fails closed: a worker that
+        cannot execute a built-in job type must never reach ``register()``, since
+        registering is what advertises capability to the fleet. Failing here
+        rather than at claim time turns a silent per-job ``unsupported_type``
+        into one loud startup error.
+        """
+        registered = tuple(sorted(known_job_types()))
+        expected = builtin_job_types()
+        missing = sorted(set(expected) - set(registered))
+        if missing:
+            raise RuntimeError(
+                "Durable job handler registry is incomplete "
+                f"(missing={missing}). Refusing to start: a worker must not "
+                "advertise job types it cannot execute."
+            )
         if self._settings.job_queue_backend != "local":  # pragma: no cover - future
             raise RuntimeError(
                 f"Unsupported job_queue_backend={self._settings.job_queue_backend!r}; "
@@ -543,7 +642,10 @@ class Worker:
                     worker_id=self.worker_id,
                     worker_type=self._settings.worker_type,
                     concurrency=self._settings.worker_concurrency,
-                    supported_job_types=[t.value for t in JobType],
+                    # Advertise what this process can actually resolve, never the
+                    # enum. ``validate()`` has already proven the two agree, so
+                    # this row can only ever claim executable capability.
+                    supported_job_types=list(known_job_types()),
                     queue_backend=self._settings.job_queue_backend,
                     application_version=self._settings.application_version,
                     build_revision=self._settings.build_revision,

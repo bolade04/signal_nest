@@ -73,14 +73,24 @@ handler must be safe to re-run.
 
 ```bash
 npm run demo:setup           # migrate + seed (creates the jobs/job_events tables)
-npm run dev                  # FastAPI (SQLite) + web
-npm run worker               # in a second terminal: process durable jobs
+npm run dev                  # FastAPI (SQLite) + durable worker + web
+npm run worker               # optional: an *additional* standalone worker
 ```
+
+`npm run dev` starts the worker alongside the API and web, because a stack without
+one accepts work it can never perform. `npm run worker` remains the standalone
+entrypoint — for running a worker on its own, or adding a second one (workers
+compete safely: claims are compare-and-set and every write is lease-fenced).
 
 Trigger a scout run from the UI (or `POST …/scout-requests/{id}/run`); it returns
 immediately with `status=queued`. The **Background jobs** panel polls the job to a terminal
 state, and opportunities appear as the worker completes the pipeline. Without a running
-worker the job simply stays `pending` — nothing is lost.
+worker the job simply stays `pending` — nothing is lost, though nothing progresses
+either, which is why the worker is part of the default local stack.
+
+If a job fails for the last time (non-retryable, or out of attempts), the scout
+request it was executing is settled to `failed` rather than being left in `queued`,
+so it can be run again instead of being locked out by "already queued or running".
 
 ## Configuration
 
