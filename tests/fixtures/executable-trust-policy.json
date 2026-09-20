@@ -178,17 +178,24 @@
    "word": "$VENV_PY"
   },
   {
-   "line": 4,
+   "line": 10,
    "module": "dev.sh",
    "reason": "`source` executes a computed operand",
    "why_bounded": "sources scripts/lib.sh, a tracked in-repository file whose content is covered by package coherence; it defines shell functions and executes no external command",
    "word": "source"
   },
   {
-   "line": 12,
+   "line": 70,
    "module": "dev.sh",
    "reason": "command word is a variable expansion",
-   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family",
+   "why_bounded": "the API virtualenv interpreter, set by lib.sh from a path inside the repository; its identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family. Phase 6U-1A moved this site from line 12 to line 70: dev.sh now arms its trap and declares its child PIDs before spawning anything, so the API spawn sits further down the file",
+   "word": "$VENV_PY"
+  },
+  {
+   "line": 74,
+   "module": "dev.sh",
+   "reason": "command word is a variable expansion",
+   "why_bounded": "$VENV_PY is set by tracked scripts/lib.sh and resolves to the API virtualenv interpreter inside the repository \u2014 the same interpreter as the site above, whose identity is the CURRENT_INTERPRETER_IDENTITY_BOUND python family already governed for the API startup. NEW at Phase 6U-1A: this call executes `-m app.jobs.worker`, because `npm run dev` now also starts the durable job worker \u2014 a local stack without one accepts scout runs it can never execute. This authorization is specific to that worker-start site: same interpreter, same bound, one additional call site",
    "word": "$VENV_PY"
   },
   {

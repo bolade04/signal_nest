@@ -459,8 +459,7 @@ are marked as such. A visual pass remains worth doing.
 The application runs, and the core loop — sign in → workspace → locations → scout
 requests → scored opportunities → evidence — is **genuinely usable end to end on seeded
 demo data, provided all three processes are running** (API, web **and worker** — see
-§5A.7; `npm run dev` starts all three as of Phase 6U-1A). It is a real product, not a
-shell.
+§5A.7; `npm run dev` starts only the first two). It is a real product, not a shell.
 
 Two things qualify that, and neither is cosmetic:
 
@@ -592,9 +591,8 @@ practical finding of `P6-UI-0`:
 ```bash
 npm run bootstrap     # once
 npm run demo:setup    # once — migrate + seed
-npm run dev           # API (127.0.0.1:8000) + durable worker + web (localhost:5173)
-                      # since Phase 6U-1A the worker starts here; a second terminal
-                      # running `npm run worker` is optional (an extra worker)
+npm run dev           # terminal 1 — API (127.0.0.1:8000) + web (localhost:5173)
+npm run worker        # terminal 2 — REQUIRED, or "Run now" does nothing (P6-UI-018)
 ```
 
 Then `http://localhost:5173`, sign in `demo@signalnest.dev` / `demo1234`.
