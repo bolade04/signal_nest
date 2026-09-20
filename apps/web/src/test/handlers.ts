@@ -72,7 +72,9 @@ const scoutRequests = CITIES.map((c, i) => ({
   resolved_market: c.market,
   notes: null,
   last_run_at: '2026-06-01T12:00:00Z',
-  stats: { opportunities: 2, signals_processed: 20 },
+  // The four keys apps/api/app/jobs/pipeline.py actually persists. The previous
+  // fixture invented `signals_processed`, which is why the wrong-key defect passed CI.
+  stats: { scanned: 24, noise_filtered: 4, signals_analyzed: 20, opportunities: 2 },
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-06-01T12:00:00Z',
 }));

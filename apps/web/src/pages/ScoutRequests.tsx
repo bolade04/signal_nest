@@ -21,17 +21,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { scoutStatusLabels } from '@/lib/labels';
+import { formatStat, statValue } from '@/lib/scout-stats';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { ScoutRequestDialog } from './scouts/ScoutRequestDialog';
 import { useScoutActions } from './scouts/useScoutActions';
 
 const ANY = '__any__';
-
-function num(stats: Record<string, unknown>, key: string): number {
-  const v = stats[key];
-  return typeof v === 'number' ? v : 0;
-}
 
 function ScoutsInner({ workspaceId }: { workspaceId: string }) {
   const { locationId, locations } = useWorkspace();
@@ -117,7 +113,8 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
                       {locName(r.location_id) ? <Badge intent="neutral">{locName(r.location_id)}</Badge> : null}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {num(r.stats, 'opportunities')} opportunities · {num(r.stats, 'signals_processed')} signals ·{' '}
+                      {formatStat(statValue(r.stats, 'opportunities'))} opportunities ·{' '}
+                      {formatStat(statValue(r.stats, 'signals_analyzed'))} signals ·{' '}
                       {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
                     </p>
                   </div>
