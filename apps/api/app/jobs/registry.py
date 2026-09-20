@@ -63,6 +63,42 @@ JobHandler = Callable[[HandlerContext], dict[str, Any]]
 _HANDLERS: dict[str, JobHandler] = {}
 
 
+@dataclass(frozen=True)
+class TerminalFailureContext:
+    """What a terminal-failure hook is given after a job fails for the last time.
+
+    The hook runs inside the worker's *failure* transaction, after the job's
+    terminal transition has been applied under its lease fence and before that
+    transition is committed, so the hook's writes and the job's terminal state
+    are one atomic unit. Like a handler, the hook must not commit or roll back.
+
+    ``context`` is rebuilt from the durable job row (never the message body), so
+    a hook can never be tricked into widening its own tenant scope.
+    """
+
+    db: Session
+    context: ExecutionContext
+    payload: dict[str, Any]
+    job_id: str
+    job_type: str
+    #: The terminal status the job just reached (``failed`` or ``dead_lettered``).
+    status: str
+    #: The stable, secret-free classification of the final attempt's failure.
+    error_code: JobErrorCode
+    attempt: int
+    now: datetime
+
+
+#: A terminal-failure hook reconciles *domain* state that the job was driving.
+#: It returns nothing: the job's own outcome is already decided by the store.
+JobTerminalFailureHook = Callable[[TerminalFailureContext], None]
+
+#: Optional, keyed exactly like :data:`_HANDLERS`. Kept as a separate map so the
+#: handler registry's value type — and therefore ``resolve_handler`` and every
+#: caller of it — is unchanged.
+_TERMINAL_FAILURE_HOOKS: dict[str, JobTerminalFailureHook] = {}
+
+
 def register_handler(job_type: str | JobType) -> Callable[[JobHandler], JobHandler]:
     """Register ``fn`` as the handler for ``job_type`` (idempotent per import)."""
     key = job_type.value if isinstance(job_type, JobType) else job_type
@@ -72,6 +108,56 @@ def register_handler(job_type: str | JobType) -> Callable[[JobHandler], JobHandl
         return fn
 
     return _wrap
+
+
+def register_terminal_failure_hook(
+    job_type: str | JobType,
+) -> Callable[[JobTerminalFailureHook], JobTerminalFailureHook]:
+    """Register ``fn`` as the terminal-failure hook for ``job_type``.
+
+    A job type needs a hook only when a *final* failure leaves domain state that
+    the job itself was responsible for advancing. Most job types need none, so
+    the hook is optional and its absence is not an error.
+    """
+    key = job_type.value if isinstance(job_type, JobType) else job_type
+
+    def _wrap(fn: JobTerminalFailureHook) -> JobTerminalFailureHook:
+        _TERMINAL_FAILURE_HOOKS[key] = fn
+        return fn
+
+    return _wrap
+
+
+def resolve_terminal_failure_hook(job_type: str) -> JobTerminalFailureHook | None:
+    """Return the terminal-failure hook for ``job_type``, or ``None``."""
+    return _TERMINAL_FAILURE_HOOKS.get(job_type)
+
+
+def register_builtin_handlers() -> tuple[str, ...]:
+    """Import and register every built-in handler; return what is registered.
+
+    Registration is an import side effect of :mod:`app.jobs.handlers`. Naming it
+    here makes that dependency **explicit and orderable** for every entrypoint
+    that must have it — in particular the worker process, which otherwise has no
+    import path to the handler module at all and would resolve nothing.
+
+    Idempotent: re-importing is a no-op and re-registering rebinds the same
+    functions to the same keys. The import is function-local because
+    :mod:`app.jobs.handlers` imports *this* module, so a module-level import
+    here would be a cycle.
+    """
+    from app.jobs import handlers as _handlers  # noqa: F401 — registers on import
+
+    return known_job_types()
+
+
+def builtin_job_types() -> tuple[str, ...]:
+    """The authoritative set of job types the platform ships handlers for.
+
+    This is the *expectation* against which the live registry is checked at
+    worker startup; :func:`known_job_types` is the *observation*.
+    """
+    return tuple(sorted(t.value for t in JobType))
 
 
 def get_job_handler(job_type: str) -> JobHandler | None:
@@ -106,9 +192,15 @@ def resolve_handler(job_type: str) -> JobHandler:
 __all__ = [
     "HandlerContext",
     "JobHandler",
+    "JobTerminalFailureHook",
+    "TerminalFailureContext",
+    "builtin_job_types",
     "get_job_handler",
     "is_known_job_type",
     "known_job_types",
+    "register_builtin_handlers",
     "register_handler",
+    "register_terminal_failure_hook",
     "resolve_handler",
+    "resolve_terminal_failure_hook",
 ]

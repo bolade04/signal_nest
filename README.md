@@ -46,13 +46,15 @@ The API exposes **56 operations across 41 paths**. See the live OpenAPI docs at
 ```bash
 npm run bootstrap      # install JS deps + create apps/api/.venv + install the API
 npm run demo:setup     # migrate the SQLite schema + seed demo data
-npm run dev            # start FastAPI (http://127.0.0.1:8000) + web (http://localhost:5173)
+npm run dev            # start FastAPI (http://127.0.0.1:8000) + worker + web (http://localhost:5173)
 ```
 
-`npm run dev` starts both the Vite frontend (http://localhost:5173) and the FastAPI
-backend (http://127.0.0.1:8000, with API docs at http://127.0.0.1:8000/api/v1/docs);
-Ctrl-C stops both. Then open http://localhost:5173 and sign in with the seeded demo
-account:
+`npm run dev` starts all three local processes: the Vite frontend
+(http://localhost:5173), the FastAPI backend (http://127.0.0.1:8000, with API docs at
+http://127.0.0.1:8000/api/v1/docs), and the durable job worker that executes
+background work such as scout runs. Ctrl-C stops all three, and if any one of them
+exits the others are stopped too. Then open http://localhost:5173 and sign in with the
+seeded demo account:
 
 - **Email:** `demo@signalnest.dev`
 - **Password:** `demo1234`
@@ -67,8 +69,9 @@ isolation and geo accuracy.
 | Command | What it does |
 | --- | --- |
 | `npm run bootstrap` | Install JS deps + create/refresh the API virtualenv |
-| `npm run dev` | Run API + web together (Ctrl-C stops both) |
+| `npm run dev` | Run API + durable worker + web together (Ctrl-C stops all three) |
 | `npm run dev:web` / `npm run dev:api` | Run one side only |
+| `npm run worker` | Run a durable job worker on its own (or a second one) |
 | `npm run migrate` | Apply Alembic migrations (SQLite by default) |
 | `npm run seed` | Seed idempotent demo data (`-- --reset` to rebuild) |
 | `npm run demo:setup` | Migrate + seed in one step |
