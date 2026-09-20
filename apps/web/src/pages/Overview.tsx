@@ -28,13 +28,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { classificationLabels, label } from '@/lib/labels';
+import { formatStat, sumStat } from '@/lib/scout-stats';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
-
-function num(stats: Record<string, unknown>, key: string): number {
-  const v = stats[key];
-  return typeof v === 'number' ? v : 0;
-}
 
 function StatCard({
   icon: Icon,
@@ -91,13 +87,34 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
     (s) => !locationId || s.location_id === locationId,
   );
 
-  const active = scouts.filter((s) => ['running', 'queued', 'paused'].includes(s.status));
+  // "In flight" is the API's own definition — a queued or running job. A paused
+  // request is deliberately switched off and POST .../run refuses it, so it is not
+  // in flight; completed and failed are terminal.
+  const inFlight = scouts.filter((s) => ['queued', 'running'].includes(s.status));
+  const paused = scouts.filter((s) => s.status === 'paused');
+  const failed = scouts.filter((s) => s.status === 'failed');
+  const lastRun = scouts.reduce<string | null>(
+    (latest, s) => (s.last_run_at && (!latest || s.last_run_at > latest) ? s.last_run_at : latest),
+    null,
+  );
+  // Whatever most wants attention, falling back to when work last landed.
+  const scoutHint =
+    [
+      // "in progress", not "running": a queued request has been accepted but no
+      // worker has claimed it, so claiming execution would overstate what the API says.
+      inFlight.length ? `${inFlight.length} in progress` : '',
+      paused.length ? `${paused.length} paused` : '',
+      failed.length ? `${failed.length} failed` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ') || (lastRun ? `last run ${formatRelative(lastRun)}` : 'none run yet');
   const avg = (key: 'relevance_score' | 'confidence_score') =>
     opps.length ? Math.round(opps.reduce((sum, o) => sum + o[key], 0) / opps.length) : 0;
   const riskCount = opps.filter((o) => o.risk_level === 'high' || o.risk_level === 'blocked').length;
 
-  const signalsProcessed = scouts.reduce((sum, s) => sum + num(s.stats, 'signals_processed'), 0);
-  const noiseFiltered = scouts.reduce((sum, s) => sum + num(s.stats, 'noise_filtered'), 0);
+  const allStats = scouts.map((s) => s.stats);
+  const signalsAnalyzed = sumStat(allStats, 'signals_analyzed');
+  const noiseFiltered = sumStat(allStats, 'noise_filtered');
 
   const byClassification = Object.keys(classificationLabels)
     .map((key) => ({
@@ -143,10 +160,10 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard icon={Radar} label="Active scout requests" value={active.length} hint={`${scouts.length} total`} />
+        <StatCard icon={Radar} label="Scout requests" value={scouts.length} hint={scoutHint} />
         <StatCard icon={Sparkles} label="Opportunities" value={opps.length} hint={`${byMarket.length} markets`} />
         <StatCard icon={Gauge} label="Avg relevance" value={avg('relevance_score')} hint={`Avg confidence ${avg('confidence_score')}`} />
-        <StatCard icon={ShieldAlert} label="High-risk / claims" value={riskCount} hint={`${noiseFiltered} noise filtered · ${signalsProcessed} signals`} />
+        <StatCard icon={ShieldAlert} label="High-risk / claims" value={riskCount} hint={`${formatStat(noiseFiltered)} noise filtered · ${formatStat(signalsAnalyzed)} signals`} />
       </div>
 
       {opps.length === 0 && scouts.length === 0 ? (

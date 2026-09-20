@@ -12,17 +12,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
+import { formatStat, statValue } from '@/lib/scout-stats';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { JobsPanel } from './scouts/JobsPanel';
 import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
-
-function num(stats: Record<string, unknown>, key: string): number {
-  const v = stats[key];
-  return typeof v === 'number' ? v : 0;
-}
 
 function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestId: string }) {
   const navigate = useNavigate();
@@ -65,7 +61,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             </div>
             <h1 className="text-2xl font-semibold tracking-tight">{r.name}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {num(r.stats, 'opportunities')} opportunities · {num(r.stats, 'signals_processed')} signals ·{' '}
+              {formatStat(statValue(r.stats, 'opportunities'))} opportunities ·{' '}
+              {formatStat(statValue(r.stats, 'signals_analyzed'))} signals ·{' '}
               {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
             </p>
           </div>
