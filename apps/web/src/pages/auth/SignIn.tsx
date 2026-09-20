@@ -10,9 +10,10 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/auth/AuthContext';
 import { AuthLayout } from './AuthLayout';
-
-const DEMO_EMAIL = 'demo@signalnest.dev';
-const DEMO_PASSWORD = 'demo1234';
+// Static import on purpose: a dynamic import would be code-split before the
+// `import.meta.env.DEV` branch below is folded away, shipping the demo
+// credentials in a chunk of their own. See DemoSignInShortcut.tsx.
+import { DemoSignInShortcut } from './DemoSignInShortcut';
 
 const schema = z.object({
   email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
@@ -58,9 +59,9 @@ export function SignInPage() {
     }
   };
 
-  const fillDemo = () => {
-    form.setValue('email', DEMO_EMAIL, { shouldValidate: true });
-    form.setValue('password', DEMO_PASSWORD, { shouldValidate: true });
+  const useDemoAccount = (email: string, password: string) => {
+    form.setValue('email', email, { shouldValidate: true });
+    form.setValue('password', password, { shouldValidate: true });
     void form.handleSubmit(submit)();
   };
 
@@ -107,25 +108,18 @@ export function SignInPage() {
           Sign in
         </Button>
 
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full"
-          onClick={fillDemo}
-          disabled={form.formState.isSubmitting}
-        >
-          Use demo account
-        </Button>
-
         <p className="text-center text-sm text-muted-foreground">
           No account?{' '}
           <Link to="/register" className="font-medium text-primary hover:underline">
             Create one
           </Link>
         </p>
-        <p className="rounded-md bg-muted/60 px-3 py-2 text-center text-xs text-muted-foreground">
-          Demo login: {DEMO_EMAIL} · {DEMO_PASSWORD}
-        </p>
+
+        {/* Read at render, not module scope: a module-scope capture would be
+            evaluated at import time and could not be exercised by a test. */}
+        {import.meta.env.DEV ? (
+          <DemoSignInShortcut onUse={useDemoAccount} disabled={form.formState.isSubmitting} />
+        ) : null}
       </form>
     </AuthLayout>
   );

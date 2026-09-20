@@ -26,6 +26,17 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
 
+  // Build-time Node scripts (not shipped, not type-checked by tsconfig.app.json,
+  // which includes only `src`). They need Node globals rather than browser ones.
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
+
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
