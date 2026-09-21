@@ -200,8 +200,8 @@ jobs:
           $PY -m app.db.seed
           echo "== seed again (idempotency: no duplicates, safe re-run) =="
           $PY -m app.db.seed
-          echo "== downgrade to base =="
-          $PY -m alembic downgrade base
+          echo "== downgrade to base (real, under the target-bound guard) =="
+          $PY -m alembic -x confirm=$($PY -m app.db.migrate downgrade-confirmation base) downgrade base
           echo "== upgrade back to head =="
           $PY -m alembic upgrade head
           echo "== reset + reseed (documented seed:reset workflow) =="

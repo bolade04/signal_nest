@@ -25,7 +25,8 @@ a different command.
 python -m app.db.migrate            # upgrade to head (default)
 python -m app.db.migrate upgrade    # explicit upgrade to head
 python -m app.db.migrate check      # verify compatibility, mutate nothing
-python -m app.db.migrate downgrade <revision>   # explicit, targeted downgrade
+python -m app.db.migrate downgrade-confirmation <target>   # print the confirmation
+python -m app.db.migrate downgrade <target> --confirm <TOKEN>   # guarded downgrade
 ```
 
 * The **bare invocation** (no subcommand) is the fail-closed staging path and
@@ -42,11 +43,211 @@ python -m app.db.migrate downgrade <revision>   # explicit, targeted downgrade
 * `downgrade` requires an explicit target revision — a bare `head` is rejected —
   so a downgrade is always a deliberate, named step. Failures exit `4` with a
   fixed classification.
+* `downgrade` additionally requires a **confirmation bound to this exact
+  database and transition**. There is no `--force`, no `--yes` and no
+  environment variable: a generic flag confirms intent to downgrade *something*
+  and says nothing about *where*, which is the failure this control exists to
+  prevent. Obtain the confirmation with `downgrade-confirmation`, which reads
+  the live revision and writes nothing:
 
-All paths emit structured, secret-free logs (the database URL, driver messages
+  ```bash
+  TOKEN="$(python -m app.db.migrate downgrade-confirmation -1)"
+  python -m app.db.migrate downgrade -1 --confirm "$TOKEN"
+  ```
+
+  `downgrade-confirmation` prints the bare token on **stdout** (so `$(...)` is
+  safe) and a `connected database :` line naming the server that actually
+  answered on **stderr**. Read that line **before** you run the downgrade —
+  minting is the only moment at which it can stop you. A successful downgrade
+  never prints it again; a refusal reprints the same line.
+
+  If the mint fails it exits `4` and prints nothing on stdout, so
+  `TOKEN="$(...)"` silently yields an empty string and the downgrade then looks
+  like a confirmation mismatch rather than a failed mint. Check the exit status,
+  or test that the token is 16 hex characters, before running the downgrade.
+
+  The same confirmation works through the direct CLI
+  (`alembic -x confirm=<TOKEN> downgrade <target>`, where `-x` is a global
+  option and must precede the subcommand), through
+  `npm run migrate:down -- <target> <TOKEN>`, and through
+  `command.downgrade(cfg, target)` with `cfg.attributes["confirm"]`. All of
+  these enforce the same value; none of them has its own semantics.
+
+  A downgrade target must be `-1` (or `-01`), `base`, or an explicit revision
+  id (a unique prefix of a revision id also works, and the literal text you
+  typed is what gets bound — so mint and run must use the same spelling).
+  Other relative forms (`-2`, `-0`, `-001`, `<rev>-1`, `head-1`) are refused.
+  To go back more than one revision, either repeat `-1` and mint a fresh
+  confirmation for each step, or name the ancestor revision explicitly and
+  confirm the whole chain at once — run the downgrade unconfirmed once to read
+  the `would revert : N migration(s)` count, then mint.
+
+  > **The CI one-liner is not an operator procedure.**
+  > `.github/workflows/ci.yml` mints and consumes the token in a single
+  > `$(...)`. That is correct there — the database was created moments earlier
+  > in the same job and is thrown away after it. Copying that idiom to a real
+  > database removes the human from the loop entirely: nobody ever reads the
+  > `connected database :` line, which is the only check that can catch a
+  > tunnel or a stale `.env`. Mint, read, then run. Two steps, deliberately.
+
+  The confirmation stops matching when the target database, the server that
+  actually answered when it was minted, the revision it is on, the requested
+  target, the resolved destination or the migrations that would run change. The
+  server term means a failover or a restart onto a different host invalidates a
+  token with no configuration change at all. It is **not** a single-use nonce:
+  deliberately returning a
+  database to the same revision and requesting the same transition re-authorises
+  the transition you already reviewed. Running the downgrade unconfirmed prints
+  the required command, including the connected database, and changes nothing.
+* `stamp` is guarded the same way, in **either** direction. Moving
+  `alembic_version` without running migrations rewrites the fact every
+  confirmation is bound to, and an unguarded forward stamp could re-arm a spent
+  confirmation and leave `check` reporting `compatible` on a schema missing its
+  objects.
+
+  Guarding makes that confirmable, not impossible. The refusal hands you a
+  working command, and for a `stamp` that command rewrites the version table
+  without migrating: a **confirmed** forward stamp still re-arms the spent
+  confirmation and still leaves `check` reporting `compatible` on a schema
+  missing its objects. Use it only when you already know the schema matches the
+  revision you are stamping — never to "fix" a stuck state.
+
+  There is no `stamp-confirmation` command. `downgrade-confirmation` mints
+  downgrade confirmations only, and its token will never satisfy a stamp — the
+  stamp is bound in a separate `stamp:` namespace. To stamp, run it unconfirmed
+  (which changes nothing) and copy the full command, token included, out of the
+  refusal:
+
+  ```bash
+  alembic stamp <revision>                      # refused; prints the command to re-run
+  alembic -x confirm=<TOKEN> stamp <revision>
+  ```
+
+  Two things about that refusal. It is raised as an exception through the
+  `alembic` CLI, so it appears after the last stack frame, on the
+  `DowngradeTargetError:` line and the indented block that follows it — that is
+  the refusal, not a crash. The command to re-run is the indented line under
+  "then re-run with the confirmation…", partway down that block, with one
+  closing paragraph after it. And its headline reads `Destructive migration
+  downgrade refused.` even for a stamp; the `requested target : stamp:<rev>`
+  line and the re-run command are what identify the operation. The refusal also
+  prints `would revert : 0 migration(s)`. That is accurate — a stamp runs no
+  migrations — but the stamp still rewrites `alembic_version`, which is the
+  whole reason it is gated.
+
+  A few failures surface as raw Alembic errors rather than as a guard refusal —
+  a current database revision that is absent from this migration history, or a
+  migration file that cannot be read. An unknown **requested target** is not one
+  of these — it is a guard refusal. The effect is
+  the same (nothing is applied), but the output is a traceback rather than the
+  catalogue above.
+* Offline (`--sql`) downgrades and stamps are **refused outright**: the script
+  would be applied later to a database this process cannot identify.
+
+#### When the guard refuses
+
+The downgrade and stamp guards refuse any target they cannot pin to one specific
+database. There is no `--force`, no `--yes` and no environment variable — by
+design. `downgrade-confirmation` runs the same target, revision-state and
+live-identity checks (and rejects a bare `head` itself), and creates no schema
+and no rows, so **run it first for a downgrade**: it surfaces almost every refusal
+below before you run anything destructive. (On SQLite, connecting to a path that
+does not yet exist creates an empty file — a 0-byte database, never schema or
+data. This cannot happen on PostgreSQL.) There is no equivalent dry run for a
+stamp; see the stamp note above.
+
+**Transport and DSN shape**
+
+* **Unix-domain sockets** (`postgresql:///db`, `?host=/var/run/postgresql`,
+  `?host=@…`, and percent-encoded spellings of those). PostgreSQL reports no
+  server address or port over a socket, so the connection cannot be attributed
+  to a particular server. **Connect over TCP — including when you are logged in
+  on the database host**, which is the likeliest place to be during an incident.
+  A hostless `postgresql:///db` is refused slightly earlier, as "missing a host
+  or database name".
+* **Several candidate hosts** (`host=a,b`, or a comma in the authority),
+  `service=`, or `target_session_attrs=` — each resolves the target outside the
+  URL or at connect time, so none can be pinned. A comma in a *host* is caught
+  by the host-shape check first, so it reports "not a hostname or IP address";
+  the several-candidates wording appears for `port` and `dbname`.
+* **Any connection parameter not known to leave the target unchanged.** TLS
+  settings, timeouts and labels are allowed (`sslmode`, `sslcert`, `sslkey`,
+  `sslcrl`, `sslrootcert`, `sslcompression`, `connect_timeout`,
+  `application_name`, `fallback_application_name`, `client_encoding`); anything
+  else is refused rather than assumed benign, so a future libpq routing keyword
+  cannot slip through. **`sslmode=require` — the production minimum — is
+  explicitly supported.**
+* **A repeated parameter** (`?sslmode=require&sslmode=disable`), on either
+  PostgreSQL or SQLite.
+* **A host that is not a hostname or an IP literal**, including all-numeric or
+  octal/integer loopback aliases (`0177.0.0.1`, `2130706433`). Single-label
+  hosts (`postgres`, `localhost`), underscores and IPv6 literals are accepted.
+* **`postgres://`** is not a synonym for `postgresql://` — SQLAlchemy reports
+  its backend as `postgres` and will not build an engine for it, so it is
+  refused rather than silently folded in. Any other backend is refused outright.
+* **In-memory SQLite** (`:memory:`, `sqlite://`, `sqlite:///`, `file::memory:`,
+  `?mode=memory`) — such a database cannot be re-identified on a later
+  connection, so it can never match a confirmation.
+
+**What the server reports**
+
+* The connected database name must equal the one the URL names (following any
+  `?dbname=` override). A mismatch means the connection did not land on the
+  configured target — the stale-`.env` case — and is refused with both names in
+  the message.
+* The server must report a non-empty address and a non-zero port. This is
+  checked on the server's answer, not on the DSN, so it can also fire on a
+  well-formed TCP connection through a proxy that suppresses
+  `inet_server_addr()`.
+* A pooler that presents a different database name than the backend is refused
+  by design; adopting one is a reviewed change, not a bug.
+* If the server's identity cannot be read at all (driver error, permission
+  failure), the operation is refused rather than assumed safe.
+
+**Target expression**
+
+* Relative forms other than `-1`/`-01` and the `<rev>-1` style are refused with
+  "the requested downgrade target is not a revision in this migration history".
+* The `<source>:<target>` range form never reaches this guard: Alembic rejects
+  it first with `Range revision not allowed` (online), and with `--sql` it is
+  caught by the offline refusal instead.
+
+**Revision state**
+
+* `alembic_version` must hold **exactly one** revision. Zero (fresh or
+  truncated) and several (unmerged branches) are both ambiguous and both refuse.
+* The requested target must be **the current revision or an ancestor of it**
+  (naming the current revision is accepted and reverts nothing) and must
+  exist in this migration history, and every migration in the path must be
+  readable on disk.
+
+**Operation and mode**
+
+* An Alembic operation this guard cannot identify is refused — a rename in a
+  future Alembic release fails closed on the upgrade path rather than silently
+  disarming the guard.
+* Offline (`--sql`) downgrades and stamps are refused outright.
+
+`upgrade`, `check` and `current` are unaffected by every item above: the guard
+returns on the safe path before any of these checks run. A refusal here never
+indicates a problem with your deployment's upgrade path.
+
+**If the guard refuses a downgrade you are certain of, there is no bypass.**
+Re-read the `connected database :` line, confirm the DSN and the revision state,
+and re-mint. If a re-mint reports a *different* server address for the same
+endpoint, that is the control working — a load balancer, a multi-node pooler or
+round-robin DNS is answering, and you must pin the connection to one backend
+before downgrading. If it still refuses, the guard is reporting that the target
+is not what you believe it is — escalate rather than applying the DDL by hand.
+
+The `python -m app.db.migrate` upgrade, downgrade and check paths emit
+structured, secret-free logs (the database URL, driver messages
 and tracebacks are never logged; failures carry only the exception *class*
 name) and increment the bounded `migration_runs_total` metric
-(`operation`, `outcome`).
+(`operation`, `outcome`). The bare invocation records
+`operation=upgrade_verify`, not `upgrade`. `downgrade-confirmation` and
+refusals raised through the direct `alembic` CLI emit neither a structured log
+nor a metric.
 
 The container images expose the same commands; run the migration actor as a
 one-shot container/job that shares the API's configuration:
@@ -105,13 +306,33 @@ This is why the current migration head is reached purely by additive migrations
 4. If a rollback is required, redeploy the previous image. Because the schema is
    additive-first, the previous code runs against the newer schema (`ahead`); only
    run `downgrade` if a specific migration must be reversed, and only via the
-   single actor with an explicit target revision.
+   single actor with an explicit target revision and its confirmation.
 
 ## Never do this
 
 * Do **not** run migrations from every replica (no auto-migrate on startup).
 * Do **not** edit an already-applied migration in place — add a new revision.
 * Do **not** downgrade with a bare `head`; always name the target revision.
+  (`python -m app.db.migrate downgrade` rejects `head` outright, before any
+  database access, with an argparse usage error and exit `2`. `npm run
+  migrate:down` and the `alembic` CLI pass it through to the guard, which gates
+  it like any other target: unconfirmed it produces the ordinary refusal, and a
+  confirmation for it authorises an operation that reverts nothing. That no-op
+  holds only while the database is at head; from any earlier revision, `head`
+  is a descendant and is refused as "not an ancestor of the database's current
+  revision".)
+* Do **not** mint a confirmation from one shell and run the downgrade from
+  another directory or against another `DATABASE_URL`. The confirmation is bound
+  to the database that answered when it was minted; a relative SQLite path
+  resolves against the working directory, so minting and running must happen
+  from the same place.
+* Do **not** treat a matching confirmation as proof you are on the right
+  server. Two PostgreSQL instances that report the same address, port and
+  database name — an `ssh -L` tunnel or port-forward to production while a local
+  database is also named `signalnest` — produce the same confirmation. Read the
+  `connected database :` line that `downgrade-confirmation` prints on stderr
+  before you run the downgrade. A successful downgrade prints nothing, so that
+  line and any refusal are the only places it ever appears.
 * Do **not** make a column non-nullable and start reading it in the same release
   that adds it — that breaks the rolling-deploy `ahead` guarantee.
 
@@ -150,8 +371,9 @@ Behavior delta (measured, not assumed):
   `sqlalchemy.engine` records even at root `DEBUG`). No bound SQL parameters
   or connection details become newly visible.
 
-The direct `alembic` CLI (`python -m alembic ...`) builds its own config and
-is unchanged.
+The direct `alembic` CLI (`python -m alembic ...`) builds its own config, so
+this logging behaviour does not apply to it. The downgrade and stamp guards do
+— they live in `alembic/env.py`, which every entry point loads.
 
 The bare-command success event `migrate.upgrade_verify.done` carries two
 **independently sourced** provenance fields: `code_head` (repository script
@@ -357,6 +579,11 @@ permission grant is safe.
 
 ## Remaining architectural residuals (known, not addressed here)
 
+* **Two PostgreSQL servers reporting the same address, port and database name
+  share one confirmation** — the downgrade guard's only fail-open path; see
+  "the confirmation is not proof of server" above.
+* **A confirmation is not a single-use nonce, and a confirmed stamp re-arms a
+  spent one** — accepted by design; see the `stamp` notes above.
 * **Worker startup gate is a table-existence probe, not a revision gate**: the
   worker's `validate()` checks that the jobs/registry tables exist; unlike the
   API it does not compare Alembic revisions, so a worker can start against a

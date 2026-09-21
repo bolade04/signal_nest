@@ -29,11 +29,57 @@ API_DIR = Path(__file__).resolve().parents[2]
 PREV = "c3e5a7b9d1f2"
 
 
+def _downgrade_confirmation(db_path: Path, args: tuple[str, ...]) -> list[str]:
+    """Mint the guard's confirmation for a downgrade against this temp database.
+
+    Computed, not hard-coded: each test binds a fresh `tmp_path`, so the token
+    differs per run. The digest algorithm itself is pinned by literal value in
+    `test_migrate_downgrade_target_guard.py`, which is what keeps this from being
+    a self-confirming oracle.
+    """
+    if not args or args[0] != "downgrade":
+        return []
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+
+    from app.db.downgrade_guard import (
+        chain_identity,
+        confirmation_token,
+        live_identity,
+        resolve_downgrade,
+    )
+
+    url = f"sqlite:///{db_path}"
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        heads = MigrationContext.configure(conn).get_current_heads()
+        identity = live_identity(conn, url)
+    if len(heads) != 1:
+        return []
+    script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
+    resolved, chain = resolve_downgrade(script, heads[0], args[1])
+    token = confirmation_token(
+        database_url=url,
+        live_identity=identity,
+        source_revision=heads[0],
+        requested_target=args[1],
+        resolved_destination=resolved,
+        chain_identity=chain_identity(script, chain),
+    )
+    return ["-x", f"confirm={token}"]
+
+
 def _alembic(db_path: Path, *args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["DATABASE_URL"] = f"sqlite:///{db_path}"
+    # `-x` is a GLOBAL alembic option and must precede the subcommand, so it is
+    # prefixed here rather than appended to *args. Harmless for upgrade/check;
+    # required for downgrade, which the target-bound guard refuses unconfirmed.
+    confirm = _downgrade_confirmation(db_path, args)
     return subprocess.run(
-        [sys.executable, "-m", "alembic", *args],
+        [sys.executable, "-m", "alembic", *confirm, *args],
         cwd=API_DIR,
         env=env,
         capture_output=True,
