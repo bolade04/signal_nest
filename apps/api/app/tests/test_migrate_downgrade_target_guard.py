@@ -442,8 +442,12 @@ def test_b4_live_identity_is_a_hashed_input_to_the_token():
         "resolved_destination": DESTINATION,
         "chain_identity": "chain-x",
     }
-    staging = guard.confirmation_token(live_identity="postgresql|10.0.1.5|5432|signalnest", **common)
-    production = guard.confirmation_token(live_identity="postgresql|10.0.2.7|5432|signalnest", **common)
+    staging = guard.confirmation_token(
+        live_identity="postgresql|10.0.1.5|5432|signalnest", **common
+    )
+    production = guard.confirmation_token(
+        live_identity="postgresql|10.0.2.7|5432|signalnest", **common
+    )
     assert staging != production
 
 
@@ -535,7 +539,9 @@ def test_b5_same_revision_ids_different_body_changes_the_identity(tmp_path):
     """R2's executed bypass: identical ids, identical graph shape, a different
     `downgrade()` body -- and the same token, authorizing different destruction."""
     a = _write_script(tmp_path, "a.py", "def downgrade():\n    op.drop_table('x')\n")
-    b = _write_script(tmp_path, "b.py", "def downgrade():\n    op.drop_table('x')\n    op.drop_table('y')\n")
+    b = _write_script(
+        tmp_path, "b.py", "def downgrade():\n    op.drop_table('x')\n    op.drop_table('y')\n"
+    )
     first = guard.chain_identity(_FakeScript({SOURCE: a}), [SOURCE])
     second = guard.chain_identity(_FakeScript({SOURCE: b}), [SOURCE])
     assert first != second
