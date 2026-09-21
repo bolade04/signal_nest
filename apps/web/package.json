@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/assert-no-demo-credentials.mjs",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0",
     "format": "eslint . --fix",
