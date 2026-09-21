@@ -21,9 +21,10 @@ from __future__ import annotations
 import argparse
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Final
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 # Importing the pipeline module registers the ``run_scout_request`` job and gives
 # us direct access to the synchronous runner used below.
@@ -39,13 +40,14 @@ from app.campaign_context.models import (
     ProductProfile,
     SourcePreference,
 )
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.enums import (
     CampaignMode,
     Role,
     ScoutRequestStatus,
     SourceType,
 )
+from app.core.errors import ConfigurationError
 from app.core.logging import get_logger
 from app.core.security import hash_password
 from app.db.models import Base
@@ -152,8 +154,127 @@ CITIES: list[dict] = [
 ]
 
 
+class SeedTargetError(ConfigurationError):
+    """The database this process would seed is not a permitted demo target."""
+
+
+#: Seeding is allowed only in these environments. ``development`` is what a
+#: developer's shell defaults to (``config.py`` Environment default) and ``test``
+#: is what the CI workflow-level env sets for all five of its seed executions --
+#: three direct and two via scripts/demo-setup.sh, one of them ``--reset``. Both
+#: values are load-bearing; dropping either breaks a real caller.
+_SEEDABLE_ENVIRONMENTS: Final = ("development", "test")
+
+#: The only backend a demo fixture may be written to.
+_SEEDABLE_BACKEND: Final = "sqlite"
+
+
+_UNSET: Final = object()
+
+
+def _backend_of(bind: object) -> str:
+    """Classify an already-constructed bind without touching the network.
+
+    Anything whose backend cannot be read is reported as undeterminable, so the
+    caller refuses it. A bind that is not an Engine (a Connection, a mock, a
+    stray object) must fail closed rather than raise AttributeError: a guard
+    that dies with the wrong exception type is a guard whose failure mode is
+    untested.
+    """
+    if bind is None:
+        return "unbound"
+    url = getattr(bind, "url", None)
+    getter = getattr(url, "get_backend_name", None)
+    if getter is None:
+        return "unknown"
+    try:
+        return getter() or "unknown"
+    except Exception:  # pragma: no cover - defensive
+        return "unknown"
+
+
+def _require_safe_seed_target(
+    settings: Settings | None = None,
+    *,
+    session_factory: sessionmaker | None = None,
+    bind: object = _UNSET,
+) -> None:
+    """Refuse to seed anything but a local development/test SQLite database.
+
+    This module writes a deterministic, publicly-documented OWNER account and,
+    with ``reset``, deletes every row of every mapped table. Neither is safe
+    against a database the operator did not mean to target, so the decision is
+    made here, before anything opens a connection.
+
+    Three deliberate choices:
+
+    * **An allowlist, not a denylist.** ``postgres://`` (no ``ql``) resolves to
+      backend ``"postgres"``, so :attr:`Settings.is_postgres` is *False* for a
+      real PostgreSQL server; "deny if is_postgres" would admit it. Requiring
+      ``sqlite`` refuses that, ``mysql``, and anything not yet invented.
+    * **The bind is checked as well as the configuration.** ``seed`` writes
+      through the module-global ``SessionLocal``, which is rebindable — eight
+      test modules rebind it. Consulting only ``Settings`` would adjudicate a URL
+      this function never touches while the writes went elsewhere.
+    * **No escape hatch, and an explicit raise.** There is no ``force`` flag to
+      find in a shell history, and no ``assert`` for ``python -O`` to strip.
+
+    ``settings`` is a test seam, not a capability: no shipped caller passes it
+    (the shell scripts, the CI steps and ``__main__`` all go through ``main``).
+    A forged object could satisfy the environment and backend checks, but it
+    cannot loosen the bind limb, which is read from the real session factory --
+    and constructing one already requires executing arbitrary code in-process.
+
+    Nothing here performs I/O: ``make_url`` parses without importing a driver,
+    and reading a factory's bind only inspects an already-constructed object. An
+    unreachable host is therefore refused just as fast as a reachable one.
+    """
+    settings = settings if settings is not None else get_settings()
+    environment = settings.environment
+    backend = settings.db_backend_name or "unknown"
+
+    if environment not in _SEEDABLE_ENVIRONMENTS or backend != _SEEDABLE_BACKEND:
+        raise SeedTargetError(
+            "Demo seeding is restricted to development/test SQLite targets "
+            f"(detected environment={environment}, backend={backend}). "
+            "Refusing to create demo accounts or delete data in this database. "
+            "Check ENVIRONMENT and DATABASE_URL (including apps/api/.env)."
+        )
+
+    # The configured URL got us this far; what actually receives the writes is
+    # the bind. Callers that already hold a Session pass it explicitly; everyone
+    # else is adjudicated against the module-global factory, which is what
+    # `seed` will open. `kw` is absent on anything that is not a sessionmaker
+    # and `bind` is None on an unbound one -- both undeterminable, both refused.
+    if bind is _UNSET:
+        factory = session_factory if session_factory is not None else SessionLocal
+        kw = getattr(factory, "kw", None)
+        bind = kw.get("bind") if isinstance(kw, dict) else None
+    bound_backend = _backend_of(bind)
+    if bound_backend != _SEEDABLE_BACKEND:
+        # Deliberately does NOT report `environment`: this limb is only reached
+        # once the environment check has passed, and naming it here would blame
+        # a setting that is not at fault.
+        raise SeedTargetError(
+            "Demo seeding is restricted to development/test SQLite targets "
+            f"(detected bound backend={bound_backend}). The session receiving "
+            "the writes is not a local SQLite database."
+        )
+
+
 def _reset(db: Session) -> None:
-    """Clear every table (demo-only database)."""
+    """Clear every table (demo-only database).
+
+    Guarded in its own right: the leading underscore is a convention, not an
+    access control, and this issues an unfiltered DELETE against every mapped
+    table -- every tenant's rows, not only the demo fixture.
+
+    The bind comes from the session being deleted through, never from the module
+    global. Adjudicating the global here would approve a caller-supplied Session
+    pointed somewhere else entirely -- exactly the laundering the bind limb
+    exists to stop.
+    """
+    _require_safe_seed_target(bind=db.get_bind() if hasattr(db, "get_bind") else None)
     for table in reversed(Base.metadata.sorted_tables):
         db.execute(table.delete())
     db.flush()
@@ -184,7 +305,12 @@ def _counts(db: Session) -> dict[str, int]:
     }
 
 
-def seed(reset: bool = False) -> dict:
+def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
+    # Before the session exists: `seed` is public and callable directly, so this
+    # path must be closed independently of `main`. `settings` is injectable so
+    # the guard's own tests can present a target without mutating process env --
+    # it supplies facts only, and cannot loosen the policy.
+    _require_safe_seed_target(settings)
     db = SessionLocal()
     try:
         if reset:
@@ -541,6 +667,17 @@ def main() -> None:
         help="Delete all existing data and reseed from scratch (local dev only).",
     )
     args = parser.parse_args()
+
+    # Before `inspect(engine)` below, which opens a real connection. A guard
+    # living only in `seed()` would let the CLI contact the wrong database first.
+    # Surfaced as SystemExit to match the un-migrated-schema check further down:
+    # an operator pointing the seed at the wrong database has made a
+    # configuration mistake, and a traceback would bury the one line that says
+    # so. The exception type is preserved for programmatic callers of `seed`.
+    try:
+        _require_safe_seed_target()
+    except SeedTargetError as exc:
+        raise SystemExit(str(exc)) from None
 
     # Fail fast with a clear message if migrations haven't been applied.
     from sqlalchemy import inspect
