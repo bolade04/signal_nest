@@ -1,18 +1,27 @@
 """Feature-gated opportunity-feedback API (Phase 3C, 3C-C).
 
-Two endpoints, both nested under an opportunity and both editor-gated *and*
-feature-gated:
+Three endpoints. Two are nested under an opportunity and are both editor-gated
+*and* capability-gated:
 
     POST /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/feedback
     GET  /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/feedback
 
+The third is workspace-scoped, editor-gated, and deliberately *not* capability-gated:
+it reports the capability decision, so gating it on that decision would make it useless.
+
+    GET  /api/v1/workspaces/{workspace_id}/feedback-capability
+
 Design, mirroring the scouting-schedule route boundary:
 
-* **Feature gate** — while ``opportunity_feedback_enabled`` is off (the dark default)
-  *every* operation, read and write alike, answers 503 ``capability_unavailable``.
-  Unlike the schedule reads, feedback history is also gated: nothing about the loop is
-  exposed until the feature is deliberately enabled.
-* **Authorization** — both submit and read require an editor role
+* **Capability gate** — the two opportunity-nested endpoints answer 503
+  ``capability_unavailable`` whenever the capability resolves *disabled for this
+  workspace*. That decision belongs to the resolver, not to a raw global read: an
+  honored workspace override outranks the ``opportunity_feedback_enabled`` global
+  flag in both directions, so the flag alone does not determine the answer. The
+  dark default is the flag ``False`` with no override. Unlike the schedule reads,
+  feedback history is also gated: nothing about the loop is exposed until the
+  capability resolves enabled.
+* **Authorization** — all three require an editor role
   (owner / admin / marketer). A non-member is 403; an unauthenticated caller is 401.
 * **Scope / IDOR** — the opportunity is resolved within the path workspace (unknown or
   cross-workspace → 404, a hidden IDOR). The target intelligence record must live in
@@ -45,7 +54,12 @@ from app.core.errors import CapabilityUnavailableError, NotFoundError
 from app.core.logging import get_logger, log_event
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
-from app.feedback.schemas import FeedbackCreate, FeedbackHistoryOut, FeedbackOut
+from app.feedback.schemas import (
+    FeedbackCapabilityOut,
+    FeedbackCreate,
+    FeedbackHistoryOut,
+    FeedbackOut,
+)
 from app.feedback.service import create_feedback
 from app.intelligence.records import SignalIntelligenceRecord
 from app.opportunities.models import Opportunity
@@ -58,6 +72,39 @@ EDITORS = require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+
+
+def _resolve_feedback_capability(db: Session, ctx: TenantContext):
+    """The one place this package asks whether feedback is available for a workspace.
+
+    Both the enforcement gate and the customer reflection call this, with the same
+    server-resolved tenant identity. Keeping it to a single call site is what makes
+    "the UI shows what the backend enforces" structural rather than coincidental: two
+    call sites with identical arguments would agree today and drift later.
+
+    A dependency failure is re-raised, never converted into a decision. A coerced
+    ``False`` would be indistinguishable from a genuine governance denial, which would
+    turn an outage into an apparent policy.
+    """
+    try:
+        return resolve_capability(
+            session=db,
+            settings=get_settings(),
+            capability=Capability.OPPORTUNITY_FEEDBACK,
+            organization_id=ctx.organization.id,
+            workspace_id=ctx.workspace.id,
+        )
+    except Exception:
+        log_event(
+            logger,
+            "opportunity_feedback_gate_failed",
+            level=logging.ERROR,
+            outcome="error",
+            capability=Capability.OPPORTUNITY_FEEDBACK.value,
+            organization_id=ctx.organization.id,
+            workspace_id=ctx.workspace.id,
+        )
+        raise
 
 
 def _require_feedback_feature(db: Session, ctx: TenantContext) -> None:
@@ -81,27 +128,7 @@ def _require_feedback_feature(db: Session, ctx: TenantContext) -> None:
     behavior is identical to the previous raw-flag gate. Wiring the gate flips no flag
     and creates no override.
     """
-    try:
-        resolution = resolve_capability(
-            session=db,
-            settings=get_settings(),
-            capability=Capability.OPPORTUNITY_FEEDBACK,
-            organization_id=ctx.organization.id,
-            workspace_id=ctx.workspace.id,
-        )
-    except Exception:
-        # Fail-closed: record the dependency failure distinctly from a denial, then let
-        # it propagate before any write. Never continue as allowed.
-        log_event(
-            logger,
-            "opportunity_feedback_gate_failed",
-            level=logging.ERROR,
-            outcome="error",
-            capability=Capability.OPPORTUNITY_FEEDBACK.value,
-            organization_id=ctx.organization.id,
-            workspace_id=ctx.workspace.id,
-        )
-        raise
+    resolution = _resolve_feedback_capability(db, ctx)
 
     # Structured, secret-free decision log: the capability, scoped ids, the boolean
     # result, and the deciding precedence rule — enough to detect an unexpected enable
@@ -122,9 +149,45 @@ def _require_feedback_feature(db: Session, ctx: TenantContext) -> None:
         raise CapabilityUnavailableError("Opportunity feedback is not available yet.")
 
 
-def _get_scoped_opportunity(
-    db: Session, workspace_id: str, opportunity_id: str
-) -> Opportunity:
+@router.get(
+    "/workspaces/{workspace_id}/feedback-capability",
+    response_model=FeedbackCapabilityOut,
+    summary="Whether opportunity feedback is available for this workspace",
+)
+def read_feedback_capability(
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> FeedbackCapabilityOut:
+    """Customer-facing, workspace-effective feedback availability (P6-UI-005).
+
+    Scoped to the workspace, not an opportunity: the resolver's decision domain is
+    ``(capability, workspace)``, so an opportunity segment would advertise a dimension
+    the decision cannot express.
+
+    Editor-gated to match the feedback routes' usable audience. A viewer cannot submit
+    or read feedback, so reflecting its availability to them would disclose tenant
+    governance state for a feature they could not use.
+
+    Advisory only. ``GET``/``POST`` feedback re-decide independently and answer 503 when
+    unavailable; that remains the enforcement boundary, and this route weakens nothing.
+    """
+    resolution = _resolve_feedback_capability(db, ctx)
+
+    # Distinct from `opportunity_feedback_gate_decided`, which exists to surface an
+    # unexpected *enable*; read traffic must not dilute that signal.
+    log_event(
+        logger,
+        "opportunity_feedback_capability_reflected",
+        outcome="allowed" if resolution.effective_enabled else "denied",
+        capability=Capability.OPPORTUNITY_FEEDBACK.value,
+        organization_id=ctx.organization.id,
+        workspace_id=ctx.workspace.id,
+        effective_enabled=resolution.effective_enabled,
+    )
+    return FeedbackCapabilityOut(enabled=resolution.effective_enabled)
+
+
+def _get_scoped_opportunity(db: Session, workspace_id: str, opportunity_id: str) -> Opportunity:
     """Load the opportunity within this workspace, or 404 (hidden IDOR)."""
     opp = db.get(Opportunity, opportunity_id)
     if opp is None or opp.workspace_id != workspace_id:
@@ -132,9 +195,7 @@ def _get_scoped_opportunity(
     return opp
 
 
-def _get_scoped_record(
-    db: Session, workspace_id: str, record_id: str
-) -> SignalIntelligenceRecord:
+def _get_scoped_record(db: Session, workspace_id: str, record_id: str) -> SignalIntelligenceRecord:
     """Load the intelligence record within this workspace, or 404.
 
     A missing id and a cross-workspace id both return 404 so a caller can never probe
@@ -204,9 +265,7 @@ def list_opportunity_feedback(
         OpportunityFeedback.workspace_id == workspace_id,
         OpportunityFeedback.opportunity_id == opportunity.id,
     )
-    total = int(
-        db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    )
+    total = int(db.scalar(select(func.count()).select_from(base.subquery())) or 0)
     rows = list(
         db.execute(
             base.order_by(

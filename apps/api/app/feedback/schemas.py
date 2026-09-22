@@ -74,3 +74,15 @@ class FeedbackHistoryOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class FeedbackCapabilityOut(BaseModel):
+    """Customer-visible opportunity-feedback availability for one workspace.
+
+    Exactly one field. The operator endpoint's ``decided_by`` / ``global_flag`` /
+    ``has_override`` / ``override_value`` are governance metadata: they would tell a
+    customer the platform-wide rollout posture and that an operator intervened on their
+    tenant. A customer needs only whether the feature is available to them.
+    """
+
+    enabled: bool

@@ -417,7 +417,8 @@ Lane S — SECURITY / OPERATIONS                     (spans P and I)
   the resolver, so its defect is reflection-only. It is **not** closed by `P6-CAP-2` and
   is **not** 6U-1 content: `P6-CAP-2` reflects the *raw global* flags, which is what
   `P6-UI-002` needs, whereas `P6-UI-005` needs a **workspace-effective** reflection. See
-  §5 for the full reasoning; it remains OPEN for a separate tranche.
+  §5 for the full reasoning. That reflection shipped in **6U-1H**, so `P6-UI-005` is now
+  **CLOSED**; `P6-UI-006` remains open and still depends on `P6-CAP-1`.
 - `P6-UI-004` cannot be fully closed until `P6-DATA-2` lands, because the honest empty
   state depends on the backend distinguishing "no signals found" from "market not
   covered". Lane U can ship the copy change; Lane S makes it true.
@@ -488,7 +489,7 @@ operator-only (`apps/web/src/components/layout/nav.ts`).
 | `/opportunities` | `pages/Opportunities.tsx` | yes | any | ✅ | opportunities | — | **WORKING_WITH_FIXTURE_DATA** |
 | `/opportunities/:id` | `pages/OpportunityDetail.tsx` | yes | any | — | opportunity, intelligence, feedback | `opportunity_feedback_enabled` | **WORKING_WITH_FIXTURE_DATA**; feedback correctly invisible |
 | `/settings` | `pages/Settings.tsx` | yes | any | ✅ | `/auth/me`, workspaces, runtime | — | **PARTIAL** — roles card inert (`P6-UI-007`) |
-| `/operations` | `pages/operations/Operations.tsx` | yes | **operator** | ✅ (operator) | 11 `/internal/system/*` | — | **WORKING**, but misreports 2 of 3 capabilities (`P6-UI-005/006`) |
+| `/operations` | `pages/operations/Operations.tsx` | yes | **operator** | ✅ (operator) | 11 `/internal/system/*` | — | **WORKING**, but misreports 1 of 3 capabilities (`P6-UI-006`; `P6-UI-005` closed in 6U-1H) |
 | `*` | `pages/NotFound.tsx` | yes | any | — | — | — | **WORKING** |
 
 **Verified live** against the seeded workspace: 4 locations (Dallas, London, Lagos,
@@ -555,7 +556,7 @@ team invites · password reset · billing. All are either Phase 5A–5E (§4.10,
 | `P6-UI-002` | Scout request detail → schedule | `SchedulePanel` mounts unconditionally (`ScoutRequestDetail.tsx:160`) and renders enabled "Schedule daily"/"Schedule weekly" (`SchedulePanel.tsx:123-131`); backend 503s the POST (`scouting_requests/routes.py:75,389`). Root cause: `scout_scheduling_enabled` is absent from `FeatureFlagsOut`, so the client cannot know | The most prominent unbuilt feature is presented as working. Click → opaque failure (compounded by `P6-UI-001`) → user concludes the product is broken | **UI-P0 — YES** | `P6-CAP-2` | **6U-1** |
 | `P6-UI-003` | Sign-in | No "Forgot password?" link exists anywhere (`SignIn.tsx:105-128`); no reset route server-side | A forgotten password means permanent loss of the org, its workspaces and all data. Only recourse is registering a new account, which creates a new org | **UI-P0 — YES** | `P6-AUTH-2` | **6B** |
 | `P6-UI-004` | Opportunities empty state | `Opportunities.tsx:293-297` shows "No opportunities yet — Run a scout request to generate…" — identical whether the user has never run a scout or ran one that returned zero signals (the guaranteed outcome outside the 4 fixture markets, `fixtures.py:156-167`) | The app advises the user to do the thing they just did. This is the one place fixtures genuinely mislead | **UI-P1 — YES** | `P6-DATA-2` | **6U-2** |
-| `P6-UI-005` | Operations → capability overrides (feedback) | Feedback's **enforcement is already correct** — `feedback/routes.py:85-91` decides via `resolve_capability`. The defect is purely the **reflection**: `system/routes.py:94-96` populates `FeatureFlagsOut` from the raw global flag | An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI**, because the client gate reads the global reflection | **UI-P1** | **Not `P6-CAP-2`.** `P6-CAP-2` reflects the *raw global* flags, which is what `P6-UI-002` needs; it cannot close this row. The customer reflection must expose the **workspace-effective** feedback state, which needs workspace context `GET /system/capabilities` does not have | **OPEN — separate future tranche**, not 6U-1G |
+| `P6-UI-005` | Operations → capability overrides (feedback) | Feedback's **enforcement is already correct** — `feedback/routes.py:85-91` decides via `resolve_capability`. The defect is purely the **reflection**: `system/routes.py:94-96` populates `FeatureFlagsOut` from the raw global flag | ~~An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI**, because the client gate reads the global reflection~~ — **fixed in 6U-1H**: the client gate now reads `GET /workspaces/{workspace_id}/feedback-capability`, the workspace-effective decision, resolved through the same single call site the enforcement gate uses | **UI-P1** | **Not `P6-CAP-2`.** `P6-CAP-2` reflects the *raw global* flags, which is what `P6-UI-002` needs; it cannot close this row. The customer reflection must expose the **workspace-effective** feedback state, which needs workspace context `GET /system/capabilities` does not have | **CLOSED in 6U-1H.** The customer reflection is a dedicated workspace-scoped route sharing one `resolve_capability` call site with the gate, so the UI shows what the backend enforces. `P6-UI-006` / `P6-CAP-1` remain open and are unaffected |
 | `P6-UI-006` | Operations → capability overrides (scheduling) | `scouting_requests/routes.py:75` reads the raw global flag and never calls `resolve_capability` | Operator sees "Enabled · Workspace override"; every schedule mutation still 503s. **Misreports** rather than under-reports | **UI-P1** | `P6-CAP-1` | **6C** |
 | `P6-UI-007` | Settings → Organizations & roles | Static row + read-only `Badge` (`Settings.tsx:129-144`); no invite, role change or remove, and no explanatory empty state — unlike the Workspaces card directly beneath it, which does have `+ New` | Looks like team management, does nothing. A pilot user hunts for the invite button and finds none | **UI-P1** | `P6-AUTH-1` | **6B** |
 | `P6-UI-008` | Sign-in | Live demo credentials printed in plain text (`SignIn.tsx:126-128`) plus a one-click "Use demo account" button (`:110-118`). **`SignIn.tsx` carries no environment guard on any of this**, so the constants compile into the production bundle — confirmed, the built `apps/web/dist/assets/index-*.js` contains `demo1234` | Anyone reaching an externally reachable deployment where the demo org was seeded gets a working **OWNER account inside a real tenant**. Blast radius is the demo org — tenant isolation still protects a pilot's own org. **Correction to an earlier draft:** this row previously claimed the account also grants the operator console. That holds only locally — `apps/api/app/db/seed.py:212` sets `demo_is_operator = environment in ("development","test")`, so `is_operator` is **False** in staging/production. The live `is_operator: true` observation came from a dev server. The finding stands on the unguarded credentials alone | **UI-P0 — YES for any external exposure** | none | **6U-1** |
@@ -613,7 +614,7 @@ not mention `npm run worker`. Without it the product's primary action silently d
 | 7 | Opportunities | Filter (verified live: `classification=early`→8, `min_score=61`→4, `search=Dallas`→3), sort, change status | All rows badged **Simulated** | Header global search fails when already on this page (`P6-UI-021`); no pagination past 100 (`P6-UI-022`) |
 | 8 | Opportunity detail | Scores, why-it-matters, evidence/inference split, intelligence panel, explicit "Simulated opportunity" callout | The whole record | Feedback (correctly invisible); recommendations, approvals, creative (Phase 5) |
 | 9 | Settings | Account read-only, theme, workspace create/switch, runtime status | — | Roles card inert (`P6-UI-007`); no password change |
-| 10 | Operations *(operator)* | Capability registry, queue health, worker fleet, schedules, telemetry, override read/write | — | Overrides don't bind for 2 of 3 capabilities (`P6-UI-005/006`) |
+| 10 | Operations *(operator)* | Capability registry, queue health, worker fleet, schedules, telemetry, override read/write | — | Overrides don't bind in the customer UI for 1 of 3 capabilities (`P6-UI-006`; `P6-UI-005` closed in 6U-1H) |
 
 ### 5A.8 Verdict
 
@@ -660,7 +661,9 @@ prerequisites are obtained — which is exactly the parallelism §5.1 is built f
 `P6-CAP-1` in Lane P (6C) rather than a UI patch.
 
 **`P6-UI-005` is a reflection defect, but it is NOT closed by the same change as
-`P6-UI-002`.** An earlier draft excluded it alongside `P6-UI-006` on the assumption that
+`P6-UI-002`.** *(Closed in 6U-1H by a dedicated workspace-effective route. The reasoning
+below is retained because it is why that route exists rather than an extra field on
+`FeatureFlagsOut`.)* An earlier draft excluded it alongside `P6-UI-006` on the assumption that
 both were `P6-CAP-1`. They are not: feedback already enforces correctly through
 `resolve_capability` (`apps/api/app/feedback/routes.py:85`), so `P6-UI-005` is a
 **reflection-only** defect.

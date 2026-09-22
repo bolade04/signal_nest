@@ -13,8 +13,9 @@ read-only slices plus both override write paths are shipped so far:
   resolver (:func:`app.capabilities.resolver.resolve_capability`). This is the
   **first sanctioned production consumer of the resolver**: the operator surface
   reads override *intent* and the deciding rule, but it is **not a live gate** — it
-  gates no customer request and flips no global flag, so every capability remains
-  dark.
+  gates no customer request and flips no global flag. That says nothing about whether
+  some OTHER surface consumes the resolver: since Phase 4B-A the feedback gate does.
+  See "Which capabilities have a live gate" below.
 * ``GET /internal/system/capabilities/overrides`` (4A-C.4.3) — a tenant-scoped,
   bounded, newest-first page of the stored per-workspace override rows, read through
   the merged governed override service
@@ -32,9 +33,9 @@ read-only slices plus both override write paths are shipped so far:
   reason validation, and an idempotent, audited upsert under the service's
   ``SELECT … FOR UPDATE``/SAVEPOINT concurrency — all inside the request-scoped
   transaction, with the operator's id recorded as the actor. Recording override *intent*
-  is **not activation**: it flips no global flag and wires the resolver into no live
-  gate, so an enabled override is honored by the resolver alone while its bound global
-  flag stays ``False`` and every capability remains dark.
+  flips no global flag — but **whether it activates anything depends on the
+  capability**, and for ``opportunity_feedback`` it does. Read "Which capabilities have
+  a live gate" below before using this route.
 * ``DELETE /internal/system/capabilities/overrides`` (4A-C.4.5) — clears any recorded
   override for one ``(capability, workspace)`` pair, delegating every gate to the merged
   governed override service
@@ -47,8 +48,9 @@ read-only slices plus both override write paths are shipped so far:
   typed capability arrive as query params (avoiding DELETE-with-body friction, matching the
   read routes). Clearing an existing override returns effective state to the dark default
   (``changed=True``, one ``.cleared`` audit); clearing an absent override is an idempotent
-  success (``changed=False``) that writes nothing. Either way it flips no global flag, so
-  every capability remains dark.
+  success (``changed=False``) that writes nothing. Either way it flips no global flag —
+  and for ``opportunity_feedback`` clearing an honored enable override is exactly how a
+  canary is rolled back server-side, because that capability HAS a live gate.
 
 The three reads are read-only: none opens a transaction of its own, writes a row, or
 toggles a flag. The set and clear write paths open no transaction of their own either —
@@ -58,8 +60,26 @@ validate the operator-supplied tenant scope (the workspace must exist and be own
 supplied organization) before touching override state, mapping a cross-tenant or absent
 workspace to a non-enumerating 404 — never revealing whether the workspace exists.
 Because all three global flags stay ``False``, every capability resolves disabled via
-``global_configuration`` unless an honored per-workspace override is present — and even
-then only the resolver honors it, with no live gate consuming the decision.
+``global_configuration`` unless an honored per-workspace override is present.
+
+**Which capabilities have a live gate.** This is the fact these routes turn on, and it
+is NOT uniform across the three:
+
+* ``opportunity_feedback`` — **has a live resolver-backed gate** since Phase 4B-A
+  (:func:`app.feedback.routes._resolve_feedback_capability`, shared by the enforcement
+  gate and the customer reflection). An honored enable override therefore makes the
+  customer feedback endpoints **serve for that workspace** while the global flag stays
+  ``False``. Recording such an override IS an activation for that workspace.
+* ``scout_scheduling`` — ``workspace_enableable=True``, so an override can be recorded
+  and this surface will report ``effective_enabled=true`` — but schedule enforcement
+  reads the RAW global flag (:mod:`app.scouting_requests.routes`), so the mutations
+  still answer 503. Here the override changes what this surface REPORTS, not what the
+  endpoints DO.
+* ``connector_rss`` — not ``workspace_enableable``; an ``enabled=True`` override is
+  refused 422, and enforcement reads the raw flag.
+
+So "recording intent is not activation" holds for scheduling and RSS and is **false for
+feedback**. Do not generalise in either direction.
 
 Every route requires an authenticated operator (``require_operator``: 401 anonymous,
 403 non-operator) and returns only bounded, secret-free governance metadata. The
@@ -318,8 +338,11 @@ def internal_capability_effective(
     every capability resolves disabled via ``global_configuration`` — the surface is
     dark. A persisted enable on a ``workspace_enableable`` capability would show
     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
-    while ``global_flag`` stays ``False``: persisted intent the resolver alone honors,
-    with no live gate consuming it, so nothing is globally activated.
+    while ``global_flag`` stays ``False``. No GLOBAL flag is changed — but whether a live
+    gate consumes that decision depends on the capability: ``opportunity_feedback`` has one
+    (Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``
+    and ``connector_rss`` do not, so their enforcement still reads the raw flag. For those
+    two this surface can report ``effective_enabled=true`` while the endpoints still 503.
     """
     _validate_effective_scope(db, organization_id=organization_id, workspace_id=workspace_id)
     settings = get_settings()
@@ -362,7 +385,9 @@ def internal_capability_overrides(
     bounded by the typed query params (out-of-range → 422) and re-clamped inside the
     service, so the route can never over-fetch. With no real override row by default the
     page is empty; a persisted override appears here as recorded *intent* only — listing
-    it activates nothing and flips no flag, so every capability stays dark.
+    it activates nothing and flips no flag. Note that the intent it lists may already be
+    live: an honored ``opportunity_feedback`` enable override is consumed by that
+    capability's live gate, so reading this page is not evidence that nothing is serving.
     """
     page = list_capability_overrides(
         db,
@@ -402,10 +427,14 @@ def internal_capability_override_set(
 
     Attribution is server-side: ``actor_user_id`` is taken from the authenticated
     operator, never the request body, so no override is recorded anonymously or under a
-    spoofed identity. Recording intent is **not activation** — the write flips no global
-    flag and wires the resolver into no live gate, so an enabled override is honored by
-    the resolver alone while its bound global flag stays ``False`` and every capability
-    remains dark. The response's ``created``/``changed`` let the caller distinguish a real
+    spoofed identity. The write flips no global flag — but **it is not inert**, and what it
+    activates depends on the capability. For ``opportunity_feedback`` an ``enabled=True``
+    override is consumed by a live gate (Phase 4B-A) and the customer feedback endpoints
+    **begin serving for that workspace immediately**, while the global flag stays ``False``;
+    clearing the override is what reverses it. For ``scout_scheduling`` enforcement reads the
+    raw global flag, so an override changes only what the operator surface reports.
+    ``connector_rss`` is not ``workspace_enableable`` and an ``enabled=True`` is refused
+    422. The response's ``created``/``changed`` let the caller distinguish a real
     write from an idempotent re-PUT (which writes no new audit).
     """
     mutation = set_capability_override(
@@ -458,8 +487,9 @@ def internal_capability_override_clear(
     none exists the call is an idempotent success (``changed=False``) that writes no row and
     emits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override
     remains), the response's ``changed`` lets the caller distinguish a real removal from an
-    absent-clear no-op, and no global flag is touched — clearing activates nothing and every
-    capability stays dark.
+    absent-clear no-op, and no global flag is touched. Clearing activates nothing — but it
+    can DEACTIVATE: for ``opportunity_feedback`` removing an honored enable override returns
+    that workspace's customer endpoints to 503, which is the server-side canary rollback.
     """
     mutation = clear_capability_override(
         db,

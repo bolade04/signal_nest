@@ -255,10 +255,9 @@ const emptyProfile = {
 };
 
 // ---- Operator observability + capability governance (4A-D) ----
-// A stateful in-memory override store so tests can exercise the full
-// set → resolve → clear loop against the same deny-biased precedence the real
-// resolver applies. Operations tests call resetCapabilityOverrides() in their
-// beforeEach; no other suite touches this state.
+// The registry the operator console renders its capability controls from; a static
+// mirror of app/capabilities/registry.py. Not a store and not reset by anything —
+// the stateful override store is `capabilityOverrideRows` further below.
 const capabilityRegistryItems = [
   {
     capability: 'opportunity_feedback',
@@ -298,6 +297,10 @@ interface OverrideRow {
   updated_at: string;
 }
 
+// A stateful in-memory override store so tests can exercise the full
+// set → resolve → clear loop against the same deny-biased precedence the real
+// resolver applies. Operations tests call resetCapabilityOverrides() in their
+// beforeEach; no other suite touches this state.
 const capabilityOverrideRows = new Map<string, OverrideRow>();
 const overrideKey = (ws: string, cap: string) => `${ws}:${cap}`;
 
@@ -475,7 +478,21 @@ export const handlers = [
   }),
 
   // ---- System (runtime introspection; secret-free) ----
+  // Workspace-effective feedback availability (P6-UI-005). Dark by default, in
+  // step with the shipped global default; tests that need it enabled install a
+  // per-test `server.use(...)` override for the specific workspace.
+  //
+  // The trade: a default handler means a test that never reaches the capability
+  // layer looks the same as one that does, because `onUnhandledRequest: 'error'`
+  // can no longer flag the missing request. Fail-closed defaults are worth more
+  // here, but a dark-state assertion must prove it settled rather than rely on
+  // an unstubbed request throwing.
+  http.get(P('/workspaces/:workspaceId/feedback-capability'), () =>
+    HttpResponse.json({ enabled: false }),
+  ),
+
   // Coarse summary for any authenticated caller (no per-capability topology).
+  // Raw global flags only — NOT the workspace-effective answer above.
   http.get(P('/system/capabilities'), () =>
     HttpResponse.json({
       app_mode: 'local',

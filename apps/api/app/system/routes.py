@@ -40,16 +40,24 @@ class HealthOut(BaseModel):
 class FeatureFlagsOut(BaseModel):
     """Coarse, read-only product-capability booleans.
 
-    These are *reflections* of server feature flags — never a customer-settable
-    toggle. They let an authenticated client know, before it issues any
-    feature-specific request, whether a dark-deployed capability is live, so it
-    can avoid probing an endpoint that would only answer ``503``. Secret-free:
-    only booleans, never backend topology or configuration values.
+    These are *reflections* of raw server feature flags — never a customer-settable
+    toggle. Secret-free: only booleans, never backend topology or configuration
+    values.
+
+    They answer "is this flag on?", NOT "is this capability available to my
+    workspace?". For ``scout_scheduling`` and ``connector_rss`` those coincide,
+    because enforcement reads the raw flag. For ``opportunity_feedback`` they do
+    not: an honored workspace override outranks the flag, so this field can read
+    ``false`` while the feedback endpoints serve normally. The customer-facing,
+    workspace-effective answer lives on its own route,
+    ``GET /workspaces/{workspace_id}/feedback-capability``.
     """
 
-    #: Whether the opportunity-feedback capability is enabled server-side. While
-    #: false the feedback endpoints answer 503; the UI uses this to render
-    #: nothing and skip the feedback request entirely.
+    #: The RAW global opportunity-feedback flag. It does NOT decide availability
+    #: for a workspace holding an honored enable override — the resolver returns
+    #: the override before it reaches this flag — and the feedback UI no longer
+    #: reads this field at all: it reads the workspace-effective reflection at
+    #: ``GET /workspaces/{workspace_id}/feedback-capability`` (P6-UI-005).
     opportunity_feedback_enabled: bool
 
     #: Whether scout scheduling is enabled server-side. While false the schedule
@@ -105,11 +113,16 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
     return RuntimeSummaryOut(
         **report.to_summary_dict(),
         # Raw global flags, one field per registered capability. Deliberately NOT
-        # resolver-derived: scheduling enforcement reads the raw setting, so a
-        # per-workspace effective value would not describe what the mutation
-        # endpoints actually do. Making these effective is a separate tranche
-        # (see `P6-UI-005`), and would change the meaning of a key the UI
-        # already consumes.
+        # resolver-derived, and this is settled rather than pending: scheduling
+        # enforcement reads the raw setting, so a per-workspace effective value
+        # here would not describe what the mutation endpoints actually do.
+        #
+        # `P6-UI-005` shipped in 6U-1H and deliberately did NOT convert these
+        # fields. The customer workspace-effective feedback reflection lives on
+        # its own route (`GET /workspaces/{workspace_id}/feedback-capability`),
+        # precisely so this endpoint could keep raw-global meaning for a key the
+        # UI already consumes. Making scheduling resolver-backed is a different
+        # problem — `P6-UI-006` / `P6-CAP-1` — and remains open.
         features=FeatureFlagsOut(
             opportunity_feedback_enabled=settings.opportunity_feedback_enabled,
             scout_scheduling_enabled=settings.scout_scheduling_enabled,

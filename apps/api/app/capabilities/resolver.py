@@ -27,10 +27,20 @@ Deny-biased posture (Phase 4A-C.2 plan §8.9, §8.14, §8.18):
   ``except``-to-disabled; the safety comes from the precedence *shape*. A failed
   lookup aborts (a 5xx for a future caller) rather than defaulting to enabled.
 
-This batch ships the resolver **unconsumed**: no feedback, scheduling, or RSS
-gate imports or calls it, no global flag is flipped, and the override table stays
-empty — so every capability in every workspace resolves **disabled** via the
-global-configuration rule. Every capability remains dark.
+**Consumption, as of Phase 6U-1H** (this paragraph described 4A-C, when the
+resolver shipped unconsumed; that has not been true since 4B-A):
+
+* ``opportunity_feedback`` — LIVE. :mod:`app.feedback.routes` calls this resolver
+  through a single shared helper used by both the enforcement gate and the
+  customer-facing reflection. An honored enable override therefore makes that
+  workspace's feedback endpoints serve while ``opportunity_feedback_enabled``
+  stays ``False``.
+* ``scout_scheduling`` and ``connector_rss`` — NOT consumed here. Their gates read
+  their raw global flags directly, so a recorded override changes what the
+  operator surface reports, not what those endpoints do.
+
+With all three global flags ``False`` and no override row, every capability still
+resolves **disabled** via the global-configuration rule.
 """
 
 from __future__ import annotations

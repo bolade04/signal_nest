@@ -19,8 +19,11 @@ It owns the invariants that make captured feedback trustworthy and inert:
 
 Capture-only by contract: this service never scores, rescores, ranks, trains, or
 emits any cross-workspace / cross-market signal. Role gating (editor-only) and the
-``opportunity_feedback_enabled`` feature gate live at the future API boundary (3C-C),
+capability gate live at the API boundary (3C-C, resolver-backed since 4B-A),
 mirroring how the scouting-schedule service leaves role/feature gating to its route.
+That gate resolves availability **per workspace** — an honored override outranks the
+``opportunity_feedback_enabled`` global flag — so this service must not be read as
+reachable only while that flag is ``True``.
 
 Transaction ownership follows the house rule: this service ``flush``es but never
 commits — the caller owns the transaction.

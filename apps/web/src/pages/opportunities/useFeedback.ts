@@ -16,24 +16,54 @@ export function isFeatureDark(error: unknown): boolean {
 }
 
 /**
- * Authoritative, *pre-request* capability gate. The coarse runtime summary
- * (`GET /system/capabilities`, already fetched app-wide and cached) reflects the
- * server ``opportunity_feedback_enabled`` flag. Reading it lets the UI decide
- * whether the feedback capability is live **before** issuing any feedback
- * request, so while the feature is dark no feedback GET/POST is ever sent — the
- * backend 503 remains only as defence-in-depth for a stale client. The query is
- * shared (same key + queryFn as Settings) so this adds no extra network cost.
+ * Authoritative, *pre-request* capability gate — **workspace-effective**.
+ *
+ * The feedback backend decides per workspace through the capability resolver, so
+ * an override can enable feedback for one workspace while the global flag stays
+ * off. The coarse runtime summary (`GET /system/capabilities`) deliberately
+ * reflects the **raw global** flags and therefore cannot answer this question;
+ * reading it here was the P6-UI-005 defect. This asks the server the same
+ * question the gate asks, scoped to the same workspace.
+ *
+ * Returns a tri-state rather than a bare boolean. Collapsing "not yet resolved"
+ * into "disabled" makes an unresolved query and a real denial indistinguishable.
+ * Note what that does and does not buy: `status` has NO production reader at all
+ * — the panel consumes only `isEnabled`, computed in this hook's own return — and
+ * the panel renders nothing while loading exactly as it does while disabled, so no
+ * rendered output differs.
+ * The gain is OBSERVABILITY — it is the reason dark-state tests could previously
+ * pass without the gate doing anything, because a test could not tell a settled
+ * denial from a query that had never resolved.
+ *
+ * `=== true` rather than a truthy check: a non-boolean value must read as dark.
+ *
+ * Advisory only. The feedback routes' own 503 remains the enforcement boundary.
  */
-export function useFeedbackCapability() {
+export type FeedbackCapabilityStatus = 'loading' | 'enabled' | 'disabled';
+
+export function useFeedbackCapability(workspaceId: string) {
   const query = useQuery({
-    queryKey: queryKeys.runtimeSummary,
-    queryFn: ({ signal }) => api.getRuntimeSummary(signal),
+    queryKey: queryKeys.feedbackCapability(workspaceId),
+    queryFn: ({ signal }) => api.getFeedbackCapability(workspaceId, signal),
     staleTime: 60_000,
+    // A failed lookup means the capability is unknown, and unknown must not
+    // present controls the server would refuse. Retrying would only widen the
+    // window in which the UI shows nothing while appearing to be loading.
+    //
+    // This bounds retries WITHIN a query only. An errored query holds no data,
+    // so it is always stale and a later mount re-probes — while the endpoint is
+    // failing, each mount costs one request. That is accepted: the alternative
+    // is caching a failure, which would keep the UI dark after recovery.
+    retry: false,
   });
-  return {
-    isEnabled: query.data?.features?.opportunity_feedback_enabled ?? false,
-    isLoading: query.isLoading,
-  };
+
+  const status: FeedbackCapabilityStatus = query.isPending
+    ? 'loading'
+    : query.data?.enabled === true
+      ? 'enabled'
+      : 'disabled';
+
+  return { status, isEnabled: status === 'enabled' };
 }
 
 /**

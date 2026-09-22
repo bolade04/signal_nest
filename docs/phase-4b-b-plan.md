@@ -129,10 +129,14 @@ Key architectural facts (verified, load-bearing for this tranche):
   via `global_configuration`. An enable override on a `workspace_enableable` capability
   yields `has_override=True`, `decided_by=workspace_override`, `effective_enabled=True`
   for that one workspace while `global_flag` stays `False`.
-- After Phase 4B-A the feedback gate `_require_feedback_feature`
-  (`app/feedback/routes.py`) is the single sanctioned **live** resolver consumer; the
-  operator effective-read surface is also sanctioned but is not a live gate. Scheduling
-  and RSS live gates do not import the resolver.
+- After Phase 6U-1H the single sanctioned **live** resolver CALL SITE is
+  `_resolve_feedback_capability` (`app/feedback/routes.py`), shared by two live
+  consumers: the enforcement gate `_require_feedback_feature` and the customer-facing
+  reflection `read_feedback_capability`, which resolves on every panel mount. (Before
+  6U-1H the gate was the only live consumer; the invariant that survived is one call
+  site, not one consumer — it is what makes the UI and the gate structurally
+  inseparable.) The operator effective-read surface is also sanctioned but is not a
+  live gate. Scheduling and RSS live gates do not import the resolver.
 - **Fail-closed (D2):** only an explicit `effective_enabled is True` opens the gate; any
   resolver/DB/override-storage failure is logged (`opportunity_feedback_gate_failed`) and
   re-raised before any write. A non-enabled resolution returns `503 capability_unavailable`.
@@ -236,7 +240,9 @@ Evidence to capture (parent §11) after the single override is created:
 
 ## 10. Feedback smoke-test safety
 
-When exercising the enabled target directly (backend-first canary):
+When exercising the enabled target directly (the canary is **tenant-visible** — see
+the fourth bullet of §10; an earlier "backend-first / UI stays dark" posture no longer
+holds):
 
 - submit only **synthetic, non-sensitive** verdicts from the closed vocabulary
   (`is_useful` boolean + optional `reason_code`); **never** free text (there is none) and
@@ -245,10 +251,21 @@ When exercising the enabled target directly (backend-first canary):
   submission is a permanent row, so keep it minimal and clearly internal;
 - capturing feedback changes **no** opportunity score, version, ranking, or any
   worker/scheduling/connector behavior;
-- the `/system/capabilities` frontend reflection still reads the **raw global flag** and
-  will report the feature **disabled** even for the enabled canary — this is the intended
-  backend-first posture; verification exercises the API directly and records the
-  divergence, not a UI reveal;
+- **the canary is tenant-visible — plan for exposure, not for invisibility.** Since
+  Phase 6U-1H (`P6-UI-005`) the customer feedback panel no longer decides from
+  `/system/capabilities`. It reads a **workspace-effective** reflection,
+  `GET /workspaces/{workspace_id}/feedback-capability`, computed with the same
+  resolver semantics as the backend feedback gate. `/system/capabilities` remains
+  **raw-global** and will still report `opportunity_feedback_enabled: false`
+  during the canary — but it is no longer the customer-authoritative source and
+  **must not be used to conclude the canary is hidden**. So:
+  global flag `false` **+** honored workspace enable override **=** feedback
+  effectively enabled for that workspace, visible to every eligible editor
+  (owner / admin / marketer). Announce before enabling, exactly as the rollout
+  runbook's step 1 requires. Rolling the canary back means **removing or
+  disabling the workspace override** — flipping the raw global flag to `false`
+  does not retract an honored override (see
+  [operations/opportunity-feedback-rollout.md](operations/opportunity-feedback-rollout.md));
 - **no feedback body or override reason** is ever logged; observability is secret-free
   (§11).
 
@@ -303,14 +320,24 @@ handling**; reactivation is **not** automatically authorized.
 
 Layered controls, in order of use:
 
-1. **Primary scoped rollback:** clear the one canary workspace override → instant revert
-   to disabled for that workspace. *This* is the immediate canary rollback.
+1. **Primary scoped rollback:** clear the one canary workspace override → the server-side
+   decision reverts to disabled for that workspace immediately. *This* is the immediate
+   canary rollback. **Server state reverts instantly; an already-rendering client does
+   not.** Clearing from Operations refreshes only the operator's own session; other
+   sessions keep the affordance until they navigate, reload or reconnect, because
+   staleness is
+   permission to refetch, not a trigger, and there is no cross-session invalidation.
+   Assume customer exposure continues until affected sessions turn over — see the
+   "Rolling back (kill-switch)" section of
+   [operations/opportunity-feedback-rollout.md](operations/opportunity-feedback-rollout.md).
 2. **Global safety invariant:** `opportunity_feedback_enabled` stays `False` throughout.
    Setting an already-`False` flag to `False` is a standing invariant, **not** an action —
    it is not, by itself, a useful canary rollback.
-3. **Resolver safety ceiling:** the deny-biased precedence and the reserved
-   `safety_ceiling` slot (`app/capabilities/resolver.py`) remain intact and able to force
-   the capability off regardless of any override.
+3. **Resolver safety ceiling:** the deny-biased precedence remains intact. The
+   `safety_ceiling` slot (`app/capabilities/resolver.py`) is **reserved, not yet operable**
+   for a registered capability: `_ceiling_blocks` returns true only for a capability
+   *absent* from `CAPABILITY_REGISTRY`, and all three registered capabilities are present.
+   It is not a lever an operator can pull today, and must not be planned as one.
 4. **Code rollback:** revert the Phase 4B-A gate-wiring commit if the resolver integration
    itself is defective.
 

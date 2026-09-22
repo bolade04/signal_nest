@@ -1262,7 +1262,7 @@
         "type": "string"
       },
       "FeatureFlagsOut": {
-        "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of server feature flags \u2014 never a customer-settable\ntoggle. They let an authenticated client know, before it issues any\nfeature-specific request, whether a dark-deployed capability is live, so it\ncan avoid probing an endpoint that would only answer ``503``. Secret-free:\nonly booleans, never backend topology or configuration values.",
+        "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of raw server feature flags \u2014 never a customer-settable\ntoggle. Secret-free: only booleans, never backend topology or configuration\nvalues.\n\nThey answer \"is this flag on?\", NOT \"is this capability available to my\nworkspace?\". For ``scout_scheduling`` and ``connector_rss`` those coincide,\nbecause enforcement reads the raw flag. For ``opportunity_feedback`` they do\nnot: an honored workspace override outranks the flag, so this field can read\n``false`` while the feedback endpoints serve normally. The customer-facing,\nworkspace-effective answer lives on its own route,\n``GET /workspaces/{workspace_id}/feedback-capability``.",
         "properties": {
           "connector_rss_enabled": {
             "title": "Connector Rss Enabled",
@@ -1283,6 +1283,20 @@
           "connector_rss_enabled"
         ],
         "title": "FeatureFlagsOut",
+        "type": "object"
+      },
+      "FeedbackCapabilityOut": {
+        "description": "Customer-visible opportunity-feedback availability for one workspace.\n\nExactly one field. The operator endpoint's ``decided_by`` / ``global_flag`` /\n``has_override`` / ``override_value`` are governance metadata: they would tell a\ncustomer the platform-wide rollout posture and that an operator intervened on their\ntenant. A customer needs only whether the feature is available to them.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "FeedbackCapabilityOut",
         "type": "object"
       },
       "FeedbackCreate": {
@@ -5832,7 +5846,7 @@
     },
     "/api/v1/internal/system/capabilities/effective": {
       "get": {
-        "description": "Return the effective state of each capability for one workspace.\n\nThe route is a thin adapter over the merged deny-biased resolver: it validates the\noperator-supplied tenant scope, then delegates every precedence decision to\n:func:`resolve_capability` (safety ceiling \u2192 honored workspace override \u2192 global\nconfiguration \u2192 secure default) and projects each :class:`CapabilityResolution`.\nIt implements no precedence of its own, opens no transaction, writes no row, and\nflips no flag.\n\n``capability`` is an optional filter: absent, the response covers every capability\nin :func:`iter_capabilities` (canonical order); supplied, it narrows to that one.\nAn unknown ``capability`` value is rejected as 422 by the typed enum before any\nresolution. A cross-tenant or absent workspace is a non-enumerating 404.\n\nWith shipped defaults (all three global flags ``False``) and no real override row,\nevery capability resolves disabled via ``global_configuration`` \u2014 the surface is\ndark. A persisted enable on a ``workspace_enableable`` capability would show\n``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``\nwhile ``global_flag`` stays ``False``: persisted intent the resolver alone honors,\nwith no live gate consuming it, so nothing is globally activated.",
+        "description": "Return the effective state of each capability for one workspace.\n\nThe route is a thin adapter over the merged deny-biased resolver: it validates the\noperator-supplied tenant scope, then delegates every precedence decision to\n:func:`resolve_capability` (safety ceiling \u2192 honored workspace override \u2192 global\nconfiguration \u2192 secure default) and projects each :class:`CapabilityResolution`.\nIt implements no precedence of its own, opens no transaction, writes no row, and\nflips no flag.\n\n``capability`` is an optional filter: absent, the response covers every capability\nin :func:`iter_capabilities` (canonical order); supplied, it narrows to that one.\nAn unknown ``capability`` value is rejected as 422 by the typed enum before any\nresolution. A cross-tenant or absent workspace is a non-enumerating 404.\n\nWith shipped defaults (all three global flags ``False``) and no real override row,\nevery capability resolves disabled via ``global_configuration`` \u2014 the surface is\ndark. A persisted enable on a ``workspace_enableable`` capability would show\n``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``\nwhile ``global_flag`` stays ``False``. No GLOBAL flag is changed \u2014 but whether a live\ngate consumes that decision depends on the capability: ``opportunity_feedback`` has one\n(Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``\nand ``connector_rss`` do not, so their enforcement still reads the raw flag. For those\ntwo this surface can report ``effective_enabled=true`` while the endpoints still 503.",
         "operationId": "internal_capability_effective_api_v1_internal_system_capabilities_effective_get",
         "parameters": [
           {
@@ -5918,7 +5932,7 @@
     },
     "/api/v1/internal/system/capabilities/overrides": {
       "delete": {
-        "description": "Clear any recorded override for one ``(capability, workspace)`` pair.\n\nThe route is a thin adapter over the merged governed override service: it delegates\nevery gate to :func:`clear_capability_override` \u2014 authoritative tenant validation\n(cross-tenant or absent workspace \u2192 non-enumerating 404) and a ``SELECT \u2026 FOR\nUPDATE``/indexed-lookup critical section \u2014 then projects the typed\n:class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements no\npersistence or audit logic of its own and opens no transaction: the request-scoped\nsession makes the row delete and its single ``.cleared`` ``AuditLog`` commit atomically\nat the request boundary.\n\nThe tenant scope and typed ``capability`` are taken as query params (an unknown\n``capability`` value is rejected as 422 by the enum before any service call), matching\nthe operator read routes and avoiding DELETE-with-body client friction. Attribution is\nserver-side: ``actor_user_id`` is the authenticated operator, never a request-supplied\nid, so no clear is recorded anonymously or under a spoofed identity.\n\nClearing is deny-biased and always permitted \u2014 removing an override can only relax\ntoward the secure default. When an override exists it is deleted (``changed=True``,\nexactly one ``.cleared`` audit) and effective state returns to the dark default; when\nnone exists the call is an idempotent success (``changed=False``) that writes no row and\nemits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override\nremains), the response's ``changed`` lets the caller distinguish a real removal from an\nabsent-clear no-op, and no global flag is touched \u2014 clearing activates nothing and every\ncapability stays dark.",
+        "description": "Clear any recorded override for one ``(capability, workspace)`` pair.\n\nThe route is a thin adapter over the merged governed override service: it delegates\nevery gate to :func:`clear_capability_override` \u2014 authoritative tenant validation\n(cross-tenant or absent workspace \u2192 non-enumerating 404) and a ``SELECT \u2026 FOR\nUPDATE``/indexed-lookup critical section \u2014 then projects the typed\n:class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements no\npersistence or audit logic of its own and opens no transaction: the request-scoped\nsession makes the row delete and its single ``.cleared`` ``AuditLog`` commit atomically\nat the request boundary.\n\nThe tenant scope and typed ``capability`` are taken as query params (an unknown\n``capability`` value is rejected as 422 by the enum before any service call), matching\nthe operator read routes and avoiding DELETE-with-body client friction. Attribution is\nserver-side: ``actor_user_id`` is the authenticated operator, never a request-supplied\nid, so no clear is recorded anonymously or under a spoofed identity.\n\nClearing is deny-biased and always permitted \u2014 removing an override can only relax\ntoward the secure default. When an override exists it is deleted (``changed=True``,\nexactly one ``.cleared`` audit) and effective state returns to the dark default; when\nnone exists the call is an idempotent success (``changed=False``) that writes no row and\nemits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override\nremains), the response's ``changed`` lets the caller distinguish a real removal from an\nabsent-clear no-op, and no global flag is touched. Clearing activates nothing \u2014 but it\ncan DEACTIVATE: for ``opportunity_feedback`` removing an honored enable override returns\nthat workspace's customer endpoints to 503, which is the server-side canary rollback.",
         "operationId": "internal_capability_override_clear_api_v1_internal_system_capabilities_overrides_delete",
         "parameters": [
           {
@@ -5994,7 +6008,7 @@
         ]
       },
       "get": {
-        "description": "Return a tenant-scoped, bounded page of a workspace's stored override rows.\n\nThe route is a thin adapter over the merged governed override service: it delegates\ntenant validation, scoping, ordering, and clamping to\n:func:`list_capability_overrides` (which authoritatively confirms the workspace\nexists and is owned by ``organization_id``, then returns a newest-first,\n``created_at DESC, id DESC`` page strictly scoped to that one workspace) and projects\neach row onto :class:`CapabilityOverrideOut`. It implements no query or scoping of its\nown, opens no transaction, writes no row, and emits no audit \u2014 this is a read.\n\nA cross-tenant or absent workspace is a non-enumerating 404. ``limit``/``offset`` are\nbounded by the typed query params (out-of-range \u2192 422) and re-clamped inside the\nservice, so the route can never over-fetch. With no real override row by default the\npage is empty; a persisted override appears here as recorded *intent* only \u2014 listing\nit activates nothing and flips no flag, so every capability stays dark.",
+        "description": "Return a tenant-scoped, bounded page of a workspace's stored override rows.\n\nThe route is a thin adapter over the merged governed override service: it delegates\ntenant validation, scoping, ordering, and clamping to\n:func:`list_capability_overrides` (which authoritatively confirms the workspace\nexists and is owned by ``organization_id``, then returns a newest-first,\n``created_at DESC, id DESC`` page strictly scoped to that one workspace) and projects\neach row onto :class:`CapabilityOverrideOut`. It implements no query or scoping of its\nown, opens no transaction, writes no row, and emits no audit \u2014 this is a read.\n\nA cross-tenant or absent workspace is a non-enumerating 404. ``limit``/``offset`` are\nbounded by the typed query params (out-of-range \u2192 422) and re-clamped inside the\nservice, so the route can never over-fetch. With no real override row by default the\npage is empty; a persisted override appears here as recorded *intent* only \u2014 listing\nit activates nothing and flips no flag. Note that the intent it lists may already be\nlive: an honored ``opportunity_feedback`` enable override is consumed by that\ncapability's live gate, so reading this page is not evidence that nothing is serving.",
         "operationId": "internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get",
         "parameters": [
           {
@@ -6085,7 +6099,7 @@
         ]
       },
       "put": {
-        "description": "Record an operator's intent to enable/disable one per-workspace override.\n\nThe route is a thin adapter over the merged governed override service: it delegates\nevery gate to :func:`set_capability_override` \u2014 authoritative tenant validation\n(cross-tenant or absent workspace \u2192 non-enumerating 404), deny-biased registry policy\n(an ``enabled=True`` for a non-``workspace_enableable`` capability such as RSS \u2192\n422 ``capability_override_not_permitted``, with a service-emitted ``.rejected`` audit\nand no row), bounded reason validation (over-length \u2192 422), and an idempotent upsert\nunder a ``SELECT \u2026 FOR UPDATE``/SAVEPOINT critical section \u2014 then projects the typed\n:class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements\nno policy, persistence, or audit logic of its own and opens no transaction: the\nrequest-scoped session makes the override row and its single ``AuditLog`` commit\natomically at the request boundary. An unknown ``capability`` value is rejected as 422\nby the typed enum before any service call.\n\nAttribution is server-side: ``actor_user_id`` is taken from the authenticated\noperator, never the request body, so no override is recorded anonymously or under a\nspoofed identity. Recording intent is **not activation** \u2014 the write flips no global\nflag and wires the resolver into no live gate, so an enabled override is honored by\nthe resolver alone while its bound global flag stays ``False`` and every capability\nremains dark. The response's ``created``/``changed`` let the caller distinguish a real\nwrite from an idempotent re-PUT (which writes no new audit).",
+        "description": "Record an operator's intent to enable/disable one per-workspace override.\n\nThe route is a thin adapter over the merged governed override service: it delegates\nevery gate to :func:`set_capability_override` \u2014 authoritative tenant validation\n(cross-tenant or absent workspace \u2192 non-enumerating 404), deny-biased registry policy\n(an ``enabled=True`` for a non-``workspace_enableable`` capability such as RSS \u2192\n422 ``capability_override_not_permitted``, with a service-emitted ``.rejected`` audit\nand no row), bounded reason validation (over-length \u2192 422), and an idempotent upsert\nunder a ``SELECT \u2026 FOR UPDATE``/SAVEPOINT critical section \u2014 then projects the typed\n:class:`OverrideMutation` onto :class:`CapabilityOverrideMutationOut`. It implements\nno policy, persistence, or audit logic of its own and opens no transaction: the\nrequest-scoped session makes the override row and its single ``AuditLog`` commit\natomically at the request boundary. An unknown ``capability`` value is rejected as 422\nby the typed enum before any service call.\n\nAttribution is server-side: ``actor_user_id`` is taken from the authenticated\noperator, never the request body, so no override is recorded anonymously or under a\nspoofed identity. The write flips no global flag \u2014 but **it is not inert**, and what it\nactivates depends on the capability. For ``opportunity_feedback`` an ``enabled=True``\noverride is consumed by a live gate (Phase 4B-A) and the customer feedback endpoints\n**begin serving for that workspace immediately**, while the global flag stays ``False``;\nclearing the override is what reverses it. For ``scout_scheduling`` enforcement reads the\nraw global flag, so an override changes only what the operator surface reports.\n``connector_rss`` is not ``workspace_enableable`` and an ``enabled=True`` is refused\n422. The response's ``created``/``changed`` let the caller distinguish a real\nwrite from an idempotent re-PUT (which writes no new audit).",
         "operationId": "internal_capability_override_set_api_v1_internal_system_capabilities_overrides_put",
         "parameters": [
           {
@@ -8755,6 +8769,65 @@
         "tags": [
           "campaign-context",
           "competitors"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/feedback-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective feedback availability (P6-UI-005).\n\nScoped to the workspace, not an opportunity: the resolver's decision domain is\n``(capability, workspace)``, so an opportunity segment would advertise a dimension\nthe decision cannot express.\n\nEditor-gated to match the feedback routes' usable audience. A viewer cannot submit\nor read feedback, so reflecting its availability to them would disclose tenant\ngovernance state for a feature they could not use.\n\nAdvisory only. ``GET``/``POST`` feedback re-decide independently and answer 503 when\nunavailable; that remains the enforcement boundary, and this route weakens nothing.",
+        "operationId": "read_feedback_capability_api_v1_workspaces__workspace_id__feedback_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether opportunity feedback is available for this workspace",
+        "tags": [
+          "opportunity-feedback"
         ]
       }
     },
