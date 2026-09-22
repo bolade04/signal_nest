@@ -52,6 +52,18 @@ class FeatureFlagsOut(BaseModel):
     #: nothing and skip the feedback request entirely.
     opportunity_feedback_enabled: bool
 
+    #: Whether scout scheduling is enabled server-side. While false the schedule
+    #: *mutation* endpoints answer 503 while the schedule *read* stays available,
+    #: so the UI keeps an existing schedule visible and withholds only the
+    #: mutation affordances.
+    scout_scheduling_enabled: bool
+
+    #: Whether the RSS connector is enabled server-side. Reflected for parity
+    #: with the capability registry so a client can tell the capability is dark
+    #: without probing; reflection alone selects no connector and performs no
+    #: fetch.
+    connector_rss_enabled: bool
+
 
 class RuntimeSummaryOut(BaseModel):
     app_mode: str
@@ -92,8 +104,16 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
     report = build_runtime_report(settings)
     return RuntimeSummaryOut(
         **report.to_summary_dict(),
+        # Raw global flags, one field per registered capability. Deliberately NOT
+        # resolver-derived: scheduling enforcement reads the raw setting, so a
+        # per-workspace effective value would not describe what the mutation
+        # endpoints actually do. Making these effective is a separate tranche
+        # (see `P6-UI-005`), and would change the meaning of a key the UI
+        # already consumes.
         features=FeatureFlagsOut(
             opportunity_feedback_enabled=settings.opportunity_feedback_enabled,
+            scout_scheduling_enabled=settings.scout_scheduling_enabled,
+            connector_rss_enabled=settings.connector_rss_enabled,
         ),
     )
 

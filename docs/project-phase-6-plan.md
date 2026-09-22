@@ -414,8 +414,10 @@ Lane S — SECURITY / OPERATIONS                     (spans P and I)
   only lane that can start, finish and be seen by the founder immediately.
 - `P6-UI-006` is a UI *symptom* of `P6-CAP-1` (Lane P, 6C). Do not patch it in Lane U —
   fixing the resolver fixes it. **`P6-UI-005` is different**: feedback already consumes
-  the resolver, so its defect is reflection-only (`P6-CAP-2`) and it ships in 6U-1
-  alongside `P6-UI-002`, which shares that root cause.
+  the resolver, so its defect is reflection-only. It is **not** closed by `P6-CAP-2` and
+  is **not** 6U-1 content: `P6-CAP-2` reflects the *raw global* flags, which is what
+  `P6-UI-002` needs, whereas `P6-UI-005` needs a **workspace-effective** reflection. See
+  §5 for the full reasoning; it remains OPEN for a separate tranche.
 - `P6-UI-004` cannot be fully closed until `P6-DATA-2` lands, because the honest empty
   state depends on the backend distinguishing "no signals found" from "market not
   covered". Lane U can ship the copy change; Lane S makes it true.
@@ -553,7 +555,7 @@ team invites · password reset · billing. All are either Phase 5A–5E (§4.10,
 | `P6-UI-002` | Scout request detail → schedule | `SchedulePanel` mounts unconditionally (`ScoutRequestDetail.tsx:160`) and renders enabled "Schedule daily"/"Schedule weekly" (`SchedulePanel.tsx:123-131`); backend 503s the POST (`scouting_requests/routes.py:75,389`). Root cause: `scout_scheduling_enabled` is absent from `FeatureFlagsOut`, so the client cannot know | The most prominent unbuilt feature is presented as working. Click → opaque failure (compounded by `P6-UI-001`) → user concludes the product is broken | **UI-P0 — YES** | `P6-CAP-2` | **6U-1** |
 | `P6-UI-003` | Sign-in | No "Forgot password?" link exists anywhere (`SignIn.tsx:105-128`); no reset route server-side | A forgotten password means permanent loss of the org, its workspaces and all data. Only recourse is registering a new account, which creates a new org | **UI-P0 — YES** | `P6-AUTH-2` | **6B** |
 | `P6-UI-004` | Opportunities empty state | `Opportunities.tsx:293-297` shows "No opportunities yet — Run a scout request to generate…" — identical whether the user has never run a scout or ran one that returned zero signals (the guaranteed outcome outside the 4 fixture markets, `fixtures.py:156-167`) | The app advises the user to do the thing they just did. This is the one place fixtures genuinely mislead | **UI-P1 — YES** | `P6-DATA-2` | **6U-2** |
-| `P6-UI-005` | Operations → capability overrides (feedback) | Feedback's **enforcement is already correct** — `feedback/routes.py:85-91` decides via `resolve_capability`. The defect is purely the **reflection**: `system/routes.py:94-96` populates `FeatureFlagsOut` from the raw global flag | An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI**, because the client gate reads the global reflection | **UI-P1** | **`P6-CAP-2`** (not `P6-CAP-1` — an earlier draft mis-attributed this; feedback already consumes the resolver) | **6U-1**, with `P6-CAP-2` |
+| `P6-UI-005` | Operations → capability overrides (feedback) | Feedback's **enforcement is already correct** — `feedback/routes.py:85-91` decides via `resolve_capability`. The defect is purely the **reflection**: `system/routes.py:94-96` populates `FeatureFlagsOut` from the raw global flag | An operator enabling feedback for one workspace sees "Enabled · Workspace override" on `/operations` and **still sees no feedback UI**, because the client gate reads the global reflection | **UI-P1** | **Not `P6-CAP-2`.** `P6-CAP-2` reflects the *raw global* flags, which is what `P6-UI-002` needs; it cannot close this row. The customer reflection must expose the **workspace-effective** feedback state, which needs workspace context `GET /system/capabilities` does not have | **OPEN — separate future tranche**, not 6U-1G |
 | `P6-UI-006` | Operations → capability overrides (scheduling) | `scouting_requests/routes.py:75` reads the raw global flag and never calls `resolve_capability` | Operator sees "Enabled · Workspace override"; every schedule mutation still 503s. **Misreports** rather than under-reports | **UI-P1** | `P6-CAP-1` | **6C** |
 | `P6-UI-007` | Settings → Organizations & roles | Static row + read-only `Badge` (`Settings.tsx:129-144`); no invite, role change or remove, and no explanatory empty state — unlike the Workspaces card directly beneath it, which does have `+ New` | Looks like team management, does nothing. A pilot user hunts for the invite button and finds none | **UI-P1** | `P6-AUTH-1` | **6B** |
 | `P6-UI-008` | Sign-in | Live demo credentials printed in plain text (`SignIn.tsx:126-128`) plus a one-click "Use demo account" button (`:110-118`). **`SignIn.tsx` carries no environment guard on any of this**, so the constants compile into the production bundle — confirmed, the built `apps/web/dist/assets/index-*.js` contains `demo1234` | Anyone reaching an externally reachable deployment where the demo org was seeded gets a working **OWNER account inside a real tenant**. Blast radius is the demo org — tenant isolation still protects a pilot's own org. **Correction to an earlier draft:** this row previously claimed the account also grants the operator console. That holds only locally — `apps/api/app/db/seed.py:212` sets `demo_is_operator = environment in ("development","test")`, so `is_operator` is **False** in staging/production. The live `is_operator: true` observation came from a dev server. The finding stands on the unguarded credentials alone | **UI-P0 — YES for any external exposure** | none | **6U-1** |
@@ -657,13 +659,34 @@ prerequisites are obtained — which is exactly the parallelism §5.1 is built f
 (`P6-D02`), any AWS action, any flag activation, and **`P6-UI-006`**, whose real fix is
 `P6-CAP-1` in Lane P (6C) rather than a UI patch.
 
-**`P6-UI-005` IS in the first tranche.** An earlier draft excluded it alongside
-`P6-UI-006` on the assumption that both were `P6-CAP-1`. They are not: feedback already
-enforces correctly through `resolve_capability` (`apps/api/app/feedback/routes.py:85`), so
-`P6-UI-005` is a **reflection-only** defect — i.e. `P6-CAP-2`, which 6U-1 already carries
-for `P6-UI-002`. One change to `FeatureFlagsOut` closes `P6-UI-002` and `P6-UI-005`
-together. `P6-UI-006` is genuinely different: `scouting_requests/routes.py:75` reads the
-raw global flag and never consults the resolver.
+**`P6-UI-005` is a reflection defect, but it is NOT closed by the same change as
+`P6-UI-002`.** An earlier draft excluded it alongside `P6-UI-006` on the assumption that
+both were `P6-CAP-1`. They are not: feedback already enforces correctly through
+`resolve_capability` (`apps/api/app/feedback/routes.py:85`), so `P6-UI-005` is a
+**reflection-only** defect.
+
+An earlier revision of this section went one step further and concluded that "one change
+to `FeatureFlagsOut` closes `P6-UI-002` and `P6-UI-005` together". **That inference is
+false**, and it was corrected during the 6U-1G four-lane review. The two defects require
+*opposite* semantics for two keys in the same response object:
+
+* **`P6-UI-002` requires a RAW-GLOBAL scheduling reflection.** Scheduling *enforcement*
+  reads the raw setting (`apps/api/app/scouting_requests/routes.py:75` —
+  `get_settings().scout_scheduling_enabled`) and never consults the resolver. A reflection
+  that reported anything else would not describe what the mutation endpoints actually do.
+* **`P6-UI-005` requires a WORKSPACE-EFFECTIVE feedback reflection.** Feedback
+  *enforcement* already resolves per workspace
+  (`apps/api/app/feedback/routes.py:85-90`), so only an override-resolved reflection can
+  make the client gate agree with the server.
+
+`P6-CAP-2` as scoped — *reflect all three registered raw global flags* — therefore closes
+`P6-UI-002` and leaves `P6-UI-005` open. Making the reflection effective instead would
+close `P6-UI-005` and **break** `P6-UI-002`'s truthfulness. `P6-UI-005` needs workspace
+context on `GET /system/capabilities`, which that endpoint does not have, so it is a
+separate tranche with its own tenancy and disclosure questions — **not** 6U-1 content.
+
+`P6-UI-006` is different again: `scouting_requests/routes.py:75` reads the raw global flag
+and never consults the resolver, so its fix is `P6-CAP-1` in 6C.
 
 ---
 
@@ -750,7 +773,7 @@ earlier draft listed it in both places; 6E governs.
 | **6E** | Infrastructure, observability & deployment | `P6-INF-2..10`, `P6-INF-13`, `P6-INF-14`, `P6-INF-15` | **Yes** | Apply + spend authorization | 6B, 6C, 6D |
 | **6F** | Live data & privacy | `P6-DATA-1..4`, `P6-DATA-6`, `P6-PRIV-1..5`, `P6-LLM-6` | Partly | **Yes — legal/ToS + retention policy** | after 6C |
 | **6G** | Production environment & launch closeout | `P6-INF-1`, `P6-INF-11`, `P6-INF-12` | **Yes** | Spend + launch authorization | after 6E, 6F |
-| **6U-1** | **Founder-visible UI truthfulness** (added by `P6-UI-0`) | `P6-UI-001`, `P6-UI-002` and `P6-UI-005` (+ their shared backend half `P6-CAP-2`), `P6-UI-008`, `P6-UI-010`, `P6-UI-018`, `P6-UI-019`, `P6-UI-020` | No | No | everything — it is repo-only and tiny |
+| **6U-1** | **Founder-visible UI truthfulness** (added by `P6-UI-0`) | `P6-UI-001`, `P6-UI-002` (+ its backend half `P6-CAP-2`), `P6-UI-008`, `P6-UI-010`, `P6-UI-018`, `P6-UI-019`, `P6-UI-020`. **`P6-UI-005` is NOT 6U-1 content** — it needs a workspace-effective reflection, not the raw-flag one `P6-CAP-2` provides (see §5) | No | No | everything — it is repo-only and tiny |
 | **6U-2** | Founder-visible UI polish | `P6-UI-004`, `P6-UI-009`, `P6-UI-011`, `P6-UI-012`, `P6-UI-013`, `P6-UI-015`, `P6-UI-021`, `P6-UI-022`, `P6-UI-023`, `P6-UI-024` | No | No | 6B, 6C, 6D, 6E |
 
 **Rationale for this shape rather than the suggested 6A–6E labels.** The audit produced

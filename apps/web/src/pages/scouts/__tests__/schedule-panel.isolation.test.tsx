@@ -15,6 +15,28 @@ const P = (path: string) => `*${API_PREFIX}${path}`;
 const schedulePath = (req: string) => P(`/workspaces/${WS}/scout-requests/${req}/schedule`);
 
 // Four independent markets, mirroring the backend worker-integration coverage.
+const CAPABILITIES = P('/system/capabilities');
+
+// Default handlers report every capability dark. These tests are about per-market
+// isolation, not the capability gate, so they opt in to the enabled surface.
+function enableScheduling() {
+  server.use(
+    http.get(CAPABILITIES, () =>
+      HttpResponse.json({
+        app_mode: 'local',
+        environment: 'development',
+        is_local_mode: true,
+        all_configured: true,
+        features: {
+          opportunity_feedback_enabled: false,
+          scout_scheduling_enabled: true,
+          connector_rss_enabled: false,
+        },
+      }),
+    ),
+  );
+}
+
 const MARKETS = {
   dallas: 'scout-loc-dallas',
   london: 'scout-loc-london',
@@ -43,6 +65,7 @@ const notFound = () =>
 
 describe('SchedulePanel isolation (SB-D)', () => {
   it('renders each market with its own independent state', async () => {
+    enableScheduling();
     server.use(
       http.get(schedulePath(MARKETS.dallas), () => HttpResponse.json(scheduleRow(MARKETS.dallas))),
       http.get(schedulePath(MARKETS.london), () =>
@@ -90,6 +113,7 @@ describe('SchedulePanel isolation (SB-D)', () => {
   });
 
   it('keeps a lifecycle action scoped to the acting market', async () => {
+    enableScheduling();
     let dallasState = 'active';
     server.use(
       http.get(schedulePath(MARKETS.dallas), () =>

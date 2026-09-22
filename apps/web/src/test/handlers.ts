@@ -482,8 +482,16 @@ export const handlers = [
       environment: 'development',
       is_local_mode: true,
       all_configured: true,
-      // Opportunity feedback ships dark by default, mirroring the server flag.
-      features: { opportunity_feedback_enabled: false },
+      // Every registered capability ships dark by default, mirroring the server
+      // flags (`config.py`: all three default False). Tests that need a
+      // capability ON install a per-test `server.use(...)` override rather than
+      // changing this shared default — so the dark path is what renders unless a
+      // test explicitly opts out of it.
+      features: {
+        opportunity_feedback_enabled: false,
+        scout_scheduling_enabled: false,
+        connector_rss_enabled: false,
+      },
     }),
   ),
   // Detailed backend topology — operator-only in the real API.
