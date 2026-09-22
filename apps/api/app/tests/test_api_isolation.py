@@ -29,9 +29,7 @@ def client() -> TestClient:
 
 @pytest.fixture(scope="module")
 def auth(client: TestClient) -> dict[str, str]:
-    resp = client.post(
-        f"{API}/auth/login", json={"email": DEMO_EMAIL, "password": DEMO_PASSWORD}
-    )
+    resp = client.post(f"{API}/auth/login", json={"email": DEMO_EMAIL, "password": DEMO_PASSWORD})
     if resp.status_code != 200:
         pytest.skip("Demo account not seeded; run `npm run demo:setup` first.")
     token = resp.json()["access_token"]
@@ -41,9 +39,7 @@ def auth(client: TestClient) -> dict[str, str]:
 def _first_workspace(client: TestClient, auth: dict[str, str]) -> str:
     orgs = client.get(f"{API}/organizations", headers=auth).json()
     assert orgs, "expected at least one seeded organization"
-    ws = client.get(
-        f"{API}/organizations/{orgs[0]['id']}/workspaces", headers=auth
-    ).json()
+    ws = client.get(f"{API}/organizations/{orgs[0]['id']}/workspaces", headers=auth).json()
     assert ws, "expected at least one seeded workspace"
     return ws[0]["id"]
 
@@ -125,9 +121,7 @@ def test_system_capabilities_requires_authentication(client: TestClient):
     assert resp.status_code == 401
 
 
-def test_system_capabilities_is_coarse_summary_only(
-    client: TestClient, auth: dict[str, str]
-):
+def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: dict[str, str]):
     # Any authenticated caller gets a coarse summary WITHOUT per-capability
     # backend topology (that detail is operator-only).
     resp = client.get(f"{API}/system/capabilities", headers=auth)
@@ -136,23 +130,80 @@ def test_system_capabilities_is_coarse_summary_only(
     assert body["is_local_mode"] is True
     assert "capabilities" not in body
     # Read-only product-capability reflections are exposed (never backend
-    # topology). Opportunity feedback ships dark, so it reflects False.
-    assert body["features"] == {"opportunity_feedback_enabled": False}
+    # topology). All three registered capabilities ship dark, so all reflect
+    # False. This stays EXACT-EQUALITY on purpose: it is the closed-set
+    # disclosure control for a customer-facing endpoint, and it is what fails
+    # loudly if a fourth value is ever reflected into `features`. Do not relax
+    # it to a subset or per-key check.
+    assert body["features"] == {
+        "opportunity_feedback_enabled": False,
+        "scout_scheduling_enabled": False,
+        "connector_rss_enabled": False,
+    }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
         assert forbidden not in blob
 
 
-def test_system_capabilities_reflects_feedback_flag_when_enabled(
-    client: TestClient, auth: dict[str, str], monkeypatch
+@pytest.mark.parametrize(
+    "setting_attr",
+    ["opportunity_feedback_enabled", "scout_scheduling_enabled", "connector_rss_enabled"],
+)
+def test_system_capabilities_reflects_each_flag_independently(
+    client: TestClient, auth: dict[str, str], monkeypatch, setting_attr: str
 ):
-    # The features block is a live reflection of the server flag, not a constant.
+    """Each reflected key is wired to its OWN setting, and to no other.
+
+    A name-set check would pass even if two fields were populated from the same
+    attribute, or if the values were swapped. Toggling one setting and asserting
+    that exactly one boolean flips proves the wiring, not merely the shape.
+    """
     from app.core.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "opportunity_feedback_enabled", True)
+    monkeypatch.setattr(get_settings(), setting_attr, True)
     resp = client.get(f"{API}/system/capabilities", headers=auth)
     assert resp.status_code == 200
-    assert resp.json()["features"]["opportunity_feedback_enabled"] is True
+    features = resp.json()["features"]
+
+    assert features[setting_attr] is True, f"{setting_attr} did not reflect its own setting"
+    others = {k: v for k, v in features.items() if k != setting_attr}
+    assert all(v is False for v in others.values()), (
+        f"toggling {setting_attr} moved another flag: {others}"
+    )
+
+
+def test_system_capabilities_reflects_every_registered_capability(
+    client: TestClient, auth: dict[str, str]
+):
+    """Reflection parity against the capability registry.
+
+    The registry is the closed source of truth for globally bound capabilities.
+    If a fourth is ever added, this fails rather than silently under-reporting.
+    """
+    from app.capabilities.registry import CAPABILITY_REGISTRY
+
+    resp = client.get(f"{API}/system/capabilities", headers=auth)
+    assert resp.status_code == 200
+    reflected = set(resp.json()["features"])
+    registered = {policy.global_flag_attr for policy in CAPABILITY_REGISTRY.values()}
+
+    # Limb 1 (safety): never reflect a key the registry does not govern. A
+    # surplus key is an ungoverned flag on a public endpoint, so this limb must
+    # hold unconditionally and is not waivable by the set below.
+    assert not (reflected - registered), (
+        f"reflected keys with no registry entry: {sorted(reflected - registered)}"
+    )
+
+    # Limb 2 (completeness): every registered capability is reflected unless it
+    # is listed here as a deliberate withholding. The list is empty today; a new
+    # capability therefore fails this test rather than silently under-reporting,
+    # and withholding one becomes an explicit, reviewable edit rather than a
+    # quietly relaxed assertion.
+    INTENTIONALLY_UNREFLECTED: set[str] = set()
+    withheld = sorted(registered - reflected - INTENTIONALLY_UNREFLECTED)
+    assert reflected | INTENTIONALLY_UNREFLECTED == registered, (
+        f"registered but not reflected: {withheld}"
+    )
 
 
 def test_internal_capabilities_requires_operator(client: TestClient):
@@ -194,9 +245,7 @@ def test_internal_readiness_requires_operator(client: TestClient):
     assert resp.status_code == 403
 
 
-def test_internal_readiness_reports_probe_diagnostics(
-    client: TestClient, auth: dict[str, str]
-):
+def test_internal_readiness_reports_probe_diagnostics(client: TestClient, auth: dict[str, str]):
     resp = client.get(f"{API}/internal/system/readiness", headers=auth)
     assert resp.status_code == 200
     body = resp.json()
@@ -248,9 +297,7 @@ def test_internal_jobs_requires_operator(client: TestClient):
     assert resp.status_code == 403
 
 
-def test_internal_jobs_is_diagnostics_and_secret_free(
-    client: TestClient, auth: dict[str, str]
-):
+def test_internal_jobs_is_diagnostics_and_secret_free(client: TestClient, auth: dict[str, str]):
     resp = client.get(f"{API}/internal/system/jobs", headers=auth)
     assert resp.status_code == 200
     body = resp.json()
@@ -268,9 +315,7 @@ def test_internal_workers_requires_operator(client: TestClient):
     assert resp.status_code == 403
 
 
-def test_internal_workers_is_coarse_and_secret_free(
-    client: TestClient, auth: dict[str, str]
-):
+def test_internal_workers_is_coarse_and_secret_free(client: TestClient, auth: dict[str, str]):
     resp = client.get(f"{API}/internal/system/workers", headers=auth)
     assert resp.status_code == 200
     body = resp.json()
@@ -301,9 +346,7 @@ def test_internal_telemetry_requires_operator(client: TestClient):
     assert resp.status_code == 403
 
 
-def test_internal_telemetry_is_operator_safe_posture(
-    client: TestClient, auth: dict[str, str]
-):
+def test_internal_telemetry_is_operator_safe_posture(client: TestClient, auth: dict[str, str]):
     resp = client.get(f"{API}/internal/system/telemetry", headers=auth)
     assert resp.status_code == 200
     body = resp.json()
@@ -348,9 +391,7 @@ def test_internal_telemetry_is_operator_safe_posture(
         assert forbidden not in blob
 
 
-def test_unfiltered_feed_is_superset_of_each_location(
-    client: TestClient, auth: dict[str, str]
-):
+def test_unfiltered_feed_is_superset_of_each_location(client: TestClient, auth: dict[str, str]):
     ws = _first_workspace(client, auth)
     locations = client.get(f"{API}/workspaces/{ws}/locations", headers=auth).json()
     all_rows = client.get(f"{API}/workspaces/{ws}/opportunities", headers=auth).json()

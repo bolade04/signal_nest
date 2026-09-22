@@ -14,12 +14,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
-import { useScheduleActions } from './useScheduleActions';
+import { useScheduleActions, useScheduleCapability } from './useScheduleActions';
 
 // Owner/admin/marketer may mutate; view-only roles get read-only display. This
 // mirrors the server-side EDITORS gate — the API is the real authority, this
 // only hides controls the user could not use anyway.
 const EDITOR_ROLES = new Set(['owner', 'admin', 'marketer']);
+
+// Rendered wherever a mutation affordance would otherwise sit. Schedule reads
+// stay available while the capability is dark, so this explains the absence
+// rather than hiding the schedule itself.
+const DARK_NOTE = 'Scheduling is not available yet, so this schedule cannot be changed.';
 
 const STATE_META: Record<
   string,
@@ -47,7 +52,20 @@ export function SchedulePanel({
   const canEdit = role ? EDITOR_ROLES.has(role) : false;
 
   const actions = useScheduleActions(workspaceId, requestId);
+  const { isEnabled: schedulingEnabled } = useScheduleCapability();
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Gating the dialog on `schedulingEnabled` only *hides* it while dark; the
+  // `confirmDelete` intent stays latched and would spring the destructive
+  // confirmation back open the moment the capability returned, without the user
+  // re-opening it. Drop the intent when the gate closes. This is React's
+  // documented "adjust state during render" pattern rather than an effect: it
+  // resolves before the children render, so the stale dialog is never committed.
+  const [gateWasOpen, setGateWasOpen] = useState(schedulingEnabled);
+  if (gateWasOpen !== schedulingEnabled) {
+    setGateWasOpen(schedulingEnabled);
+    if (!schedulingEnabled && confirmDelete) setConfirmDelete(false);
+  }
 
   const query = useQuery({
     queryKey: queryKeys.scoutSchedule(workspaceId, requestId),
@@ -78,6 +96,7 @@ export function SchedulePanel({
         ) : noSchedule || !query.data ? (
           <NoSchedule
             canEdit={canEdit}
+            schedulingEnabled={schedulingEnabled}
             busy={busy}
             onCreate={(interval) => actions.create.mutate(interval)}
           />
@@ -85,6 +104,7 @@ export function SchedulePanel({
           <ScheduleView
             schedule={query.data}
             canEdit={canEdit}
+            schedulingEnabled={schedulingEnabled}
             busy={busy}
             onPause={() => actions.pause.mutate()}
             onActivate={() => actions.resume.mutate()}
@@ -93,8 +113,13 @@ export function SchedulePanel({
         )}
       </CardContent>
 
+      {/* The state reset above already makes this unreachable while dark, so the
+          `schedulingEnabled` conjunct is deliberate redundancy rather than the
+          active guard: the reset protects the state, this protects the render.
+          It is kept so a refactor that drops that subtle render-phase reset
+          cannot resurrect a destructive confirmation on its own. */}
       <ConfirmDialog
-        open={confirmDelete}
+        open={schedulingEnabled && confirmDelete}
         onOpenChange={setConfirmDelete}
         title="Delete schedule?"
         description="Recurring runs will stop. This does not affect runs already in progress, and you can create a new schedule later."
@@ -108,10 +133,12 @@ export function SchedulePanel({
 
 function NoSchedule({
   canEdit,
+  schedulingEnabled,
   busy,
   onCreate,
 }: {
   canEdit: boolean;
+  schedulingEnabled: boolean;
   busy: boolean;
   onCreate: (interval: ScheduleInterval) => void;
 }) {
@@ -120,7 +147,9 @@ function NoSchedule({
       <p className="text-muted-foreground">
         No recurring schedule. Runs stay manual until you set one up.
       </p>
-      {canEdit ? (
+      {canEdit && !schedulingEnabled ? (
+        <p className="text-xs text-muted-foreground">{DARK_NOTE}</p>
+      ) : canEdit ? (
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => onCreate('daily')} disabled={busy}>
             Schedule daily
@@ -141,6 +170,7 @@ function NoSchedule({
 function ScheduleView({
   schedule,
   canEdit,
+  schedulingEnabled,
   busy,
   onPause,
   onActivate,
@@ -148,12 +178,24 @@ function ScheduleView({
 }: {
   schedule: ScoutScheduleOut;
   canEdit: boolean;
+  schedulingEnabled: boolean;
   busy: boolean;
   onPause: () => void;
   onActivate: () => void;
   onDelete: () => void;
 }) {
-  const meta = STATE_META[schedule.state] ?? { label: titleCase(schedule.state), intent: 'muted' as const };
+  const derived = STATE_META[schedule.state] ?? {
+    label: titleCase(schedule.state),
+    intent: 'muted' as const,
+  };
+  // Flipping the flag off does not cancel an already-enqueued tick, so the API
+  // keeps reporting `active` for up to a full interval. Rendering that state
+  // verbatim would show an "Active" badge and a concrete "Next run" date for a
+  // schedule guaranteed not to run, and the activation hint would assert the
+  // capability is enabled. While dark, report the capability instead of the row.
+  const meta = schedulingEnabled
+    ? derived
+    : { label: 'Unavailable', intent: 'muted' as const, hint: undefined };
 
   return (
     <div className="space-y-4 text-sm">
@@ -170,7 +212,9 @@ function ScheduleView({
         <div className="flex justify-between">
           <span>Next run</span>
           <span className="text-foreground">
-            {schedule.state === 'active' ? formatDateTime(schedule.next_run_at) : '—'}
+            {schedulingEnabled && schedule.state === 'active'
+              ? formatDateTime(schedule.next_run_at)
+              : '—'}
           </span>
         </div>
         <div className="flex justify-between">
@@ -181,7 +225,12 @@ function ScheduleView({
         </div>
       </div>
 
-      {canEdit ? (
+      {canEdit && !schedulingEnabled ? (
+        <>
+          <Separator />
+          <p className="text-xs text-muted-foreground">{DARK_NOTE}</p>
+        </>
+      ) : canEdit ? (
         <>
           <Separator />
           <div className="flex flex-wrap gap-2">

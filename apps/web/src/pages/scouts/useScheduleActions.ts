@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
 import type { ScheduleInterval } from '@/api/types';
@@ -60,4 +60,27 @@ export function useScheduleActions(workspaceId: string, requestId: string) {
 
 function msg(err: unknown): string | undefined {
   return err instanceof Error ? err.message : undefined;
+}
+
+/**
+ * Authoritative, *pre-request* capability gate for scout scheduling.
+ *
+ * The coarse runtime summary (`GET /system/capabilities`, shared app-wide and
+ * cached) reflects the raw server `scout_scheduling_enabled` flag — the same
+ * value the schedule *mutation* endpoints gate on. Schedule *reads* are not
+ * gated, so this never hides an existing schedule; it only decides whether the
+ * mutation affordances may be offered.
+ *
+ * `=== true` on purpose: loading, `undefined`, `null` and a missing key must all
+ * read as dark. The server 503 remains the enforcement boundary for a stale or
+ * hand-rolled client; this gate exists so the UI stops claiming a capability is
+ * available when the server will refuse it.
+ */
+export function useScheduleCapability() {
+  const query = useQuery({
+    queryKey: queryKeys.runtimeSummary,
+    queryFn: ({ signal }) => api.getRuntimeSummary(signal),
+    staleTime: 60_000,
+  });
+  return { isEnabled: query.data?.features?.scout_scheduling_enabled === true };
 }

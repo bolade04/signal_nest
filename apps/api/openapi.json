@@ -1264,13 +1264,23 @@
       "FeatureFlagsOut": {
         "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of server feature flags \u2014 never a customer-settable\ntoggle. They let an authenticated client know, before it issues any\nfeature-specific request, whether a dark-deployed capability is live, so it\ncan avoid probing an endpoint that would only answer ``503``. Secret-free:\nonly booleans, never backend topology or configuration values.",
         "properties": {
+          "connector_rss_enabled": {
+            "title": "Connector Rss Enabled",
+            "type": "boolean"
+          },
           "opportunity_feedback_enabled": {
             "title": "Opportunity Feedback Enabled",
+            "type": "boolean"
+          },
+          "scout_scheduling_enabled": {
+            "title": "Scout Scheduling Enabled",
             "type": "boolean"
           }
         },
         "required": [
-          "opportunity_feedback_enabled"
+          "opportunity_feedback_enabled",
+          "scout_scheduling_enabled",
+          "connector_rss_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"

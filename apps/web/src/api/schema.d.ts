@@ -1907,8 +1907,12 @@ export interface components {
          *     only booleans, never backend topology or configuration values.
          */
         FeatureFlagsOut: {
+            /** Connector Rss Enabled */
+            connector_rss_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
+            /** Scout Scheduling Enabled */
+            scout_scheduling_enabled: boolean;
         };
         /**
          * FeedbackCreate
