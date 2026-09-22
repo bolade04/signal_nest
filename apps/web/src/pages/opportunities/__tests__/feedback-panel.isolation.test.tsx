@@ -16,17 +16,41 @@ const P = (path: string) => `*${API_PREFIX}${path}`;
 const feedbackPath = (opp: string) => P(`/workspaces/${WS}/opportunities/${opp}/feedback`);
 const CAPABILITIES = P('/system/capabilities');
 
-// The panel only mounts its data hooks once the runtime-capability reflection
-// reports the feature enabled — mirror that precondition in every test here.
-function enableCapability(enabled = true) {
+// The panel only mounts its data hooks once the WORKSPACE-EFFECTIVE feedback
+// reflection reports the feature enabled — mirror that precondition in every
+// test here. (Not the raw-global runtime summary; see the note below.)
+function enableCapability(enabled = true, globalFlag = false) {
+  // 6U-1H: the panel's authoritative gate is the WORKSPACE-EFFECTIVE reflection,
+  // not the raw-global runtime summary. The summary is still stubbed alongside it
+  // so these tests keep exercising the real app shell, but it no longer decides
+  // the panel.
+  //
+  // The two are DELIBERATELY DECOUPLED, and `globalFlag` defaults to `false`.
+  // Driving both from one parameter would force `global_flag === effective`, and
+  // the fixture could then never represent the configuration this whole tranche
+  // exists for: an honored workspace override with the global flag off. Worse, it
+  // would be blind to the very regression it should catch — a panel that went back
+  // to reading `features.opportunity_feedback_enabled` would pass every row here.
+  // With the default below, every row runs in the override-enabled/flag-false
+  // configuration, which is both the canary shape and the one that kills that revert.
+  //
+  // All three booleans are supplied because `FeatureFlagsOut` requires all three;
+  // omitting two asserted a response shape the server cannot return.
   server.use(
+    http.get(P('/workspaces/:workspaceId/feedback-capability'), () =>
+      HttpResponse.json({ enabled }),
+    ),
     http.get(CAPABILITIES, () =>
       HttpResponse.json({
         app_mode: 'local',
         environment: 'development',
         is_local_mode: true,
         all_configured: true,
-        features: { opportunity_feedback_enabled: enabled },
+        features: {
+          opportunity_feedback_enabled: globalFlag,
+          scout_scheduling_enabled: false,
+          connector_rss_enabled: false,
+        },
       }),
     ),
   );
@@ -144,6 +168,7 @@ describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
   it('keeps a submission scoped to the acting market', async () => {
     enableCapability(true);
     let dallasCreated = false;
+    let londonGets = 0;
     server.use(
       http.get(feedbackPath(MARKETS.dallas.opp), () =>
         page(dallasCreated ? [feedbackRow(MARKETS.dallas, { reason_code: 'useful_insight' })] : []),
@@ -155,8 +180,14 @@ describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
         dallasCreated = true;
         return HttpResponse.json(feedbackRow(MARKETS.dallas), { status: 201 });
       }),
-      // London stays empty and must never receive a POST.
-      http.get(feedbackPath(MARKETS.london.opp), () => page([])),
+      // London stays empty and must never receive a POST. Its GET is counted:
+      // an unscoped invalidate refetches it, and because the payload is
+      // unchanged the rendered assertions below cannot tell the difference.
+      // The count is the only observable that distinguishes the two.
+      http.get(feedbackPath(MARKETS.london.opp), () => {
+        londonGets += 1;
+        return page([]);
+      }),
       http.post(feedbackPath(MARKETS.london.opp), () => {
         throw new Error('London feedback POST should never be called');
       }),
@@ -196,6 +227,12 @@ describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
 
     // Dallas records the entry; London remains untouched and empty.
     expect(await dallas.findByText('Useful insight')).toBeInTheDocument();
+
+    // The submit invalidates only its own record's history. A blanket
+    // invalidate over ['workspaces'] would refetch London too — invisible in
+    // the rendered output, visible here.
+    const londonGetsAfterSubmit = londonGets;
+    expect(londonGetsAfterSubmit).toBe(1);
     expect(london.getByText(/no feedback recorded yet/i)).toBeInTheDocument();
     expect(london.queryByText('Useful insight')).not.toBeInTheDocument();
   });
@@ -341,5 +378,49 @@ describe('OpportunityFeedbackPanel isolation (3C-D)', () => {
     await new Promise((r) => setTimeout(r, 0));
     // Exactly one append-only write was issued; unmounting mid-flight is inert.
     expect(postCount).toBe(1);
+  });
+
+  it('stays dark for every market when the raw global flag is ON but the workspace-effective answer is OFF', async () => {
+    // THE FOURTH QUADRANT: raw global = TRUE, workspace-effective = FALSE.
+    //
+    // Before this row, all 11 `enableCapability(...)` call sites across the two
+    // panel files passed `enabled = true`, and `opportunity_feedback_enabled:
+    // true` appeared in ZERO frontend tests. The suite only ever drove the two
+    // values in AGREEMENT, or in the canary direction (raw=false/effective=true).
+    // With them agreeing, a regression that reads the raw-global summary is
+    // invisible: both sources say the same thing, so reading the wrong one costs
+    // nothing observable.
+    //
+    // This row's detection power does NOT depend on `globalFlag`'s default,
+    // because it passes `true` explicitly. If the fixture helper were ever
+    // re-coupled (`globalFlag = enabled`), every other row here would silently
+    // lose its ability to catch a raw-global regression; this one would not.
+    // It does not DETECT re-coupling — an explicit argument still wins — it
+    // makes re-coupling harmless.
+    let capRequests = 0;
+    let historyRequests = 0;
+    enableCapability(false, true);
+    server.use(
+      http.get(P('/workspaces/:workspaceId/feedback-capability'), () => {
+        capRequests += 1;
+        return HttpResponse.json({ enabled: false });
+      }),
+      ...Object.values(MARKETS).map((m) =>
+        http.get(feedbackPath(m.opp), () => {
+          historyRequests += 1;
+          return page([]);
+        }),
+      ),
+    );
+
+    const screen = renderMarkets();
+    await waitFor(() => expect(capRequests).toBeGreaterThan(0));
+
+    for (const name of Object.keys(MARKETS)) {
+      const panel = within(screen, `panel-${name}`);
+      expect(panel.queryByRole('button', { name: /^useful$/i })).not.toBeInTheDocument();
+      expect(panel.queryByRole('heading', { name: /feedback/i })).not.toBeInTheDocument();
+    }
+    expect(historyRequests).toBe(0);
   });
 });

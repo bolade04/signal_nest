@@ -49,8 +49,14 @@ export const queryKeys = {
   opportunityIntelligence: (workspaceId: string, opportunityId: string) =>
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId, 'intelligence'] as const,
   // The feedback key embeds the intelligence record id (not just workspace +
-  // opportunity) so that feedback bound to one immutable record can never share
-  // a cache entry with — or be invalidated by — another record or opportunity.
+  // opportunity) so that feedback bound to one immutable record never SHARES a
+  // cache entry with another record or opportunity — that separation is what the
+  // isolation tests exercise.
+  //
+  // Narrower than it reads: the tests vary opportunity and record together, so
+  // they do not prove a record cannot be *invalidated by* a sibling record under
+  // the same opportunity. The key shape would prevent it; nothing currently
+  // demonstrates it.
   opportunityFeedback: (
     workspaceId: string,
     opportunityId: string,
@@ -65,6 +71,13 @@ export const queryKeys = {
       'feedback',
       intelligenceRecordId,
     ] as const,
+
+  // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
+  // `runtimeSummary`: that key carries the raw global flags, has no workspace in
+  // it, and is shared at a 60s staleTime — putting a per-workspace answer there
+  // would serve one workspace's value to another for the life of the entry.
+  feedbackCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'feedback-capability'] as const,
 
   auditLogs: (workspaceId: string) => ['workspaces', workspaceId, 'audit-logs'] as const,
 } as const;

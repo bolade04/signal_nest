@@ -6,8 +6,10 @@ customer's binary judgement about a scored opportunity, captured against the exa
 immutable intelligence record that judgement was made on:
 
 * **Capture-only** — persisting feedback never influences scoring, ranking, model
-  training, prompts, or any cross-workspace / cross-market signal. The whole
-  subsystem ships behind ``opportunity_feedback_enabled`` (default off).
+  training, prompts, or any cross-workspace / cross-market signal. Availability is
+  decided per workspace by the capability resolver, not by the raw global flag: an
+  honored workspace override outranks ``opportunity_feedback_enabled`` (default
+  off), so the subsystem can serve one workspace while the flag stays ``False``.
 * **Immutable / append-only** — feedback is never edited in place or overwritten.
   A change of mind is a *new* row; the history is the audit trail. (The inherited
   ``updated_at`` column is unused for mutation here — nothing ever updates a row.)

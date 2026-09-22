@@ -1,5 +1,6 @@
 import { apiRequest } from './client';
 import type {
+  FeedbackCapability,
   AudienceIn,
   BrandOut,
   BrandVoiceIn,
@@ -341,11 +342,21 @@ export const updateOpportunityStatus = (
   );
 
 // ---- Opportunity feedback (3C-C; dark-deployed human feedback loop) ----
-// Both the read and the write are feature-gated *and* editor-gated: while the
-// feature is dark every call answers 503 (capability_unavailable), and a
-// view-only member is 403. The append-only history is a bounded page.
+// The history read and the write are capability-gated *and* editor-gated: while
+// the capability resolves disabled FOR THAT WORKSPACE they answer 503
+// (capability_unavailable), and a view-only member is 403. The append-only
+// history is a bounded page. The capability reflection added below is the
+// exception: it is editor-gated but deliberately NOT capability-gated, and
+// answers 200 {enabled:false} while dark rather than 503 — gating the endpoint
+// that reports the decision on that same decision would make it useless.
 const feedbackPath = (workspaceId: string, opportunityId: string) =>
   `/workspaces/${workspaceId}/opportunities/${opportunityId}/feedback`;
+
+// Workspace-effective feedback availability, decided by the same resolver the
+// feedback gate enforces with. Workspace-scoped, not opportunity-scoped: the
+// resolver's decision domain is (capability, workspace).
+export const getFeedbackCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<FeedbackCapability>(`/workspaces/${workspaceId}/feedback-capability`, { signal });
 
 export const listOpportunityFeedback = (
   workspaceId: string,

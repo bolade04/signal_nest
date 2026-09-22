@@ -69,7 +69,20 @@ export function useCapabilityOverrides(organizationId: string | null, workspaceI
   });
 }
 
-/** Invalidate both tenant-scoped capability reads after a mutation. */
+/** Invalidate the tenant-scoped capability reads after a mutation.
+ *
+ * The third key is the customer-facing one. Without it an operator could enable
+ * feedback for a workspace and the customer surface would keep saying otherwise
+ * INDEFINITELY — not for 60s. `staleTime` is permission to refetch, not a
+ * trigger: an entry that already has a mounted observer is not refetched when it
+ * goes stale, and this app disables refetch-on-focus and sets no interval, so a
+ * mounted panel refreshes only on remount or reconnect. The operator view and
+ * the customer view disagreeing about the same workspace, in the same session,
+ * is precisely the class of untruth this capability work exists to remove.
+ *
+ * Scoped to the mutated workspace only: another workspace's answer did not
+ * change and must not be discarded.
+ */
 function useInvalidateCapabilityState(organizationId: string | null, workspaceId: string | null) {
   const queryClient = useQueryClient();
   return async () => {
@@ -80,6 +93,9 @@ function useInvalidateCapabilityState(organizationId: string | null, workspaceId
       }),
       queryClient.invalidateQueries({
         queryKey: queryKeys.capabilityOverrides(organizationId, workspaceId),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.feedbackCapability(workspaceId),
       }),
     ]);
   };

@@ -119,8 +119,11 @@ export interface paths {
          *     every capability resolves disabled via ``global_configuration`` — the surface is
          *     dark. A persisted enable on a ``workspace_enableable`` capability would show
          *     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
-         *     while ``global_flag`` stays ``False``: persisted intent the resolver alone honors,
-         *     with no live gate consuming it, so nothing is globally activated.
+         *     while ``global_flag`` stays ``False``. No GLOBAL flag is changed — but whether a live
+         *     gate consumes that decision depends on the capability: ``opportunity_feedback`` has one
+         *     (Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``
+         *     and ``connector_rss`` do not, so their enforcement still reads the raw flag. For those
+         *     two this surface can report ``effective_enabled=true`` while the endpoints still 503.
          */
         get: operations["internal_capability_effective_api_v1_internal_system_capabilities_effective_get"];
         put?: never;
@@ -154,7 +157,9 @@ export interface paths {
          *     bounded by the typed query params (out-of-range → 422) and re-clamped inside the
          *     service, so the route can never over-fetch. With no real override row by default the
          *     page is empty; a persisted override appears here as recorded *intent* only — listing
-         *     it activates nothing and flips no flag, so every capability stays dark.
+         *     it activates nothing and flips no flag. Note that the intent it lists may already be
+         *     live: an honored ``opportunity_feedback`` enable override is consumed by that
+         *     capability's live gate, so reading this page is not evidence that nothing is serving.
          */
         get: operations["internal_capability_overrides_api_v1_internal_system_capabilities_overrides_get"];
         /**
@@ -176,10 +181,14 @@ export interface paths {
          *
          *     Attribution is server-side: ``actor_user_id`` is taken from the authenticated
          *     operator, never the request body, so no override is recorded anonymously or under a
-         *     spoofed identity. Recording intent is **not activation** — the write flips no global
-         *     flag and wires the resolver into no live gate, so an enabled override is honored by
-         *     the resolver alone while its bound global flag stays ``False`` and every capability
-         *     remains dark. The response's ``created``/``changed`` let the caller distinguish a real
+         *     spoofed identity. The write flips no global flag — but **it is not inert**, and what it
+         *     activates depends on the capability. For ``opportunity_feedback`` an ``enabled=True``
+         *     override is consumed by a live gate (Phase 4B-A) and the customer feedback endpoints
+         *     **begin serving for that workspace immediately**, while the global flag stays ``False``;
+         *     clearing the override is what reverses it. For ``scout_scheduling`` enforcement reads the
+         *     raw global flag, so an override changes only what the operator surface reports.
+         *     ``connector_rss`` is not ``workspace_enableable`` and an ``enabled=True`` is refused
+         *     422. The response's ``created``/``changed`` let the caller distinguish a real
          *     write from an idempotent re-PUT (which writes no new audit).
          */
         put: operations["internal_capability_override_set_api_v1_internal_system_capabilities_overrides_put"];
@@ -209,8 +218,9 @@ export interface paths {
          *     none exists the call is an idempotent success (``changed=False``) that writes no row and
          *     emits no audit. Either way ``enabled``/``override_id`` come back ``None`` (no override
          *     remains), the response's ``changed`` lets the caller distinguish a real removal from an
-         *     absent-clear no-op, and no global flag is touched — clearing activates nothing and every
-         *     capability stays dark.
+         *     absent-clear no-op, and no global flag is touched. Clearing activates nothing — but it
+         *     can DEACTIVATE: for ``opportunity_feedback`` removing an honored enable override returns
+         *     that workspace's customer endpoints to 503, which is the server-side canary rollback.
          */
         delete: operations["internal_capability_override_clear_api_v1_internal_system_capabilities_overrides_delete"];
         options?: never;
@@ -862,6 +872,37 @@ export interface paths {
         post?: never;
         /** Delete Competitors */
         delete: operations["delete_competitors_api_v1_workspaces__workspace_id__competitors__item_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/feedback-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether opportunity feedback is available for this workspace
+         * @description Customer-facing, workspace-effective feedback availability (P6-UI-005).
+         *
+         *     Scoped to the workspace, not an opportunity: the resolver's decision domain is
+         *     ``(capability, workspace)``, so an opportunity segment would advertise a dimension
+         *     the decision cannot express.
+         *
+         *     Editor-gated to match the feedback routes' usable audience. A viewer cannot submit
+         *     or read feedback, so reflecting its availability to them would disclose tenant
+         *     governance state for a feature they could not use.
+         *
+         *     Advisory only. ``GET``/``POST`` feedback re-decide independently and answer 503 when
+         *     unavailable; that remains the enforcement boundary, and this route weakens nothing.
+         */
+        get: operations["read_feedback_capability_api_v1_workspaces__workspace_id__feedback_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1900,11 +1941,17 @@ export interface components {
          * FeatureFlagsOut
          * @description Coarse, read-only product-capability booleans.
          *
-         *     These are *reflections* of server feature flags — never a customer-settable
-         *     toggle. They let an authenticated client know, before it issues any
-         *     feature-specific request, whether a dark-deployed capability is live, so it
-         *     can avoid probing an endpoint that would only answer ``503``. Secret-free:
-         *     only booleans, never backend topology or configuration values.
+         *     These are *reflections* of raw server feature flags — never a customer-settable
+         *     toggle. Secret-free: only booleans, never backend topology or configuration
+         *     values.
+         *
+         *     They answer "is this flag on?", NOT "is this capability available to my
+         *     workspace?". For ``scout_scheduling`` and ``connector_rss`` those coincide,
+         *     because enforcement reads the raw flag. For ``opportunity_feedback`` they do
+         *     not: an honored workspace override outranks the flag, so this field can read
+         *     ``false`` while the feedback endpoints serve normally. The customer-facing,
+         *     workspace-effective answer lives on its own route,
+         *     ``GET /workspaces/{workspace_id}/feedback-capability``.
          */
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
@@ -1913,6 +1960,19 @@ export interface components {
             opportunity_feedback_enabled: boolean;
             /** Scout Scheduling Enabled */
             scout_scheduling_enabled: boolean;
+        };
+        /**
+         * FeedbackCapabilityOut
+         * @description Customer-visible opportunity-feedback availability for one workspace.
+         *
+         *     Exactly one field. The operator endpoint's ``decided_by`` / ``global_flag`` /
+         *     ``has_override`` / ``override_value`` are governance metadata: they would tell a
+         *     customer the platform-wide rollout posture and that an operator intervened on their
+         *     tenant. A customer needs only whether the feature is available to them.
+         */
+        FeedbackCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * FeedbackCreate
@@ -5136,6 +5196,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_feedback_capability_api_v1_workspaces__workspace_id__feedback_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackCapabilityOut"];
+                };
             };
             /** @description Validation Error */
             422: {

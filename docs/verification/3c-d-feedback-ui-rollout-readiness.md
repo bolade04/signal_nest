@@ -18,7 +18,9 @@ approach and are retained only for history; the hardened behaviour is authoritat
   design used the feedback history GET as the capability probe, so while the flag
   was off an editor's panel mounted, fired one GET, received `503`, then hid. The
   requirement is that a disabled feature issues **zero** feedback requests (no GET
-  probe, no POST, no background prefetch). **Fix:** a small **additive, read-only**
+  probe, no POST, no background prefetch). **Fix (as designed at 3C-D; SUPERSEDED BY 6U-1H —
+  the UI no longer reads this endpoint, see the corrected transport section
+  below):** a small **additive, read-only**
   capability reflection — `features.opportunity_feedback_enabled` on the existing
   authenticated `GET /system/capabilities` (`RuntimeSummaryOut`), sourced from the
   existing `Settings.opportunity_feedback_enabled`. The UI reads this **before**
@@ -37,7 +39,10 @@ approach and are retained only for history; the hardened behaviour is authoritat
   response landing after a switch (never appears in the newly-bound view), and an
   unmount while a submission is pending (exactly one POST, no throw).
 
-**New/updated tests (exact files):**
+**New/updated tests (exact files) — AS OF 3C-D; superseded by 6U-1H.** The
+per-role zero-request-while-dark rows and the defence-in-depth 503 row listed
+below were **removed or relocated** in 6U-1H (see the traceability table). This
+list records what 3C-D added; it is not the current contents of those files.
 
 - `apps/web/src/pages/opportunities/__tests__/feedback-panel.test.tsx` — per-role
   zero-request-while-dark tests (owner/admin/marketer/viewer, asserting `GET==0 &&
@@ -68,9 +73,11 @@ Batch 5 not begun.
 
 **Deliberate additive exception (acceptance hardening):** to close Gap A the
 backend `RuntimeSummaryOut` gains a read-only `features.opportunity_feedback_enabled`
-boolean and `openapi.json` / `schema.d.ts` are regenerated additively. This is the
-only backend / contract change and it adds no endpoint, migration, authorization
-model, or customer-settable toggle.
+boolean and `openapi.json` / `schema.d.ts` are regenerated additively. Within 3C-D
+this is the only backend / contract change and it adds no endpoint, migration,
+authorization model, or customer-settable toggle. *(Historical, 3C-D scope. Phase
+6U-1H later did add an endpoint — `GET /workspaces/{workspace_id}/feedback-capability`
+— which is what the customer panel now reads.)*
 
 ## Feature-gate transport decision (_superseded_ — original server-gated "Option A")
 
@@ -84,18 +91,33 @@ treated `503`/`403` as "render nothing." This meant a disabled deployment still
 issued **one** feedback GET per editor mount — the acceptance gap now closed by the
 additive capability reflection.
 
-## Feature-gate transport decision (authoritative — capability-reflected)
+> **Superseded in part by Phase 6U-1H (`P6-UI-005`).** This document records the
+> 3C-D readiness review as executed. Where it describes the customer feedback gate
+> as reading the raw-global runtime summary, that was accurate at 3C-D and is no
+> longer the shipped behaviour — 6U-1H repointed the gate at a dedicated
+> workspace-effective reflection. Passages below are corrected in place where they
+> would otherwise misdescribe current behaviour; statements retained for history
+> are marked as such.
 
-- The UI reads `features.opportunity_feedback_enabled` from the already-fetched,
-  cached `GET /system/capabilities` (`useFeedbackCapability`, shared query key with
-  Settings — no extra network cost) **before** issuing any feedback request.
+## Feature-gate transport decision (corrected — see 6U-1H note above)
+
+- **At 3C-D (historical):** the UI read `features.opportunity_feedback_enabled`
+  from the cached `GET /system/capabilities`, sharing a query key with Settings.
+- **Current (6U-1H):** `useFeedbackCapability(workspaceId)` reads
+  `GET /workspaces/{workspace_id}/feedback-capability` — resolver-backed and
+  workspace-effective, the same decision the backend feedback gate enforces — on
+  its own workspace-scoped query key, **before** issuing any feedback request. It
+  returns a tri-state (`loading` / `enabled` / `disabled`) and treats anything but
+  a literal `true` as dark.
 - While dark the history query is **disabled** (`enabled: capability.isEnabled`), so
   **zero** feedback GET/POST is ever sent; the panel renders nothing.
 - The backend `503 capability_unavailable` on the feedback routes is retained as
   **defence-in-depth** only, for a stale client whose cached capability is ahead of
   a mid-session rollback. The client still treats `503`/`403` as "render nothing".
-- Enabling remains a single backend flag flip; the shipped client needs **no
-  rebuild** (the capability reflection updates within its 60s staleness window).
+- Enabling requires **no client rebuild**. The reflection is re-read on its next
+  observer mount — staleness permits a refetch, it does not trigger one. Under
+  Phase 4B, first enablement is a per-workspace override with the global flag left
+  `False`, not a single global flag flip.
 
 ## Files changed
 
@@ -121,8 +143,9 @@ additive capability reflection.
   `RuntimeSummaryOut.features`, sourced from `Settings.opportunity_feedback_enabled`.
 - `apps/api/openapi.json`, `apps/web/src/api/schema.d.ts` — regenerated additively.
 - `apps/web/src/pages/opportunities/useFeedback.ts` — `useFeedbackCapability`
-  (pre-request gate off the shared runtime-summary query); `useFeedbackHistory`
-  gains an `enabled` flag so it never fires while dark.
+  (at 3C-D a pre-request gate off the shared runtime-summary query; **since 6U-1H**
+  a workspace-scoped gate off the effective reflection); `useFeedbackHistory` gains
+  an `enabled` flag so it never fires while dark.
 - `apps/web/src/pages/opportunities/FeedbackPanel.tsx` — consults the capability
   gate first and returns `null` while dark before any feedback request.
 
@@ -153,9 +176,10 @@ additive capability reflection.
 
 | Requirement | Evidence |
 | --- | --- |
-| Feature-gated (dark by default) | Pre-request capability gate `useFeedbackCapability`; while dark the history query is disabled and panel returns `null`. Tests: per-role "issues no feedback request while dark" (`GET==0 && POST==0`). |
-| Disabled → zero feedback network activity | `enabled: capability.isEnabled` on the history query; role gate precedes all hooks. Tests: owner/admin/marketer/viewer all assert `GET==0 && POST==0`. |
-| Defence-in-depth on stale client | Capability enabled but backend GET `503` → panel hides, fetched at most once, no retry. Test: "surfaces the panel only after the capability reflects enabled (defence-in-depth 503)". |
+| Feature-gated (dark by default) | Pre-request capability gate `useFeedbackCapability`; while dark the history query is disabled and panel returns `null`. Tests (6U-1H): `feedback-effective-capability.test.tsx` F1 (dark, zero requests). Since 6U-1H the client observes the *outcome* of precedence — that is what P6-UI-005 delivers — but never the deciding *rule*: `decided_by` is withheld from `FeedbackCapabilityOut`. The rule itself is covered by backend `test_b4_*` / `test_b6_*`. The 3C-D per-role "issues no feedback request while dark" rows were **removed** in 6U-1H — they asserted inside an unresolved-auth window and held even with the gate enabled. |
+| Disabled → zero feedback network activity | `enabled: capability.isEnabled` on the history query; role gate precedes all hooks. Tests (6U-1H): F1, F8 (reflection error), F9 (non-boolean) each assert zero feedback GETs after the role precondition and the capability reflection have both settled. Probe settlement is a necessary condition only — the guarantee is the mutation check recorded in that file's header, not the wait. |
+| Defence-in-depth on stale client | Capability enabled but backend GET `503` → panel hides. Test (6U-1H): F16, which asserts the probe *was* issued (`GET==1`) and the heading is absent — an exact count, since "hidden" alone is satisfied by the history query never firing. |
+| Forbidden read hides the panel | A mid-session role downgrade can 403 the history read while the client's cached membership still permits it. Test (6U-1H): F17 — `GET==1`, no heading, no retry affordance. |
 | Role-aware (editors only; viewer hidden) | `EDITOR_ROLES` gate in `OpportunityFeedbackPanel`. Tests: viewer hidden; editor sees controls. |
 | Binary verdict + optional structured reason; no free text | `feedbackReasons.ts` closed vocabulary; dialog has toggle buttons only. Test: "offers only polarity-correct reasons". |
 | Polarity-filtered reasons | `reasonsForVerdict(isUseful)`. Test: positive verdict shows positive reasons only, and vice-versa. |
@@ -169,20 +193,28 @@ additive capability reflection.
 
 - **Frontend lint:** `npm run lint` — clean (eslint `--max-warnings 0`).
 - **Frontend type-check:** `npm run type-check` — clean (`tsc -b --noEmit`).
-- **Frontend tests:** `npm run test` — 15 files, 76 tests, all pass. The default
-  `/system/capabilities` handler reports the feature dark, so prior suites keep the
-  panel hidden; hardened suites enable the capability reflection explicitly.
-- **Backend lint/tests:** `.venv/bin/ruff check app` clean; `.venv/bin/pytest -q`
-  644 passed, 8 skipped, including the extended `/system/capabilities` coverage.
+- **Frontend tests (3C-D run; counts are historical):** `npm run test` — 15 files,
+  76 tests, all pass. At 3C-D the default `/system/capabilities` handler reported
+  the feature dark, which is what kept prior suites' panels hidden.
+  **Superseded by 6U-1H:** the panel no longer reads that endpoint, and the
+  default dark state now comes from the `feedback-capability` handler in
+  `apps/web/src/test/handlers.ts`. Current counts are not restated here — consult
+  the suite rather than this record.
+- **Backend lint/tests (3C-D run; counts are historical):** `.venv/bin/ruff check
+  app` clean; `.venv/bin/pytest -q` 644 passed, 8 skipped, including the extended
+  `/system/capabilities` coverage. 6U-1H adds a reflection suite; current counts
+  are not restated here.
 - **No migration:** single Alembic head `4945b98229e6` (add_opportunity_feedback)
   unchanged; `.venv/bin/alembic check` reports no new upgrade operations.
 - **Additive contract change only:** `scripts/gen-types.sh` regenerates
   `openapi.json` / `schema.d.ts` with an additive-only diff (`FeatureFlagsOut` and
   the `RuntimeSummaryOut.features` field); re-running the script is idempotent (no
   further drift).
-- **Backend change is minimal and additive:** limited to
+- **Backend change is minimal and additive** *(historical, 3C-D scope)*: limited to
   `apps/api/app/system/routes.py` (the read-only `features` reflection) and its
   tests; no persistence, scoring, worker, scheduling, or connector code touched.
+  6U-1H later added the workspace-effective reflection route in
+  `apps/api/app/feedback/routes.py`.
 - **Flags remain dark:** `opportunity_feedback_enabled`, `scout_scheduling_enabled`,
   and `connector_rss_enabled` all stay `False`.
 
@@ -202,7 +234,12 @@ until the external scheduling blocker is resolved and exact-head CI can be green
 
 The feature is implementation-complete and **dark**. Production rollout remains a
 separate, explicitly-approved decision (phase-3C plan §15). Enabling is a single
-API flag flip (`OPPORTUNITY_FEEDBACK_ENABLED=true`) with an immediate,
-data-preserving kill-switch — see
+API flag flip (`OPPORTUNITY_FEEDBACK_ENABLED=true`) — superseded by the Phase 4B
+per-workspace override — with a data-preserving kill-switch. The supersession
+applies to the kill-switch as well as to enabling: turning the flag off stops new
+panel mounts **only for workspaces without an honored enable override**. For an
+override-enabled workspace the flip changes nothing, because the resolver returns
+the override before the global rule is reached — clear the override instead.
+Neither route retracts already-open pages — see
 [../operations/opportunity-feedback-rollout.md](../operations/opportunity-feedback-rollout.md).
 No rollout is executed by this batch.
