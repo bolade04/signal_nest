@@ -52,7 +52,7 @@ export function AuthLayout({
           </ul>
         </div>
         <p className="text-xs text-slate-500">
-          Phase 1 &amp; 2 · Scouting workflow to explainable opportunities.
+          Scouting workflow to explainable opportunities.
         </p>
       </div>
 

@@ -261,7 +261,7 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
                     ))}
                   </ul>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Creative generation from these angles arrives in Phase 3.
+                    AI-suggested starting points, not finished creative.
                   </p>
                 </div>
               ) : null}
