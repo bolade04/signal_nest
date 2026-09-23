@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditLog
-from app.auth.dependencies import TenantContext, require_role
+from app.auth.dependencies import TenantContext, require_exact_roles
 from app.core.enums import Role
 from app.db.session import get_db
 
@@ -17,7 +17,9 @@ def list_audit_logs(
     workspace_id: str,
     limit: int = Query(default=100, le=500),
     db: Session = Depends(get_db),
-    ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.COMPLIANCE_REVIEWER)),
+    ctx: TenantContext = Depends(
+        require_exact_roles(Role.OWNER, Role.ADMIN, Role.COMPLIANCE_REVIEWER)
+    ),
 ) -> list[dict]:
     rows = db.execute(
         select(AuditLog)

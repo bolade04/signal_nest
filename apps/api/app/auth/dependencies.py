@@ -99,6 +99,42 @@ def get_tenant_context(
     )
 
 
+def require_exact_roles(*allowed: Role):
+    """Dependency factory admitting only the roles explicitly named.
+
+    Separation-of-duties counterpart to :func:`require_role`. ``require_role`` is a
+    *rank floor*: it admits every role at or above the lowest rank among ``allowed``,
+    so naming a low-ranked role silently admits every higher one. That is correct for
+    a privilege hierarchy and wrong for a duty boundary, where a role must be granted
+    access by name rather than inherit it by seniority.
+
+    This factory performs exact membership only: ``ctx.role in allowed``. Rank plays
+    no part -- no inheritance, no widening, no floor. ``require_role`` is deliberately
+    left unchanged; the two answer different authorization questions and both are in
+    use.
+
+    Raises:
+        ValueError: at construction time if no role is supplied. An empty allowed set
+            is a programming error, and failing when the dependency is built keeps a
+            route that would admit nobody from ever being mounted. This mirrors
+            ``require_role``, whose ``min()`` over an empty iterable raises the same
+            error at construction.
+    """
+    if not allowed:
+        raise ValueError("require_exact_roles() requires at least one role.")
+    # frozenset normalises duplicates: repeating a role is a no-op, never a widening.
+    permitted = frozenset(allowed)
+
+    def _checker(ctx: TenantContext = Depends(get_tenant_context)) -> TenantContext:
+        if ctx.role not in permitted:
+            raise PermissionDeniedError(
+                f"Role '{ctx.role.value}' is not permitted for this action."
+            )
+        return ctx
+
+    return _checker
+
+
 def require_role(*allowed: Role):
     """Dependency factory enforcing a minimum set of roles for a workspace request."""
     min_rank = min(_ROLE_RANK[r] for r in allowed)
