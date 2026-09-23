@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pause, Play, Radar, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
@@ -20,21 +21,60 @@ import { JobsPanel } from './scouts/JobsPanel';
 import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
 
+// Scout statuses where the backend is still working, so this view has to keep
+// re-reading: the run endpoint returns `queued` immediately and a durable worker
+// settles it later, with nothing pushing that change to the client. Mirrors
+// `_IN_FLIGHT_SCOUT_STATUSES` in apps/api/app/jobs/handlers.py. Deliberately an
+// explicit allowlist rather than "anything that is not completed": the status
+// column is an unconstrained string, so an unrecognised value would otherwise
+// poll forever. `draft` and `paused` are settled states, not in-flight ones.
+const IN_FLIGHT = new Set(['queued', 'running']);
+
+// The outcomes a run settles into. Arriving at one of these FROM an in-flight
+// status is the moment this scout's opportunities have actually changed.
+const TERMINAL = new Set(['completed', 'failed']);
+
 function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestId: string }) {
   const navigate = useNavigate();
   const { locations } = useWorkspace();
   const actions = useScoutActions(workspaceId);
+  const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: queryKeys.scoutRequest(workspaceId, requestId),
     queryFn: ({ signal }) => api.getScoutRequest(workspaceId, requestId, signal),
+    // Poll only while the run is in flight, matching the JobsPanel cadence.
+    refetchInterval: (q) => (IN_FLIGHT.has(q.state.data?.status ?? '') ? 2000 : false),
   });
 
-  const oppFilters: OpportunityFilters = { scout_request_id: requestId, limit: 100 };
+  const oppFilters: OpportunityFilters = useMemo(
+    () => ({ scout_request_id: requestId, limit: 100 }),
+    [requestId],
+  );
   const oppQuery = useQuery({
     queryKey: queryKeys.opportunities(workspaceId, oppFilters),
     queryFn: ({ signal }) => api.listOpportunities(workspaceId, oppFilters, signal),
   });
+
+  // The opportunity grid has to be refreshed on the in-flight → terminal
+  // TRANSITION, not merely because the status is terminal: a request that is
+  // already completed when the page opens would otherwise invalidate on every
+  // render. The run mutation invalidates opportunities at QUEUE time, when the
+  // worker has produced nothing yet, so without this the header would read
+  // "Completed" above the pre-run grid.
+  const status = query.data?.status ?? null;
+  const previousStatus = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousStatus.current;
+    previousStatus.current = status;
+    if (previous === null || status === null) return;
+    if (!IN_FLIGHT.has(previous) || !TERMINAL.has(status)) return;
+    // Minimum scope: this workspace and this scout request only.
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.opportunities(workspaceId, oppFilters),
+      exact: true,
+    });
+  }, [status, queryClient, workspaceId, oppFilters]);
 
   if (query.isLoading) return <LoadingRows rows={5} />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;

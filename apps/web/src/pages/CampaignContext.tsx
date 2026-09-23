@@ -125,7 +125,7 @@ const KINDS: KindConfig[] = [
     kind: 'brand-voice',
     tab: 'Brand voice',
     singular: 'voice profile',
-    blurb: 'How your brand sounds. Guides reasoning tone and future creative generation (Phase 3).',
+    blurb: 'How your brand sounds. Saved to your workspace — scouting does not use it yet.',
     title: (r) => arr(r.tone).join(', ') || 'Brand voice',
     subtitle: (r) => arr(r.personality).join(', ') || null,
     fields: [
@@ -206,7 +206,7 @@ const KINDS: KindConfig[] = [
     kind: 'channel-preferences',
     tab: 'Channels',
     singular: 'channel preference',
-    blurb: 'Marketing channels you use. Referenced by recommended actions and Phase 3 authoring.',
+    blurb: 'Marketing channels you use. Saved to your workspace — scouting does not use them yet.',
     title: (r) => str(r.channel) ?? 'Channel',
     subtitle: (r) => (r.enabled === false ? 'Disabled' : 'Enabled'),
     fields: [

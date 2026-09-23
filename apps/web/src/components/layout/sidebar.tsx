@@ -66,9 +66,9 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </ul>
       <div className="rounded-md border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">Phase 1 &amp; 2</p>
+        <p className="font-medium text-foreground">Current scope</p>
         <p className="mt-0.5">
-          Scouting to explainable opportunities. Creative generation arrives in Phase 3.
+          Scouting to explainable, scored opportunities.
         </p>
       </div>
     </nav>
