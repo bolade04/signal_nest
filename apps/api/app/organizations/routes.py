@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import (
+    OrganizationContext,
+    get_current_user,
+    require_exact_organization_roles,
+)
+from app.core.enums import Role
 from app.core.errors import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
@@ -58,22 +63,20 @@ def list_workspaces(
     status_code=201,
 )
 def create_workspace(
-    organization_id: str,
     body: WorkspaceCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    ctx: OrganizationContext = Depends(require_exact_organization_roles(Role.OWNER, Role.ADMIN)),
 ) -> Workspace:
-    _assert_member(db, user.id, organization_id)
-    if not db.get(Organization, organization_id):
-        raise NotFoundError("Organization not found.")
+    # Membership, organization existence and the exact OWNER/ADMIN check are done by the
+    # dependency; the organization written to is the one it authorized.
     slug = re.sub(r"[^a-z0-9]+", "-", body.name.lower()).strip("-") or "workspace"
     if db.scalar(
         select(Workspace).where(
-            Workspace.organization_id == organization_id, Workspace.slug == slug
+            Workspace.organization_id == ctx.organization.id, Workspace.slug == slug
         )
     ):
         slug = f"{slug}-{len(slug)}"
-    ws = Workspace(organization_id=organization_id, name=body.name, slug=slug)
+    ws = Workspace(organization_id=ctx.organization.id, name=body.name, slug=slug)
     db.add(ws)
     db.flush()
     return ws
