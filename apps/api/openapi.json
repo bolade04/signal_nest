@@ -2123,6 +2123,239 @@
         "title": "IntelligenceVersionInfo",
         "type": "object"
       },
+      "InvitationCreate": {
+        "additionalProperties": false,
+        "description": "Invite an email address into the organization in the path with a non-OWNER role.\n\nThe organization and the inviter come from the authorized request, never the body.\nUnknown fields are rejected.",
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "marketer",
+              "reviewer",
+              "compliance_reviewer",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ],
+        "title": "InvitationCreate",
+        "type": "object"
+      },
+      "InvitationCreatedOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "invited_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invited By User Id"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "marketer",
+              "reviewer",
+              "compliance_reviewer",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "token": {
+            "description": "The one-time invitation token. It is returned only in this response: the server keeps only its hash, so it can never be shown again or recovered. Share it with the invitee; accepting the invitation spends it.",
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "expires_at",
+          "created_at",
+          "invited_by_user_id",
+          "token"
+        ],
+        "title": "InvitationCreatedOut",
+        "type": "object"
+      },
+      "InvitationOut": {
+        "description": "An invitation as its organization's administrators see it. Never carries the token.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "invited_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invited By User Id"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "marketer",
+              "reviewer",
+              "compliance_reviewer",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "expires_at",
+          "created_at",
+          "invited_by_user_id"
+        ],
+        "title": "InvitationOut",
+        "type": "object"
+      },
+      "InvitationPreviewOut": {
+        "description": "What an invitation offers, shown before accepting it. Reading it spends nothing.",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "organization_name": {
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "marketer",
+              "reviewer",
+              "compliance_reviewer",
+              "viewer"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "organization_name",
+          "email",
+          "role",
+          "expires_at"
+        ],
+        "title": "InvitationPreviewOut",
+        "type": "object"
+      },
+      "InvitationRegisterRequest": {
+        "additionalProperties": false,
+        "description": "Create an account through an invitation.\n\nThe account's email is the invitation's; the caller supplies only the token and the\naccount's name and password, bounded as in :class:`RegisterRequest`. No organization\nis created. Unknown fields are rejected.",
+        "properties": {
+          "full_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Full Name",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "full_name",
+          "password"
+        ],
+        "title": "InvitationRegisterRequest",
+        "type": "object"
+      },
+      "InvitationTokenRequest": {
+        "additionalProperties": false,
+        "description": "An invitation token, carried in the body and never in a URL.\n\nOnly the token: the organization, role and email are the invitation's own and are\nnever taken from the caller. Unknown fields are rejected.",
+        "properties": {
+          "token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "InvitationTokenRequest",
+        "type": "object"
+      },
       "JobDiagnosticsOut": {
         "description": "Operator queue snapshot: status counts + a page of recent jobs.",
         "properties": {
@@ -3181,6 +3414,19 @@
         "title": "LoginRequest",
         "type": "object"
       },
+      "MemberRoleUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "MemberRoleUpdate",
+        "type": "object"
+      },
       "MembershipOut": {
         "properties": {
           "organization_id": {
@@ -3975,6 +4221,40 @@
         "title": "OpportunityStatusUpdate",
         "type": "object"
       },
+      "OrganizationMemberOut": {
+        "description": "One member of an organization: identity and organization-wide role.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "full_name",
+          "role",
+          "created_at"
+        ],
+        "title": "OrganizationMemberOut",
+        "type": "object"
+      },
       "OrganizationOut": {
         "properties": {
           "id": {
@@ -4258,6 +4538,18 @@
         ],
         "title": "RegisterRequest",
         "type": "object"
+      },
+      "Role": {
+        "enum": [
+          "owner",
+          "admin",
+          "marketer",
+          "reviewer",
+          "viewer",
+          "compliance_reviewer"
+        ],
+        "title": "Role",
+        "type": "string"
       },
       "RunHistoryOut": {
         "properties": {
@@ -5595,6 +5887,147 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/auth/invitations/accept": {
+      "post": {
+        "operationId": "accept_invitation_api_v1_auth_invitations_accept_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/invitations/preview": {
+      "post": {
+        "operationId": "preview_invitation_api_v1_auth_invitations_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/invitations/register": {
+      "post": {
+        "operationId": "register_with_invitation_api_v1_auth_invitations_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register With Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "operationId": "login_api_v1_auth_login_post",
@@ -7066,6 +7499,393 @@
           }
         },
         "summary": "List Organizations",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/invitations": {
+      "get": {
+        "operationId": "list_invitations_api_v1_organizations__organization_id__invitations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InvitationOut"
+                  },
+                  "title": "Response List Invitations Api V1 Organizations  Organization Id  Invitations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Invitations",
+        "tags": [
+          "organizations"
+        ]
+      },
+      "post": {
+        "operationId": "create_invitation_api_v1_organizations__organization_id__invitations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreatedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Invitation",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/invitations/{invitation_id}": {
+      "delete": {
+        "operationId": "revoke_invitation_api_v1_organizations__organization_id__invitations__invitation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "title": "Invitation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invitation",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/members": {
+      "get": {
+        "operationId": "list_members_api_v1_organizations__organization_id__members_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrganizationMemberOut"
+                  },
+                  "title": "Response List Members Api V1 Organizations  Organization Id  Members Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Members",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/members/{user_id}": {
+      "delete": {
+        "operationId": "remove_member_api_v1_organizations__organization_id__members__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member",
+        "tags": [
+          "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/members/{user_id}/role": {
+      "put": {
+        "operationId": "change_member_role_api_v1_organizations__organization_id__members__user_id__role_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRoleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemberOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Member Role",
         "tags": [
           "organizations"
         ]
