@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     # tracebacks or pydantic ValidationError output (config errors are logged).
     secret_key: str = Field(default="dev-insecure-change-me", repr=False)
     access_token_expire_minutes: int = 60 * 12
+    #: Lifetime of an organization invitation, in hours. The expiry is computed from
+    #: and compared against the database clock. Must be >= 1.
+    invitation_expire_hours: int = 72
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     # --- Database ------------------------------------------------------------
@@ -420,6 +423,11 @@ class Settings(BaseSettings):
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")
+
+        # A non-positive lifetime would mint invitations that are already expired
+        # when created; reject it at construction.
+        if self.invitation_expire_hours < 1:
+            errors.append("invitation_expire_hours must be >= 1")
 
         # Distributed-tracing bounds. Sampling must be a probability; timeouts and
         # queue bounds must be positive so tracing can never stall or busy-block the
