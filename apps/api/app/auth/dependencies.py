@@ -38,6 +38,15 @@ class TenantContext:
     role: Role
 
 
+@dataclass
+class OrganizationContext:
+    """Resolved context for an organization-scoped request that has no workspace."""
+
+    user: User
+    organization: Organization
+    role: Role
+
+
 def get_current_user(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
@@ -99,6 +108,35 @@ def get_tenant_context(
     )
 
 
+def get_organization_context(
+    organization_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> OrganizationContext:
+    """Resolve and authorize an organization-scoped request.
+
+    Organization-level counterpart of :func:`get_tenant_context`, for
+    organization-administration routes that have no workspace. ``organization_id`` is
+    the route's path parameter; it only selects which membership to look up.
+
+    The order of checks is fixed: authentication (``get_current_user``, 401), then
+    membership via the shared ``_membership`` (403, "You are not a member of this
+    organization."), then organization existence (404). Membership is checked before
+    existence, so a caller with no membership gets the same 403 for an organization
+    that exists and one that does not. The role is read from the persisted membership
+    row, never from client input.
+    """
+    membership = _membership(db, user.id, organization_id)
+    organization = db.get(Organization, organization_id)
+    if not organization:
+        raise NotFoundError("Organization not found.")
+    return OrganizationContext(
+        user=user,
+        organization=organization,
+        role=Role(membership.role),
+    )
+
+
 def require_exact_roles(*allowed: Role):
     """Dependency factory admitting only the roles explicitly named.
 
@@ -126,6 +164,40 @@ def require_exact_roles(*allowed: Role):
     permitted = frozenset(allowed)
 
     def _checker(ctx: TenantContext = Depends(get_tenant_context)) -> TenantContext:
+        if ctx.role not in permitted:
+            raise PermissionDeniedError(
+                f"Role '{ctx.role.value}' is not permitted for this action."
+            )
+        return ctx
+
+    return _checker
+
+
+def require_exact_organization_roles(*allowed: Role):
+    """Dependency factory admitting only the roles explicitly named, per organization.
+
+    Organization-scoped counterpart of :func:`require_exact_roles`, for
+    organization-administration routes that have no workspace. The context comes from
+    :func:`get_organization_context` rather than ``get_tenant_context``, so the route
+    takes no ``workspace_id``.
+
+    The decision is the same exact membership: ``ctx.role in allowed``. Rank plays no
+    part -- no inheritance, no widening, no floor. An admitted context is returned
+    unchanged.
+
+    Raises:
+        ValueError: at construction time if no role is supplied, for the same reason
+            as ``require_exact_roles``: a route that would admit nobody is never
+            mounted.
+    """
+    if not allowed:
+        raise ValueError("require_exact_organization_roles() requires at least one role.")
+    # frozenset normalises duplicates: repeating a role is a no-op, never a widening.
+    permitted = frozenset(allowed)
+
+    def _checker(
+        ctx: OrganizationContext = Depends(get_organization_context),
+    ) -> OrganizationContext:
         if ctx.role not in permitted:
             raise PermissionDeniedError(
                 f"Role '{ctx.role.value}' is not permitted for this action."
