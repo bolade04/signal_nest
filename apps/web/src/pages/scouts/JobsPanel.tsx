@@ -8,7 +8,9 @@ import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states'
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/components/ui/toast';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatRelative } from '@/lib/utils';
+import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 // Statuses where the job is still in flight and the view should keep polling.
 const ACTIVE = new Set([
@@ -32,6 +34,9 @@ export function JobsPanel({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { organizationId } = useWorkspace();
+  // Cancelling is an editor action (EDITORS gate); the job list stays readable.
+  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const filters = { scout_request_id: scoutRequestId, limit: 10 };
 
   const query = useQuery({
@@ -94,7 +99,7 @@ export function JobsPanel({
                     {job.last_error_code ? ` · ${job.last_error_code}` : ''}
                   </p>
                 </div>
-                {CANCELLABLE.has(job.status) ? (
+                {canEdit && CANCELLABLE.has(job.status) ? (
                   <Button
                     variant="ghost"
                     size="sm"

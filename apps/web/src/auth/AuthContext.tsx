@@ -10,7 +10,15 @@ import {
 } from 'react';
 import { setAuthToken, setUnauthorizedHandler } from '@/api/client';
 import * as api from '@/api/endpoints';
-import type { LoginRequest, MembershipOut, RegisterRequest, SessionOut, UserOut } from '@/api/types';
+import type {
+  InvitationRegisterRequest,
+  InvitationTokenRequest,
+  LoginRequest,
+  MembershipOut,
+  RegisterRequest,
+  SessionOut,
+  UserOut,
+} from '@/api/types';
 
 const TOKEN_KEY = 'signalnest-token';
 
@@ -21,6 +29,12 @@ interface AuthContextValue {
   token: string | null;
   login: (body: LoginRequest) => Promise<void>;
   register: (body: RegisterRequest) => Promise<void>;
+  /** Create an account through an invitation and sign in as it (P6-AUTH-1). */
+  registerWithInvitation: (body: InvitationRegisterRequest) => Promise<void>;
+  /** Accept an invitation as the signed-in user; the returned session replaces this one. */
+  acceptInvitation: (body: InvitationTokenRequest) => Promise<void>;
+  /** Re-read the signed-in session (user + memberships) from the server. */
+  refreshSession: () => Promise<void>;
   logout: () => void;
   /** Path the user was trying to reach before being bounced to sign-in. */
   intendedPath: string | null;
@@ -109,6 +123,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [applySession],
   );
 
+  // Both invitation outcomes answer with a full SessionOut, so they go through the
+  // same applySession as login: one place persists the session token.
+  const registerWithInvitation = useCallback(
+    async (body: InvitationRegisterRequest) => {
+      const session = await api.registerWithInvitation(body);
+      applySession(session);
+    },
+    [applySession],
+  );
+
+  const acceptInvitation = useCallback(
+    async (body: InvitationTokenRequest) => {
+      const session = await api.acceptInvitation(body);
+      applySession(session);
+    },
+    [applySession],
+  );
+
+  const refreshSession = useCallback(async () => {
+    const current = localStorage.getItem(TOKEN_KEY);
+    if (!current) return;
+    const session = await api.getSession();
+    // A sign-out or a different sign-in while this was in flight wins; applying
+    // the stale answer would silently sign the previous user back in.
+    if (localStorage.getItem(TOKEN_KEY) !== current) return;
+    applySession(session);
+  }, [applySession]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
@@ -117,11 +159,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token,
       login,
       register,
+      registerWithInvitation,
+      acceptInvitation,
+      refreshSession,
       logout,
       intendedPath,
       setIntendedPath,
     }),
-    [status, user, memberships, token, login, register, logout, intendedPath, setIntendedPath],
+    [
+      status,
+      user,
+      memberships,
+      token,
+      login,
+      register,
+      registerWithInvitation,
+      acceptInvitation,
+      refreshSession,
+      logout,
+      intendedPath,
+      setIntendedPath,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

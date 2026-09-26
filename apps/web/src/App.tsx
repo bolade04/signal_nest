@@ -4,6 +4,7 @@ import { ProtectedRoute } from '@/auth/ProtectedRoute';
 import { RequireOperator } from '@/auth/RequireOperator';
 import { SignInPage } from '@/pages/auth/SignIn';
 import { RegisterPage } from '@/pages/auth/Register';
+import { InvitePage } from '@/pages/invite/InvitePage';
 import { OverviewPage } from '@/pages/Overview';
 import { OnboardingPage } from '@/pages/Onboarding';
 import { CampaignContextPage } from '@/pages/CampaignContext';
@@ -21,6 +22,8 @@ export function App() {
     <Routes>
       <Route path="/sign-in" element={<SignInPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      {/* Public, and usable while signed in: an invitee may not have an account yet. */}
+      <Route path="/invite" element={<InvitePage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route index element={<OverviewPage />} />

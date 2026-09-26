@@ -13,6 +13,22 @@ export type WorkspaceOut = S['WorkspaceOut'];
 export type WorkspaceCreate = S['WorkspaceCreate'];
 export type BrandOut = S['BrandOut'];
 
+// 6B-3A organization members and invitations (P6-AUTH-1). A role is
+// organization-wide; there is no per-workspace membership.
+export type Role = S['Role'];
+export type OrganizationMemberOut = S['OrganizationMemberOut'];
+export type MemberRoleUpdate = S['MemberRoleUpdate'];
+export type InvitationCreate = S['InvitationCreate'];
+/** The only response that carries the raw invitation token; it is never returned again. */
+export type InvitationCreatedOut = S['InvitationCreatedOut'];
+/** A pending invitation as administrators list it. Never carries the token. */
+export type InvitationOut = S['InvitationOut'];
+/** The roles an invitation may carry: every role except OWNER. */
+export type InvitationRole = InvitationCreate['role'];
+export type InvitationPreviewOut = S['InvitationPreviewOut'];
+export type InvitationTokenRequest = S['InvitationTokenRequest'];
+export type InvitationRegisterRequest = S['InvitationRegisterRequest'];
+
 export type BusinessProfileBase = S['BusinessProfileBase'];
 export type BusinessProfileOut = S['BusinessProfileOut'];
 

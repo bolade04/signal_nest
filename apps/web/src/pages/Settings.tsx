@@ -31,7 +31,9 @@ import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/auth/AuthContext';
 import { useTheme, type Theme } from '@/app/theme';
 import { roleLabels } from '@/lib/labels';
+import { canCreateWorkspace, useActorRole } from '@/lib/roles';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { OrganizationMembers } from './settings/OrganizationMembers';
 
 const wsSchema = z.object({ name: z.string().min(1, 'Workspace name is required') });
 
@@ -45,6 +47,11 @@ export function SettingsPage() {
   const [open, setOpen] = useState(false);
 
   const isOperator = user?.is_operator ?? false;
+  // POST /organizations/{id}/workspaces admits exactly owner and admin.
+  const canCreate = canCreateWorkspace(useActorRole(organizationId).role);
+  // Drop an open create dialog the moment the actor may no longer create (an
+  // organization switch, a refreshed role), so it cannot reappear on its own later.
+  if (open && !canCreate) setOpen(false);
 
   const runtime = useQuery({
     queryKey: queryKeys.runtimeSummary,
@@ -146,37 +153,39 @@ export function SettingsPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>Workspaces</CardTitle>
-            <Dialog open={open} onOpenChange={setOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" variant="outline">
-                  <Plus className="size-4" /> New
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-sm">
-                <DialogHeader>
-                  <DialogTitle>Create workspace</DialogTitle>
-                </DialogHeader>
-                <form
-                  id="create-ws"
-                  onSubmit={form.handleSubmit((v) => createWs.mutate(v.name))}
-                  className="space-y-3"
-                >
-                  <Field label="Workspace name" error={form.formState.errors.name?.message} required>
-                    {({ id, describedBy, invalid }) => (
-                      <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} {...form.register('name')} />
-                    )}
-                  </Field>
-                </form>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setOpen(false)}>
-                    Cancel
+            {canCreate ? (
+              <Dialog open={open} onOpenChange={setOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline">
+                    <Plus className="size-4" /> New
                   </Button>
-                  <Button type="submit" form="create-ws" disabled={createWs.isPending}>
-                    Create
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                </DialogTrigger>
+                <DialogContent className="max-w-sm">
+                  <DialogHeader>
+                    <DialogTitle>Create workspace</DialogTitle>
+                  </DialogHeader>
+                  <form
+                    id="create-ws"
+                    onSubmit={form.handleSubmit((v) => createWs.mutate(v.name))}
+                    className="space-y-3"
+                  >
+                    <Field label="Workspace name" error={form.formState.errors.name?.message} required>
+                      {({ id, describedBy, invalid }) => (
+                        <Input id={id} aria-describedby={describedBy} aria-invalid={invalid} {...form.register('name')} />
+                      )}
+                    </Field>
+                  </form>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" form="create-ws" disabled={createWs.isPending}>
+                      Create
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            ) : null}
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-muted-foreground">
@@ -254,6 +263,18 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Only once the active organization is resolved from the loaded list: a stale
+          persisted id is never queried. Keyed so a switch remounts the whole area. */}
+      {activeOrganization ? (
+        <div className="mt-6">
+          <OrganizationMembers
+            key={activeOrganization.id}
+            organizationId={activeOrganization.id}
+            organizationName={activeOrganization.name}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { scoutStatusLabels } from '@/lib/labels';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -30,11 +31,18 @@ import { useScoutActions } from './scouts/useScoutActions';
 const ANY = '__any__';
 
 function ScoutsInner({ workspaceId }: { workspaceId: string }) {
-  const { locationId, locations } = useWorkspace();
+  const { locationId, locations, organizationId } = useWorkspace();
+  // Create / run / pause / resume are editor actions (EDITORS gate). Everyone
+  // else keeps the list; an unresolved role is denied until it resolves.
+  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(ANY);
   const actions = useScoutActions(workspaceId);
+
+  // Drop a latched open intent when the role gate closes, so the create dialog
+  // cannot spring back open by itself if the gate later reopens.
+  if (!canEdit && dialogOpen) setDialogOpen(false);
 
   const query = useQuery({
     queryKey: queryKeys.scoutRequests(workspaceId),
@@ -65,9 +73,11 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
         title="Scout requests"
         description="Create, run, pause and review market scouts. Each request stays isolated to its market and campaign."
         actions={
-          <Button onClick={() => setDialogOpen(true)}>
-            <Plus className="size-4" /> New scout request
-          </Button>
+          canEdit ? (
+            <Button onClick={() => setDialogOpen(true)}>
+              <Plus className="size-4" /> New scout request
+            </Button>
+          ) : undefined
         }
       />
 
@@ -118,24 +128,26 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
                       {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
                     </p>
                   </div>
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => actions.run.mutate(r.id)}
-                      disabled={actions.run.isPending && actions.run.variables === r.id}
-                    >
-                      <Radar className="size-4" /> Run now
-                    </Button>
-                    {isPaused ? (
-                      <Button size="sm" variant="outline" onClick={() => actions.resume.mutate(r.id)}>
-                        <Play className="size-4" /> Resume
+                  {canEdit ? (
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => actions.run.mutate(r.id)}
+                        disabled={actions.run.isPending && actions.run.variables === r.id}
+                      >
+                        <Radar className="size-4" /> Run now
                       </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" onClick={() => actions.pause.mutate(r.id)} disabled={!canPause}>
-                        <Pause className="size-4" /> Pause
-                      </Button>
-                    )}
-                  </div>
+                      {isPaused ? (
+                        <Button size="sm" variant="outline" onClick={() => actions.resume.mutate(r.id)}>
+                          <Play className="size-4" /> Resume
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={() => actions.pause.mutate(r.id)} disabled={!canPause}>
+                          <Pause className="size-4" /> Pause
+                        </Button>
+                      )}
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             );
@@ -148,17 +160,23 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
           description={
             query.data?.length
               ? 'Adjust your search or status filter.'
-              : 'Create your first scout request to start collecting market signals and generating opportunities.'
+              : canEdit
+                ? 'Create your first scout request to start collecting market signals and generating opportunities.'
+                : 'No scout requests have been created in this workspace yet.'
           }
           action={
-            <Button onClick={() => setDialogOpen(true)}>
-              <Plus className="size-4" /> New scout request
-            </Button>
+            canEdit ? (
+              <Button onClick={() => setDialogOpen(true)}>
+                <Plus className="size-4" /> New scout request
+              </Button>
+            ) : undefined
           }
         />
       )}
 
-      <ScoutRequestDialog workspaceId={workspaceId} open={dialogOpen} onOpenChange={setDialogOpen} />
+      {canEdit ? (
+        <ScoutRequestDialog workspaceId={workspaceId} open={dialogOpen} onOpenChange={setDialogOpen} />
+      ) : null}
     </div>
   );
 }
