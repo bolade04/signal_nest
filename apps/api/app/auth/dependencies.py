@@ -60,6 +60,13 @@ def get_current_user(
     user = db.get(User, payload["sub"])
     if not user or not user.is_active:
         raise AuthError("User not found or inactive.")
+    # The token must carry the account's current credential epoch. A token issued
+    # before epochs existed has no claim and counts as epoch 0, so the first password
+    # reset invalidates it too. Only a genuine int is accepted: bool (an int subclass),
+    # str and float claims are rejected rather than coerced.
+    claim = payload.get("auth_epoch", 0)
+    if type(claim) is not int or claim != user.auth_epoch:
+        raise AuthError("Invalid or expired token.")
     return user
 
 

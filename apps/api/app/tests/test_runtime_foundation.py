@@ -85,6 +85,11 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
         vector_backend="pgvector",
         llm_provider="openai",
         llm_api_key="sk-test",
+        # Account mail must really be delivered in production (6B-4A): inert test values.
+        mail_backend="ses",
+        public_web_origin="https://app.example.com",
+        mail_from_address="no-reply@example.com",
+        mail_ses_region="us-east-1",
     )
     base.update(overrides)
     return base

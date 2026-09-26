@@ -414,6 +414,7 @@ class TestInvitedRegistration:
             "email": "fresh@example.com",
             "full_name": "Fresh Person",
             "is_operator": False,
+            "email_verified": False,  # FD-5: an invitation never verifies an address
         }
         assert body["memberships"] == [
             {"organization_id": ORG_A, "organization_name": "Acme A", "role": "marketer"}

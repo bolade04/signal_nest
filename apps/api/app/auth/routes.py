@@ -1,27 +1,33 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
-from app.auth import service
+from app.auth import account_tokens, mail_dispatch, service
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import (
+    EmailVerificationConfirmRequest,
+    EmailVerificationRequest,
     InvitationPreviewOut,
     InvitationRegisterRequest,
     InvitationTokenRequest,
     LoginRequest,
     MembershipOut,
+    PasswordResetConfirmRequest,
+    PasswordResetRequest,
     RegisterRequest,
     SessionOut,
     UserOut,
 )
+from app.core.logging import get_logger, log_event
 from app.db.session import get_db
 from app.organizations import invitations as invitation_service
 from app.organizations.models import Organization, OrganizationMember, User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = get_logger(__name__)
 
 
 def _session(db: Session, user: User) -> SessionOut:
@@ -40,6 +46,7 @@ def _session(db: Session, user: User) -> SessionOut:
             email=user.email,
             full_name=user.full_name,
             is_operator=user.is_operator,
+            email_verified=user.email_verified_at is not None,
         ),
         memberships=memberships,
     )
@@ -112,3 +119,95 @@ def accept_invitation(
     db.commit()
     # Every membership the user now holds, the accepted one included.
     return _session(db, user)
+
+
+# --- Password reset and email verification ------------------------------------------------
+# The token travels only in the request body, never in a path or query string. Each route
+# commits before it schedules mail and before it answers, so a message is only sent for a
+# committed token and a 204 only reports a committed change. Security events carry no
+# email address, token, digest or link.
+
+
+@router.post("/password-reset/request", status_code=204)
+def request_password_reset(
+    body: PasswordResetRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Email a password-reset link if the address belongs to an active account.
+
+    Always 204 with an empty body, whatever the address: unknown, inactive, cooling down
+    and capped accounts are indistinguishable from one that was sent mail.
+    """
+    issued = account_tokens.request_password_reset(db, email=body.email)
+    db.commit()
+    if issued is None:
+        log_event(logger, "security.password_reset.requested", outcome="suppressed")
+    else:
+        background_tasks.add_task(mail_dispatch.send_password_reset_email, issued)
+        log_event(
+            logger, "security.password_reset.requested", outcome="issued", user_id=issued.user_id
+        )
+    return Response(status_code=204)
+
+
+@router.post("/password-reset/confirm", status_code=204)
+def confirm_password_reset(
+    body: PasswordResetConfirmRequest, db: Session = Depends(get_db)
+) -> Response:
+    """Set a new password with a reset token.
+
+    Spends the token and invalidates every session already issued for the account; no
+    new session is created. A token that is unknown, expired, used, revoked or superseded,
+    or whose account is inactive, is a 404.
+    """
+    account_tokens.confirm_password_reset(db, token=body.token, new_password=body.new_password)
+    db.commit()
+    log_event(logger, "security.password_reset.completed", outcome="success")
+    return Response(status_code=204)
+
+
+@router.post("/email-verification/request", status_code=204)
+def request_email_verification(
+    body: EmailVerificationRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Email a verification link to the signed-in account's stored address.
+
+    A 409 if the address is already verified; otherwise 204, whether or not a cooldown
+    or daily cap held the message back.
+    """
+    # The body is an empty object: the address is the account's own, never the caller's.
+    issued = account_tokens.request_email_verification(db, user=user)
+    db.commit()
+    if issued is None:
+        log_event(logger, "security.email_verification.requested", outcome="suppressed")
+    else:
+        background_tasks.add_task(mail_dispatch.send_email_verification_email, issued)
+        log_event(
+            logger,
+            "security.email_verification.requested",
+            outcome="issued",
+            user_id=issued.user_id,
+        )
+    return Response(status_code=204)
+
+
+@router.post("/email-verification/confirm", status_code=204)
+def confirm_email_verification(
+    body: EmailVerificationConfirmRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Mark the signed-in account's stored address verified with a verification token.
+
+    The token must be this account's (403 otherwise, and nothing is spent); an unknown,
+    expired, used or superseded token, or one for an address the account no longer has,
+    is a 404.
+    """
+    account_tokens.confirm_email_verification(db, user=user, token=body.token)
+    db.commit()
+    log_event(logger, "security.email_verification.completed", outcome="success", user_id=user.id)
+    return Response(status_code=204)

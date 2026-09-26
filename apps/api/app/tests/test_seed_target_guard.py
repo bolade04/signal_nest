@@ -61,6 +61,10 @@ _PRODUCTION_LIKE_REQUIRED: dict[str, Any] = {
     "secret_key": "x" * 64,
     "llm_provider": "openai",
     "llm_api_key": "k" * 20,
+    "mail_backend": "ses",
+    "public_web_origin": "https://app.example.com",
+    "mail_from_address": "no-reply@example.com",
+    "mail_ses_region": "us-east-1",
 }
 
 

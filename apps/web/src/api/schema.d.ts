@@ -4,6 +4,53 @@
  */
 
 export interface paths {
+    "/api/v1/auth/email-verification/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Email Verification
+         * @description Mark the signed-in account's stored address verified with a verification token.
+         *
+         *     The token must be this account's (403 otherwise, and nothing is spent); an unknown,
+         *     expired, used or superseded token, or one for an address the account no longer has,
+         *     is a 404.
+         */
+        post: operations["confirm_email_verification_api_v1_auth_email_verification_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/email-verification/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Email Verification
+         * @description Email a verification link to the signed-in account's stored address.
+         *
+         *     A 409 if the address is already verified; otherwise 204, whether or not a cooldown
+         *     or daily cap held the message back.
+         */
+        post: operations["request_email_verification_api_v1_auth_email_verification_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/invitations/accept": {
         parameters: {
             query?: never;
@@ -83,6 +130,53 @@ export interface paths {
         get: operations["me_api_v1_auth_me_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password-reset/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Password Reset
+         * @description Set a new password with a reset token.
+         *
+         *     Spends the token and invalidates every session already issued for the account; no
+         *     new session is created. A token that is unknown, expired, used, revoked or superseded,
+         *     or whose account is inactive, is a 404.
+         */
+        post: operations["confirm_password_reset_api_v1_auth_password_reset_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password-reset/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Password Reset
+         * @description Email a password-reset link if the address belongs to an active account.
+         *
+         *     Always 204 with an empty body, whatever the address: unknown, inactive, cooling down
+         *     and capped accounts are indistinguishable from one that was sent mail.
+         */
+        post: operations["request_password_reset_api_v1_auth_password_reset_request_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2075,6 +2169,25 @@ export interface components {
          */
         DecisionSource: "safety_ceiling" | "workspace_override" | "global_configuration" | "secure_default";
         /**
+         * EmailVerificationConfirmRequest
+         * @description A verification token, carried in the body and never in a URL.
+         *
+         *     Only the token: the account is the signed-in caller's, and the token must be that
+         *     account's. Unknown fields are rejected.
+         */
+        EmailVerificationConfirmRequest: {
+            /** Token */
+            token: string;
+        };
+        /**
+         * EmailVerificationRequest
+         * @description Ask for a verification email for the signed-in account's stored address.
+         *
+         *     Deliberately empty: the address is the account's own and is never taken from the
+         *     caller. Unknown fields are rejected.
+         */
+        EmailVerificationRequest: Record<string, never>;
+        /**
          * FeatureFlagsOut
          * @description Coarse, read-only product-capability booleans.
          *
@@ -3170,6 +3283,33 @@ export interface components {
             /** Slug */
             slug: string;
         };
+        /**
+         * PasswordResetConfirmRequest
+         * @description Set a new password with a reset token carried in the body, never in a URL.
+         *
+         *     The new password is bounded as in :class:`RegisterRequest`. Unknown fields are
+         *     rejected.
+         */
+        PasswordResetConfirmRequest: {
+            /** New Password */
+            new_password: string;
+            /** Token */
+            token: string;
+        };
+        /**
+         * PasswordResetRequest
+         * @description Ask for a password-reset email.
+         *
+         *     The answer is the same for every address, known or not, so it reveals nothing about
+         *     which accounts exist. Unknown fields are rejected.
+         */
+        PasswordResetRequest: {
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+        };
         /** ProbeDiagnosticOut */
         ProbeDiagnosticOut: {
             /** Detail */
@@ -3693,6 +3833,11 @@ export interface components {
              * Format: email
              */
             email: string;
+            /**
+             * Email Verified
+             * @default false
+             */
+            email_verified: boolean;
             /** Full Name */
             full_name: string;
             /** Id */
@@ -3808,6 +3953,72 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    confirm_email_verification_api_v1_auth_email_verification_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailVerificationConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_email_verification_api_v1_auth_email_verification_request_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     accept_invitation_api_v1_auth_invitations_accept_post: {
         parameters: {
             query?: never;
@@ -3961,6 +4172,68 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_password_reset_api_v1_auth_password_reset_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_password_reset_api_v1_auth_password_reset_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
