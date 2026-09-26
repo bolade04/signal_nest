@@ -369,7 +369,414 @@ function scopeInvalid(url: URL): boolean {
   );
 }
 
+// ---- Organizations, members, invitations and sessions (6B-3A authority) ----
+// A stateful model of the backend's organization administration so a test can
+// drive the real customer flow end to end: an administrator creates an
+// invitation, the one-time token comes back once, the invitee previews and
+// registers or accepts, and the SessionOut that comes back carries the new
+// membership. Sessions are derived from the bearer token, so a role or a second
+// organization is configured in the model, never by stubbing /auth/me.
+//
+// Every rule below mirrors a backend line (cited), because a model that is
+// kinder than the server would let the UI pass for the wrong reason. The model
+// is module state: vitest isolates modules per test file, and files that drive
+// it call `orgModel.reset()` in their beforeEach. Files that never touch it
+// see the default below, which serves exactly what the fixed handlers served
+// before 6B-3B.
+
+export type ModelRole = 'owner' | 'admin' | 'marketer' | 'reviewer' | 'viewer' | 'compliance_reviewer';
+type InvitableRole = Exclude<ModelRole, 'owner'>;
+
+// apps/api/app/auth/dependencies.py:23-30.
+const ROLE_RANK: Record<ModelRole, number> = {
+  viewer: 0,
+  reviewer: 1,
+  compliance_reviewer: 1,
+  marketer: 2,
+  admin: 3,
+  owner: 4,
+};
+const ORG_ADMINS = new Set<ModelRole>(['owner', 'admin']);
+const INVITABLE = new Set<string>(['admin', 'marketer', 'reviewer', 'compliance_reviewer', 'viewer']);
+const INVITATION_TTL_MS = 72 * 3600 * 1000;
+
+interface ModelUser {
+  id: string;
+  email: string;
+  full_name: string;
+  password: string | null;
+  is_operator: boolean;
+}
+interface ModelOrg {
+  id: string;
+  name: string;
+  slug: string;
+}
+interface ModelWorkspace {
+  id: string;
+  organization_id: string;
+  name: string;
+  slug: string;
+  onboarding_completed: boolean;
+  created_at: string;
+}
+interface ModelMembership {
+  organization_id: string;
+  user_id: string;
+  role: ModelRole;
+  created_at: string;
+  /** 'invitation' only when created by the register/accept handlers below. */
+  source: 'fixture' | 'invitation';
+}
+interface ModelInvitation {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: InvitableRole;
+  token: string;
+  created_at: string;
+  expires_at: string;
+  invited_by_user_id: string;
+  revoked_at: string | null;
+  accepted_at: string | null;
+}
+export interface ModelRequest {
+  method: string;
+  path: string;
+  search: string;
+  body: unknown;
+  userId: string | null;
+}
+
+const model = {
+  users: new Map<string, ModelUser>(),
+  orgs: new Map<string, ModelOrg>(),
+  workspaces: new Map<string, ModelWorkspace[]>(),
+  memberships: [] as ModelMembership[],
+  invitations: [] as ModelInvitation[],
+  accessTokens: new Map<string, string>(),
+  requests: [] as ModelRequest[],
+  violations: [] as string[],
+  nextInvitationToken: null as string | null,
+  seq: 0,
+};
+
+function nextId(prefix: string): string {
+  model.seq += 1;
+  return `${prefix}-${model.seq}`;
+}
+
+function modelError(status: number, code: string, message: string) {
+  return HttpResponse.json({ error: { code, message, request_id: 'req-model' } }, { status });
+}
+
+function invitationState(inv: ModelInvitation): 'pending' | 'accepted' | 'revoked' | 'expired' {
+  // apps/api/app/organizations/invitations.py:124-133 (revoked, then accepted, then expired).
+  if (inv.revoked_at) return 'revoked';
+  if (inv.accepted_at) return 'accepted';
+  if (Date.parse(inv.expires_at) <= Date.now()) return 'expired';
+  return 'pending';
+}
+
+const STATE_CONFLICT = {
+  accepted: ['invitation_already_used', 'This invitation has already been used.'],
+  revoked: ['invitation_revoked', 'This invitation has been revoked.'],
+  expired: ['invitation_expired', 'This invitation has expired.'],
+} as const;
+
+function membershipOf(orgId: string, userId: string): ModelMembership | undefined {
+  return model.memberships.find((m) => m.organization_id === orgId && m.user_id === userId);
+}
+
+function userOf(request: Request): ModelUser | null {
+  const header = request.headers.get('authorization') ?? '';
+  const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
+  const id = model.accessTokens.get(token);
+  return id ? (model.users.get(id) ?? null) : null;
+}
+
+function issueAccessToken(user: ModelUser): string {
+  // The seeded demo session keeps the fixed token every existing test seeds.
+  if (user.id === demoUser.id) return 'test-token';
+  const token = `access-${user.id}-${nextId('t')}`;
+  model.accessTokens.set(token, user.id);
+  return token;
+}
+
+function sessionFor(user: ModelUser, accessToken: string) {
+  return {
+    access_token: accessToken,
+    token_type: 'bearer',
+    user: { id: user.id, email: user.email, full_name: user.full_name, is_operator: user.is_operator },
+    memberships: model.memberships
+      .filter((m) => m.user_id === user.id)
+      .map((m) => ({
+        organization_id: m.organization_id,
+        organization_name: model.orgs.get(m.organization_id)?.name ?? '',
+        role: m.role,
+      })),
+  };
+}
+
+function liveTokens(): string[] {
+  return model.invitations.map((i) => i.token);
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  try {
+    const body = (await request.clone().json()) as unknown;
+    return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Log a model request and flag any invitation token that reached the URL. */
+async function record(request: Request): Promise<{ user: ModelUser | null; body: Record<string, unknown> }> {
+  const url = new URL(request.url);
+  const body = request.method === 'GET' || request.method === 'DELETE' ? {} : await readJson(request);
+  const user = userOf(request);
+  model.requests.push({ method: request.method, path: url.pathname, search: url.search, body, userId: user?.id ?? null });
+  for (const token of liveTokens()) {
+    if (request.url.includes(token) || request.url.includes(encodeURIComponent(token))) {
+      model.violations.push(`invitation token in request URL: ${request.method} ${url.pathname}${url.search}`);
+    }
+  }
+  return { user, body };
+}
+
+/** Pydantic `extra="forbid"`: the exact key set, else a 422 and a recorded violation. */
+function exactKeys(route: string, body: Record<string, unknown>, keys: string[]) {
+  const got = Object.keys(body).sort();
+  const want = [...keys].sort();
+  if (got.length === want.length && got.every((k, i) => k === want[i])) return null;
+  model.violations.push(`${route} body keys ${JSON.stringify(got)} != ${JSON.stringify(want)}`);
+  return modelError(422, 'validation_error', 'Request validation failed');
+}
+
+function tokenOnlyInBody(route: string, request: Request) {
+  const url = new URL(request.url);
+  if (url.search) model.violations.push(`${route} carried a query string: ${url.search}`);
+}
+
+/** apps/api/app/organizations/invitations.py:287-303 — unknown → 404, not pending → its 409. */
+function resolveToken(token: unknown): ModelInvitation | Response {
+  const inv = typeof token === 'string' ? model.invitations.find((i) => i.token === token) : undefined;
+  if (!inv) return modelError(404, 'invitation_invalid', 'This invitation link is invalid.');
+  const state = invitationState(inv);
+  if (state !== 'pending') {
+    const [code, message] = STATE_CONFLICT[state];
+    return modelError(409, code, message);
+  }
+  return inv;
+}
+
+/** invitations.py:306-332 — the inviter must still be able to issue this invitation. */
+function inviterStillAuthorized(inv: ModelInvitation): boolean {
+  const m = membershipOf(inv.organization_id, inv.invited_by_user_id);
+  return Boolean(m && ORG_ADMINS.has(m.role) && ROLE_RANK[inv.role] <= ROLE_RANK[m.role]);
+}
+
+/** OrganizationContext: a non-member is refused before any role check (403). */
+function orgActor(orgId: string, user: ModelUser | null): ModelMembership | Response {
+  if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+  if (!model.orgs.has(orgId)) return modelError(404, 'not_found', 'Organization not found.');
+  const m = membershipOf(orgId, user.id);
+  if (!m) return modelError(403, 'permission_denied', 'You are not a member of this organization.');
+  return m;
+}
+
+function requireOrgAdmin(actor: ModelMembership): Response | null {
+  return ORG_ADMINS.has(actor.role)
+    ? null
+    : modelError(403, 'permission_denied', `Role '${actor.role}' is not permitted for this action.`);
+}
+
+function ownerCount(orgId: string): number {
+  return model.memberships.filter((m) => m.organization_id === orgId && m.role === 'owner').length;
+}
+
+function memberRow(m: ModelMembership) {
+  const u = model.users.get(m.user_id)!;
+  return { user_id: u.id, email: u.email, full_name: u.full_name, role: m.role, created_at: m.created_at };
+}
+
+function invitationOut(inv: ModelInvitation) {
+  return {
+    id: inv.id,
+    email: inv.email,
+    role: inv.role,
+    expires_at: inv.expires_at,
+    created_at: inv.created_at,
+    invited_by_user_id: inv.invited_by_user_id,
+  };
+}
+
+/** The organization that owns a workspace the model knows, else null. */
+function workspaceOrganization(workspaceId: string): string | null {
+  for (const [orgId, list] of model.workspaces) {
+    if (list.some((w) => w.id === workspaceId)) return orgId;
+  }
+  return null;
+}
+
+/**
+ * get_tenant_context (apps/api/app/auth/dependencies.py:92-106): a workspace-scoped
+ * route answers only members of the workspace's organization, else 403. The fixed
+ * fixture handlers below know nothing of sessions, so this gate runs first and then
+ * falls through to them. A workspace the model does not know keeps their behaviour.
+ */
+async function tenantGate({ request, params }: { request: Request; params: Record<string, unknown> }) {
+  const { user } = await record(request);
+  const orgId = workspaceOrganization(String(params.ws));
+  if (!orgId || !user) return undefined;
+  if (!membershipOf(orgId, user.id)) {
+    return modelError(403, 'permission_denied', 'You are not a member of this organization.');
+  }
+  return undefined;
+}
+
+/** Test-facing control surface for the model. */
+export const orgModel = {
+  reset(): void {
+    model.users.clear();
+    model.orgs.clear();
+    model.workspaces.clear();
+    model.memberships = [];
+    model.invitations = [];
+    model.accessTokens.clear();
+    model.requests = [];
+    model.violations = [];
+    model.nextInvitationToken = null;
+    model.seq = 0;
+    model.users.set(demoUser.id, { ...demoUser, password: null });
+    model.accessTokens.set('test-token', demoUser.id);
+    model.orgs.set(org.id, org);
+    model.workspaces.set(org.id, [workspace]);
+    model.memberships.push({
+      organization_id: org.id,
+      user_id: demoUser.id,
+      role: 'owner',
+      created_at: '2026-01-01T00:00:00Z',
+      source: 'fixture',
+    });
+  },
+  addUser(user: { id: string; email: string; full_name: string; password?: string; is_operator?: boolean }): void {
+    model.users.set(user.id, {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      password: user.password ?? 'correct horse battery',
+      is_operator: user.is_operator ?? false,
+    });
+  },
+  addOrganization(o: ModelOrg, workspaces: Omit<ModelWorkspace, 'organization_id'>[] = []): void {
+    model.orgs.set(o.id, o);
+    model.workspaces.set(
+      o.id,
+      workspaces.map((w) => ({ ...w, organization_id: o.id })),
+    );
+  },
+  /**
+   * A PRE-INVITATION fixture membership (the actor's role, a roster). Refuses to
+   * create or change a membership for any email that holds an invitation to that
+   * organization: an invitee's membership may only come from the register/accept
+   * handlers (§46: no test inserts the second membership directly).
+   */
+  setMembership(orgId: string, userId: string, role: ModelRole, createdAt = '2026-01-02T00:00:00Z'): void {
+    const user = model.users.get(userId);
+    if (!user) throw new Error(`orgModel.setMembership: unknown user ${userId}`);
+    if (model.invitations.some((i) => i.organization_id === orgId && i.email === user.email)) {
+      throw new Error(`orgModel.setMembership: ${user.email} was invited to ${orgId}; its membership must come from the flow`);
+    }
+    const existing = membershipOf(orgId, userId);
+    if (existing) existing.role = role;
+    else model.memberships.push({ organization_id: orgId, user_id: userId, role, created_at: createdAt, source: 'fixture' });
+  },
+  /** A concurrent change made by someone else (the §79 stale race), bypassing the UI. */
+  changeRoleBehindTheUi(orgId: string, userId: string, role: ModelRole): void {
+    const existing = membershipOf(orgId, userId);
+    if (!existing) throw new Error(`orgModel.changeRoleBehindTheUi: ${userId} is not in ${orgId}`);
+    existing.role = role;
+  },
+  /** Someone else created a pending invitation meanwhile (the screen has not seen it). */
+  invitationCreatedBehindTheUi(orgId: string, email: string, role: InvitableRole, invitedBy: string): void {
+    const now = Date.now();
+    model.invitations.push({
+      id: nextId('inv'),
+      organization_id: orgId,
+      email,
+      role,
+      token: `Bx${model.seq}_behind-${model.seq}`,
+      created_at: new Date(now).toISOString(),
+      expires_at: new Date(now + INVITATION_TTL_MS).toISOString(),
+      invited_by_user_id: invitedBy,
+      revoked_at: null,
+      accepted_at: null,
+    });
+  },
+  /** Someone else revoked an invitation meanwhile. */
+  invitationRevokedBehindTheUi(email: string): void {
+    const inv = model.invitations.find((i) => i.email === email && invitationState(i) === 'pending');
+    if (!inv) throw new Error(`orgModel.invitationRevokedBehindTheUi: no pending invitation for ${email}`);
+    inv.revoked_at = new Date().toISOString();
+  },
+  /** The server stops accepting an access token (expired or revoked): it now answers 401. */
+  expireSession(accessToken: string): void {
+    model.accessTokens.delete(accessToken);
+  },
+  /** Six-role roster: the demo actor plus one other member per role. */
+  seedRoster(orgId: string): void {
+    const roster: [string, string, string, ModelRole][] = [
+      ['user-owner-2', 'olivia.owner@example.com', 'Olivia Owner', 'owner'],
+      ['user-admin', 'adam.admin@example.com', 'Adam Admin', 'admin'],
+      ['user-marketer', 'mara.marketer@example.com', 'Mara Marketer', 'marketer'],
+      ['user-reviewer', 'rhea.reviewer@example.com', 'Rhea Reviewer', 'reviewer'],
+      ['user-compliance', 'cora.compliance@example.com', 'Cora Compliance', 'compliance_reviewer'],
+      ['user-viewer', 'vic.viewer@example.com', 'Vic Viewer', 'viewer'],
+    ];
+    roster.forEach(([id, email, name, role], i) => {
+      if (!model.users.has(id)) orgModel.addUser({ id, email, full_name: name });
+      orgModel.setMembership(orgId, id, role, `2026-02-0${i + 1}T00:00:00Z`);
+    });
+  },
+  /** An access token for a model user, as if they had signed in earlier. */
+  signIn(userId: string): string {
+    const user = model.users.get(userId);
+    if (!user) throw new Error(`orgModel.signIn: unknown user ${userId}`);
+    return issueAccessToken(user);
+  },
+  /** The raw token the NEXT created invitation will carry (else a generated one). */
+  setNextInvitationToken(token: string): void {
+    model.nextInvitationToken = token;
+  },
+  expireInvitation(invitationId: string): void {
+    const inv = model.invitations.find((i) => i.id === invitationId);
+    if (!inv) throw new Error(`orgModel.expireInvitation: unknown invitation ${invitationId}`);
+    inv.expires_at = new Date(Date.now() - 60_000).toISOString();
+  },
+  /** Another workspace in an existing organization. */
+  addWorkspace(orgId: string, w: Omit<ModelWorkspace, 'organization_id'>): void {
+    model.workspaces.set(orgId, [...(model.workspaces.get(orgId) ?? []), { ...w, organization_id: orgId }]);
+  },
+  workspacesOf: (orgId: string): readonly ModelWorkspace[] => model.workspaces.get(orgId) ?? [],
+  memberships: (): readonly ModelMembership[] => model.memberships,
+  invitations: (): readonly ModelInvitation[] => model.invitations,
+  users: (): readonly ModelUser[] => [...model.users.values()],
+  requests: (): readonly ModelRequest[] => model.requests,
+  violations: (): readonly string[] => model.violations,
+  count(method: string, pathPattern: RegExp): number {
+    return model.requests.filter((r) => r.method === method && pathPattern.test(r.path)).length;
+  },
+};
+
+orgModel.reset();
+
 export const handlers = [
+  // ---- Tenant gate for every workspace-scoped route (runs first, then falls through) ----
+  http.all(P('/workspaces/:ws'), tenantGate),
+  http.all(P('/workspaces/:ws/*'), tenantGate),
+
   // ---- Operator observability + capability governance (4A-D; operator-only) ----
   http.get(P('/internal/system/overview'), () =>
     HttpResponse.json({
@@ -530,21 +937,282 @@ export const handlers = [
     }),
   ),
 
-  // ---- Auth ----
-  http.get(P('/auth/me'), () =>
-    HttpResponse.json({ access_token: 'test-token', token_type: 'bearer', user: demoUser, memberships: [{ organization_id: org.id, role: 'owner' }] }),
-  ),
-  http.post(P('/auth/login'), () =>
-    HttpResponse.json({ access_token: 'test-token', token_type: 'bearer', user: demoUser, memberships: [{ organization_id: org.id, role: 'owner' }] }),
-  ),
-  http.post(P('/auth/register'), () =>
-    HttpResponse.json({ access_token: 'test-token', token_type: 'bearer', user: demoUser, memberships: [{ organization_id: org.id, role: 'owner' }] }),
-  ),
+  // ---- Auth (sessions derived from the bearer token; see orgModel) ----
+  http.get(P('/auth/me'), async ({ request }) => {
+    const { user } = await record(request);
+    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+    const header = request.headers.get('authorization') ?? '';
+    return HttpResponse.json(sessionFor(user, header.slice('Bearer '.length)));
+  }),
+  http.post(P('/auth/login'), async ({ request }) => {
+    const { body } = await record(request);
+    const known = [...model.users.values()].find((u) => u.email === body.email && u.id !== demoUser.id);
+    // Any other address signs in as the seeded demo account, exactly as the fixed
+    // handler always did (auth.test.tsx relies on it).
+    if (!known) return HttpResponse.json(sessionFor(model.users.get(demoUser.id)!, 'test-token'));
+    if (known.password !== body.password) return modelError(401, 'unauthorized', 'Invalid credentials');
+    return HttpResponse.json(sessionFor(known, issueAccessToken(known)));
+  }),
+  http.post(P('/auth/register'), async ({ request }) => {
+    await record(request);
+    return HttpResponse.json(sessionFor(model.users.get(demoUser.id)!, 'test-token'), { status: 201 });
+  }),
+
+  // ---- Invitations: the token holder's side (auth/routes.py:82-116) ----
+  // The token rides only in the JSON body; no request here accepts the email,
+  // organization or role.
+  http.post(P('/auth/invitations/preview'), async ({ request }) => {
+    const { body } = await record(request);
+    tokenOnlyInBody('preview', request);
+    const bad = exactKeys('preview', body, ['token']);
+    if (bad) return bad;
+    const inv = resolveToken(body.token);
+    if (inv instanceof Response) return inv;
+    return HttpResponse.json({
+      organization_id: inv.organization_id,
+      organization_name: model.orgs.get(inv.organization_id)!.name,
+      email: inv.email,
+      role: inv.role,
+      expires_at: inv.expires_at,
+    });
+  }),
+  http.post(P('/auth/invitations/register'), async ({ request }) => {
+    const { body } = await record(request);
+    tokenOnlyInBody('register', request);
+    const bad = exactKeys('register', body, ['token', 'full_name', 'password']);
+    if (bad) return bad;
+    const inv = resolveToken(body.token);
+    if (inv instanceof Response) return inv;
+    // invitations.py:576-613: an existing account for the invited email is a 409.
+    if ([...model.users.values()].some((u) => u.email === inv.email)) {
+      return modelError(409, 'invitation_account_exists', 'An account already exists for this email address.');
+    }
+    if (!inviterStillAuthorized(inv)) {
+      return modelError(409, 'invitation_inviter_not_authorized', 'The person who sent this invitation can no longer grant this access.');
+    }
+    const user: ModelUser = {
+      id: nextId('user-invited'),
+      email: inv.email,
+      full_name: String(body.full_name),
+      password: String(body.password),
+      is_operator: false,
+    };
+    model.users.set(user.id, user);
+    inv.accepted_at = new Date().toISOString();
+    model.memberships.push({
+      organization_id: inv.organization_id,
+      user_id: user.id,
+      role: inv.role,
+      created_at: inv.accepted_at,
+      source: 'invitation',
+    });
+    return HttpResponse.json(sessionFor(user, issueAccessToken(user)), { status: 201 });
+  }),
+  http.post(P('/auth/invitations/accept'), async ({ request }) => {
+    const { user, body } = await record(request);
+    tokenOnlyInBody('accept', request);
+    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+    const bad = exactKeys('accept', body, ['token']);
+    if (bad) return bad;
+    const inv = resolveToken(body.token);
+    if (inv instanceof Response) return inv;
+    // invitations.py:545-573, in order.
+    if (user.email !== inv.email) {
+      return modelError(403, 'permission_denied', 'This invitation was issued to a different email address.');
+    }
+    if (membershipOf(inv.organization_id, user.id)) {
+      return modelError(409, 'invitation_already_member', 'You are already a member of this organization.');
+    }
+    if (!inviterStillAuthorized(inv)) {
+      return modelError(409, 'invitation_inviter_not_authorized', 'The person who sent this invitation can no longer grant this access.');
+    }
+    inv.accepted_at = new Date().toISOString();
+    model.memberships.push({
+      organization_id: inv.organization_id,
+      user_id: user.id,
+      role: inv.role,
+      created_at: inv.accepted_at,
+      source: 'invitation',
+    });
+    return HttpResponse.json(sessionFor(user, issueAccessToken(user)));
+  }),
 
   // ---- Org / workspace / brand ----
-  http.get(P('/organizations'), () => HttpResponse.json([org])),
-  http.get(P('/organizations/:orgId/workspaces'), () => HttpResponse.json([workspace])),
-  http.post(P('/organizations/:orgId/workspaces'), () => HttpResponse.json(workspace)),
+  http.get(P('/organizations'), async ({ request }) => {
+    const { user } = await record(request);
+    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+    const ids = new Set(model.memberships.filter((m) => m.user_id === user.id).map((m) => m.organization_id));
+    return HttpResponse.json([...model.orgs.values()].filter((o) => ids.has(o.id)));
+  }),
+  http.get(P('/organizations/:orgId/workspaces'), async ({ request, params }) => {
+    const { user } = await record(request);
+    const actor = orgActor(String(params.orgId), user);
+    if (actor instanceof Response) return actor;
+    return HttpResponse.json(model.workspaces.get(String(params.orgId)) ?? []);
+  }),
+  // organizations/routes.py:75-97 — exact OWNER/ADMIN.
+  http.post(P('/organizations/:orgId/workspaces'), async ({ request, params }) => {
+    const { user, body } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    const denied = requireOrgAdmin(actor);
+    if (denied) return denied;
+    const created: ModelWorkspace = {
+      id: nextId('ws'),
+      organization_id: orgId,
+      name: String(body.name),
+      slug: String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      onboarding_completed: false,
+      created_at: new Date().toISOString(),
+    };
+    model.workspaces.set(orgId, [...(model.workspaces.get(orgId) ?? []), created]);
+    return HttpResponse.json(created, { status: 201 });
+  }),
+
+  // ---- Invitations: the administrator's side (organizations/routes.py:118-161) ----
+  http.post(P('/organizations/:orgId/invitations'), async ({ request, params }) => {
+    const { user, body } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    const denied = requireOrgAdmin(actor);
+    if (denied) return denied;
+    const bad = exactKeys('create invitation', body, ['email', 'role']);
+    if (bad) return bad;
+    // InvitationCreate.role's enum has no owner, so the schema refuses it (422)
+    // before invitations.py:397-401 ever could.
+    if (!INVITABLE.has(String(body.role))) return modelError(422, 'validation_error', 'Request validation failed');
+    const role = body.role as InvitableRole;
+    const email = String(body.email);
+    if (ROLE_RANK[role] > ROLE_RANK[actor.role]) {
+      return modelError(403, 'invitation_role_forbidden', 'You cannot invite a member with a role ranked above your own.');
+    }
+    if (model.memberships.some((m) => m.organization_id === orgId && model.users.get(m.user_id)?.email === email)) {
+      return modelError(409, 'invitation_already_member', 'This email address already belongs to a member of the organization.');
+    }
+    const open = model.invitations.find(
+      (i) => i.organization_id === orgId && i.email === email && !i.revoked_at && !i.accepted_at,
+    );
+    if (open && invitationState(open) === 'pending') {
+      return modelError(409, 'invitation_pending_exists', 'A pending invitation already exists for this email address.');
+    }
+    if (open) open.revoked_at = new Date().toISOString(); // an expired open invitation is superseded
+    const now = Date.now();
+    const inv: ModelInvitation = {
+      id: nextId('inv'),
+      organization_id: orgId,
+      email,
+      role,
+      token: model.nextInvitationToken ?? `Ix${model.seq + 1}_q7Rz-Tk${model.seq + 1}vW`,
+      created_at: new Date(now).toISOString(),
+      expires_at: new Date(now + INVITATION_TTL_MS).toISOString(),
+      invited_by_user_id: user!.id,
+      revoked_at: null,
+      accepted_at: null,
+    };
+    model.nextInvitationToken = null;
+    model.invitations.push(inv);
+    return HttpResponse.json({ ...invitationOut(inv), token: inv.token }, { status: 201 });
+  }),
+  http.get(P('/organizations/:orgId/invitations'), async ({ request, params }) => {
+    const { user } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    const denied = requireOrgAdmin(actor);
+    if (denied) return denied;
+    return HttpResponse.json(
+      model.invitations
+        .filter((i) => i.organization_id === orgId && invitationState(i) === 'pending')
+        .map(invitationOut),
+    );
+  }),
+  http.delete(P('/organizations/:orgId/invitations/:invitationId'), async ({ request, params }) => {
+    const { user } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    const denied = requireOrgAdmin(actor);
+    if (denied) return denied;
+    const inv = model.invitations.find((i) => i.id === params.invitationId && i.organization_id === orgId);
+    if (!inv) return modelError(404, 'invitation_not_found', 'Invitation not found.');
+    const state = invitationState(inv);
+    if (state !== 'pending') {
+      const [code, message] = STATE_CONFLICT[state];
+      return modelError(409, code, message);
+    }
+    inv.revoked_at = new Date().toISOString();
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ---- Members (organizations/routes.py:164-205; members.py) ----
+  http.get(P('/organizations/:orgId/members'), async ({ request, params }) => {
+    const { user } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    return HttpResponse.json(
+      model.memberships
+        .filter((m) => m.organization_id === orgId)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.user_id.localeCompare(b.user_id))
+        .map(memberRow),
+    );
+  }),
+  http.put(P('/organizations/:orgId/members/:userId/role'), async ({ request, params }) => {
+    const { user, body } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    const denied = requireOrgAdmin(actor);
+    if (denied) return denied;
+    const bad = exactKeys('change role', body, ['role']);
+    if (bad) return bad;
+    if (!(String(body.role) in ROLE_RANK)) return modelError(422, 'validation_error', 'Request validation failed');
+    const next = body.role as ModelRole;
+    // members.py:205-261, in order.
+    if (params.userId === user!.id) {
+      return modelError(403, 'member_self_change_forbidden', 'You cannot change your own role.');
+    }
+    const target = membershipOf(orgId, String(params.userId));
+    if (!target) return modelError(404, 'member_not_found', 'Member not found.');
+    if ((target.role === 'owner' || next === 'owner') && actor.role !== 'owner') {
+      return modelError(403, 'member_owner_required', 'Only an owner can grant, change or remove the owner role.');
+    }
+    if (ROLE_RANK[next] > ROLE_RANK[actor.role] || ROLE_RANK[target.role] > ROLE_RANK[actor.role]) {
+      return modelError(403, 'member_role_ceiling', 'You cannot manage a member or assign a role ranked above your own.');
+    }
+    if (target.role === 'owner' && next !== 'owner' && ownerCount(orgId) < 2) {
+      return modelError(409, 'organization_last_owner', "The organization's last owner cannot be demoted or removed.");
+    }
+    target.role = next;
+    return HttpResponse.json(memberRow(target));
+  }),
+  http.delete(P('/organizations/:orgId/members/:userId'), async ({ request, params }) => {
+    const { user } = await record(request);
+    const orgId = String(params.orgId);
+    const actor = orgActor(orgId, user);
+    if (actor instanceof Response) return actor;
+    const denied = requireOrgAdmin(actor);
+    if (denied) return denied;
+    // members.py:263-300, in order.
+    if (params.userId === user!.id) {
+      return modelError(403, 'member_self_removal_forbidden', 'You cannot remove yourself from the organization.');
+    }
+    const target = membershipOf(orgId, String(params.userId));
+    if (!target) return modelError(404, 'member_not_found', 'Member not found.');
+    if (target.role === 'owner' && actor.role !== 'owner') {
+      return modelError(403, 'member_owner_required', 'Only an owner can grant, change or remove the owner role.');
+    }
+    if (ROLE_RANK[target.role] > ROLE_RANK[actor.role]) {
+      return modelError(403, 'member_role_ceiling', 'You cannot manage a member or assign a role ranked above your own.');
+    }
+    if (target.role === 'owner' && ownerCount(orgId) < 2) {
+      return modelError(409, 'organization_last_owner', "The organization's last owner cannot be demoted or removed.");
+    }
+    model.memberships = model.memberships.filter((m) => m !== target);
+    return new HttpResponse(null, { status: 204 });
+  }),
   http.get(P('/workspaces/:ws'), () => HttpResponse.json(workspace)),
   http.get(P('/workspaces/:ws/brands'), () => HttpResponse.json([brand])),
   http.get(P('/workspaces/:ws/business-profile'), () => HttpResponse.json(emptyProfile)),

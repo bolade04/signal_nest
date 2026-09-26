@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import { canEditWorkspace } from '@/lib/roles';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { reasonLabel, reasonsForVerdict } from './feedbackReasons';
@@ -26,17 +27,17 @@ import {
   useSubmitFeedback,
 } from './useFeedback';
 
-// Mirrors the server-side EDITORS gate (owner / admin / marketer). View-only
-// members never see the control — the API would 403 them anyway; this only
-// hides an affordance they could not use.
-const EDITOR_ROLES = new Set(['owner', 'admin', 'marketer']);
-
 /**
  * The panel's own role gate, as a TRI-STATE, exported so a test observes the
  * exact decision the panel makes rather than re-deriving it.
  *
+ * The editor decision mirrors the server-side EDITORS gate (owner / admin /
+ * marketer) through the shared `canEditWorkspace`. View-only members never see
+ * the control — the API would 403 them anyway; this only hides an affordance
+ * they could not use.
+ *
  * Exporting only the role *lookup* was not enough: the decision is
- * `EDITOR_ROLES.has(role)`, and a probe that reproduced that step was still a
+ * `canEditWorkspace(role)`, and a probe that reproduced that step was still a
  * second construction at the point that actually matters. This returns the
  * decision itself, so nothing is left to re-derive.
  *
@@ -71,7 +72,7 @@ export function feedbackRoleState(
   // return value.
   const role = memberships.find((m) => m.organization_id === organizationId)?.role;
   if (!role) return 'no-role';
-  return EDITOR_ROLES.has(role) ? 'editor' : 'not-editor';
+  return canEditWorkspace(role) ? 'editor' : 'not-editor';
 }
 
 /**

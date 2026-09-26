@@ -5,21 +5,16 @@ import { ApiError } from '@/api/client';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
 import type { ScheduleInterval, ScoutScheduleOut } from '@/api/types';
-import { useAuth } from '@/auth/AuthContext';
 import { ConfirmDialog } from '@/components/common/confirm-dialog';
 import { ErrorState, LoadingRows } from '@/components/common/states';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { useScheduleActions, useScheduleCapability } from './useScheduleActions';
-
-// Owner/admin/marketer may mutate; view-only roles get read-only display. This
-// mirrors the server-side EDITORS gate — the API is the real authority, this
-// only hides controls the user could not use anyway.
-const EDITOR_ROLES = new Set(['owner', 'admin', 'marketer']);
 
 // Rendered wherever a mutation affordance would otherwise sit. Schedule reads
 // stay available while the capability is dark, so this explains the absence
@@ -46,10 +41,12 @@ export function SchedulePanel({
   workspaceId: string;
   requestId: string;
 }) {
-  const { memberships } = useAuth();
+  // Owner/admin/marketer may mutate; view-only roles get read-only display. This
+  // mirrors the server-side EDITORS gate — the API is the real authority, this
+  // only hides controls the user could not use anyway. An unresolved role is
+  // denied, so nothing is offered before the session has landed.
   const { organizationId } = useWorkspace();
-  const role = memberships.find((m) => m.organization_id === organizationId)?.role;
-  const canEdit = role ? EDITOR_ROLES.has(role) : false;
+  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
 
   const actions = useScheduleActions(workspaceId, requestId);
   const { isEnabled: schedulingEnabled } = useScheduleCapability();

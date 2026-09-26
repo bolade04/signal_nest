@@ -33,6 +33,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/toast';
 import { scoreHelp } from '@/lib/labels';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatDateTime, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityIntelligencePanel } from './opportunities/IntelligencePanel';
@@ -77,6 +78,10 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { organizationId } = useWorkspace();
+  // Changing status is an editor action (EDITORS gate). The current status stays
+  // visible to everyone through the status badge.
+  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
 
   const query = useQuery({
     queryKey: queryKeys.opportunity(workspaceId, opportunityId),
@@ -143,24 +148,26 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               )}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {statusActions.map((action) => {
-              const Icon = action.icon;
-              const active = o.status === action.status;
-              return (
-                <Button
-                  key={action.status}
-                  variant={active ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => statusMutation.mutate(action.status)}
-                  disabled={statusMutation.isPending}
-                  aria-pressed={active}
-                >
-                  <Icon className="size-4" /> {action.label}
-                </Button>
-              );
-            })}
-          </div>
+          {canEdit ? (
+            <div className="flex flex-wrap gap-2">
+              {statusActions.map((action) => {
+                const Icon = action.icon;
+                const active = o.status === action.status;
+                return (
+                  <Button
+                    key={action.status}
+                    variant={active ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => statusMutation.mutate(action.status)}
+                    disabled={statusMutation.isPending}
+                    aria-pressed={active}
+                  >
+                    <Icon className="size-4" /> {action.label}
+                  </Button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       </div>
 

@@ -24,12 +24,19 @@ import type {
   GeoCoverageOut,
   GeocodeRequest,
   GeocodeResponse,
+  InvitationCreate,
+  InvitationCreatedOut,
+  InvitationOut,
+  InvitationPreviewOut,
+  InvitationRegisterRequest,
+  InvitationTokenRequest,
   JobEventOut,
   JobListOut,
   JobOut,
   LocationBase,
   LocationOut,
   LoginRequest,
+  MemberRoleUpdate,
   OfferIn,
   OnboardingRequest,
   OnboardingResult,
@@ -38,6 +45,7 @@ import type {
   OpportunityDetail,
   OpportunityFilters,
   OpportunityIntelligenceResponse,
+  OrganizationMemberOut,
   OrganizationOut,
   ProductIn,
   RegisterRequest,
@@ -124,6 +132,20 @@ export const register = (body: RegisterRequest, signal?: AbortSignal) =>
 export const getSession = (signal?: AbortSignal) =>
   apiRequest<SessionOut>('/auth/me', { signal });
 
+// ---- Invitation token holders (P6-AUTH-1) ----
+// The raw token travels only in the JSON body — never a path segment or query
+// string. The organization, role and email are the invitation's own; none of these
+// requests accepts them. Preview is public and spends nothing; register is public
+// and creates the account; accept needs the session of the invited email.
+export const previewInvitation = (body: InvitationTokenRequest, signal?: AbortSignal) =>
+  apiRequest<InvitationPreviewOut>('/auth/invitations/preview', { method: 'POST', body, signal });
+
+export const registerWithInvitation = (body: InvitationRegisterRequest, signal?: AbortSignal) =>
+  apiRequest<SessionOut>('/auth/invitations/register', { method: 'POST', body, signal });
+
+export const acceptInvitation = (body: InvitationTokenRequest, signal?: AbortSignal) =>
+  apiRequest<SessionOut>('/auth/invitations/accept', { method: 'POST', body, signal });
+
 // ---- Organizations / workspaces ----
 export const listOrganizations = (signal?: AbortSignal) =>
   apiRequest<OrganizationOut[]>('/organizations', { signal });
@@ -136,6 +158,36 @@ export const createWorkspace = (orgId: string, body: WorkspaceCreate) =>
 
 export const getWorkspace = (workspaceId: string, signal?: AbortSignal) =>
   apiRequest<WorkspaceOut>(`/workspaces/${workspaceId}`, { signal });
+
+// ---- Organization members + invitations (6B-3A; P6-AUTH-1) ----
+// Any member may read the member list. Everything else — inviting, listing and
+// revoking invitations, changing a role, removing a member — is exact OWNER/ADMIN
+// on the backend, which also enforces the self, OWNER-ceiling and last-owner rules.
+export const listOrganizationMembers = (orgId: string, signal?: AbortSignal) =>
+  apiRequest<OrganizationMemberOut[]>(`/organizations/${orgId}/members`, { signal });
+
+export const changeMemberRole = (orgId: string, userId: string, body: MemberRoleUpdate) =>
+  apiRequest<OrganizationMemberOut>(`/organizations/${orgId}/members/${userId}/role`, {
+    method: 'PUT',
+    body,
+  });
+
+export const removeMember = (orgId: string, userId: string) =>
+  apiRequest<void>(`/organizations/${orgId}/members/${userId}`, { method: 'DELETE' });
+
+// The list never carries a token. The create response is the one place the raw
+// token exists: the server keeps only its hash, so it cannot be shown again.
+export const listInvitations = (orgId: string, signal?: AbortSignal) =>
+  apiRequest<InvitationOut[]>(`/organizations/${orgId}/invitations`, { signal });
+
+export const createInvitation = (orgId: string, body: InvitationCreate) =>
+  apiRequest<InvitationCreatedOut>(`/organizations/${orgId}/invitations`, {
+    method: 'POST',
+    body,
+  });
+
+export const revokeInvitation = (orgId: string, invitationId: string) =>
+  apiRequest<void>(`/organizations/${orgId}/invitations/${invitationId}`, { method: 'DELETE' });
 
 // ---- Brand / business profile ----
 export const listBrands = (workspaceId: string, signal?: AbortSignal) =>

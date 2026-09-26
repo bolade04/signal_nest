@@ -34,7 +34,9 @@ import { TagInput } from '@/components/ui/tag-input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { sourceTypeLabels } from '@/lib/labels';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { titleCase } from '@/lib/utils';
+import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 // ---- Field + kind descriptors -------------------------------------------------
 
@@ -391,8 +393,19 @@ function sanitize(form: Record<string, unknown>): Record<string, unknown> {
 function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindConfig }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { organizationId } = useWorkspace();
+  // Adding and removing context are editor actions (EDITORS gate); every member
+  // keeps the list. An unresolved role is denied until it resolves.
+  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [toDelete, setToDelete] = useState<ContextRow | null>(null);
+
+  // Drop latched add/remove intents when the role gate closes, so neither
+  // dialog can spring back open by itself if the gate later reopens.
+  if (!canEdit && (dialogOpen || toDelete)) {
+    setDialogOpen(false);
+    setToDelete(null);
+  }
 
   const query = useQuery({
     queryKey: queryKeys.context(workspaceId, config.kind),
@@ -419,9 +432,11 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
     <div>
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-2xl text-sm text-muted-foreground">{config.blurb}</p>
-        <Button size="sm" onClick={() => setDialogOpen(true)} className="shrink-0">
-          <Plus className="size-4" /> Add {config.singular}
-        </Button>
+        {canEdit ? (
+          <Button size="sm" onClick={() => setDialogOpen(true)} className="shrink-0">
+            <Plus className="size-4" /> Add {config.singular}
+          </Button>
+        ) : null}
       </div>
 
       {query.isLoading ? (
@@ -441,15 +456,17 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
                       <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{subtitle}</p>
                     ) : null}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Remove ${config.singular}`}
-                    onClick={() => setToDelete(row)}
-                    disabled={remove.isPending}
-                  >
-                    <Trash2 className="size-4 text-muted-foreground" />
-                  </Button>
+                  {canEdit ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${config.singular}`}
+                      onClick={() => setToDelete(row)}
+                      disabled={remove.isPending}
+                    >
+                      <Trash2 className="size-4 text-muted-foreground" />
+                    </Button>
+                  ) : null}
                 </CardContent>
               </Card>
             );
@@ -461,32 +478,38 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
           title={`No ${config.singular}s yet`}
           description={config.blurb}
           action={
-            <Button onClick={() => setDialogOpen(true)}>
-              <Plus className="size-4" /> Add {config.singular}
-            </Button>
+            canEdit ? (
+              <Button onClick={() => setDialogOpen(true)}>
+                <Plus className="size-4" /> Add {config.singular}
+              </Button>
+            ) : undefined
           }
         />
       )}
 
-      <ContextDialog
-        workspaceId={workspaceId}
-        config={config}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-      />
+      {canEdit ? (
+        <>
+          <ContextDialog
+            workspaceId={workspaceId}
+            config={config}
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+          />
 
-      <ConfirmDialog
-        open={Boolean(toDelete)}
-        onOpenChange={(o) => !o && setToDelete(null)}
-        title={`Remove this ${config.singular}?`}
-        description="This cannot be undone."
-        confirmLabel="Remove"
-        destructive
-        onConfirm={async () => {
-          if (toDelete) await remove.mutateAsync(toDelete.id);
-          setToDelete(null);
-        }}
-      />
+          <ConfirmDialog
+            open={Boolean(toDelete)}
+            onOpenChange={(o) => !o && setToDelete(null)}
+            title={`Remove this ${config.singular}?`}
+            description="This cannot be undone."
+            confirmLabel="Remove"
+            destructive
+            onConfirm={async () => {
+              if (toDelete) await remove.mutateAsync(toDelete.id);
+              setToDelete(null);
+            }}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

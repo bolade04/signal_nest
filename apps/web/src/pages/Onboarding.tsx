@@ -16,6 +16,7 @@ import { TagInput } from '@/components/ui/tag-input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { sourceTypeLabels } from '@/lib/labels';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { cn } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 
@@ -75,6 +76,10 @@ function WizardInner({ workspaceId }: { workspaceId: string }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { organizationId } = useWorkspace();
+  // Finishing onboarding is an editor action (EDITORS gate). Other members can
+  // still look through the wizard; only the submit is withheld.
+  const actor = useActorRole(organizationId);
+  const canEdit = canEditWorkspace(actor.role);
 
   const draftKey = `signalnest-onboarding-${workspaceId}`;
   const [form, setForm] = useState<OnboardingForm>(() => {
@@ -417,11 +422,16 @@ function WizardInner({ workspaceId }: { workspaceId: string }) {
           <Button onClick={next} disabled={!stepValid}>
             Save &amp; continue <ChevronRight className="size-4" />
           </Button>
-        ) : (
+        ) : canEdit ? (
           <Button onClick={() => submit.mutate()} disabled={!canSubmit || submit.isPending}>
             <Rocket className="size-4" /> Finish onboarding
           </Button>
-        )}
+        ) : actor.status === 'known' ? (
+          // Only once the role is known, so an editor never sees this flash by.
+          <p className="text-xs text-muted-foreground">
+            You do not have permission to finish onboarding.
+          </p>
+        ) : null}
       </div>
     </div>
   );

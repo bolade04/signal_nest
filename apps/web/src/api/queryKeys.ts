@@ -18,8 +18,17 @@ export const queryKeys = {
     ['internal', 'system', 'capabilities', 'effective', orgId, workspaceId] as const,
   capabilityOverrides: (orgId: string, workspaceId: string) =>
     ['internal', 'system', 'capabilities', 'overrides', orgId, workspaceId] as const,
+  // `organizations` is a PREFIX of every organization-scoped key below, so
+  // invalidating it without `exact: true` also wipes every organization's
+  // workspaces, members and invitations. Invalidate the list with `exact: true`.
   organizations: ['organizations'] as const,
   workspaces: (orgId: string) => ['organizations', orgId, 'workspaces'] as const,
+  // Members and pending invitations are organization-wide (a role is not scoped to a
+  // workspace), so they key by organization — never a global ['members'] — and an
+  // organization switch can never reuse another organization's entries. No
+  // invitation key ever embeds a token.
+  organizationMembers: (orgId: string) => ['organizations', orgId, 'members'] as const,
+  organizationInvitations: (orgId: string) => ['organizations', orgId, 'invitations'] as const,
   workspace: (workspaceId: string) => ['workspaces', workspaceId] as const,
 
   brands: (workspaceId: string) => ['workspaces', workspaceId, 'brands'] as const,

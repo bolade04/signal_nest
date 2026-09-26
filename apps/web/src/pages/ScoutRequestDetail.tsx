@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
+import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -36,7 +37,10 @@ const TERMINAL = new Set(['completed', 'failed']);
 
 function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestId: string }) {
   const navigate = useNavigate();
-  const { locations } = useWorkspace();
+  const { locations, organizationId } = useWorkspace();
+  // Run / pause / resume are editor actions (EDITORS gate); the configuration,
+  // schedule, jobs and opportunities below stay readable for every member.
+  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const actions = useScoutActions(workspaceId);
   const queryClient = useQueryClient();
 
@@ -106,23 +110,25 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
               {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={() => actions.run.mutate(r.id)}
-              disabled={actions.run.isPending && actions.run.variables === r.id}
-            >
-              <Radar className="size-4" /> Run now
-            </Button>
-            {isPaused ? (
-              <Button variant="outline" onClick={() => actions.resume.mutate(r.id)}>
-                <Play className="size-4" /> Resume
+          {canEdit ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => actions.run.mutate(r.id)}
+                disabled={actions.run.isPending && actions.run.variables === r.id}
+              >
+                <Radar className="size-4" /> Run now
               </Button>
-            ) : (
-              <Button variant="outline" onClick={() => actions.pause.mutate(r.id)} disabled={!canPause}>
-                <Pause className="size-4" /> Pause
-              </Button>
-            )}
-          </div>
+              {isPaused ? (
+                <Button variant="outline" onClick={() => actions.resume.mutate(r.id)}>
+                  <Play className="size-4" /> Resume
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={() => actions.pause.mutate(r.id)} disabled={!canPause}>
+                  <Pause className="size-4" /> Pause
+                </Button>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -220,14 +226,20 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             <EmptyState
               icon={Radar}
               title="No opportunities yet"
-              description="Run this scout to process fixture signals into scored, explainable opportunities."
+              description={
+                canEdit
+                  ? 'Run this scout to process fixture signals into scored, explainable opportunities.'
+                  : 'This scout has not produced any opportunities yet.'
+              }
               action={
-                <Button
-                  onClick={() => actions.run.mutate(r.id)}
-                  disabled={actions.run.isPending && actions.run.variables === r.id}
-                >
-                  <Radar className="size-4" /> Run now
-                </Button>
+                canEdit ? (
+                  <Button
+                    onClick={() => actions.run.mutate(r.id)}
+                    disabled={actions.run.isPending && actions.run.variables === r.id}
+                  >
+                    <Radar className="size-4" /> Run now
+                  </Button>
+                ) : undefined
               }
             />
           )}
