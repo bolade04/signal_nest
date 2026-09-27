@@ -82,4 +82,12 @@ def authenticate(db: Session, *, email: str, password: str) -> User:
 
 
 def issue_token(user: User) -> str:
-    return create_access_token(subject=user.id, extra={"email": user.email})
+    """Issue an access token for ``user``, stamped with the account's credential epoch.
+
+    The only access-token issuance path. ``get_current_user`` rejects a token whose
+    ``auth_epoch`` differs from the account's, so every token issued before a password
+    reset stops authenticating once the reset increments the epoch.
+    """
+    return create_access_token(
+        subject=user.id, extra={"email": user.email, "auth_epoch": user.auth_epoch}
+    )

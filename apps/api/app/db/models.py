@@ -7,6 +7,7 @@ autogenerate.
 from __future__ import annotations
 
 from app.audit.models import AuditLog  # noqa: F401
+from app.auth.models import EmailVerificationToken, PasswordResetToken  # noqa: F401
 from app.brands.models import Brand, BusinessProfile  # noqa: F401
 from app.campaign_context.models import (  # noqa: F401
     AudienceProfile,

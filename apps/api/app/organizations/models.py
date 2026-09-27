@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     UniqueConstraint,
     false,
@@ -34,6 +35,16 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: sets it True only in local/test environments.
     is_operator: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
+    )
+    #: When the stored email address was proven reachable: set by confirming an
+    #: email-verification token or by completing a password reset, and never
+    #: cleared. NULL means unverified; existing accounts are not backfilled.
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Credential epoch. Every access token carries the epoch it was issued under
+    #: and is rejected once they differ; a password reset increments it, so every
+    #: token issued before the reset stops authenticating. Server-controlled only.
+    auth_epoch: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
     )
 
     memberships: Mapped[list[OrganizationMember]] = relationship(

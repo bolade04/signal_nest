@@ -6,8 +6,8 @@ Three parts, all about what the database itself guarantees (P6-AUTH-1).
 the real Alembic CLI, as ``test_workspace_capability_override_migration.py`` does for its
 predecessor: upgrade creates the table, its organization index, the token-digest uniqueness
 constraint, the role CHECK and the *partial* unique pending index with its ``WHERE``; ``check``
-reports no drift; the head is single; downgrade one step drops only the new table and keeps
-business data; re-upgrade restores it.
+reports no drift; the head is single (the 6B-4A revision now follows this one); downgrade to
+the previous revision drops only the new table and keeps business data; re-upgrade restores it.
 
 **Invariants on the migrated schema** (not on ``create_all``): the closed role vocabulary, one
 digest per token, at most one open invitation per (organization, email) with accepted and
@@ -69,6 +69,8 @@ from app.organizations.models import (
 API_DIR = Path(__file__).resolve().parents[2]
 PREV = "98289430a3ec"
 HEAD = "3dc124a7dfd7"
+#: The code head, one additive revision later (6B-4A account tokens).
+CODE_HEAD = "a452ee007cc2"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -253,11 +255,11 @@ def test_upgrade_leaves_no_model_drift(migrated) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_single_head_is_this_migration(db_path) -> None:
+def test_single_head_follows_this_migration(db_path) -> None:
     result = _alembic(db_path, "heads")
     assert result.returncode == 0, result.stderr
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    assert len(heads) == 1 and HEAD in heads[0], result.stdout
+    assert len(heads) == 1 and CODE_HEAD in heads[0], result.stdout
 
 
 def test_revision_chain() -> None:
@@ -266,7 +268,8 @@ def test_revision_chain() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert script.get_revision(HEAD).down_revision == PREV
-    assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
+    assert script.get_revision(CODE_HEAD).down_revision == HEAD
+    assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
 
 
 def test_check_literal_matches_the_role_vocabulary() -> None:

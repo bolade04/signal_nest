@@ -377,6 +377,8 @@ AUTHENTICATED_ONLY = {
     ("GET", f"{API}/organizations"),
     ("GET", f"{API}/system/capabilities"),
     ("POST", f"{API}/auth/invitations/accept"),
+    ("POST", f"{API}/auth/email-verification/request"),
+    ("POST", f"{API}/auth/email-verification/confirm"),
 }
 #: Routes with no authentication dependency at all.
 PUBLIC = {
@@ -387,6 +389,8 @@ PUBLIC = {
     ("POST", f"{API}/auth/login"),
     ("POST", f"{API}/auth/invitations/preview"),
     ("POST", f"{API}/auth/invitations/register"),
+    ("POST", f"{API}/auth/password-reset/request"),
+    ("POST", f"{API}/auth/password-reset/confirm"),
 }
 OPERATOR_ROUTE_COUNT = 17
 
@@ -539,7 +543,7 @@ class TestPolicyTableCompleteness:
             if method in {"get", "post", "put", "delete", "patch"}
         }
         assert served == published
-        assert len(served) == 99
+        assert len(served) == 103
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
