@@ -29,6 +29,7 @@ from email.utils import formataddr
 
 import boto3
 import pytest
+from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.exceptions import (
     ConnectTimeoutError,
@@ -102,12 +103,12 @@ def memory_backend(monkeypatch):
 
 
 def _client():
+    # Unsigned: the Stubber and the before-send hook intercept before any request is signed,
+    # so the client needs no credentials.
     return boto3.client(
         "sesv2",
         region_name=REGION,
-        aws_access_key_id="testing",
-        aws_secret_access_key="testing",
-        config=Config(retries={"mode": "standard", "max_attempts": 1}),
+        config=Config(signature_version=UNSIGNED, retries={"mode": "standard", "max_attempts": 1}),
     )
 
 
