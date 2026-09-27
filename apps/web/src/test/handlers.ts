@@ -14,6 +14,9 @@ export const demoUser = {
   email: 'demo@signalnest.dev',
   full_name: 'Demo Marketer',
   is_operator: true,
+  // The seeded account is verified, so the verification banner stays out of every
+  // page test that does not ask for it (6B-4B).
+  email_verified: true,
 };
 
 const org = { id: 'org-1', name: 'Demo Org', slug: 'demo-org' };
@@ -399,6 +402,10 @@ const ROLE_RANK: Record<ModelRole, number> = {
 const ORG_ADMINS = new Set<ModelRole>(['owner', 'admin']);
 const INVITABLE = new Set<string>(['admin', 'marketer', 'reviewer', 'compliance_reviewer', 'viewer']);
 const INVITATION_TTL_MS = 72 * 3600 * 1000;
+// apps/api/app/core/config.py:193-198 (defaults).
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+const EMAIL_VERIFICATION_TTL_MS = 48 * 3600 * 1000;
+const AUTH_MAIL_COOLDOWN_MS = 120 * 1000;
 
 interface ModelUser {
   id: string;
@@ -406,6 +413,7 @@ interface ModelUser {
   full_name: string;
   password: string | null;
   is_operator: boolean;
+  email_verified: boolean;
 }
 interface ModelOrg {
   id: string;
@@ -440,6 +448,26 @@ interface ModelInvitation {
   revoked_at: string | null;
   accepted_at: string | null;
 }
+/** A password-reset or email-verification token (apps/api/app/auth/account_tokens.py). */
+type AccountTokenKind = 'password_reset' | 'email_verification';
+interface ModelAccountToken {
+  kind: AccountTokenKind;
+  token: string;
+  user_id: string;
+  /** The address the token was minted for; a verification token is void once it changes. */
+  email: string;
+  issued_at: number;
+  expires_at: number;
+  used_at: number | null;
+  revoked_at: number | null;
+}
+/** A message the backend would have mailed: the link is `<origin><path>#token=<token>`. */
+export interface ModelMail {
+  kind: AccountTokenKind;
+  to: string;
+  path: '/reset-password' | '/verify-email';
+  token: string;
+}
 export interface ModelRequest {
   method: string;
   path: string;
@@ -454,6 +482,8 @@ const model = {
   workspaces: new Map<string, ModelWorkspace[]>(),
   memberships: [] as ModelMembership[],
   invitations: [] as ModelInvitation[],
+  accountTokens: [] as ModelAccountToken[],
+  outbox: [] as ModelMail[],
   accessTokens: new Map<string, string>(),
   requests: [] as ModelRequest[],
   violations: [] as string[],
@@ -507,7 +537,13 @@ function sessionFor(user: ModelUser, accessToken: string) {
   return {
     access_token: accessToken,
     token_type: 'bearer',
-    user: { id: user.id, email: user.email, full_name: user.full_name, is_operator: user.is_operator },
+    user: {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      is_operator: user.is_operator,
+      email_verified: user.email_verified,
+    },
     memberships: model.memberships
       .filter((m) => m.user_id === user.id)
       .map((m) => ({
@@ -519,7 +555,7 @@ function sessionFor(user: ModelUser, accessToken: string) {
 }
 
 function liveTokens(): string[] {
-  return model.invitations.map((i) => i.token);
+  return [...model.invitations.map((i) => i.token), ...model.accountTokens.map((t) => t.token)];
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
@@ -531,7 +567,7 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-/** Log a model request and flag any invitation token that reached the URL. */
+/** Log a model request and flag any invitation or account token that reached the URL. */
 async function record(request: Request): Promise<{ user: ModelUser | null; body: Record<string, unknown> }> {
   const url = new URL(request.url);
   const body = request.method === 'GET' || request.method === 'DELETE' ? {} : await readJson(request);
@@ -539,7 +575,7 @@ async function record(request: Request): Promise<{ user: ModelUser | null; body:
   model.requests.push({ method: request.method, path: url.pathname, search: url.search, body, userId: user?.id ?? null });
   for (const token of liveTokens()) {
     if (request.url.includes(token) || request.url.includes(encodeURIComponent(token))) {
-      model.violations.push(`invitation token in request URL: ${request.method} ${url.pathname}${url.search}`);
+      model.violations.push(`token in request URL: ${request.method} ${url.pathname}${url.search}`);
     }
   }
   return { user, body };
@@ -575,6 +611,70 @@ function resolveToken(token: unknown): ModelInvitation | Response {
 function inviterStillAuthorized(inv: ModelInvitation): boolean {
   const m = membershipOf(inv.organization_id, inv.invited_by_user_id);
   return Boolean(m && ORG_ADMINS.has(m.role) && ROLE_RANK[inv.role] <= ROLE_RANK[m.role]);
+}
+
+// ---- Password reset and email verification (6B-4A, account_tokens.py) ----
+
+function accountTokenOpen(t: ModelAccountToken): boolean {
+  return t.used_at === null && t.revoked_at === null && t.expires_at > Date.now();
+}
+
+/** Revoke the account's other open tokens of a kind (issue, reset and verify all do). */
+function revokeOpenAccountTokens(kind: AccountTokenKind, userId: string, except?: ModelAccountToken) {
+  const now = Date.now();
+  for (const t of model.accountTokens) {
+    if (t.kind === kind && t.user_id === userId && t !== except && accountTokenOpen(t)) t.revoked_at = now;
+  }
+}
+
+function mintAccountToken(kind: AccountTokenKind, user: ModelUser, token?: string): ModelAccountToken {
+  revokeOpenAccountTokens(kind, user.id);
+  const now = Date.now();
+  const minted: ModelAccountToken = {
+    kind,
+    token:
+      token ??
+      (kind === 'password_reset'
+        ? `Rs${model.seq + 1}_mail-reset${model.seq + 1}Q`
+        : `Vf${model.seq + 1}_mail-verify${model.seq + 1}Q`),
+    user_id: user.id,
+    email: user.email,
+    issued_at: now,
+    expires_at: now + (kind === 'password_reset' ? PASSWORD_RESET_TTL_MS : EMAIL_VERIFICATION_TTL_MS),
+    used_at: null,
+    revoked_at: null,
+  };
+  model.seq += 1;
+  model.accountTokens.push(minted);
+  return minted;
+}
+
+/**
+ * A request-driven issue, as `_issue` does it: within the cooldown nothing is minted
+ * or mailed, yet the route still answers 204 — a 204 never proves a message went out.
+ */
+function mailAccountToken(kind: AccountTokenKind, user: ModelUser): void {
+  const now = Date.now();
+  const cooling = model.accountTokens.some(
+    (t) => t.kind === kind && t.user_id === user.id && now - t.issued_at < AUTH_MAIL_COOLDOWN_MS,
+  );
+  if (cooling) return;
+  const minted = mintAccountToken(kind, user);
+  model.outbox.push({
+    kind,
+    to: user.email,
+    path: kind === 'password_reset' ? '/reset-password' : '/verify-email',
+    token: minted.token,
+  });
+}
+
+function findAccountToken(kind: AccountTokenKind, token: unknown): ModelAccountToken | undefined {
+  return typeof token === 'string' ? model.accountTokens.find((t) => t.kind === kind && t.token === token) : undefined;
+}
+
+/** A pydantic `str` field with `min_length` / `max_length`. */
+function boundedString(value: unknown, min: number, max: number): value is string {
+  return typeof value === 'string' && value.length >= min && value.length <= max;
 }
 
 /** OrganizationContext: a non-member is refused before any role check (403). */
@@ -644,6 +744,8 @@ export const orgModel = {
     model.workspaces.clear();
     model.memberships = [];
     model.invitations = [];
+    model.accountTokens = [];
+    model.outbox = [];
     model.accessTokens.clear();
     model.requests = [];
     model.violations = [];
@@ -661,13 +763,26 @@ export const orgModel = {
       source: 'fixture',
     });
   },
-  addUser(user: { id: string; email: string; full_name: string; password?: string; is_operator?: boolean }): void {
+  /**
+   * An account that exists before the test. Verified unless `email_verified: false`:
+   * like the seeded demo account, so the verification banner appears only where a
+   * test asks for an unverified account.
+   */
+  addUser(user: {
+    id: string;
+    email: string;
+    full_name: string;
+    password?: string;
+    is_operator?: boolean;
+    email_verified?: boolean;
+  }): void {
     model.users.set(user.id, {
       id: user.id,
       email: user.email,
       full_name: user.full_name,
       password: user.password ?? 'correct horse battery',
       is_operator: user.is_operator ?? false,
+      email_verified: user.email_verified ?? true,
     });
   },
   addOrganization(o: ModelOrg, workspaces: Omit<ModelWorkspace, 'organization_id'>[] = []): void {
@@ -746,6 +861,32 @@ export const orgModel = {
     if (!user) throw new Error(`orgModel.signIn: unknown user ${userId}`);
     return issueAccessToken(user);
   },
+  /**
+   * A password-reset token for a model user, as if the reset mail had just been sent.
+   * The page under test only ever sees it through the `#token=` fragment the test opens.
+   */
+  issuePasswordResetToken(userId: string, token?: string): string {
+    const user = model.users.get(userId);
+    if (!user) throw new Error(`orgModel.issuePasswordResetToken: unknown user ${userId}`);
+    return mintAccountToken('password_reset', user, token).token;
+  },
+  /** An email-verification token for a model user's current address (see above). */
+  issueEmailVerificationToken(userId: string, token?: string): string {
+    const user = model.users.get(userId);
+    if (!user) throw new Error(`orgModel.issueEmailVerificationToken: unknown user ${userId}`);
+    return mintAccountToken('email_verification', user, token).token;
+  },
+  /** The address was verified elsewhere meanwhile (another tab or device); the screen has not seen it. */
+  emailVerifiedBehindTheUi(userId: string): void {
+    const user = model.users.get(userId);
+    if (!user) throw new Error(`orgModel.emailVerifiedBehindTheUi: unknown user ${userId}`);
+    user.email_verified = true;
+  },
+  expireAccountToken(token: string): void {
+    const t = model.accountTokens.find((row) => row.token === token);
+    if (!t) throw new Error('orgModel.expireAccountToken: unknown token');
+    t.expires_at = Date.now() - 60_000;
+  },
   /** The raw token the NEXT created invitation will carry (else a generated one). */
   setNextInvitationToken(token: string): void {
     model.nextInvitationToken = token;
@@ -763,6 +904,9 @@ export const orgModel = {
   memberships: (): readonly ModelMembership[] => model.memberships,
   invitations: (): readonly ModelInvitation[] => model.invitations,
   users: (): readonly ModelUser[] => [...model.users.values()],
+  user: (userId: string): ModelUser | undefined => model.users.get(userId),
+  /** Every reset / verification message the backend would have mailed, oldest first. */
+  outbox: (): readonly ModelMail[] => model.outbox,
   requests: (): readonly ModelRequest[] => model.requests,
   violations: (): readonly string[] => model.violations,
   count(method: string, pathPattern: RegExp): number {
@@ -958,6 +1102,89 @@ export const handlers = [
     return HttpResponse.json(sessionFor(model.users.get(demoUser.id)!, 'test-token'), { status: 201 });
   }),
 
+  // ---- Password reset and email verification (auth/routes.py:124-213) ----
+  // Every success is an empty 204. A token rides only in the JSON body.
+  http.post(P('/auth/password-reset/request'), async ({ request }) => {
+    const { body } = await record(request);
+    const bad = exactKeys('password-reset request', body, ['email']);
+    if (bad) return bad;
+    if (typeof body.email !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.email)) {
+      return modelError(422, 'validation_error', 'Request validation failed');
+    }
+    // The same answer for every address, known or not (anti-enumeration).
+    const user = [...model.users.values()].find((u) => u.email === body.email);
+    if (user) mailAccountToken('password_reset', user);
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.post(P('/auth/password-reset/confirm'), async ({ request }) => {
+    const { body } = await record(request);
+    tokenOnlyInBody('password-reset confirm', request);
+    const bad = exactKeys('password-reset confirm', body, ['token', 'new_password']);
+    if (bad) return bad;
+    if (!boundedString(body.token, 1, 128) || !boundedString(body.new_password, 8, 128)) {
+      return modelError(422, 'validation_error', 'Request validation failed');
+    }
+    // account_tokens.py:341-381: every token-state failure is the same 404.
+    const row = findAccountToken('password_reset', body.token);
+    const user = row ? model.users.get(row.user_id) : undefined;
+    if (!row || !accountTokenOpen(row) || !user) {
+      return modelError(404, 'password_reset_invalid', 'This password reset link is invalid or has expired.');
+    }
+    row.used_at = Date.now();
+    user.password = body.new_password;
+    // FD-7: a completed reset verifies the address.
+    user.email_verified = true;
+    // auth_epoch + 1: every access token issued to the account before now stops working.
+    for (const [accessToken, userId] of [...model.accessTokens]) {
+      if (userId === user.id) model.accessTokens.delete(accessToken);
+    }
+    revokeOpenAccountTokens('password_reset', user.id, row);
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.post(P('/auth/email-verification/request'), async ({ request }) => {
+    const { user } = await record(request);
+    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+    // EmailVerificationRequest is the empty object and nothing else: no body at all
+    // is a 422 as well (readJson would have read it as {}).
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await request.clone().text());
+    } catch {
+      raw = undefined;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).length) {
+      model.violations.push(`email-verification request body ${JSON.stringify(raw ?? null)} != {}`);
+      return modelError(422, 'validation_error', 'Request validation failed');
+    }
+    if (user.email_verified) {
+      return modelError(409, 'email_already_verified', 'This email address is already verified.');
+    }
+    mailAccountToken('email_verification', user);
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.post(P('/auth/email-verification/confirm'), async ({ request }) => {
+    const { user, body } = await record(request);
+    tokenOnlyInBody('email-verification confirm', request);
+    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+    const bad = exactKeys('email-verification confirm', body, ['token']);
+    if (bad) return bad;
+    if (!boundedString(body.token, 1, 128)) return modelError(422, 'validation_error', 'Request validation failed');
+    // account_tokens.py:424-469, in order: unknown 404, another account's 403 (nothing
+    // spent), then not open or minted for an address the account no longer has 404.
+    const row = findAccountToken('email_verification', body.token);
+    if (!row) return modelError(404, 'email_verification_invalid', 'This verification link is invalid or has expired.');
+    if (row.user_id !== user.id) {
+      return modelError(403, 'email_verification_wrong_account', 'This verification link was issued to a different account.');
+    }
+    if (!accountTokenOpen(row) || row.email !== user.email) {
+      return modelError(404, 'email_verification_invalid', 'This verification link is invalid or has expired.');
+    }
+    row.used_at = Date.now();
+    user.email_verified = true;
+    revokeOpenAccountTokens('email_verification', user.id, row);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   // ---- Invitations: the token holder's side (auth/routes.py:82-116) ----
   // The token rides only in the JSON body; no request here accepts the email,
   // organization or role.
@@ -996,6 +1223,8 @@ export const handlers = [
       full_name: String(body.full_name),
       password: String(body.password),
       is_operator: false,
+      // FD-5 / FD-6: holding an invitation proves nothing about the mailbox.
+      email_verified: false,
     };
     model.users.set(user.id, user);
     inv.accepted_at = new Date().toISOString();

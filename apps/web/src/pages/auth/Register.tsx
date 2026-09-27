@@ -14,7 +14,8 @@ const schema = z.object({
   full_name: z.string().min(1, 'Your name is required'),
   organization_name: z.string().min(1, 'Organization name is required'),
   email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
-  password: z.string().min(8, 'Use at least 8 characters'),
+  // RegisterRequest's password bounds, so a 422 (which echoes its input) is never provoked.
+  password: z.string().min(8, 'Use at least 8 characters').max(128, 'Use at most 128 characters'),
 });
 
 type FormValues = z.infer<typeof schema>;

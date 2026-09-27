@@ -17,6 +17,8 @@ import type {
   ClaimIn,
   CompetitorIn,
   ContextRow,
+  EmailVerificationConfirmRequest,
+  EmailVerificationRequest,
   FeedbackCreate,
   FeedbackHistoryOut,
   FeedbackOut,
@@ -47,6 +49,8 @@ import type {
   OpportunityIntelligenceResponse,
   OrganizationMemberOut,
   OrganizationOut,
+  PasswordResetConfirmRequest,
+  PasswordResetRequest,
   ProductIn,
   RegisterRequest,
   RuntimeCapabilities,
@@ -145,6 +149,27 @@ export const registerWithInvitation = (body: InvitationRegisterRequest, signal?:
 
 export const acceptInvitation = (body: InvitationTokenRequest, signal?: AbortSignal) =>
   apiRequest<SessionOut>('/auth/invitations/accept', { method: 'POST', body, signal });
+
+// ---- Password reset and email verification (P6-AUTH-2) ----
+// Every answer is an empty 204. A token travels only in the JSON body — never a path
+// segment or query string. Reset is public: the request answers alike for every
+// address, and the confirm spends the token, signs every session of the account out
+// and returns no session. Verification needs the session of the token's own account.
+export const requestPasswordReset = (body: PasswordResetRequest, signal?: AbortSignal) =>
+  apiRequest<void>('/auth/password-reset/request', { method: 'POST', body, signal });
+
+export const confirmPasswordReset = (body: PasswordResetConfirmRequest, signal?: AbortSignal) =>
+  apiRequest<void>('/auth/password-reset/confirm', { method: 'POST', body, signal });
+
+// The body is always the empty object: the address is the account's own, and a
+// request without a body is refused (422).
+export const requestEmailVerification = (signal?: AbortSignal) => {
+  const body: EmailVerificationRequest = {};
+  return apiRequest<void>('/auth/email-verification/request', { method: 'POST', body, signal });
+};
+
+export const confirmEmailVerification = (body: EmailVerificationConfirmRequest, signal?: AbortSignal) =>
+  apiRequest<void>('/auth/email-verification/confirm', { method: 'POST', body, signal });
 
 // ---- Organizations / workspaces ----
 export const listOrganizations = (signal?: AbortSignal) =>

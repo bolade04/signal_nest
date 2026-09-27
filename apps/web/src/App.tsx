@@ -4,6 +4,9 @@ import { ProtectedRoute } from '@/auth/ProtectedRoute';
 import { RequireOperator } from '@/auth/RequireOperator';
 import { SignInPage } from '@/pages/auth/SignIn';
 import { RegisterPage } from '@/pages/auth/Register';
+import { ForgotPasswordPage } from '@/pages/auth/ForgotPassword';
+import { ResetPasswordPage } from '@/pages/auth/ResetPassword';
+import { VerifyEmailPage } from '@/pages/auth/VerifyEmail';
 import { InvitePage } from '@/pages/invite/InvitePage';
 import { OverviewPage } from '@/pages/Overview';
 import { OnboardingPage } from '@/pages/Onboarding';
@@ -24,6 +27,11 @@ export function App() {
       <Route path="/register" element={<RegisterPage />} />
       {/* Public, and usable while signed in: an invitee may not have an account yet. */}
       <Route path="/invite" element={<InvitePage />} />
+      {/* Public too: a mailed link opens them signed in or out, and the token rides in
+          the fragment, which ProtectedRoute's redirect would drop. */}
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route index element={<OverviewPage />} />

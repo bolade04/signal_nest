@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 import { ApiError } from '@/api/client';
 import { Field } from '@/components/common/form-field';
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/auth/AuthContext';
+import { PASSWORD_RESET_NOTICE } from './account-token';
 import { AuthLayout } from './AuthLayout';
 // Static import on purpose: a dynamic import would be code-split before the
 // `import.meta.env.DEV` branch below is folded away, shipping the demo
@@ -25,7 +26,11 @@ type FormValues = z.infer<typeof schema>;
 export function SignInPage() {
   const { status, login, intendedPath, setIntendedPath } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [formError, setFormError] = useState<string | null>(null);
+  // Handed over in router state by a completed password reset; never read from the URL.
+  const passwordReset =
+    (location.state as { notice?: unknown } | null)?.notice === PASSWORD_RESET_NOTICE;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -68,6 +73,11 @@ export function SignInPage() {
   return (
     <AuthLayout title="Sign in" subtitle="Welcome back. Let's see what your scouts found.">
       <form onSubmit={form.handleSubmit(submit)} className="space-y-4" noValidate>
+        {passwordReset ? (
+          <p role="status" className="rounded-md border border-border bg-secondary/50 px-3 py-2 text-sm">
+            Your password has been reset. Sign in with your new password.
+          </p>
+        ) : null}
         {formError ? (
           <div
             role="alert"
@@ -102,6 +112,11 @@ export function SignInPage() {
             />
           )}
         </Field>
+        <div className="-mt-2 flex justify-end">
+          <Link to="/forgot-password" className="text-sm font-medium text-primary hover:underline">
+            Forgot password?
+          </Link>
+        </div>
 
         <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
           {form.formState.isSubmitting ? <Spinner className="size-4 text-current" /> : null}
