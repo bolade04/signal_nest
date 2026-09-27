@@ -5,6 +5,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
 import { Breadcrumbs } from './breadcrumbs';
 import { LocationSwitcher, WorkspaceSwitcher } from './context-switchers';
+import { EmailVerificationBanner } from './email-verification-banner';
 import { GlobalSearch } from './global-search';
 import { Notifications } from './notifications';
 import { SidebarNav } from './sidebar';
@@ -88,6 +89,7 @@ export function AppShell() {
 
         <main id="main-content" className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-7xl">
+            <EmailVerificationBanner />
             <Outlet />
           </div>
         </main>

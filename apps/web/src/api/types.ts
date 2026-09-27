@@ -29,6 +29,14 @@ export type InvitationPreviewOut = S['InvitationPreviewOut'];
 export type InvitationTokenRequest = S['InvitationTokenRequest'];
 export type InvitationRegisterRequest = S['InvitationRegisterRequest'];
 
+// 6B-4A password reset and email verification (P6-AUTH-2). Every answer is an
+// empty 204; a token travels only in the JSON body.
+export type PasswordResetRequest = S['PasswordResetRequest'];
+export type PasswordResetConfirmRequest = S['PasswordResetConfirmRequest'];
+/** Deliberately empty: the address is the signed-in account's own. */
+export type EmailVerificationRequest = S['EmailVerificationRequest'];
+export type EmailVerificationConfirmRequest = S['EmailVerificationConfirmRequest'];
+
 export type BusinessProfileBase = S['BusinessProfileBase'];
 export type BusinessProfileOut = S['BusinessProfileOut'];
 
