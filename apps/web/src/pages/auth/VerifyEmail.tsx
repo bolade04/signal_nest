@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { ApiError } from '@/api/client';
 import * as api from '@/api/endpoints';
 import { useAuth } from '@/auth/AuthContext';
+import { SIGN_OUT_NOTICE_COPY, signOutNotice } from '@/auth/sign-out';
 import { Field } from '@/components/common/form-field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,11 +46,12 @@ export function VerifyEmailPage() {
 }
 
 function VerifyEmailFlow({ token, onDone }: { token: string | null; onDone: () => void }) {
-  const { status, login, logout, refreshSession } = useAuth();
+  const { status, login, clearLocalSession, signOut, refreshSession } = useAuth();
   const [stage, setStage] = useState<Stage>('ready');
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const inFlight = useRef(false);
   const signedIn = status === 'authenticated';
 
@@ -73,7 +75,7 @@ function VerifyEmailFlow({ token, onDone }: { token: string | null; onDone: () =
         setStage('wrong-account');
       } else if (err instanceof ApiError && err.status === 401) {
         // The session ended. Sign in again right here; the token stays in memory.
-        logout();
+        clearLocalSession();
         setNotice('Your session has ended. Sign in again to verify your email address.');
       } else {
         setActionError(calmFailureMessage(err, 'Your email address could not be verified. Please try again.'));
@@ -107,12 +109,14 @@ function VerifyEmailFlow({ token, onDone }: { token: string | null; onDone: () =
     }
   };
 
-  const signOut = () => {
-    // The app's existing sign-out. The token stays in this page's memory so the
-    // account the link was sent to can sign in here next.
-    logout();
+  const signOutHere = async () => {
+    // Sign out on the server first (P6-AUTH-4). The token stays in this page's memory
+    // so the account the link was sent to can sign in here next.
+    setSigningOut(true);
+    const notice = signOutNotice(await signOut());
+    setSigningOut(false);
     setStage('ready');
-    setNotice(null);
+    setNotice(notice ? SIGN_OUT_NOTICE_COPY[notice] : null);
     setActionError(null);
   };
 
@@ -135,7 +139,9 @@ function VerifyEmailFlow({ token, onDone }: { token: string | null; onDone: () =
     );
   }
   if (!signedIn) return <SignInForm notice={notice} error={actionError} onSubmit={submitSignIn} />;
-  if (stage === 'wrong-account') return <WrongAccountPanel onSignOut={signOut} />;
+  if (stage === 'wrong-account') {
+    return <WrongAccountPanel busy={signingOut} onSignOut={() => void signOutHere()} />;
+  }
   return <ConfirmPanel busy={verifying} error={actionError} onVerify={() => void verify()} />;
 }
 
@@ -224,7 +230,7 @@ function ConfirmPanel({
   );
 }
 
-function WrongAccountPanel({ onSignOut }: { onSignOut: () => void }) {
+function WrongAccountPanel({ busy, onSignOut }: { busy: boolean; onSignOut: () => void }) {
   const copy = ACCOUNT_TOKEN_ERROR_COPY.email_verification_wrong_account;
   return (
     <section className="space-y-4">
@@ -239,7 +245,7 @@ function WrongAccountPanel({ onSignOut }: { onSignOut: () => void }) {
         </div>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <Button className="flex-1" onClick={onSignOut}>
+        <Button className="flex-1" onClick={onSignOut} disabled={busy} aria-busy={busy}>
           Sign out
         </Button>
         <Button asChild variant="outline" className="flex-1">

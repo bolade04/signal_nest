@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,7 @@ from app.auth.dependencies import OrganizationContext
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
+from app.db.clock import database_now
 from app.organizations.members import (
     ORGANIZATION_ADMIN_ROLES,
     as_utc,
@@ -105,20 +106,6 @@ def generate_invitation_token() -> tuple[str, str]:
     """Mint a token: ``(raw, digest)``. Only the digest is ever stored."""
     raw = secrets.token_urlsafe(32)
     return raw, hash_invitation_token(raw)
-
-
-def database_now(db: Session) -> datetime:
-    """The database's current time, as an aware UTC datetime.
-
-    PostgreSQL's ``now()`` is the transaction's start time, so every reading in one
-    transaction agrees. SQLite's ``CURRENT_TIMESTAMP`` has whole-second resolution,
-    so the millisecond form of ``'now'`` is read instead; SQLite returns it as naive
-    UTC text.
-    """
-    if db.get_bind().dialect.name == "sqlite":
-        text_value = db.scalar(select(func.strftime("%Y-%m-%d %H:%M:%f", "now")))
-        return as_utc(datetime.fromisoformat(text_value))
-    return as_utc(db.scalar(select(func.now())))
 
 
 def invitation_state(invitation: OrganizationInvitation, *, now: datetime) -> InvitationState:

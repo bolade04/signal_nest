@@ -66,7 +66,7 @@ from app.core.config import Settings, get_settings
 from app.core.enums import Role
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, SignalNestError
 from app.core.middleware import RateLimitMiddleware
-from app.core.security import create_access_token
+from app.db import clock as db_clock
 from app.db.models import Base
 from app.db.session import SessionLocal, get_db
 from app.main import app
@@ -78,6 +78,7 @@ from app.organizations.models import (
     User,
     Workspace,
 )
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -129,7 +130,7 @@ def _email(user_id: str) -> str:
 
 
 def _bearer(user_id: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+    return {"Authorization": f"Bearer {live_bearer(user_id)}"}
 
 
 def _as_utc(value: datetime | str) -> datetime:
@@ -727,7 +728,62 @@ class TestDatabaseClockNotAppClock:
     any expiry computed or decided from the host clock, these outcomes would flip.
     """
 
-    MODULES = ("app.organizations.invitations", "app.organizations.members", "app.db.base")
+    MODULES = (
+        "app.db.clock",
+        "app.organizations.invitations",
+        "app.organizations.members",
+        "app.db.base",
+    )
+    #: Every module on the database-clock path, P6-AUTH-4's included. Any of them that binds
+    #: the real ``datetime`` class must be skewed here, i.e. listed in MODULES.
+    DB_CLOCK_PATH = (
+        "app.db.clock",
+        "app.organizations.invitations",
+        "app.organizations.members",
+        "app.db.base",
+        "app.auth.service",
+        "app.auth.dependencies",
+        "app.auth.routes",
+    )
+
+    def test_every_datetime_binding_on_the_database_clock_path_is_skewed(self):  # T-37
+        import importlib
+
+        bound = {
+            name
+            for name in self.DB_CLOCK_PATH
+            if getattr(importlib.import_module(name), "datetime", None) is datetime
+        }
+        assert "app.db.clock" in bound  # positive instance: the guard sees a real binding
+        assert bound - set(self.MODULES) == set()
+
+    def test_the_auth4_session_path_reads_no_unbound_host_clock(self):  # T-37
+        """The skew above shifts only module-level ``datetime`` bindings, so a clock read that
+        binds none (``import datetime``, ``time.time()``, ``__import__``) would escape it. The
+        AUTH4 session path reads no host clock at all: its only clock is ``database_now``."""
+        import ast
+        import importlib
+        import inspect
+
+        clock_attrs = {"now", "utcnow", "today", "time", "time_ns", "monotonic", "perf_counter"}
+        clock_names = {"__import__", "time", "time_ns", "monotonic", "perf_counter"}
+
+        def clock_reads(module_name: str) -> list[str]:
+            tree = ast.parse(inspect.getsource(importlib.import_module(module_name)))
+            return [
+                ast.unparse(node)
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and (
+                    (isinstance(node.func, ast.Attribute) and node.func.attr in clock_attrs)
+                    or (isinstance(node.func, ast.Name) and node.func.id in clock_names)
+                )
+            ]
+
+        for name in ("app.auth.dependencies", "app.auth.service", "app.auth.routes"):
+            assert clock_reads(name) == [], name
+        # Positive instance: the same scan sees the token builder's deliberate app-clock read.
+        assert "datetime.now(UTC)" in clock_reads("app.core.security")
 
     def _skew(self, monkeypatch, delta: timedelta) -> None:
         real = datetime
@@ -749,14 +805,18 @@ class TestDatabaseClockNotAppClock:
             monkeypatch.setattr(module, "datetime", SkewedDatetime)
         # Positive instance: the host clock the feature sees really is skewed ...
         assert abs(invitation_service.datetime.now(UTC) - real.now(UTC) - delta) < CLOCK_TOLERANCE
+        assert abs(db_clock.datetime.now(UTC) - real.now(UTC) - delta) < CLOCK_TOLERANCE
 
     @pytest.mark.parametrize("days", [10, -10])
-    def test_database_now_ignores_the_host_clock(self, env: Env, monkeypatch, days: int):
+    def test_database_now_ignores_the_host_clock(self, env: Env, monkeypatch, days: int):  # T-37
         self._skew(monkeypatch, timedelta(days=days))
         with env.request_factory() as s:
             service_now = invitation_service.database_now(s)
-        # ... and the database clock the service reads is not.
+            clock_now = db_clock.database_now(s)
+        # ... and the database clock the service reads is not -- at its new home and through
+        # the invitations re-export alike.
         assert abs(service_now - env.witness.db_now()) < CLOCK_TOLERANCE
+        assert abs(clock_now - env.witness.db_now()) < CLOCK_TOLERANCE
 
     def test_expiry_is_computed_from_the_database_clock(self, env: Env, monkeypatch):
         self._skew(monkeypatch, timedelta(days=10))

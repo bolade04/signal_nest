@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { setAuthToken, setUnauthorizedHandler } from '@/api/client';
+import { ApiError, setAuthToken, setUnauthorizedHandler } from '@/api/client';
 import * as api from '@/api/endpoints';
 import type {
   InvitationRegisterRequest,
@@ -19,6 +19,7 @@ import type {
   SessionOut,
   UserOut,
 } from '@/api/types';
+import { SIGN_OUT_TIMEOUT_MS, type SignOutEverywhereOutcome, type SignOutOutcome } from './sign-out';
 
 const TOKEN_KEY = 'signalnest-token';
 
@@ -35,13 +36,40 @@ interface AuthContextValue {
   acceptInvitation: (body: InvitationTokenRequest) => Promise<void>;
   /** Re-read the signed-in session (user + memberships) from the server. */
   refreshSession: () => Promise<void>;
-  logout: () => void;
+  /**
+   * Forget this browser's session: stored token, request header, auth state and query
+   * cache. LOCAL ONLY — the server session is NOT revoked (P6-AUTH-4). For clears that
+   * are not a sign-out (a refused session, the password-reset page); a sign-out control
+   * calls `signOut()`.
+   */
+  clearLocalSession: () => void;
+  /**
+   * Sign out: revoke this session on the server (`POST /auth/logout`, bounded), then
+   * clear locally whatever the answer. The outcome says what the server confirmed.
+   */
+  signOut: () => Promise<SignOutOutcome>;
+  /**
+   * Sign out everywhere: revoke every session of the account (`POST /auth/logout-all`,
+   * bounded). Clears locally on 204 or 401 only; on any other failure nothing changes.
+   */
+  signOutEverywhere: () => Promise<SignOutEverywhereOutcome>;
   /** Path the user was trying to reach before being bounced to sign-in. */
   intendedPath: string | null;
   setIntendedPath: (path: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+/** Run `request` with an abort signal that fires after `SIGN_OUT_TIMEOUT_MS`. */
+async function bounded(request: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SIGN_OUT_TIMEOUT_MS);
+  try {
+    await request(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
@@ -51,6 +79,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthContextValue['status']>(token ? 'loading' : 'unauthenticated');
   const intendedPathRef = useRef<string | null>(null);
   const [intendedPath, setIntendedPathState] = useState<string | null>(null);
+  // Session re-reads in flight (refreshSession). A sign-out aborts them: once the server
+  // has revoked the session they answer 401 — possibly after the next user has signed
+  // in here, when the 401 handler would clear THAT session.
+  const refreshes = useRef(new Set<AbortController>());
+  const abortRefreshes = useCallback(() => {
+    for (const controller of refreshes.current) controller.abort();
+    refreshes.current.clear();
+  }, []);
 
   const applySession = useCallback((session: SessionOut) => {
     localStorage.setItem(TOKEN_KEY, session.access_token);
@@ -61,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStatus('authenticated');
   }, []);
 
-  const logout = useCallback(() => {
+  const clearLocalSession = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     setAuthToken(null);
     setToken(null);
@@ -71,18 +107,70 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryClient.clear();
   }, [queryClient]);
 
+  const signOut = useCallback(async (): Promise<SignOutOutcome> => {
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (!stored) {
+      // Nothing is stored, so nothing can be sent. If this tab still held a session, another
+      // tab cleared it locally and the server may still accept it: unconfirmed, not ended.
+      abortRefreshes();
+      clearLocalSession();
+      return token ? 'local-only' : 'already-ended';
+    }
+    let outcome: SignOutOutcome;
+    try {
+      // The stored session is the one this browser signs out of, and it stays stored
+      // until the server has answered.
+      setAuthToken(stored);
+      await bounded((signal) => api.logout(signal));
+      outcome = 'server-revoked';
+    } catch (err) {
+      outcome = err instanceof ApiError && err.status === 401 ? 'already-ended' : 'local-only';
+    }
+    abortRefreshes();
+    clearLocalSession();
+    return outcome;
+  }, [abortRefreshes, clearLocalSession, token]);
+
+  const signOutEverywhere = useCallback(async (): Promise<SignOutEverywhereOutcome> => {
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (!stored) {
+      // As in signOut: nothing can be sent, and a session this tab still held may be live.
+      abortRefreshes();
+      clearLocalSession();
+      return token ? 'local-only' : 'already-ended';
+    }
+    try {
+      setAuthToken(stored);
+      await bounded((signal) => api.logoutAll(signal));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        abortRefreshes();
+        clearLocalSession();
+        return 'already-ended';
+      }
+      // Nothing is cleared: this browser stays signed in, as it was, and can retry — with the
+      // session stored NOW (a re-issue may have replaced it during the wait).
+      setAuthToken(localStorage.getItem(TOKEN_KEY));
+      return 'failed';
+    }
+    abortRefreshes();
+    clearLocalSession();
+    return 'server-revoked';
+  }, [abortRefreshes, clearLocalSession, token]);
+
   const setIntendedPath = useCallback((path: string | null) => {
     intendedPathRef.current = path;
     setIntendedPathState(path);
   }, []);
 
-  // Register the 401 handler once so any expired-token response logs the user out.
+  // Register the 401 handler once so any expired-token response clears the session.
+  // Local only: the refused request already shows the server session has ended.
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      if (localStorage.getItem(TOKEN_KEY)) logout();
+      if (localStorage.getItem(TOKEN_KEY)) clearLocalSession();
     });
     return () => setUnauthorizedHandler(null);
-  }, [logout]);
+  }, [clearLocalSession]);
 
   // Validate a persisted token on first load.
   useEffect(() => {
@@ -144,11 +232,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshSession = useCallback(async () => {
     const current = localStorage.getItem(TOKEN_KEY);
     if (!current) return;
-    const session = await api.getSession();
-    // A sign-out or a different sign-in while this was in flight wins; applying
-    // the stale answer would silently sign the previous user back in.
-    if (localStorage.getItem(TOKEN_KEY) !== current) return;
-    applySession(session);
+    const controller = new AbortController();
+    refreshes.current.add(controller);
+    try {
+      const session = await api.getSession(controller.signal);
+      // A sign-out or a different sign-in while this was in flight wins; applying
+      // the stale answer would silently sign the previous user back in.
+      if (localStorage.getItem(TOKEN_KEY) !== current) return;
+      applySession(session);
+    } finally {
+      refreshes.current.delete(controller);
+    }
   }, [applySession]);
 
   const value = useMemo<AuthContextValue>(
@@ -162,7 +256,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       registerWithInvitation,
       acceptInvitation,
       refreshSession,
-      logout,
+      clearLocalSession,
+      signOut,
+      signOutEverywhere,
       intendedPath,
       setIntendedPath,
     }),
@@ -176,7 +272,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       registerWithInvitation,
       acceptInvitation,
       refreshSession,
-      logout,
+      clearLocalSession,
+      signOut,
+      signOutEverywhere,
       intendedPath,
       setIntendedPath,
     ],

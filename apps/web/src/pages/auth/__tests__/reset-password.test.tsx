@@ -224,14 +224,17 @@ describe('client-side password rules send nothing', () => {
 });
 
 describe('a completed reset', () => {
-  it('signs this tab out, lands on sign-in with the notice, and never signs in by itself', async () => {
+  it('signs this tab out, lands on sign-in with the notice, and never signs in by itself (F-11 c)', async () => {
     const token = addRita();
     const session = orgModel.signIn('user-rita');
     const screen = openLink(token, { session });
     // Usable while signed in: not redirected away.
     await waitFor(() => expect(screen.getByTestId('auth-status')).toHaveTextContent(/^authenticated$/));
     expect(window.location.pathname).toBe('/reset-password');
-    expect(localStorage.getItem('signalnest-token')).toBe(session);
+    // Signed in: the stored token is the boot re-read's re-issue of the same session.
+    const stored = localStorage.getItem('signalnest-token')!;
+    expect(stored).toMatch(/^access-user-rita-/);
+    expect(orgModel.accepts(stored)).toBe(true);
 
     await fillPasswords(screen, NEW_PASSWORD);
     await screen.user.click(screen.getByRole('button', { name: /reset password/i }));
@@ -245,8 +248,12 @@ describe('a completed reset', () => {
     expect(screen.getByTestId('auth-status')).toHaveTextContent(/^unauthenticated$/);
     expect(orgModel.count('POST', /\/auth\/login$/)).toBe(0);
     // …and the server no longer accepts it (auth_epoch).
-    const me = await fetch(`${ORIGIN}${API_PREFIX}/auth/me`, { headers: { Authorization: `Bearer ${session}` } });
-    expect(me.status).toBe(401);
+    for (const token of [session, stored]) {
+      const me = await fetch(`${ORIGIN}${API_PREFIX}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      expect(me.status).toBe(401);
+    }
+    // The page cleared LOCALLY: no server sign-out was sent (P6-AUTH-4 FD-AUTH4-8).
+    expect(orgModel.signOuts()).toEqual([]);
     // The new password is set, and the reset verified the address (FD-7).
     expect(orgModel.user('user-rita')).toMatchObject({ password: NEW_PASSWORD, email_verified: true });
     expectNoTokenLeak(token, 'after reset');
@@ -256,6 +263,35 @@ describe('a completed reset', () => {
     await screen.user.type(screen.getByLabelText(/^password/i), NEW_PASSWORD);
     await screen.user.click(screen.getByRole('button', { name: /^sign in$/i }));
     await waitFor(() => expect(screen.getByTestId('auth-status')).toHaveTextContent(/^authenticated$/));
+  });
+
+  it('signed in as ANOTHER account: opening the page changes nothing, and the reset only clears this tab', async () => {
+    // FD-AUTH4-8: the reset token is Rita's; the browser is signed in as the demo account.
+    const token = addRita();
+    const screen = openLink(token, { session: 'test-token' });
+    await waitFor(() => expect(screen.getByTestId('auth-status')).toHaveTextContent(/^authenticated$/));
+    await waitFor(() => expect(probedQueryClient()?.getQueryData(['organizations'])).toBeTruthy());
+    // (a) Opening the page sends no sign-out and leaves the demo session in place.
+    expect(orgModel.signOuts()).toEqual([]);
+    expect(localStorage.getItem('signalnest-token')).toBe('test-token');
+
+    await fillPasswords(screen, NEW_PASSWORD);
+    await screen.user.click(screen.getByRole('button', { name: /reset password/i }));
+
+    // (b) This tab is cleared -- stored token, auth state and cached data -- with the notice ...
+    expect(await screen.findByText('Your password has been reset. Sign in with your new password.')).toBeInTheDocument();
+    expect(localStorage.getItem('signalnest-token')).toBeNull();
+    expect(screen.getByTestId('auth-status')).toHaveTextContent(/^unauthenticated$/);
+    expect(
+      probedQueryClient()!
+        .getQueryCache()
+        .getAll()
+        .filter((q) => q.state.data !== undefined),
+    ).toEqual([]);
+    // ... and nothing was revoked on the server: the demo session is not Rita's to end.
+    expect(orgModel.signOuts()).toEqual([]);
+    expect(orgModel.count('POST', /\/auth\/logout(-all)?$/)).toBe(0);
+    expect(orgModel.accepts('test-token')).toBe(true);
   });
 
   it('two submits that land before the button disables spend the token once', async () => {

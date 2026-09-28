@@ -21,6 +21,13 @@ Two further seams, neither of them a FastAPI dependency override:
 
 The digests are computed here from the contract's definition, not by calling the code under
 test: ``sha256("password-reset:" + raw)`` and ``sha256("email-verification:" + raw)``.
+
+P6-AUTH-4 (session lifecycle): every access token is bound to a live ``auth_sessions`` row, so
+the token helpers here open a real session through the product's own ``create_session`` /
+``issue_token`` -- :func:`bearer` on an :class:`Env`, :func:`live_bearer` through whatever
+``get_db`` override a test module installs. :func:`raw_token` signs arbitrary claims for the
+negative tests only; :func:`app_clock_skewed` and :func:`require_postgres` are the clock-skew
+and fail-closed PostgreSQL harness of the AUTH4 test plan.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -35,16 +43,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from jose import jwt
 from sqlalchemy import create_engine, event, func, insert, select, text, update
 from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.audit.models import AuditLog
-from app.auth.models import EmailVerificationToken, PasswordResetToken
+from app.auth import service as auth_service
+from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetToken
 from app.core.config import get_settings
 from app.core.middleware import RateLimitMiddleware
-from app.core.security import create_access_token, decode_access_token, hash_password
+from app.core.security import ALGORITHM, decode_access_token, hash_password
 from app.db.models import Base
 from app.db.session import SessionLocal, get_db
 from app.infra import mail
@@ -69,6 +80,8 @@ REGISTER = f"{API}/auth/register"
 INVITATION_PREVIEW = f"{API}/auth/invitations/preview"
 INVITATION_REGISTER = f"{API}/auth/invitations/register"
 INVITATION_ACCEPT = f"{API}/auth/invitations/accept"
+LOGOUT = f"{API}/auth/logout"
+LOGOUT_ALL = f"{API}/auth/logout-all"
 
 RESET_PATH = "/reset-password"
 VERIFY_PATH = "/verify-email"
@@ -274,6 +287,15 @@ class Witness:
         where = () if user_id is None else (EmailVerificationToken.user_id == user_id,)
         return self.rows(EmailVerificationToken, *where)
 
+    def sessions(self, user_id: str | None = None) -> list[dict]:
+        """Every ``auth_sessions`` row (of ``user_id``), in id order."""
+        where = () if user_id is None else (AuthSession.user_id == user_id,)
+        return self.rows(AuthSession, *where)
+
+    def session_row(self, sid: str) -> dict:
+        [row] = self.rows(AuthSession, AuthSession.id == sid)
+        return row
+
     def token(self, model, token_id: str) -> dict:
         [row] = self.rows(model, model.id == token_id)
         return row
@@ -426,10 +448,112 @@ def _built(request_engine: Engine, witness_engine: Engine, *, teardown_commit: b
 # --------------------------------------------------------------------------- #
 # Requests
 # --------------------------------------------------------------------------- #
+def open_session(engine: Engine, user_id: str) -> tuple[str, str]:
+    """Open a live session for ``user_id`` on ``engine``'s database, as a fresh sign-in would.
+
+    The product's own ``create_session`` (database clock, fixed absolute expiry) and
+    ``issue_token`` (the account's CURRENT epoch, the session's ``sid``) do the work; the row
+    is committed before the token exists. Returns ``(access_token, sid)``.
+    """
+    with sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)() as s:
+        user = s.get(User, user_id)
+        assert user is not None, f"open_session: unknown user {user_id}"
+        session = auth_service.create_session(s, user)
+        s.commit()
+        return auth_service.issue_token(user, session), session.id
+
+
 def bearer(env: Env, user_id: str) -> str:
-    """An access token carrying the account's CURRENT epoch, as a fresh sign-in would."""
-    epoch = env.witness.user(user_id)["auth_epoch"]
-    return create_access_token(user_id, extra={"auth_epoch": epoch})
+    """A token bound to a new LIVE session of ``user_id``, carrying the account's CURRENT epoch."""
+    return open_session(env.request_engine, user_id)[0]
+
+
+def live_bearer(user_id: str, db: Session | None = None) -> str:
+    """A token bound to a new LIVE session of ``user_id``, opened through the app's ``get_db``.
+
+    For test modules with their own database: the session row is written through the
+    ``get_db`` override the module installed, so it lands in that module's database. A
+    ``user_id`` with no user row gets a well-formed token with an unused ``sid`` instead --
+    refused either way (the user is looked up before the session). ``db`` opens the session
+    inside a caller's own (seeding) transaction instead: flushed, and committed by the caller.
+    """
+    if db is not None:
+        user = db.get(User, user_id)
+        assert user is not None, f"live_bearer: unknown user {user_id}"
+        session = auth_service.create_session(db, user)
+        return auth_service.issue_token(user, session)
+    provider = app.dependency_overrides.get(get_db)
+    assert provider is not None, "live_bearer needs the test's get_db override installed"
+    generator = provider()
+    db = next(generator)
+    try:
+        user = db.get(User, user_id)
+        if user is None:
+            return raw_token(sub=user_id, sid=uuid.uuid4().hex, auth_epoch=0)
+        session = auth_service.create_session(db, user)
+        db.commit()
+        return auth_service.issue_token(user, session)
+    finally:
+        generator.close()
+
+
+def live_auth(user_id: str) -> dict:
+    """``{"Authorization": "Bearer <live_bearer(user_id)>"}``."""
+    return {"Authorization": f"Bearer {live_bearer(user_id)}"}
+
+
+#: Omit a claim from :func:`raw_token` (``None`` is a real JSON value there).
+OMIT = object()
+
+
+def raw_token(
+    *, lifetime: timedelta = timedelta(minutes=30), key: str | None = None, **claims
+) -> str:
+    """Sign ARBITRARY claims with the app's key (TEST ONLY: the product builder has no claims
+    dict). ``iat``/``exp`` default to now and now + ``lifetime``; a claim passed as
+    :data:`OMIT` is left out."""
+    now = datetime.now(UTC)
+    payload = {"iat": now, "exp": now + lifetime, **claims}
+    payload = {k: v for k, v in payload.items() if v is not OMIT}
+    return jwt.encode(payload, key or get_settings().secret_key, algorithm=ALGORITHM)
+
+
+# --------------------------------------------------------------------------- #
+# Clock skew and PostgreSQL (the AUTH4 clock-test harness)
+# --------------------------------------------------------------------------- #
+SKEW_60 = timedelta(minutes=60)  # > 0 and < the 720-minute TTL
+
+
+@contextmanager
+def app_clock_skewed(offset: timedelta) -> Iterator[type[datetime]]:
+    """Shift the APPLICATION clock by ``offset`` in every ``app.*`` module bound to the real
+    ``datetime`` class (never the tests', never jose's). The database clock is untouched."""
+    real = datetime
+
+    class Shifted(real):
+        @classmethod
+        def now(cls, tz=None):
+            return real.now(tz) + offset
+
+    with pytest.MonkeyPatch.context() as mp:
+        for name, module in list(sys.modules.items()):
+            if (
+                name.startswith("app.")
+                and not name.startswith("app.tests.")
+                and getattr(module, "datetime", None) is real
+            ):
+                mp.setattr(module, "datetime", Shifted)
+        yield Shifted
+
+
+def require_postgres() -> str:
+    """``TEST_POSTGRES_URL``; unset FAILS in CI (``CI=true``) and skips only elsewhere."""
+    url = os.getenv("TEST_POSTGRES_URL")
+    if not url:
+        if os.getenv("CI") == "true":
+            pytest.fail("AUTH4 PostgreSQL tests must run in CI (TEST_POSTGRES_URL unset)")
+        pytest.skip("TEST_POSTGRES_URL not set")
+    return url
 
 
 def post(

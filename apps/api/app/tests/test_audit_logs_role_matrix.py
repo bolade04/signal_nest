@@ -55,11 +55,11 @@ from sqlalchemy.orm import sessionmaker
 from app.audit.models import AuditLog
 from app.core.config import get_settings
 from app.core.enums import Role
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -133,7 +133,7 @@ def _mid(org: str, role: Role) -> str:
 
 
 def _auth(user_id: str) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+    return {"Authorization": f"Bearer {live_bearer(user_id)}"}
 
 
 # The two production-owned denial messages. Both arrive as 403 / permission_denied, so

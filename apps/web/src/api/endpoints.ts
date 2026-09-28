@@ -136,6 +136,15 @@ export const register = (body: RegisterRequest, signal?: AbortSignal) =>
 export const getSession = (signal?: AbortSignal) =>
   apiRequest<SessionOut>('/auth/me', { signal });
 
+// ---- Sessions (P6-AUTH-4) ----
+// Only the bearer is sent; each answers an empty 204. Sign out ends the session the
+// token belongs to; sign out everywhere ends every session of the account.
+export const logout = (signal?: AbortSignal) =>
+  apiRequest<void>('/auth/logout', { method: 'POST', signal });
+
+export const logoutAll = (signal?: AbortSignal) =>
+  apiRequest<void>('/auth/logout-all', { method: 'POST', signal });
+
 // ---- Invitation token holders (P6-AUTH-1) ----
 // The raw token travels only in the JSON body — never a path segment or query
 // string. The organization, role and email are the invitation's own; none of these

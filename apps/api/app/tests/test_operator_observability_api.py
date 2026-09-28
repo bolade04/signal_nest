@@ -36,7 +36,6 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.jobs.models import Job, JobEvent
@@ -45,6 +44,7 @@ from app.jobs.stuck import is_job_stuck
 from app.main import app
 from app.organizations.models import User
 from app.scouting_requests.models import ScoutSchedule
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -276,8 +276,8 @@ class _Harness:
     def __init__(self, client, factory):
         self.client = client
         self.factory = factory
-        self.op = {"Authorization": f"Bearer {create_access_token(_OPERATOR)}"}
-        self.cust = {"Authorization": f"Bearer {create_access_token(_CUSTOMER)}"}
+        self.op = {"Authorization": f"Bearer {live_bearer(_OPERATOR)}"}
+        self.cust = {"Authorization": f"Bearer {live_bearer(_CUSTOMER)}"}
 
     def get(self, path: str, *, auth=None, **params):
         return self.client.get(

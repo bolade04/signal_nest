@@ -181,7 +181,14 @@ class Settings(BaseSettings):
     # Secret-bearing fields set repr=False so they never appear in model reprs,
     # tracebacks or pydantic ValidationError output (config errors are logged).
     secret_key: str = Field(default="dev-insecure-change-me", repr=False)
+    #: Lifetime of one access token, in minutes. A token is also capped at its
+    #: session's absolute expiry, so it never outlives the session. Must be > 0 and
+    #: <= session_absolute_lifetime_minutes.
     access_token_expire_minutes: int = 60 * 12
+    #: Absolute lifetime of a sign-in session, in minutes (P6-AUTH-4): fixed when the
+    #: session is created, measured on the database clock, never extended by a
+    #: re-issued token. Must be > 0 and <= 720 (12 hours).
+    session_absolute_lifetime_minutes: int = 60 * 12
     #: Lifetime of an organization invitation, in hours. The expiry is computed from
     #: and compared against the database clock. Must be >= 1.
     invitation_expire_hours: int = 72
@@ -584,6 +591,16 @@ class Settings(BaseSettings):
         # when created; reject it at construction.
         if self.invitation_expire_hours < 1:
             errors.append("invitation_expire_hours must be >= 1")
+
+        # Session lifecycle (P6-AUTH-4, FD-AUTH4-C1): a session lives at most 12
+        # hours, and a token never outlives the session it belongs to.
+        if not 0 < self.session_absolute_lifetime_minutes <= 720:
+            errors.append("session_absolute_lifetime_minutes must be > 0 and <= 720")
+        if not 0 < self.access_token_expire_minutes <= self.session_absolute_lifetime_minutes:
+            errors.append(
+                "access_token_expire_minutes must be > 0 and <= "
+                "session_absolute_lifetime_minutes"
+            )
 
         # Account-token lifetimes and per-user mail throttles. A non-positive
         # lifetime would mint links that are already expired; a zero cooldown would

@@ -25,7 +25,7 @@ live, and the module is **not** root-composed.
     three separate ingress rules on the `data_sql`-owned RDS SG (§26.3).
   - **Redis TCP 6379** — egress from api/worker ONLY and two separate ingress
     rules on the `data_cache`-owned Redis SG; **the migration task is
-    Redis-excluded** (executable basis: `apps/api/app/core/config.py:306-312` —
+    Redis-excluded** (executable basis: `apps/api/app/core/config.py:471-474` —
     migration is pinned to non-Redis backends, §26.3).
   - **TCP 443 IPv4 egress per task SG** — the §26.4 NAT staging baseline (ECR
     pull, Secrets Manager injection, CloudWatch Logs delivery, S3, approved LLM
@@ -42,7 +42,11 @@ live, and the module is **not** root-composed.
   100% / maximum 200%, **deployment circuit breaker with rollback**, **ECS Exec
   disabled**, autoscaling deferred. The API service attaches to the `alb`-owned
   target group (container `api`, port 8000, health path `/health` on the ALB
-  side) with a **60s health-check grace period**.
+  side) with a **60s health-check grace period**. Breaker rollback follows
+  `deployment_rollback_enabled` (default `true`) on BOTH services; it is `false`
+  only during the one-way P6-AUTH-4 cutover, when a failed AUTH4 deployment must
+  stop rather than roll back to a pre-AUTH4 revision
+  (`docs/operations/deployment.md`). The breaker itself stays enabled either way.
 - **Migration = task definition only, never a service** — no schedule, no
   run-task, no execution here; running it is a later, separately authorized
   one-shot step (INFRA-5/INFRA-9).
@@ -104,7 +108,8 @@ in-module), per-workload `api_environment`/`worker_environment`/
 `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`, `S3_ACCESS_KEY_ID`,
 `S3_SECRET_ACCESS_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`), sizing/deployment baselines (`task_cpu` 256,
-`task_memory` 512, desired counts 1/1, `log_retention_days` 30), and the
+`task_memory` 512, desired counts 1/1 — `api_desired_count`/`worker_desired_count`,
+`>= 0` — `deployment_rollback_enabled` true, `log_retention_days` 30), and the
 graceful-shutdown trio (below). This module takes **no** task-SG id input (it
 creates the task SGs) and **no** `tags` input (root provider `default_tags`).
 
@@ -130,7 +135,7 @@ module never reads, validates, or rotates one. AWS access-key env vars stay unse
 ## 8. Graceful shutdown (§26.10)
 Exec-form PID 1 receives SIGTERM directly. The worker container `stopTimeout`
 (default 30s) is precondition-enforced `>= worker_shutdown_grace_seconds`
-(default 10s, mirroring `apps/api/app/core/config.py:175`) so in-flight jobs can
+(default 10s, mirroring `apps/api/app/core/config.py:320`) so in-flight jobs can
 drain. The API container `stopTimeout` (default 70s, validated ≥ 60) accommodates
 the ALB 60s deregistration delay. The one-shot migration container uses the ECS
 default (30s). Fargate's 120s ceiling is validated on every input.

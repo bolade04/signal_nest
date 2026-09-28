@@ -246,6 +246,12 @@ variable "worker_desired_count" {
   }
 }
 
+variable "deployment_rollback_enabled" {
+  description = "Deployment circuit-breaker rollback on BOTH services (API and worker). Default true (locked baseline). false only during the one-way P6-AUTH-4 cutover (docs/operations/deployment.md): a failed AUTH4 deployment then stops instead of rolling back to a pre-AUTH4 revision; the final cutover apply restores true."
+  type        = bool
+  default     = true
+}
+
 variable "log_retention_days" {
   description = "CloudWatch Logs retention for the three ecs-owned workload log groups (locked staging baseline 30 days, §26.9)."
   type        = number

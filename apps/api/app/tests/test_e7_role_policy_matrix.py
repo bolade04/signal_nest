@@ -379,6 +379,8 @@ AUTHENTICATED_ONLY = {
     ("POST", f"{API}/auth/invitations/accept"),
     ("POST", f"{API}/auth/email-verification/request"),
     ("POST", f"{API}/auth/email-verification/confirm"),
+    ("POST", f"{API}/auth/logout"),
+    ("POST", f"{API}/auth/logout-all"),
 }
 #: Routes with no authentication dependency at all.
 PUBLIC = {
@@ -453,7 +455,8 @@ def _classify(calls) -> tuple[str, tuple[str, ...] | None]:
         return MEMBER_WS, None
     if any(c is deps.get_organization_context for c in calls):
         return MEMBER_ORG, None
-    if any(c is deps.get_current_user for c in calls):
+    # P6-AUTH-4: /auth/me, invitation accept and the two logouts depend on the session itself.
+    if any(c in (deps.get_current_user, deps.get_authenticated_session) for c in calls):
         return "authenticated", None
     return "public", None
 
@@ -533,7 +536,7 @@ class TestPolicyTableCompleteness:
             MEMBER_HANDLER: 2,
         }
 
-    def test_the_walk_sees_every_served_operation(self):
+    def test_the_walk_sees_every_served_operation(self):  # T-31
         """The introspection covers exactly what OpenAPI publishes -- no route is invisible."""
         served = {(r.method, r.path) for r in _served_routes()}
         published = {
@@ -543,7 +546,7 @@ class TestPolicyTableCompleteness:
             if method in {"get", "post", "put", "delete", "patch"}
         }
         assert served == published
-        assert len(served) == 103
+        assert len(served) == 105
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]

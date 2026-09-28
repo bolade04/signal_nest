@@ -31,11 +31,11 @@ from app.capabilities.models import WorkspaceCapabilityOverride
 from app.capabilities.registry import Capability, iter_capabilities
 from app.capabilities.service import clear_capability_override, set_capability_override
 from app.core.config import get_settings
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
 from app.organizations.models import Organization, User, Workspace
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 EFFECTIVE_PATH = "/internal/system/capabilities/effective"
@@ -138,8 +138,8 @@ class _Harness:
     def __init__(self, client, factory):
         self.client = client
         self.factory = factory
-        self.op = {"Authorization": f"Bearer {create_access_token(_OPERATOR)}"}
-        self.cust = {"Authorization": f"Bearer {create_access_token(_CUSTOMER)}"}
+        self.op = {"Authorization": f"Bearer {live_bearer(_OPERATOR)}"}
+        self.cust = {"Authorization": f"Bearer {live_bearer(_CUSTOMER)}"}
 
     def effective(self, *, org=_ORG_A, ws=_WS_A, capability=None, auth=None, anon=False):
         params = {"organization_id": org, "workspace_id": ws}

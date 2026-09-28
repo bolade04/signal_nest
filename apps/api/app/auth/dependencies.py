@@ -7,15 +7,18 @@ organization and the user's membership/role is verified here.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.models import AuthSession
 from app.core.enums import Role
 from app.core.errors import AuthError, NotFoundError, PermissionDeniedError
 from app.core.security import decode_access_token
+from app.db.clock import database_now
 from app.db.session import get_db
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
 
@@ -28,6 +31,18 @@ _ROLE_RANK = {
     Role.ADMIN: 3,
     Role.OWNER: 4,
 }
+
+
+#: A session id (``auth_sessions.id``, the ``sid`` claim): 32 lowercase hex characters.
+_SID = re.compile(r"[0-9a-f]{32}")
+
+
+@dataclass(frozen=True)
+class AuthenticatedSession:
+    """The authenticated caller: the active user and the live session its token belongs to."""
+
+    user: User
+    session: AuthSession
 
 
 @dataclass
@@ -47,27 +62,60 @@ class OrganizationContext:
     role: Role
 
 
-def get_current_user(
+def get_authenticated_session(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
-) -> User:
+) -> AuthenticatedSession:
+    """Authenticate a request: a valid token bound to a live session of an active user.
+
+    Every failure here is an AUTHENTICATION failure (401); membership and role checks come
+    later and fail with 403. Apart from the existing "Missing bearer token." and "User not
+    found or inactive." messages, every refusal -- signature, expiry, sid, epoch, session --
+    answers the same "Invalid or expired token." and says nothing more. The order is fixed:
+    signature and JWT ``exp``, then a well-formed ``sid`` (refused before any lookup, so
+    a pre-AUTH4 token without one stops here), then the user, then the credential epoch,
+    then the session row on the DATABASE clock: it must belong to the token's user, be
+    unrevoked and be unexpired. Revoking a session therefore ends every token issued or
+    re-issued inside it (P6-AUTH-4).
+    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise AuthError("Missing bearer token.")
     token = authorization.split(" ", 1)[1]
     payload = decode_access_token(token)
     if not payload or "sub" not in payload:
         raise AuthError("Invalid or expired token.")
+    sid = payload.get("sid")
+    if type(sid) is not str or not _SID.fullmatch(sid):
+        raise AuthError("Invalid or expired token.")
     user = db.get(User, payload["sub"])
     if not user or not user.is_active:
         raise AuthError("User not found or inactive.")
-    # The token must carry the account's current credential epoch. A token issued
-    # before epochs existed has no claim and counts as epoch 0, so the first password
-    # reset invalidates it too. Only a genuine int is accepted: bool (an int subclass),
-    # str and float claims are rejected rather than coerced.
+    # The token must carry the account's current credential epoch. A token without the
+    # claim counts as epoch 0, so the first password reset invalidates it too. Only a
+    # genuine int is accepted: bool (an int subclass), str and float claims are rejected
+    # rather than coerced.
     claim = payload.get("auth_epoch", 0)
     if type(claim) is not int or claim != user.auth_epoch:
         raise AuthError("Invalid or expired token.")
-    return user
+    now = database_now(db)
+    session = db.scalar(
+        select(AuthSession).where(
+            AuthSession.id == sid,
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+            AuthSession.expires_at > now,
+        )
+    )
+    if session is None:
+        raise AuthError("Invalid or expired token.")
+    return AuthenticatedSession(user=user, session=session)
+
+
+def get_current_user(
+    authenticated: AuthenticatedSession = Depends(get_authenticated_session),
+) -> User:
+    """The authenticated user (see :func:`get_authenticated_session`), shared by every route."""
+    return authenticated.user
 
 
 def require_operator(user: User = Depends(get_current_user)) -> User:

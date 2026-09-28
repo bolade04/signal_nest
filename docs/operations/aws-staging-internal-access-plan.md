@@ -78,7 +78,7 @@ plus the org-membership-independent **operator** trust boundary
 separate logins, three bearer tokens, no shared cookies/tokens/client state.
 `IDENT-VIEW`/`IDENT-CTRL` hold their own additional independent sessions for
 their specific checks. Uniqueness key = email (409-guarded by
-`auth/service.py:26-28`); idempotency key = the logical alias→email mapping
+`auth/service.py:36-38`); idempotency key = the logical alias→email mapping
 held in the restricted execution record; synthetic aliases use the reserved
 `@example.com` convention already uniform across the test suite — **never a
 real personal address**. Every *generated* identifier (user/org/workspace/
@@ -99,7 +99,7 @@ SQL, no seed script in staging, no direct DB write, ever.
    fresh alias is a STOP/investigate signal, never retried around
    (fail-report-don't-adopt).
 1. `POST /auth/register` × `IDENT-EDIT` → creates the user + `ORG_CANARY` +
-   `owner` membership (`auth/service.py:25-43`; open, ungated, sends no
+   `owner` membership (`auth/service.py:46-58`; open, ungated, sends no
    email — no mail transport exists in the codebase).
 2. `POST /organizations/{ORG_CANARY}/workspaces` × 2 (as `IDENT-EDIT`) →
    `TARGET_CANARY`, `SAME_ORG_SIBLING` (member-gated,
@@ -129,9 +129,9 @@ Claude/CI/chat, never committed, and are restricted values from birth.
 | Gap | Evidence | Impact | Disposition / recommendation |
 | --- | --- | --- | --- |
 | **GAP-1: no `is_operator` grant surface.** The flag is server-controlled with no HTTP surface anywhere that sets it; only the dev/test-gated demo seed writes `True` (`organizations/models.py:19-25`, `db/seed.py:212-219`). | grep-verified; `require_operator` consumes only | Blocks `IDENT-OP` and `IDENT-OBS`; without it the override plane and the observer read plane are unreachable in staging | Separate PR: a supported, operator-gated operator-grant surface — which surfaces the **first-operator bootstrap decision** (an operator-gated grant cannot mint the first operator). Options for that single targeted human decision: (a) an environment-boot bootstrap path with explicit one-time authorization semantics, or (b) extending the seed's env-gate to a staging-bootstrap mode. A third alternative — a one-time direct database write — was considered and **REJECTED**: it violates this plan's own "no SQL provisioning, ever" rule and is **not an available option at any authorization tier**. This plan recommends (a). |
-| **GAP-2: no member/role-assignment surface.** Registration hardcodes `owner` of a brand-new org (`auth/service.py:41`); no invite/add-member/role-change endpoint exists in any router. | grep-verified across all `routes.py` | Blocks `IDENT-VIEW` (the 4B-B viewer-403 line) and any multi-member org; also means role escalation is currently *structurally impossible* (a clean security property to preserve) | Separate PR: an owner/admin-gated add-member + role-assignment surface using the existing `Role` enum and rank map (`auth/dependencies.py:23-30`), with positive/negative authorization tests mirroring `test_opportunity_feedback_api.py` |
+| **GAP-2: no member/role-assignment surface.** Registration hardcodes `owner` of a brand-new org (`auth/service.py:56`); no invite/add-member/role-change endpoint exists in any router. | grep-verified across all `routes.py` | Blocks `IDENT-VIEW` (the 4B-B viewer-403 line) and any multi-member org; also means role escalation is currently *structurally impossible* (a clean security property to preserve) | Separate PR: an owner/admin-gated add-member + role-assignment surface using the existing `Role` enum and rank map (`auth/dependencies.py:26-33`), with positive/negative authorization tests mirroring `test_opportunity_feedback_api.py` |
 | **GAP-3: no observer primitive.** The effective/overrides read plane is operator-gated; no read-only-observer construct exists distinct from operator. | `internal_capabilities_routes.py` (all `require_operator`) | The observer must be a second operator identity | **Recommended acceptance for 4B-B:** `IDENT-OBS` = second `is_operator` account used read-only **by convention**, with the convention enforced procedurally (observer never calls PUT/DELETE; evidence template §15 records the read-path proof) — consistent with INFRA-7 §7's access requirements. A dedicated read-only observer role is deliberately deferred (heavier than the canary needs); revisit before any production design. |
-| **GAP-4: no deactivation/revocation/membership-removal surface.** `is_active` is only ever set at construction; nothing writes it `False`; no membership-removal endpoint; stateless JWTs have no revocation list. | `organizations/models.py:18`, `auth/service.py:50-51`, `auth/dependencies.py:52` | "Rollback via supported surfaces" is today limited to: stop using credentials + natural token expiry (`access_token_expire_minutes`). A live synthetic identity cannot be revoked through any supported surface. | Separate PR (pre-canary recommended): a supported deactivation surface. Until it exists, INFRA-9's runbook must not claim a revoke-via-API rollback path. |
+| **GAP-4: no deactivation / identity-revocation / membership-removal surface (holder-initiated session revocation exists since P6-AUTH-4).** `is_active` is only ever set at construction; nothing writes it `False`. Access tokens are bound to server-side sessions that the credential holder can revoke — the current session (`POST /auth/logout`) or all of the identity's sessions (`POST /auth/logout-all`); AUTH4 adds no account deactivation, no identity disable and no organization membership removal. *(Membership-removal limb: AUTH4 adds none. The existing organization endpoint `DELETE /organizations/{organization_id}/members/{user_id}` (6B-3A, #181) is separate from AUTH4 and never removes an organization's last `OWNER`; this row does not otherwise re-verify it.)* | `organizations/models.py:31`, `auth/service.py:40` (the `User(…)` construction in `create_user`), `auth/dependencies.py:91` (the `is_active` check), `auth/routes.py:112-153` (`POST /auth/logout`, `POST /auth/logout-all`) | "Rollback via supported surfaces" is: stop using credentials + natural token expiry (`access_token_expire_minutes`), plus — since P6-AUTH-4 — holder-initiated current-session logout (`POST /auth/logout`) and all-session logout (`POST /auth/logout-all`); every session also ends at its 12-hour absolute limit (`session_absolute_lifetime_minutes`). Existing organization membership-removal capabilities remain separate (6B-3A). Account deactivation remains outside AUTH4: a live synthetic identity cannot be deactivated through any supported surface, and its credentials can sign in again. | Separate PR (pre-canary recommended): a supported deactivation surface. Until it exists, INFRA-9's runbook must not claim an identity-deactivation rollback path; it may use holder-initiated session revocation (logout / logout-all). |
 | **GAP-5: observer AWS-side read access.** INFRA-7 §7 requires observer read access to CloudWatch log groups/alarms/dashboard and CloudTrail; the merged `iam` module scopes only service roles (execution/task) — no human operator/observer IAM path exists. | `infra/aws/modules/iam` contract | Observer cannot see the CloudWatch surface without an AWS-side grant | Flag only: a separately authorized IAM/console-access tranche (NOT an INFRA-8 or unreviewed `iam`-module change). |
 
 **Notes (recorded, not gaps):** `POST /organizations/{id}/workspaces` has no
@@ -148,13 +148,13 @@ separate test addition before INFRA-9's surface verification.
 
 - **Server-side tenant derivation:** workspace scope is a **path parameter**
   resolved through membership (`get_tenant_context` →
-  `auth/dependencies.py:83-99`; `_membership` :71-80 → 403). No
+  `auth/dependencies.py:147-163`; `_membership` :135-144 → 403). No
   workspace/org header is read anywhere in the app (the only trusted headers
   are `Authorization` and the tracing ids). Client-invented tenant scope is
   structurally impossible.
-- **Session independence:** stateless HS256 bearer JWTs
-  (`core/security.py:33-43`); every login mints an independent token; no
-  server-side session state. Operationally binding: three distinct users,
+- **Session independence:** bearer JWTs bound to a server-side session
+  (`sid`; `core/security.py:38-69`); every login creates an independent
+  session and a token bound to it. Operationally binding: three distinct users,
   three separate logins, separate client profiles; reusing one token or one
   account across roles is prohibited.
 - **No client-writable escalation:** `RegisterRequest` carries no role field;

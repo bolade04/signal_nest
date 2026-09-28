@@ -161,7 +161,7 @@ describe('the verification token is read from the fragment and spent only by a c
     expectNoTokenLeak(token, 'after verifying');
   });
 
-  it('a session that ended mid-way returns to the inline sign-in with a notice, token kept', async () => {
+  it('a session that ended mid-way returns to the inline sign-in with a notice, token kept (F-05 ii)', async () => {
     const token = addVera();
     const session = orgModel.signIn(VERA.id);
     const screen = openLink(token, session);
@@ -172,6 +172,8 @@ describe('the verification token is read from the fragment and spent only by a c
     await screen.user.click(verify);
     expect(await screen.findByText('Your session has ended. Sign in again to verify your email address.')).toBeInTheDocument();
     expect(localStorage.getItem('signalnest-token')).toBeNull();
+    // A refused session is cleared here only: no server sign-out is sent (P6-AUTH-4).
+    expect(orgModel.signOuts()).toEqual([]);
 
     await signInInline(screen, VERA);
     await screen.user.click(await screen.findByRole('button', { name: /^verify email$/i }));
@@ -259,10 +261,11 @@ describe('a second link, and a scrubbed one', () => {
 });
 
 describe('a link for another account', () => {
-  it('says so without naming either address, spends nothing, and lets the right account in', async () => {
+  it('says so without naming either address, spends nothing, and lets the right account in (F-02)', async () => {
     const token = addVera();
     addOtto();
-    const screen = openLink(token, orgModel.signIn(OTTO.id));
+    const otto = orgModel.signIn(OTTO.id);
+    const screen = openLink(token, otto);
     await screen.user.click(await screen.findByRole('button', { name: /^verify email$/i }));
 
     expect(await screen.findByRole('heading', { name: /this link is for a different account/i })).toBeInTheDocument();
@@ -278,9 +281,17 @@ describe('a link for another account', () => {
     expect(orgModel.user(VERA.id)?.email_verified).toBe(false);
     expect(orgModel.user(OTTO.id)?.email_verified).toBe(false);
 
-    // Sign out here; the token stays in memory for the account it was sent to.
+    // Sign out here -- on the server first (P6-AUTH-4); the token stays in memory for the
+    // account it was sent to. The stored token is the boot re-read's re-issue of Otto's session.
+    const stored = localStorage.getItem('signalnest-token')!;
     await screen.user.click(screen.getByRole('button', { name: /^sign out$/i }));
-    expect(screen.getByTestId('session')).toHaveTextContent(/^unauthenticated:/);
+    await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent(/^unauthenticated:/));
+    expect(orgModel.signOuts()).toEqual([
+      { path: '/auth/logout', authorization: `Bearer ${stored}`, storedToken: stored },
+    ]);
+    expect(localStorage.getItem('signalnest-token')).toBeNull();
+    // The whole session ended: the stored token and the one Otto signed in with.
+    expect([orgModel.accepts(stored), orgModel.accepts(otto)]).toEqual([false, false]);
     await signInInline(screen, VERA);
     await screen.user.click(await screen.findByRole('button', { name: /^verify email$/i }));
     expect(await screen.findByRole('heading', { name: /your email address is verified\./i })).toBeInTheDocument();
@@ -288,6 +299,27 @@ describe('a link for another account', () => {
     expect(orgModel.user(VERA.id)?.email_verified).toBe(true);
     expect(orgModel.user(OTTO.id)?.email_verified).toBe(false);
     expectNoTokenLeak(token, 'after the right account verified');
+  });
+
+  it('a sign-out the server cannot confirm still signs out here, says so, and keeps the token', async () => {
+    const token = addVera();
+    addOtto();
+    const otto = orgModel.signIn(OTTO.id);
+    const screen = openLink(token, otto);
+    await screen.user.click(await screen.findByRole('button', { name: /^verify email$/i }));
+    await screen.findByRole('heading', { name: /this link is for a different account/i });
+    server.use(http.post(P('/auth/logout'), () => HttpResponse.error()));
+
+    await screen.user.click(screen.getByRole('button', { name: /^sign out$/i }));
+    expect(await screen.findByText(/the server could not confirm it/i)).toBeInTheDocument();
+    expect(localStorage.getItem('signalnest-token')).toBeNull();
+    // Nothing was revoked: that session ends at its 12-hour limit.
+    expect(orgModel.accepts(otto)).toBe(true);
+
+    await signInInline(screen, VERA);
+    await screen.user.click(await screen.findByRole('button', { name: /^verify email$/i }));
+    expect(await screen.findByRole('heading', { name: /your email address is verified\./i })).toBeInTheDocument();
+    expect(confirmBodies()).toEqual([{ token }, { token }]);
   });
 });
 

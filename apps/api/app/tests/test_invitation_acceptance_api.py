@@ -56,9 +56,10 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.audit.models import AuditLog
+from app.auth.models import AuthSession
 from app.core.config import get_settings
 from app.core.middleware import RateLimitMiddleware
-from app.core.security import create_access_token
+from app.core.security import decode_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
@@ -69,6 +70,7 @@ from app.organizations.models import (
     OrganizationMember,
     User,
 )
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 PREVIEW = f"{API}/auth/invitations/preview"
@@ -207,6 +209,11 @@ class Witness:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount
 
+    def auth_session(self, sid: str) -> dict:
+        with self.session() as s:
+            row = s.get(AuthSession, sid)
+            return {c.key: getattr(row, c.key) for c in AuthSession.__table__.c}
+
 
 @dataclass(frozen=True)
 class Env:
@@ -320,7 +327,7 @@ def _post(
     _active_rate_limiter()._hits.clear()
     headers = {}
     if user_id is not None:
-        token = create_access_token(user_id)
+        token = live_bearer(user_id)
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     return env.client.post(url, json=body, headers=headers)
@@ -546,6 +553,27 @@ class TestExistingUserAcceptance:
         row = env.witness.invitation(inv["id"])
         assert row["accepted_by_user_id"] == ALICE and row["accepted_at"] is not None
 
+    def test_acceptance_reissues_inside_the_presented_session(self, env: Env):
+        """T-18 (UNIT half; P6-AUTH-4): the returned token belongs to the presented session --
+        same ``sid``, the row (its absolute expiry included) untouched, no session opened --
+        and the membership it grants holds on the next request."""
+        inv = _invite(env, _email(ALICE), "marketer")
+        presented = live_bearer(ALICE)
+        sid = decode_access_token(presented)["sid"]
+        row, sessions = env.witness.auth_session(sid), env.witness.count(AuthSession)
+        r = _post(env, ACCEPT, {"token": inv["token"]}, token=presented)
+        assert r.status_code == 200, r.text
+        reissued = r.json()["access_token"]
+        assert decode_access_token(reissued)["sid"] == sid
+        assert env.witness.auth_session(sid) == row
+        assert env.witness.count(AuthSession) == sessions
+        assert (ALICE, ORG_A, "marketer") in env.witness.memberships()
+        me = env.client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {reissued}"})
+        assert me.status_code == 200
+        assert (ORG_A, "marketer") in {
+            (m["organization_id"], m["role"]) for m in me.json()["memberships"]
+        }
+
     def test_wrong_signed_in_user_is_403_and_nothing_changes(self, env: Env):
         inv = _invite(env, _email(ALICE), "viewer")
         before = env.witness.snapshot()
@@ -709,7 +737,7 @@ class TestDeadTokens:
         if state == "revoked":
             r = env.client.delete(
                 f"{API}/organizations/{ORG_A}/invitations/{inv['id']}",
-                headers={"Authorization": f"Bearer {create_access_token(A_OWNER)}"},
+                headers={"Authorization": f"Bearer {live_bearer(A_OWNER)}"},
             )
             assert r.status_code == 204
             return inv["token"], (409, "invitation_revoked")
@@ -734,7 +762,7 @@ class TestDeadTokens:
         revoked = _invite(env, "r-and-e@example.com")
         env.client.delete(
             f"{API}/organizations/{ORG_A}/invitations/{revoked['id']}",
-            headers={"Authorization": f"Bearer {create_access_token(A_OWNER)}"},
+            headers={"Authorization": f"Bearer {live_bearer(A_OWNER)}"},
         )
         _expire(env, revoked["id"])
         used = _invite(env, "u-and-e@example.com")

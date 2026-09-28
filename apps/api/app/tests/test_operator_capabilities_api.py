@@ -30,11 +30,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.capabilities.registry import get_policy, iter_capabilities
 from app.core.config import get_settings
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
 from app.organizations.models import User
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 REGISTRY_PATH = "/internal/system/capabilities/registry"
@@ -147,8 +147,8 @@ def h(tmp_path_factory):
 class _Harness:
     def __init__(self, client):
         self.client = client
-        self.op = {"Authorization": f"Bearer {create_access_token(_OPERATOR)}"}
-        self.cust = {"Authorization": f"Bearer {create_access_token(_CUSTOMER)}"}
+        self.op = {"Authorization": f"Bearer {live_bearer(_OPERATOR)}"}
+        self.cust = {"Authorization": f"Bearer {live_bearer(_CUSTOMER)}"}
 
     def get(self, path: str, *, auth=None):
         return self.client.get(f"{API}{path}", headers=self.op if auth is None else auth)

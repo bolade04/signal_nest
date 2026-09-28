@@ -1012,7 +1012,7 @@ describe('a sign-out ends the previous user\'s data in this tab (§81)', () => {
 
     const [account] = screen.getAllByRole('button', { name: /account menu/i });
     await screen.user.click(account!);
-    await screen.user.click(await screen.findByRole('menuitem', { name: /sign out/i }));
+    await screen.user.click(await screen.findByRole('menuitem', { name: /^sign out$/i }));
     const email = await screen.findByLabelText(/^email/i);
 
     const watch = watchForText(['Bayside Bakery', 'Bayside Workspace', 'bea.bayside@example.com', 'bob@example.com']);
@@ -1106,7 +1106,7 @@ describe('a stale-refusal session re-read never outlives a sign-out (§19, §81)
     // The user signs out while that re-read is still in flight.
     const [account] = screen.getAllByRole('button', { name: /account menu/i });
     await screen.user.click(account!);
-    await screen.user.click(await screen.findByRole('menuitem', { name: /sign out/i }));
+    await screen.user.click(await screen.findByRole('menuitem', { name: /^sign out$/i }));
     await screen.findByLabelText(/^email/i);
     expect(localStorage.getItem('signalnest-token')).toBeNull();
     return { screen, release };
@@ -1155,6 +1155,8 @@ describe('a stale-refusal session re-read never outlives a sign-out (§19, §81)
     // This tab's stale refusal must not read a session back and store it again.
     expect(orgModel.count('GET', /\/auth\/me$/)).toBe(sessionReads);
     expect(localStorage.getItem('signalnest-token')).toBeNull();
+    // Nor does it send a server sign-out of its own (P6-AUTH-4, F-09).
+    expect(orgModel.signOuts()).toEqual([]);
   });
 
   it('keeps the NEXT user signed in as themselves when the overtaken answer arrives', async () => {
@@ -1168,7 +1170,9 @@ describe('a stale-refusal session re-read never outlives a sign-out (§19, §81)
     const alicesToken = localStorage.getItem('signalnest-token');
     act(() => release());
     await new Promise((resolve) => setTimeout(resolve, 300));
-    // Demo's overtaken answer never replaces Alice's session.
+    // Demo's overtaken answer never replaces Alice's session. (P6-AUTH-4: the sign-out
+    // revoked Demo's session, so that re-read would now answer 401 and the 401 handler
+    // would clear Alice's session; the sign-out aborts it instead.)
     expect(localStorage.getItem('signalnest-token')).toBe(alicesToken);
     await waitFor(() => expect(screen.getByTestId('m4-role-probe')).toHaveTextContent('org-1:viewer'));
   });
@@ -1188,6 +1192,8 @@ describe('an expired session ends cleanly (AuthContext 401 handler)', () => {
     expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
     expect(localStorage.getItem('signalnest-token')).toBeNull();
     expect(screen.getByTestId('m4-role-probe')).toHaveTextContent(/:$/);
+    // The 401 handler clears locally only: no server sign-out (P6-AUTH-4, F-05 i).
+    expect(orgModel.signOuts()).toEqual([]);
   });
 
   it('a 401 while already signed out changes nothing on the page (the handler\'s token guard)', async () => {

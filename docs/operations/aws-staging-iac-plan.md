@@ -206,7 +206,8 @@ Per runtime-contract §§C/N and `deployment.md`:
 - **Sizing (staging, §M):** API and worker each **0.25 vCPU / 0.5 GB**, single task each. The
   migration task is short-lived and sized to complete the Alembic upgrade.
 - **Rollout model (deployment.md):** publish images → run the single migration actor to success
-  → roll API and worker. Replicas never migrate; a replica against an un-advanced schema fails
+  → roll API and worker (the AUTH4 revision uses the one-way cutover in deployment.md — no
+  old/new overlap). Replicas never migrate; a replica against an un-advanced schema fails
   fast (`pending`).
 
 ## 10. Immutable artifact and SHA wiring
@@ -290,10 +291,12 @@ are committed here:
 - **Single migration actor.** The one-shot migration run-task executes
   `python -m app.db.migrate` to success **before** API/worker roll; replicas never migrate.
 - **Additive-first schema policy (deployment.md).** During the coexistence window, old replicas
-  run `ahead` (startup-safe) against the newer additive schema; new replicas run `compatible`.
+  run `ahead` (startup-safe) against the newer additive schema; new replicas run `compatible`
+  — except across the AUTH4 boundary: no coexistence (deployment.md).
   A replica against an un-advanced schema reports `pending` and fails fast.
 - **Alembic single head `98289430a3ec`** is the current baseline; the migration task advances
-  the schema, never a replica. Rollback favors additive-first forward-compat; an explicit
+  the schema, never a replica. Rollback favors additive-first forward-compat, and never goes
+  below `AUTH4_ROLLBACK_FLOOR` (deployment.md); an explicit
   `downgrade` is a deliberate single-actor action with an explicit target revision.
 
 ## 14. Observability (design)
@@ -425,7 +428,7 @@ identifier.
   infrastructure.
 - **Later IaC PRs (pre-apply):** revert the IaC PR; nothing applied means nothing to tear down.
 - **Post-apply (INFRA-9 and beyond, not now):** immutable-artifact redeploy to a prior digest
-  for application rollback; `downgrade` (single actor, explicit target) only for a specific
+  at or above `AUTH4_ROLLBACK_FLOOR` for application rollback; `downgrade` (single actor, explicit target) only for a specific
   migration reversal; **IaC destroy** for full teardown under authorization. RDS automated
   backups and a taken restore checkpoint support data recovery. The override clear plane is
   confirmed ready (no override exists).
@@ -602,8 +605,9 @@ The decisions in §24 were verified read-only against committed application beha
   `apps/api/app/system/probes.py`) — confirms the §24.1 split.
 - No WebSocket, SSE, streaming, or long-polling exists; heavy/LLM work is off-request via the
   durable job queue and worker process — compatible with the 60s idle timeout and HTTP/1.1.
-- Auth is stateless bearer JWT with no server-side session (`apps/api/app/auth/dependencies.py`)
-  and the app is stateless across replicas — compatible with round robin and stickiness disabled.
+- Auth is a bearer JWT bound to a DB-backed server-side session record (`auth_sessions`, checked
+  on every request — `apps/api/app/auth/dependencies.py`); no in-process session state, so round
+  robin with stickiness disabled remains compatible.
 - No `TrustedHostMiddleware`, host-based routing, or Host-dependent redirect/cookie logic exists —
   host-header preservation disabled is safe. CORS origins are an explicit config list, not derived
   from the Host header.
@@ -649,7 +653,7 @@ data/log-group/`tags` language in the affected module READMEs). Notation through
 
 ### 26.1 Dependency notation and the network/edge relationship
 Every edge is stated as `producer -> consumer : <exact output consumed>`. The root wiring
-(`infra/aws/main.tf:37-74`) shows `edge` consumes **only root variables** (`web_fqdn`,
+(`infra/aws/main.tf:95-103`) shows `edge` consumes **only root variables** (`web_fqdn`,
 `hosted_zone_id`, `acm_certificate_arn`, `price_class`, `name_prefix`) and references **no**
 `module.network` output — so there is **no `network -> edge` edge**; `network` and `edge` are
 independent foundational modules. `alb` consumes `network` (`vpc_id`, `public_subnet_ids`) and a
@@ -683,11 +687,11 @@ the union of permissions; IAM cannot scope PostgreSQL/Redis/public-HTTPS reachab
 - **Redis (6379):** egress **TCP 6379** to the Redis SG from the API and worker task SGs; Redis SG
   ingress **TCP 6379** as **two separate** rules (from API, from worker). Owned by `ecs`;
   destination SG created by `data_cache`. **Migration is explicitly prohibited from Redis access** —
-  executable Settings validation (`apps/api/app/core/config.py:306-312`) requires `redis_url` only
+  executable Settings validation (`apps/api/app/core/config.py:471-474`) requires `redis_url` only
   when `app_mode=full` and `queue_backend=redis`/`cache_backend=redis`; the migration task is pinned
   with `queue_backend=inprocess` / `cache_backend=memory` (permitted in staging, which is
   `is_production_like` but not `is_production`, so the production-only backend forbiddance at
-  `config.py:319-346` does not apply), so migration constructs `Settings()` without Redis. No
+  `config.py:481-508` does not apply), so migration constructs `Settings()` without Redis. No
   migration→Redis rule is created.
 
 ### 26.4 Outbound HTTPS and DNS baseline (NAT, not SG-referenced; no DNS SG rule)
@@ -731,7 +735,7 @@ build/push is INFRA-5.
   an **undecided live-operation gate** (INFRA-6) and does not block offline HCL.
 
 ### 26.7 Per-workload secret injection (smallest sufficient subset, from executable validation)
-Derived from `apps/api/app/core/config.py` `_validate_runtime` (`:302-389`). All are ECS `secrets`
+Derived from `apps/api/app/core/config.py` `_validate_runtime` (`:465-808`). All are ECS `secrets`
 `valueFrom` ARN references, never plaintext.
 - **API:** `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`.
 - **Worker:** `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`.
@@ -789,7 +793,7 @@ rollback**. API **health-check grace period 60s**. **ECS Exec disabled** by defa
 **deferred**. Immutable digest-pinned images required. Read-only root filesystem + writable `/tmp`
 preserved from the container contract (`apps/api/Dockerfile`). Graceful shutdown reflects the actual
 application behavior: exec-form PID 1 receives SIGTERM directly; the worker drains within
-`worker_shutdown_grace_seconds` (default 10s, `config.py:175`); ECS `stopTimeout` must be ≥ that
+`worker_shutdown_grace_seconds` (default 10s, `config.py:320`); ECS `stopTimeout` must be ≥ that
 worker grace, and the API service `stopTimeout` should accommodate the ALB 60s deregistration delay.
 
 ### 26.11 Ordinary environment configuration

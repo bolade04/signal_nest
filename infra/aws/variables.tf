@@ -305,6 +305,39 @@ variable "worker_image_digest" {
   }
 }
 
+# P6-AUTH-4 one-way cutover controls (docs/operations/deployment.md). The defaults
+# reproduce the locked baseline exactly: one API and one worker task, and the ECS
+# deployment circuit breaker WITH rollback on both services. Only the cutover's
+# reviewed saved plans set other values: Apply 1 quiesces both services at 0 with
+# rollback off, Apply 2 starts the AUTH4 revision at 1, Apply 3 re-enables rollback.
+variable "ecs_deployment_rollback_enabled" {
+  description = "Deployment circuit-breaker rollback on BOTH ECS services (passed to the ecs module). Default true. false only during the one-way P6-AUTH-4 cutover, so a failed AUTH4 deployment stops at zero tasks instead of rolling back to a pre-AUTH4 revision."
+  type        = bool
+  default     = true
+}
+
+variable "api_desired_count" {
+  description = "Desired count of the API service (passed to the ecs module). Default 1 (locked baseline). 0 only while the one-way P6-AUTH-4 cutover quiesces the services before the migration."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.api_desired_count >= 0
+    error_message = "api_desired_count must be >= 0."
+  }
+}
+
+variable "worker_desired_count" {
+  description = "Desired count of the worker service (passed to the ecs module). Default 1 (locked baseline). 0 only while the one-way P6-AUTH-4 cutover quiesces the services before the migration."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.worker_desired_count >= 0
+    error_message = "worker_desired_count must be >= 0."
+  }
+}
+
 # GitHub OIDC identity-provider ARN for the CI image-publisher role (§26.5,
 # staging-publish-workflow.md §4). CONSUMED, never created: the account-wide
 # provider (token.actions.githubusercontent.com) is a shared account resource

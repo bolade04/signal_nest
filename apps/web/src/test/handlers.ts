@@ -390,7 +390,7 @@ function scopeInvalid(url: URL): boolean {
 export type ModelRole = 'owner' | 'admin' | 'marketer' | 'reviewer' | 'viewer' | 'compliance_reviewer';
 type InvitableRole = Exclude<ModelRole, 'owner'>;
 
-// apps/api/app/auth/dependencies.py:23-30.
+// apps/api/app/auth/dependencies.py:26-33.
 const ROLE_RANK: Record<ModelRole, number> = {
   viewer: 0,
   reviewer: 1,
@@ -402,7 +402,7 @@ const ROLE_RANK: Record<ModelRole, number> = {
 const ORG_ADMINS = new Set<ModelRole>(['owner', 'admin']);
 const INVITABLE = new Set<string>(['admin', 'marketer', 'reviewer', 'compliance_reviewer', 'viewer']);
 const INVITATION_TTL_MS = 72 * 3600 * 1000;
-// apps/api/app/core/config.py:193-198 (defaults).
+// apps/api/app/core/config.py:200-205 (defaults).
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const EMAIL_VERIFICATION_TTL_MS = 48 * 3600 * 1000;
 const AUTH_MAIL_COOLDOWN_MS = 120 * 1000;
@@ -475,6 +475,17 @@ export interface ModelRequest {
   body: unknown;
   userId: string | null;
 }
+/** A server-side session (P6-AUTH-4 `auth_sessions`): every access token belongs to one. */
+interface ModelSession {
+  user_id: string;
+  revoked: boolean;
+}
+/** How a sign-out request arrived: its bearer, and what this browser still stored then. */
+export interface ModelSignOut {
+  path: '/auth/logout' | '/auth/logout-all';
+  authorization: string | null;
+  storedToken: string | null;
+}
 
 const model = {
   users: new Map<string, ModelUser>(),
@@ -484,7 +495,12 @@ const model = {
   invitations: [] as ModelInvitation[],
   accountTokens: [] as ModelAccountToken[],
   outbox: [] as ModelMail[],
+  /** access token -> the id of the session it belongs to. */
   accessTokens: new Map<string, string>(),
+  sessions: new Map<string, ModelSession>(),
+  sessionSeq: 0,
+  reissueSeq: 0,
+  signOuts: [] as ModelSignOut[],
   requests: [] as ModelRequest[],
   violations: [] as string[],
   nextInvitationToken: null as string | null,
@@ -501,7 +517,7 @@ function modelError(status: number, code: string, message: string) {
 }
 
 function invitationState(inv: ModelInvitation): 'pending' | 'accepted' | 'revoked' | 'expired' {
-  // apps/api/app/organizations/invitations.py:124-133 (revoked, then accepted, then expired).
+  // apps/api/app/organizations/invitations.py:111-120 (revoked, then accepted, then expired).
   if (inv.revoked_at) return 'revoked';
   if (inv.accepted_at) return 'accepted';
   if (Date.parse(inv.expires_at) <= Date.now()) return 'expired';
@@ -518,19 +534,50 @@ function membershipOf(orgId: string, userId: string): ModelMembership | undefine
   return model.memberships.find((m) => m.organization_id === orgId && m.user_id === userId);
 }
 
-function userOf(request: Request): ModelUser | null {
+/**
+ * The live session a request's bearer belongs to, and its user (P6-AUTH-4: a token of a
+ * revoked session authenticates nothing, whatever it says).
+ */
+function sessionOf(request: Request): { id: string; user: ModelUser } | null {
   const header = request.headers.get('authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
   const id = model.accessTokens.get(token);
-  return id ? (model.users.get(id) ?? null) : null;
+  const session = id ? model.sessions.get(id) : undefined;
+  const user = session && !session.revoked ? model.users.get(session.user_id) : undefined;
+  return id && user ? { id, user } : null;
 }
 
-function issueAccessToken(user: ModelUser): string {
+function userOf(request: Request): ModelUser | null {
+  return sessionOf(request)?.user ?? null;
+}
+
+/** A token inside an existing session: the /auth/me and invitation-accept re-issue. */
+function mintInSession(sessionId: string, user: ModelUser): string {
   // The seeded demo session keeps the fixed token every existing test seeds.
-  if (user.id === demoUser.id) return 'test-token';
-  const token = `access-${user.id}-${nextId('t')}`;
-  model.accessTokens.set(token, user.id);
+  const token = user.id === demoUser.id ? 'test-token' : `access-${user.id}-${nextId('t')}`;
+  model.accessTokens.set(token, sessionId);
   return token;
+}
+
+/**
+ * The /auth/me re-issue: a NEW token string inside the presented session. Its own counter
+ * keeps every other generated id (invitations, users, fresh-session tokens) numbered as
+ * before; the demo session keeps its fixed token.
+ */
+function reissueInSession(sessionId: string, user: ModelUser): string {
+  if (user.id === demoUser.id) return 'test-token';
+  model.reissueSeq += 1;
+  const token = `access-${user.id}-me${model.reissueSeq}`;
+  model.accessTokens.set(token, sessionId);
+  return token;
+}
+
+/** A fresh sign-in (login, register, invitation register): a NEW session and its token. */
+function issueAccessToken(user: ModelUser): string {
+  model.sessionSeq += 1;
+  const sessionId = `session-${model.sessionSeq}`;
+  model.sessions.set(sessionId, { user_id: user.id, revoked: false });
+  return mintInSession(sessionId, user);
 }
 
 function sessionFor(user: ModelUser, accessToken: string) {
@@ -595,7 +642,7 @@ function tokenOnlyInBody(route: string, request: Request) {
   if (url.search) model.violations.push(`${route} carried a query string: ${url.search}`);
 }
 
-/** apps/api/app/organizations/invitations.py:287-303 — unknown → 404, not pending → its 409. */
+/** apps/api/app/organizations/invitations.py:274-290 — unknown → 404, not pending → its 409. */
 function resolveToken(token: unknown): ModelInvitation | Response {
   const inv = typeof token === 'string' ? model.invitations.find((i) => i.token === token) : undefined;
   if (!inv) return modelError(404, 'invitation_invalid', 'This invitation link is invalid.');
@@ -607,7 +654,7 @@ function resolveToken(token: unknown): ModelInvitation | Response {
   return inv;
 }
 
-/** invitations.py:306-332 — the inviter must still be able to issue this invitation. */
+/** invitations.py:293-319 — the inviter must still be able to issue this invitation. */
 function inviterStillAuthorized(inv: ModelInvitation): boolean {
   const m = membershipOf(inv.organization_id, inv.invited_by_user_id);
   return Boolean(m && ORG_ADMINS.has(m.role) && ROLE_RANK[inv.role] <= ROLE_RANK[m.role]);
@@ -721,7 +768,7 @@ function workspaceOrganization(workspaceId: string): string | null {
 }
 
 /**
- * get_tenant_context (apps/api/app/auth/dependencies.py:92-106): a workspace-scoped
+ * get_tenant_context (apps/api/app/auth/dependencies.py:147-163): a workspace-scoped
  * route answers only members of the workspace's organization, else 403. The fixed
  * fixture handlers below know nothing of sessions, so this gate runs first and then
  * falls through to them. A workspace the model does not know keeps their behaviour.
@@ -747,12 +794,18 @@ export const orgModel = {
     model.accountTokens = [];
     model.outbox = [];
     model.accessTokens.clear();
+    model.sessions.clear();
+    model.sessionSeq = 0;
+    model.reissueSeq = 0;
+    model.signOuts = [];
     model.requests = [];
     model.violations = [];
     model.nextInvitationToken = null;
     model.seq = 0;
     model.users.set(demoUser.id, { ...demoUser, password: null });
-    model.accessTokens.set('test-token', demoUser.id);
+    // The demo account's seeded session, behind the fixed token every test seeds.
+    model.sessions.set('session-demo', { user_id: demoUser.id, revoked: false });
+    model.accessTokens.set('test-token', 'session-demo');
     model.orgs.set(org.id, org);
     model.workspaces.set(org.id, [workspace]);
     model.memberships.push({
@@ -836,10 +889,24 @@ export const orgModel = {
     if (!inv) throw new Error(`orgModel.invitationRevokedBehindTheUi: no pending invitation for ${email}`);
     inv.revoked_at = new Date().toISOString();
   },
-  /** The server stops accepting an access token (expired or revoked): it now answers 401. */
+  /**
+   * The session behind an access token ends (expired or revoked): that token and every
+   * other token of the same session now answer 401.
+   */
   expireSession(accessToken: string): void {
+    const id = model.accessTokens.get(accessToken);
+    const session = id ? model.sessions.get(id) : undefined;
+    if (session) session.revoked = true;
     model.accessTokens.delete(accessToken);
   },
+  /** Whether the server still accepts `accessToken` (its session live, not revoked). */
+  accepts(accessToken: string): boolean {
+    const id = model.accessTokens.get(accessToken);
+    const session = id ? model.sessions.get(id) : undefined;
+    return Boolean(session && !session.revoked);
+  },
+  /** Every sign-out request, oldest first, as it arrived. */
+  signOuts: (): readonly ModelSignOut[] => model.signOuts,
   /** Six-role roster: the demo actor plus one other member per role. */
   seedRoster(orgId: string): void {
     const roster: [string, string, string, ModelRole][] = [
@@ -1082,27 +1149,58 @@ export const handlers = [
   ),
 
   // ---- Auth (sessions derived from the bearer token; see orgModel) ----
+  // P6-AUTH-4: login, register and invitation register each open a NEW session; /auth/me
+  // and invitation accept re-issue inside the presented one; logout and logout-all revoke.
   http.get(P('/auth/me'), async ({ request }) => {
     const { user } = await record(request);
-    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
-    const header = request.headers.get('authorization') ?? '';
-    return HttpResponse.json(sessionFor(user, header.slice('Bearer '.length)));
+    const session = sessionOf(request);
+    if (!user || !session) return modelError(401, 'unauthorized', 'Not authenticated.');
+    // Re-issue inside the presented session: never a new session, never past its end.
+    return HttpResponse.json(sessionFor(user, reissueInSession(session.id, user)));
   }),
   http.post(P('/auth/login'), async ({ request }) => {
     const { body } = await record(request);
     const known = [...model.users.values()].find((u) => u.email === body.email && u.id !== demoUser.id);
     // Any other address signs in as the seeded demo account, exactly as the fixed
     // handler always did (auth.test.tsx relies on it).
-    if (!known) return HttpResponse.json(sessionFor(model.users.get(demoUser.id)!, 'test-token'));
+    const demo = model.users.get(demoUser.id)!;
+    if (!known) return HttpResponse.json(sessionFor(demo, issueAccessToken(demo)));
     if (known.password !== body.password) return modelError(401, 'unauthorized', 'Invalid credentials');
     return HttpResponse.json(sessionFor(known, issueAccessToken(known)));
   }),
   http.post(P('/auth/register'), async ({ request }) => {
     await record(request);
-    return HttpResponse.json(sessionFor(model.users.get(demoUser.id)!, 'test-token'), { status: 201 });
+    const demo = model.users.get(demoUser.id)!;
+    return HttpResponse.json(sessionFor(demo, issueAccessToken(demo)), { status: 201 });
+  }),
+  http.post(P('/auth/logout'), async ({ request }) => {
+    await record(request);
+    model.signOuts.push({
+      path: '/auth/logout',
+      authorization: request.headers.get('authorization'),
+      storedToken: localStorage.getItem('signalnest-token'),
+    });
+    const session = sessionOf(request);
+    if (!session) return modelError(401, 'unauthorized', 'Invalid or expired token.');
+    model.sessions.get(session.id)!.revoked = true;
+    return new HttpResponse(null, { status: 204 });
+  }),
+  http.post(P('/auth/logout-all'), async ({ request }) => {
+    await record(request);
+    model.signOuts.push({
+      path: '/auth/logout-all',
+      authorization: request.headers.get('authorization'),
+      storedToken: localStorage.getItem('signalnest-token'),
+    });
+    const session = sessionOf(request);
+    if (!session) return modelError(401, 'unauthorized', 'Invalid or expired token.');
+    for (const other of model.sessions.values()) {
+      if (other.user_id === session.user.id) other.revoked = true;
+    }
+    return new HttpResponse(null, { status: 204 });
   }),
 
-  // ---- Password reset and email verification (auth/routes.py:124-213) ----
+  // ---- Password reset and email verification (auth/routes.py:198-287) ----
   // Every success is an empty 204. A token rides only in the JSON body.
   http.post(P('/auth/password-reset/request'), async ({ request }) => {
     const { body } = await record(request);
@@ -1135,8 +1233,9 @@ export const handlers = [
     // FD-7: a completed reset verifies the address.
     user.email_verified = true;
     // auth_epoch + 1: every access token issued to the account before now stops working.
-    for (const [accessToken, userId] of [...model.accessTokens]) {
-      if (userId === user.id) model.accessTokens.delete(accessToken);
+    // Its sessions are not revoked (P6-AUTH-4): the epoch alone refuses those tokens.
+    for (const [accessToken, sessionId] of [...model.accessTokens]) {
+      if (model.sessions.get(sessionId)?.user_id === user.id) model.accessTokens.delete(accessToken);
     }
     revokeOpenAccountTokens('password_reset', user.id, row);
     return new HttpResponse(null, { status: 204 });
@@ -1185,7 +1284,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  // ---- Invitations: the token holder's side (auth/routes.py:82-116) ----
+  // ---- Invitations: the token holder's side (auth/routes.py:156-195) ----
   // The token rides only in the JSON body; no request here accepts the email,
   // organization or role.
   http.post(P('/auth/invitations/preview'), async ({ request }) => {
@@ -1210,7 +1309,7 @@ export const handlers = [
     if (bad) return bad;
     const inv = resolveToken(body.token);
     if (inv instanceof Response) return inv;
-    // invitations.py:576-613: an existing account for the invited email is a 409.
+    // invitations.py:563-600: an existing account for the invited email is a 409.
     if ([...model.users.values()].some((u) => u.email === inv.email)) {
       return modelError(409, 'invitation_account_exists', 'An account already exists for this email address.');
     }
@@ -1240,12 +1339,13 @@ export const handlers = [
   http.post(P('/auth/invitations/accept'), async ({ request }) => {
     const { user, body } = await record(request);
     tokenOnlyInBody('accept', request);
-    if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
+    const session = sessionOf(request);
+    if (!user || !session) return modelError(401, 'unauthorized', 'Not authenticated.');
     const bad = exactKeys('accept', body, ['token']);
     if (bad) return bad;
     const inv = resolveToken(body.token);
     if (inv instanceof Response) return inv;
-    // invitations.py:545-573, in order.
+    // invitations.py:532-560, in order.
     if (user.email !== inv.email) {
       return modelError(403, 'permission_denied', 'This invitation was issued to a different email address.');
     }
@@ -1263,7 +1363,8 @@ export const handlers = [
       created_at: inv.accepted_at,
       source: 'invitation',
     });
-    return HttpResponse.json(sessionFor(user, issueAccessToken(user)));
+    // Re-issue inside the presented session: accepting never forks a new one (P6-AUTH-4).
+    return HttpResponse.json(sessionFor(user, mintInSession(session.id, user)));
   }),
 
   // ---- Org / workspace / brand ----
@@ -1310,7 +1411,7 @@ export const handlers = [
     const bad = exactKeys('create invitation', body, ['email', 'role']);
     if (bad) return bad;
     // InvitationCreate.role's enum has no owner, so the schema refuses it (422)
-    // before invitations.py:397-401 ever could.
+    // before invitations.py:384-388 ever could.
     if (!INVITABLE.has(String(body.role))) return modelError(422, 'validation_error', 'Request validation failed');
     const role = body.role as InvitableRole;
     const email = String(body.email);
@@ -1399,7 +1500,7 @@ export const handlers = [
     if (bad) return bad;
     if (!(String(body.role) in ROLE_RANK)) return modelError(422, 'validation_error', 'Request validation failed');
     const next = body.role as ModelRole;
-    // members.py:205-261, in order.
+    // members.py:195-251, in order.
     if (params.userId === user!.id) {
       return modelError(403, 'member_self_change_forbidden', 'You cannot change your own role.');
     }
@@ -1424,7 +1525,7 @@ export const handlers = [
     if (actor instanceof Response) return actor;
     const denied = requireOrgAdmin(actor);
     if (denied) return denied;
-    // members.py:263-300, in order.
+    // members.py:253-295, in order.
     if (params.userId === user!.id) {
       return modelError(403, 'member_self_removal_forbidden', 'You cannot remove yourself from the organization.');
     }

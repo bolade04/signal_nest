@@ -30,13 +30,13 @@ from sqlalchemy.orm import sessionmaker
 from app.audit.models import AuditLog
 from app.core.config import get_settings
 from app.core.enums import Role
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
 from app.intelligence.records import SignalIntelligenceRecord
 from app.main import app
 from app.opportunities.models import Opportunity
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -95,8 +95,8 @@ def _reset_rate_limiter() -> None:
         stack = getattr(stack, "app", None)
 
 
-def _auth(user_id: str) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+def _auth(user_id: str, s=None) -> dict:
+    return {"Authorization": f"Bearer {live_bearer(user_id, s)}"}
 
 
 def _seed_market(s, key: str) -> Market:
@@ -146,8 +146,8 @@ def _seed_market(s, key: str) -> Market:
     s.flush()
     return Market(
         key=key, org_id=org_id, ws_id=ws_id, opp_id=f"opp-{key}", record_id=f"sir-{key}",
-        owner_auth=_auth(f"owner-{key}"), marketer_auth=_auth(f"mkt-{key}"),
-        viewer_auth=_auth(f"view-{key}"),
+        owner_auth=_auth(f"owner-{key}", s), marketer_auth=_auth(f"mkt-{key}", s),
+        viewer_auth=_auth(f"view-{key}", s),
     )
 
 

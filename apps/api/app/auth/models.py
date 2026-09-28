@@ -1,4 +1,15 @@
-"""Account-token models: password reset and email verification.
+"""Auth models: sign-in sessions (P6-AUTH-4), password reset and email verification.
+
+**Sessions.** ``auth_sessions`` holds one row per sign-in. Every access token carries its
+session's id as the ``sid`` claim, and every authenticated request requires that row to
+belong to the token's user, be unrevoked and be unexpired on the database clock. The
+row is created only by a fresh sign-in (login, register, invitation register); its
+``expires_at`` is fixed then and never moved, so no re-issued token outlives it.
+``revoked_at`` set means revoked (``POST /auth/logout`` for one session, ``POST
+/auth/logout-all`` for every session of the account). There is no device, IP address,
+user agent or refresh column.
+
+**Account tokens.** Password reset and email verification.
 
 Each row is one single-use token minted for one user. Only the SHA-256 hex digest of
 the token is stored, prefixed by its purpose before hashing so a digest from one
@@ -15,7 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -25,6 +36,29 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 #: predicate cannot read the clock, and the service revokes the open row before it
 #: inserts the next.
 _OPEN_TOKEN_PREDICATE = "used_at IS NULL AND revoked_at IS NULL"
+
+
+class AuthSession(Base, UUIDPrimaryKeyMixin):
+    """One sign-in: the server-side record every access token of that sign-in is bound to.
+
+    The row's ``id`` is the tokens' ``sid`` claim. ``created_at`` and ``revoked_at`` are
+    stamped from the database clock (``app.db.clock.database_now``); ``expires_at`` is
+    ``created_at`` plus ``session_absolute_lifetime_minutes``, fixed at creation and never
+    updated. There is deliberately no ``TimestampMixin``: no ``updated_at`` and no
+    application-clock default can reach a session row. Expired and revoked rows are
+    inert history.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PasswordResetToken(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -83,4 +117,4 @@ class EmailVerificationToken(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-__all__ = ["EmailVerificationToken", "PasswordResetToken"]
+__all__ = ["AuthSession", "EmailVerificationToken", "PasswordResetToken"]

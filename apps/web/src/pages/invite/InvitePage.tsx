@@ -10,6 +10,7 @@ import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
 import type { InvitationPreviewOut } from '@/api/types';
 import { useAuth } from '@/auth/AuthContext';
+import { SIGN_OUT_NOTICE_COPY, signOutNotice } from '@/auth/sign-out';
 import { Field } from '@/components/common/form-field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -88,7 +89,7 @@ export function InvitePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { status, user, memberships, login, logout, registerWithInvitation, acceptInvitation } =
+  const { status, user, memberships, login, signOut, registerWithInvitation, acceptInvitation } =
     useAuth();
   const { setOrganizationId } = useWorkspace();
 
@@ -104,7 +105,7 @@ export function InvitePage() {
   const [mode, setMode] = useState<'register' | 'sign-in'>('register');
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pending, setPending] = useState<'registering' | 'accepting' | null>(null);
+  const [pending, setPending] = useState<'registering' | 'accepting' | 'signing-out' | null>(null);
   // The router location the token was read from, or the latest one seen since.
   const [seenLocation, setSeenLocation] = useState(location);
 
@@ -315,11 +316,14 @@ export function InvitePage() {
     await enterJoinedOrganization(preview);
   };
 
-  const signOut = () => {
-    // The app's existing sign-out. The token stays in this page's memory so the
-    // invited account can sign in here next.
-    logout();
+  const signOutHere = async () => {
+    // Sign out on the server first (P6-AUTH-4). The token stays in this page's memory
+    // so the invited account can sign in here next.
+    setPending('signing-out');
+    const notice = signOutNotice(await signOut());
+    setPending(null);
     switchMode('sign-in');
+    if (notice) setNotice(SIGN_OUT_NOTICE_COPY[notice]);
   };
 
   let content: React.ReactNode;
@@ -352,7 +356,8 @@ export function InvitePage() {
           <WrongAccountPanel
             invitedEmail={preview.email}
             currentEmail={user.email}
-            onSignOut={signOut}
+            busy={pending === 'signing-out'}
+            onSignOut={() => void signOutHere()}
           />
         );
       } else if (
@@ -516,10 +521,12 @@ function AcceptPanel({
 function WrongAccountPanel({
   invitedEmail,
   currentEmail,
+  busy,
   onSignOut,
 }: {
   invitedEmail: string;
   currentEmail: string;
+  busy: boolean;
   onSignOut: () => void;
 }) {
   return (
@@ -537,7 +544,7 @@ function WrongAccountPanel({
         </div>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <Button className="flex-1" onClick={onSignOut}>
+        <Button className="flex-1" onClick={onSignOut} disabled={busy} aria-busy={busy}>
           Sign out
         </Button>
         <Button asChild variant="outline" className="flex-1">

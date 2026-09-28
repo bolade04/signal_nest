@@ -29,7 +29,7 @@ Removal deletes the membership row only; the user account is never touched.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -38,6 +38,7 @@ from app.audit.service import record_audit
 from app.auth.dependencies import _ROLE_RANK, OrganizationContext
 from app.core.enums import Role
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
+from app.db.clock import as_utc
 from app.organizations.models import Organization, OrganizationMember, User
 
 #: The roles that administer an organization's membership and invitations.
@@ -58,17 +59,6 @@ class MemberRow:
 def role_rank(role: Role | str) -> int:
     """Privilege rank of ``role`` from the single role hierarchy (higher = more)."""
     return _ROLE_RANK[Role(role)]
-
-
-def as_utc(value: datetime) -> datetime:
-    """Return ``value`` as an aware UTC datetime.
-
-    SQLite hands back naive datetimes; every value this package writes is UTC, so a
-    naive value is UTC by construction.
-    """
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _organization_lock_select(organization_id: str):

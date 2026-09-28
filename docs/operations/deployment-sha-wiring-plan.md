@@ -174,7 +174,8 @@ Intended AWS ECS/Fargate behavior (defined here, applied later):
   artifact identity (re-tag / reference the same digest); it never rebuilds source
   independently to a reused tag.
 - **Rollback selects a previously verified task-definition revision and image digest** — an
-  earlier known-good artifact, never a rebuild.
+  earlier known-good artifact, never a rebuild, and never below `AUTH4_ROLLBACK_FLOOR`
+  ([deployment.md](./deployment.md)).
 
 ## E. Startup and observability behavior
 
@@ -270,11 +271,13 @@ token, email address, or any secret. The restricted evidence artifact template l
 - **No global flag and no capability override is changed** as part of SHA verification; G4 is
   strictly upstream of activation.
 - **Rollback uses an earlier verified image digest / task-definition revision** — never a
-  force push, a mutable-tag rewrite, or an unreviewed rebuild.
+  force push, a mutable-tag rewrite, or an unreviewed rebuild, and never below
+  `AUTH4_ROLLBACK_FLOOR` ([deployment.md](./deployment.md)).
 - **Database rollback is governed separately** (single migration actor, explicit target
   revision — see [migrations.md](./migrations.md)); an application/artifact rollback must
   **not** automatically reverse migrations. Migrations are additive-first so the prior image
-  runs against the newer schema (`ahead`).
+  runs against the newer schema (`ahead`). A pre-AUTH4 image is startup-safe (`ahead`) but
+  restores revoked and expired sessions, which is why no rollback may go below the floor.
 - **No later stage may silently bypass missing build metadata** — absence is a hard failure,
   not a defaulted value.
 
@@ -290,7 +293,7 @@ Each item below is a **separate, later, authorized** change. INFRA-2 modifies no
 | API + worker startup | Emit `build_revision`/`application_version` in structured startup log | settings → one log record | log-capture test asserts non-secret fields present, no secrets | no tenant/credential in log | none (additive log) |
 | Migration actor (`app/db/migrate.py`) | Log same revision at start | settings → log | test asserts correlation field | non-secret | none |
 | `.github/workflows/ci.yml` (or a separate deploy workflow) | Pass `--build-arg GIT_REVISION=${{ github.sha }}`; capture digest | CI SHA → build args + recorded digest | workflow lint / dry-run | OIDC only for later push; no long-lived keys | build-only in CI; publish is a later deploy tranche |
-| IaC (INFRA-4) task definitions | Set `BUILD_REVISION`/`APPLICATION_VERSION` env; pin image by digest | authorized SHA/digest → task-def env + `image@sha256:...` | `plan`-only validation | least-privilege; private subnets | rollback = prior task-def revision |
+| IaC (INFRA-4) task definitions | Set `BUILD_REVISION`/`APPLICATION_VERSION` env; pin image by digest | authorized SHA/digest → task-def env + `image@sha256:...` | `plan`-only validation | least-privilege; private subnets | rollback = prior task-def revision at or above `AUTH4_ROLLBACK_FLOOR` |
 | Preflight script (G4) | Fail-closed SHA/digest verification (§F) | expected SHA + observed runtime/registry/task-def evidence → pass/fail | unit tests for every §F clause incl. malformed/mismatch/`None` | read-only; no override path; no state mutation | idempotent; safe to re-run |
 
 ## J. Acceptance criteria for the later implementation

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
 from app.auth import account_tokens, mail_dispatch, service
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import (
+    AuthenticatedSession,
+    get_authenticated_session,
+    get_current_user,
+)
+from app.auth.models import AuthSession
 from app.auth.schemas import (
     EmailVerificationConfirmRequest,
     EmailVerificationRequest,
@@ -22,6 +27,7 @@ from app.auth.schemas import (
     UserOut,
 )
 from app.core.logging import get_logger, log_event
+from app.db.clock import database_now
 from app.db.session import get_db
 from app.organizations import invitations as invitation_service
 from app.organizations.models import Organization, OrganizationMember, User
@@ -30,7 +36,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 logger = get_logger(__name__)
 
 
-def _session(db: Session, user: User) -> SessionOut:
+def _session(db: Session, user: User, auth_session: AuthSession) -> SessionOut:
+    """The ``SessionOut`` for ``user``, with a token minted inside ``auth_session``."""
     rows = db.execute(
         select(OrganizationMember, Organization)
         .join(Organization, Organization.id == OrganizationMember.organization_id)
@@ -40,7 +47,7 @@ def _session(db: Session, user: User) -> SessionOut:
         MembershipOut(organization_id=o.id, organization_name=o.name, role=m.role) for m, o in rows
     ]
     return SessionOut(
-        access_token=service.issue_token(user),
+        access_token=service.issue_token(user, auth_session),
         user=UserOut(
             id=user.id,
             email=user.email,
@@ -50,6 +57,18 @@ def _session(db: Session, user: User) -> SessionOut:
         ),
         memberships=memberships,
     )
+
+
+def _fresh_session(db: Session, user: User) -> SessionOut:
+    """A fresh-credential boundary (P6-AUTH-4): open a new session, COMMIT it, then mint.
+
+    Only login, register and invitation register reach here. The commit happens before
+    the token exists, so a returned token always belongs to a committed session, and a
+    failed commit returns no token.
+    """
+    auth_session = service.create_session(db, user)
+    db.commit()
+    return _session(db, user, auth_session)
 
 
 @router.post("/register", response_model=SessionOut, status_code=201)
@@ -70,18 +89,68 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)) -> SessionOut
         entity_type="user",
         entity_id=user.id,
     )
-    return _session(db, user)
+    return _fresh_session(db, user)
 
 
 @router.post("/login", response_model=SessionOut)
 def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
     user = service.authenticate(db, email=body.email, password=body.password)
-    return _session(db, user)
+    return _fresh_session(db, user)
 
 
 @router.get("/me", response_model=SessionOut)
-def me(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> SessionOut:
-    return _session(db, user)
+def me(
+    db: Session = Depends(get_db),
+    authenticated: AuthenticatedSession = Depends(get_authenticated_session),
+) -> SessionOut:
+    """Re-read the signed-in session. RE-ISSUE ONLY (P6-AUTH-4): the token returned is
+    minted inside the presented session and capped at its fixed absolute expiry; no
+    session is created or extended, however often this is called."""
+    return _session(db, authenticated.user, authenticated.session)
+
+
+@router.post("/logout", status_code=204)
+def logout(
+    db: Session = Depends(get_db),
+    authenticated: AuthenticatedSession = Depends(get_authenticated_session),
+) -> Response:
+    """Sign out: revoke the session this request's token belongs to (P6-AUTH-4).
+
+    Every token issued or re-issued inside that session stops authenticating; the
+    account's other sessions stay signed in. ``auth_epoch`` is not moved. The revocation
+    is stamped on the database clock and committed before the empty 204.
+    """
+    db.execute(
+        update(AuthSession)
+        .where(AuthSession.id == authenticated.session.id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=database_now(db))
+    )
+    db.commit()
+    log_event(logger, "security.session.revoked", outcome="success", user_id=authenticated.user.id)
+    return Response(status_code=204)
+
+
+@router.post("/logout-all", status_code=204)
+def logout_all(
+    db: Session = Depends(get_db),
+    authenticated: AuthenticatedSession = Depends(get_authenticated_session),
+) -> Response:
+    """Sign out everywhere: revoke every session of the signed-in account (P6-AUTH-4).
+
+    The caller's own session is included; other accounts are untouched and
+    ``auth_epoch`` is not moved. A sign-in that commits after this creates a new,
+    legitimate session.
+    """
+    db.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == authenticated.user.id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=database_now(db))
+    )
+    db.commit()
+    log_event(
+        logger, "security.session.revoked_all", outcome="success", user_id=authenticated.user.id
+    )
+    return Response(status_code=204)
 
 
 # --- Invitations -------------------------------------------------------------------------
@@ -105,20 +174,25 @@ def register_with_invitation(
     user = service.register_invited(
         db, token=body.token, full_name=body.full_name, password=body.password
     )
-    db.commit()
-    return _session(db, user)
+    # The new account's first session is committed together with the claimed invitation.
+    return _fresh_session(db, user)
 
 
 @router.post("/invitations/accept", response_model=SessionOut)
 def accept_invitation(
     body: InvitationTokenRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    authenticated: AuthenticatedSession = Depends(get_authenticated_session),
 ) -> SessionOut:
-    invitation_service.accept_invitation_existing_user(db, user=user, token=body.token)
+    """Accept an invitation as the signed-in user. RE-ISSUE ONLY (P6-AUTH-4): the token
+    returned is minted inside the caller's own session and capped at its fixed absolute
+    expiry; a revoked or expired session is refused (401) before any membership effect."""
+    invitation_service.accept_invitation_existing_user(
+        db, user=authenticated.user, token=body.token
+    )
     db.commit()
     # Every membership the user now holds, the accepted one included.
-    return _session(db, user)
+    return _session(db, authenticated.user, authenticated.session)
 
 
 # --- Password reset and email verification ------------------------------------------------

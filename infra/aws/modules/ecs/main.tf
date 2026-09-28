@@ -20,7 +20,7 @@
 # provider-6.55 rule resources only (never inline blocks). SG-referenced traffic:
 # ALB↔API TCP 8000 (both rules owned here); PostgreSQL TCP 5432 from api/worker/
 # migration; Redis TCP 6379 from api/worker ONLY — the migration task is pinned to
-# non-Redis backends (executable basis: apps/api/app/core/config.py:306-312) and
+# non-Redis backends (executable basis: apps/api/app/core/config.py:471-474) and
 # receives NO Redis rule and NO REDIS_URL secret. Public-HTTPS egress is the §26.4
 # NAT baseline: TCP 443 IPv4 per task SG (ECR pull, Secrets Manager injection,
 # CloudWatch Logs delivery, S3, approved LLM providers) — no all-protocol egress,
@@ -35,7 +35,9 @@
 # RUNTIME (§26.10): Fargate, LINUX/X86_64 (matches the CI linux/amd64 build),
 # platform version 1.4.0, private subnets, assign_public_ip=false, 256 CPU/512 MiB
 # baseline, desired count 1+1, min-healthy 100%/max 200%, deployment circuit breaker
-# with rollback, API health-check grace 60s, ECS Exec disabled, autoscaling
+# with rollback (`deployment_rollback_enabled`, default true: false on BOTH services
+# only during the one-way P6-AUTH-4 cutover, docs/operations/deployment.md), API
+# health-check grace 60s, ECS Exec disabled, autoscaling
 # deferred. Containers run read-only-root + writable /tmp (task-scoped volume —
 # Fargate supports no tmpfs) as non-root 10001:10001 with exec-form commands;
 # `awslogs-create-group` is omitted so the OpenTofu-created groups must pre-exist
@@ -410,7 +412,7 @@ resource "aws_ecs_service" "api" {
 
   deployment_circuit_breaker {
     enable   = true
-    rollback = true
+    rollback = var.deployment_rollback_enabled
   }
 
   network_configuration {
@@ -446,7 +448,7 @@ resource "aws_ecs_service" "worker" {
 
   deployment_circuit_breaker {
     enable   = true
-    rollback = true
+    rollback = var.deployment_rollback_enabled
   }
 
   network_configuration {

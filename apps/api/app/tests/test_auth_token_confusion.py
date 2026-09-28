@@ -11,13 +11,23 @@ still works where it belongs.
 The digest separation is also checked on its own, without relying on separate tables: a row
 planted under ANOTHER purpose's digest of a raw value is not found when that raw value is
 presented, while a row under the right digest is (positive control).
+
+P6-AUTH-4 adds the access token's session id (``sid``): a token authenticates only through
+its OWN user's live session. An unknown session, another user's live session and the
+token's own revoked session are all refused, and a ``sid`` that is not exactly 32 lowercase
+hex characters (a number, a boolean, null, a container, one character short or long,
+uppercase, non-hex, a trailing newline) is refused before any lookup -- each probe after the
+same account's live-session control succeeds.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
+from sqlalchemy import event
 
 from app.auth.models import EmailVerificationToken, PasswordResetToken
 from app.organizations.models import OrganizationInvitation
@@ -28,18 +38,22 @@ from app.tests._auth2_support import (
     INVITATION_ACCEPT,
     INVITATION_PREVIEW,
     INVITATION_REGISTER,
+    LOGOUT,
     OLD_PASSWORD,
     Env,
     code,
     confirm_reset,
     confirm_verification,
     environment,
+    get_me,
     invite,
     mint_reset,
     mint_verification,
+    open_session,
     past_cooldown,
     plain_digest,
     post,
+    raw_token,
     reset_digest,
     verification_digest,
 )
@@ -47,6 +61,7 @@ from app.tests._auth2_support import (
 RESET_INVALID = (404, "password_reset_invalid")
 VERIFICATION_INVALID = (404, "email_verification_invalid")
 INVITATION_INVALID = (404, "invitation_invalid")
+UNAUTHORIZED = (401, "unauthorized")
 
 
 @pytest.fixture
@@ -177,3 +192,81 @@ class TestDigestsArePurposeBound:
     def test_the_three_digests_of_one_raw_value_differ(self):
         raw = "same-raw-value"
         assert len({reset_digest(raw), verification_digest(raw), plain_digest(raw)}) == 3
+
+
+# --------------------------------------------------------------------------- #
+@contextmanager
+def _statements(engine) -> Iterator[list[str]]:
+    """Every SQL statement ``engine`` executes inside the block."""
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+def _naming(sid: object, user_id: str = ALICE) -> str:
+    """A current-epoch token of ``user_id`` that names session ``sid``, verbatim."""
+    return raw_token(sub=user_id, sid=sid, auth_epoch=0)
+
+
+class TestSessionIdConfusion:
+    """P6-AUTH-4: a token authenticates only through its own user's live session."""
+
+    def test_only_the_tokens_own_live_session_authenticates(self, env: Env):  # T-10
+        _, own = open_session(env.request_engine, ALICE)
+        _, bobs = open_session(env.request_engine, BOB)
+        ended_token, ended = open_session(env.request_engine, ALICE)
+        assert get_me(env, _naming(own)).status_code == 200
+        # Another user's session: live for its owner, refused for ALICE.
+        assert get_me(env, _naming(bobs, BOB)).status_code == 200
+        assert code(get_me(env, _naming(bobs))) == UNAUTHORIZED
+        # The token's own session once revoked: accepted before, refused after.
+        assert get_me(env, _naming(ended)).status_code == 200
+        assert post(env, LOGOUT, None, token=ended_token).status_code == 204
+        assert code(get_me(env, _naming(ended))) == UNAUTHORIZED
+        # A well-formed id that names no session at all.
+        assert code(get_me(env, _naming(uuid.uuid4().hex))) == UNAUTHORIZED
+        assert get_me(env, _naming(own)).status_code == 200
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            lambda sid: int(sid, 16),
+            lambda sid: True,
+            lambda sid: None,
+            lambda sid: [sid],
+            lambda sid: {"sid": sid},
+            lambda sid: sid[:-1],
+            lambda sid: sid + "0",
+            lambda sid: sid.upper(),
+            lambda sid: "g" + sid[1:],
+            lambda sid: sid + "\n",
+        ],
+        ids=[
+            "int",
+            "bool",
+            "null",
+            "list",
+            "object",
+            "31-chars",
+            "33-chars",
+            "uppercase",
+            "non-hex",
+            "trailing-newline",
+        ],
+    )
+    def test_a_malformed_sid_is_refused(self, env: Env, malformed):  # T-11
+        _, sid = open_session(env.request_engine, ALICE)
+        assert sid != sid.upper(), "precondition: the live id has a hex letter to uppercase"
+        with _statements(env.request_engine) as control:
+            assert get_me(env, _naming(sid)).status_code == 200
+        assert control, "positive control: the listener sees a request's lookups"
+        with _statements(env.request_engine) as seen:
+            assert code(get_me(env, _naming(malformed(sid)))) == UNAUTHORIZED
+        assert seen == [], "a malformed sid is refused before any database lookup"

@@ -36,11 +36,11 @@ from app.capabilities.models import WorkspaceCapabilityOverride
 from app.capabilities.service import MAX_REASON_LEN
 from app.core.config import get_settings
 from app.core.middleware import RateLimitMiddleware
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
 from app.organizations.models import Organization, User, Workspace
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 OVERRIDES_PATH = "/internal/system/capabilities/overrides"
@@ -177,8 +177,8 @@ class _Harness:
     def __init__(self, client, factory):
         self.client = client
         self.factory = factory
-        self.op = {"Authorization": f"Bearer {create_access_token(_OPERATOR)}"}
-        self.cust = {"Authorization": f"Bearer {create_access_token(_CUSTOMER)}"}
+        self.op = {"Authorization": f"Bearer {live_bearer(_OPERATOR)}"}
+        self.cust = {"Authorization": f"Bearer {live_bearer(_CUSTOMER)}"}
 
     def set(self, *, org=_ORG_A, ws=_WS_A, capability="opportunity_feedback", enabled=True,
             reason=None, auth=None, anon=False):

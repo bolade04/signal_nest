@@ -214,6 +214,11 @@ module "ecs" {
   api_environment         = local.workload_env_api
   worker_environment      = local.workload_env_redis
   migration_environment   = local.workload_env_migration
+
+  # P6-AUTH-4 one-way cutover controls (variables.tf); the defaults are the baseline.
+  deployment_rollback_enabled = var.ecs_deployment_rollback_enabled
+  api_desired_count           = var.api_desired_count
+  worker_desired_count        = var.worker_desired_count
 }
 
 # Metric filters, caller-thresholded alarms, and the CloudTrail audit trail
