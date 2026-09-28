@@ -7,17 +7,18 @@ issued, unknown, inactive and cooling-down reset requests; a completed, a replay
 unknown and a refused-password confirm; issued, cooling-down and already-verified
 verification requests; a wrong-account, an unknown and a completed verification confirm;
 and two background sends that fail, one with a ``MailSendError`` and one with an arbitrary
-exception whose message quotes the whole email. Each record is rendered three ways (its
-message, its full ``__dict__``, and the production JSON formatter's output with any
+exception whose message quotes the whole email; and the two P6-AUTH-4 session revocations
+(a logout, the same token's refused repeat, and a logout-all). Each record is rendered three
+ways (its message, its full ``__dict__``, and the production JSON formatter's output with any
 traceback) and must contain no raw token, no digest, no link, no email address, no
-password and no mail body. Positive controls prove the capture really saw the request log,
-every security event, the mail events and both failure events -- and that the failed tokens
-were revoked (AUTH2-C3).
+password, no mail body, no access token and no session id. Positive controls prove the
+capture really saw the request log, every security event, the mail events and both failure
+events -- and that the failed tokens were revoked (AUTH2-C3).
 
 **OpenAPI.** The four operations take the token only in a JSON body that forbids unknown
 fields; no operation anywhere has a token in its path, query or headers; the two public
 operations have no parameters at all (no bearer dependency), the two verification
-operations only the ``authorization`` header; each answers 204 with no body. 103 operations.
+operations only the ``authorization`` header; each answers 204 with no body. 105 operations.
 """
 
 from __future__ import annotations
@@ -42,6 +43,8 @@ from app.tests._auth2_support import (
     DANA,
     EMAIL,
     INACTIVE,
+    LOGOUT,
+    LOGOUT_ALL,
     NEW_PASSWORD,
     OLD_PASSWORD,
     RESET_CONFIRM,
@@ -59,6 +62,7 @@ from app.tests._auth2_support import (
     link_token,
     mint_reset,
     mint_verification,
+    open_session,
     plain_digest,
     post,
     request_reset,
@@ -172,6 +176,13 @@ def _run_every_path(env: Env, monkeypatch) -> tuple[list[str], list]:
     confirm_verification(env, "Y" * 43, BOB)
     raws.append("Y" * 43)
     assert confirm_verification(env, bob_verification, BOB).status_code == 204
+    # Session revocation (P6-AUTH-4): a logout, its refused repeat, a logout-all. The access
+    # tokens and session ids join the secrets.
+    ended, remaining = open_session(env.request_engine, BOB), open_session(env.request_engine, BOB)
+    assert post(env, LOGOUT, None, token=ended[0]).status_code == 204
+    assert post(env, LOGOUT, None, token=ended[0]).status_code == 401
+    assert post(env, LOGOUT_ALL, None, token=remaining[0]).status_code == 204
+    raws += [*ended, *remaining]
     # Background sends that fail: a provider error, and a defect quoting the whole message.
     with failing_mail(monkeypatch, env) as provider_failure:
         request_reset(env, EMAIL[CASEY])
@@ -189,7 +200,7 @@ def _run_every_path(env: Env, monkeypatch) -> tuple[list[str], list]:
     return raws, [*env.messages(), *provider_failure, *handed]
 
 
-def test_no_secret_in_any_log_record_or_stream(env: Env, monkeypatch, capsys):
+def test_no_secret_in_any_log_record_or_stream(env: Env, monkeypatch, capsys):  # T-30
     with capture_all_logs() as records:
         raws, messages = _run_every_path(env, monkeypatch)
     out = capsys.readouterr()
@@ -205,6 +216,8 @@ def test_no_secret_in_any_log_record_or_stream(env: Env, monkeypatch, capsys):
         "mail.send_failed",
         "security.password_reset.mail_failed",
         "security.email_verification.mail_failed",
+        "security.session.revoked",
+        "security.session.revoked_all",
     ):
         assert event_name in names, (event_name, sorted(set(names)))
     # AUTH2-C3: each token whose send failed was revoked.
@@ -222,7 +235,7 @@ def test_no_secret_in_any_log_record_or_stream(env: Env, monkeypatch, capsys):
             assert secret not in stream, secret[:24]
 
 
-def test_security_events_carry_only_static_fields(env: Env, monkeypatch):
+def test_security_events_carry_only_static_fields(env: Env, monkeypatch):  # T-30
     with capture_all_logs() as records:
         _run_every_path(env, monkeypatch)
     allowed = {"outcome", "user_id", "error_class", "duration_ms"}
@@ -263,14 +276,14 @@ def doc() -> dict:
 
 
 class TestOpenApiContract:
-    def test_operation_count(self, doc: dict):
+    def test_operation_count(self, doc: dict):  # T-31
         count = sum(
             1
             for item in doc["paths"].values()
             for method in item
             if method in {"get", "post", "put", "delete", "patch"}
         )
-        assert count == 103
+        assert count == 105
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

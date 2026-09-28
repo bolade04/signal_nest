@@ -165,3 +165,66 @@ run "migration_contract" {
     error_message = "api and worker services must not assign a public IP"
   }
 }
+
+# --- P6-AUTH-4 one-way cutover controls (I-01..I-03) -----------------------------
+# The MODULE contract only: the root wiring of the three inputs (infra/aws/main.tf)
+# is reviewed in the diff, and no test here stands for a real plan or apply.
+
+# I-01: the defaults reproduce the locked baseline on BOTH services.
+run "auth4_deployment_defaults" {
+  command = plan
+
+  assert {
+    condition     = aws_ecs_service.api[0].deployment_circuit_breaker[0].enable == true && aws_ecs_service.api[0].deployment_circuit_breaker[0].rollback == true
+    error_message = "by default the API service keeps the deployment circuit breaker WITH rollback"
+  }
+  assert {
+    condition     = aws_ecs_service.worker[0].deployment_circuit_breaker[0].enable == true && aws_ecs_service.worker[0].deployment_circuit_breaker[0].rollback == true
+    error_message = "by default the worker service keeps the deployment circuit breaker WITH rollback"
+  }
+  assert {
+    condition     = aws_ecs_service.api[0].deployment_minimum_healthy_percent == 100 && aws_ecs_service.api[0].deployment_maximum_percent == 200
+    error_message = "the API service keeps min-healthy 100% / max 200%"
+  }
+  assert {
+    condition     = aws_ecs_service.worker[0].deployment_minimum_healthy_percent == 100 && aws_ecs_service.worker[0].deployment_maximum_percent == 200
+    error_message = "the worker service keeps min-healthy 100% / max 200%"
+  }
+  assert {
+    condition     = aws_ecs_service.api[0].desired_count == 1 && aws_ecs_service.worker[0].desired_count == 1
+    error_message = "by default each service runs one task"
+  }
+}
+
+# I-02: rollback off renders rollback = false -- the breaker itself stays on -- on BOTH.
+run "auth4_rollback_disabled_on_both_services" {
+  command = plan
+
+  variables {
+    deployment_rollback_enabled = false
+  }
+
+  assert {
+    condition     = aws_ecs_service.api[0].deployment_circuit_breaker[0].enable == true && aws_ecs_service.api[0].deployment_circuit_breaker[0].rollback == false
+    error_message = "deployment_rollback_enabled = false must render rollback = false (enable true) on the API service"
+  }
+  assert {
+    condition     = aws_ecs_service.worker[0].deployment_circuit_breaker[0].enable == true && aws_ecs_service.worker[0].deployment_circuit_breaker[0].rollback == false
+    error_message = "deployment_rollback_enabled = false must render rollback = false (enable true) on the worker service"
+  }
+}
+
+# I-03: the module accepts and renders a desired count of 0 on both services.
+run "auth4_quiesced_services_render_zero" {
+  command = plan
+
+  variables {
+    api_desired_count    = 0
+    worker_desired_count = 0
+  }
+
+  assert {
+    condition     = aws_ecs_service.api[0].desired_count == 0 && aws_ecs_service.worker[0].desired_count == 0
+    error_message = "api_desired_count = 0 and worker_desired_count = 0 must render desired_count 0 on both services"
+  }
+}

@@ -337,7 +337,9 @@
 - **Consider:** GitHub **OIDC** federation (no long-lived AWS keys); immutable image build;
   image-digest recording; **exact Git SHA** stamping; a **staging GitHub environment** with
   **human approval**; the one-shot migration job; ECS deployment; post-deploy health
-  verification; rollback to a prior digest.
+  verification; rollback to a prior digest. *(Point-in-time record. Since P6-AUTH-4, a
+  rollback to a prior digest may not target a revision below `AUTH4_ROLLBACK_FLOOR` — see
+  docs/operations/deployment.md.)*
 - **Dependencies:** INFRA-3, INFRA-4.
 - **Expected repository areas:** `.github/workflows/` (new staging workflow, separate PR),
   `docs/`.
@@ -494,6 +496,11 @@
   the current taxonomy (live identifiers/credentials/tokens restricted from birth; "G2"
   confirmed stale and unused). Live execution of the sequence, the gap-fix PRs, the
   first-operator decision, and surface verification all remain INFRA-9-gated.
+  *(Point-in-time record. Since P6-AUTH-4, access tokens are bound to server-side sessions
+  and the credential holder can revoke the current session or all of an identity's sessions
+  (logout / logout-all) — a supported session-revocation path that INFRA-9 may use. The
+  GAP-4 deactivation limb is unchanged: AUTH4 adds no account deactivation, so INFRA-9 still
+  must not assume an identity-deactivation path.)*
 - **Objective:** verify supported provisioning of internal tenants and roles.
 - **Consider:** supported organization/workspace provisioning surfaces
   (`POST /auth/register`, `POST /organizations/{organization_id}/workspaces`, RBAC role
@@ -556,7 +563,11 @@
   alerts; **STOP-and-reauthorize if projected above $200 without weakening a control**.
 - **Required human authorization:** explicit, fresh authorization to spend and deploy.
 - **Rollback approach:** immutable-artifact redeploy; IaC destroy for full teardown;
-  override clear plane readiness confirmed (no override yet exists).
+  override clear plane readiness confirmed (no override yet exists). *(Point-in-time record.
+  Once P6-AUTH-4 has served in staging, neither the immutable-artifact redeploy nor any
+  exact-SHA deployment may target a revision below `AUTH4_ROLLBACK_FLOOR`; a pre-AUTH4
+  INFRA-9 deployment is a PRE_AUTH4_WORKLOAD_PRESENT = true starting point for the AUTH4
+  one-way cutover — docs/operations/deployment.md.)*
 - **Exact stop boundary:** STOP after environment is verified ready with all flags `False`.
   **Phase 4B-C activation (creating the enable override) is a separate, later, explicitly
   authorized decision — not part of INFRA-9.**

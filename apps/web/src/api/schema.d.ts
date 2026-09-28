@@ -60,7 +60,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Accept Invitation */
+        /**
+         * Accept Invitation
+         * @description Accept an invitation as the signed-in user. RE-ISSUE ONLY (P6-AUTH-4): the token
+         *     returned is minted inside the caller's own session and capped at its fixed absolute
+         *     expiry; a revoked or expired session is refused (401) before any membership effect.
+         */
         post: operations["accept_invitation_api_v1_auth_invitations_accept_post"];
         delete?: never;
         options?: never;
@@ -119,6 +124,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout
+         * @description Sign out: revoke the session this request's token belongs to (P6-AUTH-4).
+         *
+         *     Every token issued or re-issued inside that session stops authenticating; the
+         *     account's other sessions stay signed in. ``auth_epoch`` is not moved. The revocation
+         *     is stamped on the database clock and committed before the empty 204.
+         */
+        post: operations["logout_api_v1_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout All
+         * @description Sign out everywhere: revoke every session of the signed-in account (P6-AUTH-4).
+         *
+         *     The caller's own session is included; other accounts are untouched and
+         *     ``auth_epoch`` is not moved. A sign-in that commits after this creates a new,
+         *     legitimate session.
+         */
+        post: operations["logout_all_api_v1_auth_logout_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me": {
         parameters: {
             query?: never;
@@ -126,7 +179,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Me */
+        /**
+         * Me
+         * @description Re-read the signed-in session. RE-ISSUE ONLY (P6-AUTH-4): the token returned is
+         *     minted inside the presented session and capped at its fixed absolute expiry; no
+         *     session is created or extended, however often this is called.
+         */
         get: operations["me_api_v1_auth_me_get"];
         put?: never;
         post?: never;
@@ -4141,6 +4199,64 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_v1_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_all_api_v1_auth_logout_all_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

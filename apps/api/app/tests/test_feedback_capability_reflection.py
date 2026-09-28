@@ -25,7 +25,7 @@ import app.feedback.routes as feedback_routes
 from app.capabilities.models import WorkspaceCapabilityOverride
 from app.core.config import get_settings
 from app.core.enums import Role
-from app.core.security import create_access_token
+from app.tests._auth2_support import live_bearer
 
 from .test_feedback_capability_gate import h  # noqa: F401  (shared harness fixture)
 
@@ -169,7 +169,7 @@ def test_b9_non_editor_member_is_forbidden(h):  # noqa: F811
             )
         )
         s.commit()
-    viewer = {"Authorization": f"Bearer {create_access_token('viewer-a')}"}
+    viewer = {"Authorization": f"Bearer {live_bearer('viewer-a')}"}
     r = h.client.get(_url(h.m("a").ws_id), headers=viewer)
     assert r.status_code == 403
 

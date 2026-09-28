@@ -40,13 +40,13 @@ from app.capabilities.registry import Capability
 from app.capabilities.resolver import resolve_capability
 from app.core.config import get_settings
 from app.core.enums import Role
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
 from app.intelligence.records import SignalIntelligenceRecord
 from app.main import app
 from app.opportunities.models import Opportunity
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 FEEDBACK = Capability.OPPORTUNITY_FEEDBACK.value
@@ -64,8 +64,8 @@ class Market:
     owner_auth: dict
 
 
-def _auth(user_id: str) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+def _auth(user_id: str, s=None) -> dict:
+    return {"Authorization": f"Bearer {live_bearer(user_id, s)}"}
 
 
 def _seed_market(s, key: str, org_id: str, *, create_org: bool = True) -> Market:
@@ -113,7 +113,7 @@ def _seed_market(s, key: str, org_id: str, *, create_org: bool = True) -> Market
         accepted=True, classification="emerging"))
     s.flush()
     return Market(key=key, org_id=org_id, ws_id=ws_id, opp_id=f"opp-{key}",
-                  record_id=f"sir-{key}", owner_auth=_auth(owner))
+                  record_id=f"sir-{key}", owner_auth=_auth(owner, s))
 
 
 class _Harness:

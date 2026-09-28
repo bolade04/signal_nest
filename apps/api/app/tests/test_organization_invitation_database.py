@@ -69,8 +69,10 @@ from app.organizations.models import (
 API_DIR = Path(__file__).resolve().parents[2]
 PREV = "98289430a3ec"
 HEAD = "3dc124a7dfd7"
-#: The code head, one additive revision later (6B-4A account tokens).
-CODE_HEAD = "a452ee007cc2"
+#: The 6B-4A account-token revision, one additive revision later; the code head one further
+#: (P6-AUTH-4 sessions).
+ACCOUNT_TOKENS = "a452ee007cc2"
+CODE_HEAD = "87198ab57b59"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -268,7 +270,8 @@ def test_revision_chain() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert script.get_revision(HEAD).down_revision == PREV
-    assert script.get_revision(CODE_HEAD).down_revision == HEAD
+    assert script.get_revision(ACCOUNT_TOKENS).down_revision == HEAD
+    assert script.get_revision(CODE_HEAD).down_revision == ACCOUNT_TOKENS
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
 
 

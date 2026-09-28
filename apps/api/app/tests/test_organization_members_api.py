@@ -47,12 +47,12 @@ from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.errors import PermissionDeniedError
 from app.core.middleware import RateLimitMiddleware
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
 from app.organizations import members as member_service
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 ORG_A, ORG_B, WS_A = "org-mem-a", "org-mem-b", "ws-mem-a"
@@ -290,7 +290,7 @@ def _send(env: Env, method: str, url: str, headers: dict[str, str], body: object
 
 
 def _bearer(user_id: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+    return {"Authorization": f"Bearer {live_bearer(user_id)}"}
 
 
 def _members_url(org: str = ORG_A) -> str:
@@ -565,8 +565,10 @@ class TestList:
 
 
 # --------------------------------------------------------------------------- #
-class TestTakesEffectOnTheNextRequest:
-    """One bearer header, minted once; the committed membership decides each request."""
+class TestTakesEffectOnTheNextRequest:  # T-27
+    """One bearer header, minted once inside a live session; the committed membership decides
+    each request. A membership or role change revokes no session (P6-AUTH-4): its refusals
+    are authorization failures (403), and the same token still authenticates."""
 
     def _probe(self, env: Env, headers) -> tuple[int, int, int]:
         members = _send(env, "GET", _members_url(), headers)
@@ -598,6 +600,7 @@ class TestTakesEffectOnTheNextRequest:
         assert _put_role(env, _actor(Role.OWNER), TARGET, "viewer").status_code == 200
         members, listing, gated = self._probe(env, headers)
         assert (members, listing, gated) == (200, 200, 403)
+        assert _send(env, "GET", f"{API}/auth/me", headers).status_code == 200
 
     def test_a_demoted_admin_loses_member_management_at_once(self, env: Env):
         admin = _bearer(_actor(Role.ADMIN))

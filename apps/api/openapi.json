@@ -6064,6 +6064,7 @@
     },
     "/api/v1/auth/invitations/accept": {
       "post": {
+        "description": "Accept an invitation as the signed-in user. RE-ISSUE ONLY (P6-AUTH-4): the token\nreturned is minted inside the caller's own session and capped at its fixed absolute\nexpiry; a revoked or expired session is refused (401) before any membership effect.",
         "operationId": "accept_invitation_api_v1_auth_invitations_accept_post",
         "parameters": [
           {
@@ -6244,8 +6245,95 @@
         ]
       }
     },
+    "/api/v1/auth/logout": {
+      "post": {
+        "description": "Sign out: revoke the session this request's token belongs to (P6-AUTH-4).\n\nEvery token issued or re-issued inside that session stops authenticating; the\naccount's other sessions stay signed in. ``auth_epoch`` is not moved. The revocation\nis stamped on the database clock and committed before the empty 204.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout-all": {
+      "post": {
+        "description": "Sign out everywhere: revoke every session of the signed-in account (P6-AUTH-4).\n\nThe caller's own session is included; other accounts are untouched and\n``auth_epoch`` is not moved. A sign-in that commits after this creates a new,\nlegitimate session.",
+        "operationId": "logout_all_api_v1_auth_logout_all_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logout All",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/me": {
       "get": {
+        "description": "Re-read the signed-in session. RE-ISSUE ONLY (P6-AUTH-4): the token returned is\nminted inside the presented session and capped at its fixed absolute expiry; no\nsession is created or extended, however often this is called.",
         "operationId": "me_api_v1_auth_me_get",
         "parameters": [
           {

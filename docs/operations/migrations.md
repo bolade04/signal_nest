@@ -280,6 +280,11 @@ nullable/defaulted, nothing an old replica reads is dropped or renamed in the sa
 release), an old replica remains compatible and reports `ahead` rather than
 failing.
 
+**Exception — P6-AUTH-4:** a pre-AUTH4 replica is startup-compatible (`ahead`) but
+ignores session revocation and issues session-less tokens, so AUTH4 is rolled out by
+the one-way cutover ([deployment.md](./deployment.md)), never by an overlapping
+rolling deploy.
+
 ## Additive-first policy (this phase)
 
 To keep rolling deploys safe, a single release must not both add and remove usage
@@ -302,11 +307,16 @@ This is why the current migration head is reached purely by additive migrations
    to head. Wait for it to succeed.
 3. Roll the API and worker replicas. Each verifies `compatible` (or `ahead` for a
    brief window) at startup; a replica that somehow starts against an un-migrated
-   database fails fast instead of corrupting data.
-4. If a rollback is required, redeploy the previous image. Because the schema is
-   additive-first, the previous code runs against the newer schema (`ahead`); only
-   run `downgrade` if a specific migration must be reversed, and only via the
-   single actor with an explicit target revision and its confirmation.
+   database fails fast instead of corrupting data. (The P6-AUTH-4 revision is the
+   exception: it is rolled out by the one-way cutover in
+   [deployment.md](./deployment.md) — services at zero during the migration, no
+   old/new overlap.)
+4. If a rollback is required, redeploy the previous image — at or above
+   `AUTH4_ROLLBACK_FLOOR` ([deployment.md](./deployment.md)), never below it. Because
+   the schema is additive-first, the previous code runs against the newer schema
+   (`ahead`); only run `downgrade` if a specific migration must be reversed, and only
+   via the single actor with an explicit target revision and its confirmation — never
+   the P6-AUTH-4 migration as part of a rollback.
 
 ## Never do this
 

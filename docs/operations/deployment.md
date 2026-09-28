@@ -119,9 +119,91 @@ so a draining worker can finish in-flight jobs before the runtime sends `SIGKILL
 4. A replica that starts against a database the migration actor has not advanced
    reports `pending` and fails fast rather than corrupting data.
 
-**Rollback:** redeploy the previous image. Because migrations are additive-first,
-the previous code runs against the newer schema (`ahead`). Only run a `downgrade`
-(single actor, explicit target revision) if a specific migration must be reversed.
+**Rollback:** redeploy the previous image — never one below `AUTH4_ROLLBACK_FLOOR`
+(see the P6-AUTH-4 cutover below). Because migrations are additive-first, the
+previous code runs against the newer schema (`ahead`). Only run a `downgrade`
+(single actor, explicit target revision) if a specific migration must be reversed —
+never the P6-AUTH-4 migration as part of a rollback.
+
+### P6-AUTH-4 one-way cutover (no old/new overlap)
+
+The P6-AUTH-4 revision binds every access token to a server-side session (an
+`auth_sessions` row checked on every request) and is **not** rolled out by the
+rolling deployment above. A pre-AUTH4 replica starts cleanly against the AUTH4
+schema (`ahead`) but ignores session revocation, issues session-less tokens that
+every AUTH4 replica refuses, and re-mints any token it accepts. Behind a round-robin
+load balancer without stickiness, old and new replicas together would make a
+sign-out depend on which task answers and bounce users between signed in and signed
+out. The cutover therefore quiesces both services to zero, migrates, and starts
+AUTH4 tasks only: old and new backend replicas never serve at the same time.
+
+Every step that changes infrastructure is applied from a **saved plan inspected
+first** (`tofu plan -out`, `tofu show -json`, then `tofu apply` of that same file —
+never a fresh plan); a plan that changes anything else is rejected:
+
+0. **Pre-check (read-only).** Record whether a pre-AUTH4 API/worker service or task
+   is running, and that no ECS deployment is `IN_PROGRESS` on either service (a
+   service that does not exist yet counts as none). Otherwise stop.
+1. **Preflight.** The AUTH4 image's migration head is the AUTH4 revision (parent
+   `a452ee007cc2`); the live database revision is read with the revision reader;
+   secrets are ready; `SESSION_ABSOLUTE_LIFETIME_MINUTES` and
+   `ACCESS_TOKEN_EXPIRE_MINUTES` pass the startup validator
+   (`0 < ACCESS_TOKEN_EXPIRE_MINUTES <= SESSION_ABSOLUTE_LIFETIME_MINUTES <= 720`).
+2. **AUTH4-capable build.** Both image digests carry an
+   `org.opencontainers.image.revision` label that contains the AUTH4 merge commit;
+   record the digests and the revision.
+3. **No unauthorized rollback path.** Nothing can redeploy an older digest meanwhile.
+4. **Apply 1 — quiesce and register.** Inputs: the AUTH4 digests,
+   `api_desired_count = 0`, `worker_desired_count = 0`,
+   `ecs_deployment_rollback_enabled = false`, `deploy_workload = true`. Allowed: the
+   API, worker and migration task definitions created, or replaced to the AUTH4
+   digests (the only destroys allowed); both services created, or updated in place to
+   the AUTH4 revision with desired count 0 and breaker rollback off (the breaker
+   itself stays on). Then verify: 0 running and 0 pending tasks on both services, the
+   deployment `COMPLETED`, and no healthy or draining target in the API target group.
+5. **Migration.** `aws ecs run-task` with the exact migration task-definition
+   revision ARN that Apply 1 registered (read it with
+   `tofu state show 'module.ecs.aws_ecs_task_definition.migration[0]'`; never a
+   family name or "latest"); record the ARN, exit 0 and the post-migration revision.
+6. **Apply 2 — start AUTH4 only.** Desired count 0 → 1 on both services and nothing
+   else (reject any task-definition change, and rollback must still be off). A failed
+   AUTH4 deployment stops at zero tasks; recover by rolling **forward** to a repaired
+   AUTH4 build.
+7. **Verify.** Every running or pending task of the api, worker and migration
+   families runs the AUTH4 revision and digest (a revision-reader task is allowed;
+   any other family: stop), and each service has exactly one deployment, `COMPLETED`.
+8. **Frontend.** Publish the AUTH4 SPA only after step 7.
+9. **One-time re-login.** A token stored before AUTH4 carries no session id: its
+   first request answers 401, the SPA clears it locally and shows sign-in once; a
+   fresh sign-in opens a session with a 12-hour absolute limit.
+10. **Session smoke** (a synthetic staging identity; record no token): sign in →
+    `/auth/me` 200 → sign out 204 → the same token 401 on repeated requests, so every
+    task is reached → sign in again → sign out everywhere 204 → every token of that
+    identity 401; a token without a session id → 401.
+11. **Apply 3 — the floor.** Record `AUTH4_ROLLBACK_FLOOR` (below); then, once each
+    service's last completed deployment is the recorded floor revision, set
+    `ecs_deployment_rollback_enabled = true` — breaker rollback back on for both
+    services, and nothing else.
+
+**`AUTH4_ROLLBACK_FLOOR`** is the first verified AUTH4-capable backend revision: the
+API and worker task-definition revisions, image digests and image source revisions
+that passed steps 7 and 10, recorded at step 11. Once AUTH4 sessions have been used,
+no deployment — automatic or manual — may roll below it. The breaker's automatic
+rollback is off for the whole cutover and returns only after the floor deployment
+completed, so its target is always at or above the floor. A normal rollback is
+another AUTH4-capable image at or above the floor; the preferred recovery is to roll
+forward. Below the floor, revoked and expired sessions would work again, and a
+pre-AUTH4 `/auth/me` would re-mint any accepted token into a fresh 12-hour one.
+
+**Emergency only.** Restoring a pre-AUTH4 revision is a security-reset incident
+procedure that needs explicit incident authorization naming the restore. Before any
+pre-AUTH4 task serves a request: quiesce to zero (no overlap), then invalidate every
+credential with the tracked `SECRET_KEY` hard cutover
+([aws-staging-operational-procedures.md](./aws-staging-operational-procedures.md)
+§5.1) — or, if rotation is impossible, a separately authorized bulk `auth_epoch`
+increment for every user — and every user signs in again. `SECRET_KEY` rotation is
+never the session-revocation mechanism of a normal rollout: sessions are revoked per
+session (sign out) or per user (sign out everywhere).
 
 ## Local full-mode stack (optional)
 

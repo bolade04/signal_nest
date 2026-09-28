@@ -20,8 +20,10 @@ Load-bearing properties, each with its own test:
   URL fragment, never a query string. Address matching is exact (finding F2, pinned).
 * **Confirm spends the token once and only for its own account.** Password changed, epoch
   +1, address marked verified (FD-7), every other open reset token revoked, no session
-  issued (FD-9). Every dead state is the same 404 ``password_reset_invalid``; a bad new
-  password is a 422 that spends nothing; a bearer header is ignored.
+  issued (FD-9). Every token of every session the account holds stops authenticating by the
+  epoch alone: no session row is revoked (P6-AUTH-4). Every dead state is the same 404
+  ``password_reset_invalid``; a bad new password is a 422 that spends nothing; a bearer
+  header is ignored.
 * **The claim is conditional** (a competitor committed just before it wins), **nothing
   outside the account moves** (tenant tables and bystander users byte-identical), and **both
   routes commit before answering** (a teardown that never commits).
@@ -360,6 +362,21 @@ class TestConfirm:
         fresh = login(env, EMAIL[ALICE], NEW_PASSWORD)
         assert fresh.status_code == 200 and fresh.json()["user"]["email_verified"] is True
         assert get_me(env, session_before).status_code == 401
+
+    def test_a_reset_ends_every_session_token_without_revoking_a_row(self, env: Env):
+        """T-02 (UNIT half): two sessions of the account, one of them re-minted by /me."""
+        first = login(env, EMAIL[BOB], OLD_PASSWORD).json()["access_token"]
+        remint = get_me(env, first)
+        assert remint.status_code == 200
+        tokens = [first, remint.json()["access_token"], bearer(env, BOB)]
+        assert [get_me(env, t).status_code for t in tokens] == [200, 200, 200]
+        sessions = env.witness.sessions(BOB)
+        assert len(sessions) == 2 and all(row["revoked_at"] is None for row in sessions)
+        epoch = env.witness.user(BOB)["auth_epoch"]
+        assert confirm_reset(env, mint_reset(env, BOB)).status_code == 204
+        assert [get_me(env, t).status_code for t in tokens] == [401, 401, 401]
+        assert env.witness.sessions(BOB) == sessions  # none issued, none revoked
+        assert env.witness.user(BOB)["auth_epoch"] == epoch + 1
 
     def test_only_the_credential_columns_of_the_target_change(self, env: Env):
         raw = mint_reset(env, ALICE)

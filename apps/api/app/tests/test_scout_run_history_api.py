@@ -26,7 +26,6 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
-from app.core.security import create_access_token
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
@@ -42,6 +41,7 @@ from app.scouting_requests.run_history import (
     get_run_history,
 )
 from app.scouting_requests.schemas import TriggerType
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -124,9 +124,9 @@ class _Harness:
         self.factory = factory
         self.ws = seed_mod.sid("ws")
         self.org = seed_mod.sid("org")
-        self.auth = {"Authorization": f"Bearer {create_access_token(seed_mod.sid('user'))}"}
+        self.auth = {"Authorization": f"Bearer {live_bearer(seed_mod.sid('user'))}"}
         # A real, active, non-member user for the 403 path.
-        self.outsider_auth = {"Authorization": f"Bearer {create_access_token('outsider-user')}"}
+        self.outsider_auth = {"Authorization": f"Bearer {live_bearer('outsider-user')}"}
 
     def req(self, market_key: str) -> str:
         return seed_mod.sid("scout", market_key)

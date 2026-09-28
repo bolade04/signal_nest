@@ -941,7 +941,7 @@ describe('a failed step leaves the invite page usable, never stuck (§23, §24, 
 // ---- §22 / §48 / §81: wrong account ------------------------------------------
 
 describe('a different signed-in account never accepts (§22, §48, §81)', () => {
-  it('shows the mismatch, never calls accept, and signs the right account in to the joined organization', async () => {
+  it('shows the mismatch, never calls accept, and signs the right account in to the joined organization (F-03)', async () => {
     addOtherOrganization();
     addExistingUser('user-bob', 'bob@example.com', 'Bob Other', 'bob password 1');
     addExistingUser('user-alice', 'alice@example.com', 'Alice Invited', 'alice password 1');
@@ -952,8 +952,9 @@ describe('a different signed-in account never accepts (§22, §48, §81)', () =>
     const { token } = await createInvitation('alice@example.com', 'marketer');
     installInstruments();
 
+    const bob = orgModel.signIn('user-bob');
     const screen = renderProductionApp(<App />, `/invite#token=${token}`, {
-      token: orgModel.signIn('user-bob'),
+      token: bob,
       probe: PROBES,
     });
 
@@ -965,11 +966,16 @@ describe('a different signed-in account never accepts (§22, §48, §81)', () =>
     // Bob's session resolved his organization and persisted it.
     await waitFor(() => expect(localStorage.getItem('signalnest-active-org')).toBe('org-b'));
 
-    // The existing sign-out path, then the invited account signs in right here.
+    // Sign out on the server first (P6-AUTH-4), then the invited account signs in right here.
+    // The stored token is the boot re-read's re-issue of Bob's session.
+    const stored = localStorage.getItem('signalnest-token')!;
     await screen.user.click(screen.getByRole('button', { name: /^sign out$/i }));
     expect(count('/auth/invitations/accept')).toBe(0);
     const password = await screen.findByLabelText(/^password\b/i);
     expect(screen.getByLabelText(/^email\b/i)).toHaveValue('alice@example.com');
+    expect(orgModel.signOuts()).toEqual([{ path: '/auth/logout', authorization: `Bearer ${stored}`, storedToken: stored }]);
+    expect(localStorage.getItem('signalnest-token')).toBeNull();
+    expect([orgModel.accepts(stored), orgModel.accepts(bob)]).toEqual([false, false]);
     await screen.user.type(password, 'alice password 1');
     await screen.user.click(screen.getByRole('button', { name: /^sign in$/i }));
 
@@ -1872,7 +1878,7 @@ describe('the invite page after the widened campaign', () => {
 
 // ---- final adjudication: a registration in flight keeps its form ----
 
-describe('a registration in flight keeps its form (InvitePage.tsx:374)', () => {
+describe('a registration in flight keeps its form (InvitePage.tsx:379)', () => {
   it('"Sign in to accept" cannot replace the form mid-flight, no second form appears, and one registration is sent', async () => {
     const { token } = await createInvitation('nia.new@example.com', 'marketer');
     let release!: () => void;

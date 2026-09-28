@@ -12,7 +12,7 @@ explicitly named set, with no rank floor and no inheritance.
 What runs for real. Only ``get_db`` is overridden, and every request helper asserts that it
 is the *only* override, so bearer parsing, token decode, user lookup, the shared membership
 lookup, the organization lookup and the role checker all execute. Tokens come from
-``create_access_token``; memberships are real ``OrganizationMember`` rows in a temporary
+``live_bearer`` (a live session); memberships are real ``OrganizationMember`` rows in a temporary
 SQLite *file* with foreign keys on. The request-path session factory is configured like
 production's ``SessionLocal`` (``autoflush=False, expire_on_commit=False``) and the override
 mirrors production ``get_db`` (commit on success, rollback on exception, close). Each test
@@ -123,13 +123,13 @@ from app.auth.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.middleware import RateLimitMiddleware
-from app.core.security import create_access_token
 from app.db import session as db_session
 from app.db.models import Base
 from app.db.session import SessionLocal, get_db
 from app.main import app
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
 from app.organizations.schemas import WorkspaceOut
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 CREATE_PATH = f"{API}/organizations/{{organization_id}}/workspaces"
@@ -225,7 +225,7 @@ def _generated_ids() -> list[str]:
 
 
 def _bearer(user_id: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+    return {"Authorization": f"Bearer {live_bearer(user_id)}"}
 
 
 def _create_url(org: str) -> str:
@@ -1075,7 +1075,7 @@ _LADDER = (
     (
         # An OWNER's valid token under the wrong scheme: the scheme alone is refused.
         "non_bearer_scheme",
-        lambda: {"Authorization": f"Token {create_access_token(_uid(ORG_A, Role.OWNER))}"},
+        lambda: {"Authorization": f"Token {live_bearer(_uid(ORG_A, Role.OWNER))}"},
         ORG_A,
         401,
         "unauthorized",

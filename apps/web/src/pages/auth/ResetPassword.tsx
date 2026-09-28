@@ -49,7 +49,7 @@ export function ResetPasswordPage() {
 }
 
 function ResetPasswordFlow({ token, onRefused }: { token: string | null; onRefused: () => void }) {
-  const { logout } = useAuth();
+  const { clearLocalSession } = useAuth();
   const navigate = useNavigate();
   const [refused, setRefused] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -93,9 +93,9 @@ function ResetPasswordFlow({ token, onRefused }: { token: string | null; onRefus
       );
       return;
     }
-    // The reset ended every session of the account and returned none. Sign this tab
-    // out too (session token and cached data), then sign in with the new password.
-    logout();
+    // The reset ended the account's sessions and returned none. Clear this tab LOCALLY
+    // (the session here may be another account's: never revoked from here), then sign in.
+    clearLocalSession();
     navigate('/sign-in', { replace: true, state: { notice: PASSWORD_RESET_NOTICE } });
   };
 

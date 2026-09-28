@@ -29,7 +29,6 @@ from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
-from app.core.security import create_access_token
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
@@ -37,6 +36,7 @@ from app.intelligence.persistence import get_latest_for_opportunity
 from app.intelligence.records import SignalIntelligenceRecord
 from app.main import app
 from app.opportunities.models import Opportunity
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -49,7 +49,13 @@ class _Closeout:
         self.client = client
         self.factory = factory
         self.ws = seed_mod.sid("ws")
-        self.auth = {"Authorization": f"Bearer {create_access_token(seed_mod.sid('user'))}"}
+        self.auth = {"Authorization": f"Bearer {live_bearer(seed_mod.sid('user'))}"}
+
+    def reseed(self) -> None:
+        """Rebuild the deterministic fixture. The reset deletes every mapped table's rows --
+        the session behind ``auth`` included -- so a fresh live session is opened."""
+        seed_mod.seed(reset=True)
+        self.auth = {"Authorization": f"Bearer {live_bearer(seed_mod.sid('user'))}"}
 
     def get(self, opportunity_id: str):
         return self.client.get(
@@ -251,7 +257,7 @@ class TestRollbackDegradation:
                 ) == phase2
         finally:
             # Restore the deterministic module fixture for any later test.
-            seed_mod.seed(reset=True)
+            c.reseed()
 
 
 # --------------------------------------------------------------------------- #

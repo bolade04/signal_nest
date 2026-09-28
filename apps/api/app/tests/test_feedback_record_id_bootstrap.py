@@ -25,11 +25,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core.enums import Role
-from app.core.security import create_access_token
 from app.db.models import Base
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
 from app.main import app
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -121,7 +121,7 @@ def client(tmp_path):
             s.close()
 
     app.dependency_overrides[get_db] = _override_get_db
-    auth = {"Authorization": f"Bearer {create_access_token(_USER)}"}
+    auth = {"Authorization": f"Bearer {live_bearer(_USER)}"}
     original_flag = get_settings().opportunity_feedback_enabled
     try:
         yield TestClient(app), make, auth

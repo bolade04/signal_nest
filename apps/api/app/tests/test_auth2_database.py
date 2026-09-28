@@ -93,7 +93,9 @@ def _this_revision() -> str:
     return children[0].revision
 
 
-HEAD = _this_revision()
+THIS = _this_revision()
+#: The code head: one additive revision later (P6-AUTH-4 sessions), the single head.
+CODE_HEAD = "87198ab57b59"
 
 
 # --------------------------------------------------------------------------- #
@@ -242,10 +244,11 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 # --------------------------------------------------------------------------- #
 # SQLite: migration lifecycle
 # --------------------------------------------------------------------------- #
-def test_this_revision_is_the_single_head_and_follows_invitations() -> None:
+def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
-    assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    revision = script.get_revision(HEAD)
+    assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
+    assert script.get_revision(CODE_HEAD).down_revision == THIS
+    revision = script.get_revision(THIS)
     assert revision.down_revision == PREV
     assert Path(revision.path).name.endswith("_add_password_reset_and_email_verification.py")
 
@@ -254,7 +257,7 @@ def test_cli_reports_one_head(db_path) -> None:
     result = _alembic(db_path, "heads")
     _ok(result)
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    assert len(heads) == 1 and HEAD in heads[0], result.stdout
+    assert len(heads) == 1 and CODE_HEAD in heads[0], result.stdout
 
 
 def test_upgrade_creates_exactly_the_contracted_tables(migrated) -> None:

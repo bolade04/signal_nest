@@ -51,7 +51,7 @@
 - **Protected deployment approval** is required (GitHub environment protection + human
   approval — INFRA-5).
 - **Rollback** uses a previously approved **immutable** artifact (a prior digest), never a
-  mutable rebuild.
+  mutable rebuild, never below `AUTH4_ROLLBACK_FLOOR` ([deployment.md](./deployment.md)).
 
 ## C. Service topology
 

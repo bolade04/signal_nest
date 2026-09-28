@@ -22,7 +22,6 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
-from app.core.security import create_access_token
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
@@ -33,6 +32,7 @@ from app.intelligence.schemas import IntelligencePayload
 from app.main import app
 from app.opportunities.models import Opportunity
 from app.organizations.models import Workspace
+from app.tests._auth2_support import live_bearer
 
 API = get_settings().api_prefix
 
@@ -59,7 +59,7 @@ class _Harness:
         self.ws = seed_mod.sid("ws")
         self.org = seed_mod.sid("org")
         self.user = seed_mod.sid("user")
-        self.auth = {"Authorization": f"Bearer {create_access_token(self.user)}"}
+        self.auth = {"Authorization": f"Bearer {live_bearer(self.user)}"}
         self.with_intel: list[str] = []
         self.without_intel: list[str] = []
         self._categorize()

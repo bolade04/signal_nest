@@ -141,7 +141,7 @@ def test_single_head(db_path) -> None:
     # Exactly one head line — no divergent branches.
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, result.stdout
-    assert "a452ee007cc2" in heads[0]
+    assert "87198ab57b59" in heads[0]
 
 
 def test_downgrade_is_surgical_and_preserves_business_data(db_path) -> None:
