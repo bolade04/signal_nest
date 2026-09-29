@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.logging import get_logger, log_event, request_id_ctx
+from app.core.middleware import html_docs_paths, security_headers_for
 
 logger = get_logger("signalnest.errors")
 
@@ -228,7 +229,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(Exception)
-    async def _unhandled(_: Request, exc: Exception):
+    async def _unhandled(request: Request, exc: Exception):
         # Fixed low-cardinality event + exception class only. The raw message
         # and traceback are never logged: the formatter redacts extra_fields but
         # NOT the message/event text or exc_info, and a driver exception can
@@ -241,7 +242,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             outcome="failure",
             error_class=type(exc).__name__,
         )
+        # This handler runs in Starlette's ServerErrorMiddleware, outside every user
+        # middleware, so SecurityHeadersMiddleware never sees a 500: set them here.
         return JSONResponse(
             status_code=500,
             content=_envelope("internal_error", "An unexpected error occurred"),
+            headers=security_headers_for(request.url.path, html_docs_paths(request.app)),
         )

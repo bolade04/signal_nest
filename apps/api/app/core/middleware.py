@@ -1,12 +1,15 @@
-"""Request correlation + simple in-memory rate-limit placeholder."""
+"""Request correlation, security headers + simple in-memory rate-limit placeholder."""
 
 from __future__ import annotations
 
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.log_context import bound_context, new_request_id, normalize_request_id
 from app.core.logging import get_logger, log_event
@@ -95,6 +98,72 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
                 m.increment(HTTP_REQUESTS_TOTAL, outcome=outcome, status_class=status_class)
                 m.observe(HTTP_REQUEST_DURATION_MS, elapsed_ms, outcome=outcome)
                 return response
+
+
+#: Browser security headers set on every API response (P6-AUTH-5). HSTS carries no
+#: includeSubDomains/preload: the parent domain is undecided, and both would outlive a
+#: rollback. Cache-Control ``no-store`` keeps token-bearing JSON (``SessionOut``, the
+#: one-time invitation token) out of the browser's disk cache.
+SECURITY_HEADERS: dict[str, str] = {
+    "Strict-Transport-Security": "max-age=31536000",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+}
+
+#: JSON needs no fetch; this only stops a response rendered as a document from loading
+#: anything or being framed.
+API_CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 'none'"
+
+
+def html_docs_paths(app) -> frozenset[str]:
+    """The FastAPI HTML documentation routes, read from the app, never hard-coded.
+
+    Swagger UI, its OAuth2 redirect page and ReDoc load CDN assets and run inline
+    scripts, so the API policy would break them (their hardening is P6-INF-18).
+    ``docs_url`` is prefixed here; the other two are FastAPI's unprefixed defaults.
+    """
+    urls = (app.docs_url, app.swagger_ui_oauth2_redirect_url, app.redoc_url)
+    return frozenset(url for url in urls if url)
+
+
+def security_headers_for(path: str, csp_exempt_paths: Iterable[str]) -> dict[str, str]:
+    """The security headers for a response to ``path`` (exact path match only)."""
+    headers = dict(SECURITY_HEADERS)
+    if path not in csp_exempt_paths:
+        headers["Content-Security-Policy"] = API_CONTENT_SECURITY_POLICY
+    return headers
+
+
+class SecurityHeadersMiddleware:
+    """Set :data:`SECURITY_HEADERS` (+ the API CSP) on every HTTP response.
+
+    Pure ASGI, registered last so it is the outermost user middleware: CORS preflight
+    answers and rate-limit 429s pass through it. The catch-all 500 handler runs in
+    Starlette's ServerErrorMiddleware, outside all user middleware, so it applies the
+    same headers itself (``app.core.errors``). ``self.app`` stays public: test helpers
+    walk ``app.middleware_stack`` through it to reach the rate limiter.
+    """
+
+    def __init__(self, app: ASGIApp, csp_exempt_paths: Iterable[str] = ()) -> None:
+        self.app = app
+        self.csp_exempt_paths = frozenset(csp_exempt_paths)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        extra = security_headers_for(scope["path"], self.csp_exempt_paths)
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in extra.items():
+                    headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
