@@ -205,6 +205,91 @@ increment for every user — and every user signs in again. `SECRET_KEY` rotatio
 never the session-revocation mechanism of a normal rollout: sessions are revoked per
 session (sign out) or per user (sign out everywhere).
 
+### P6-AUTH-5 security headers and the SPA's CSP (repository side only)
+
+**What ships.** The API sets these headers on every response — success, 401, 404,
+422, CORS preflight, the rate limiter's 429 and the catch-all 500 (whose handler sets
+them itself, because it runs outside every user middleware):
+
+| Header | Value |
+|---|---|
+| `Strict-Transport-Security` | `max-age=31536000` (no `includeSubDomains`, no `preload`) |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` — omitted only on the three FastAPI HTML documentation pages (`/api/v1/docs`, `/docs/oauth2-redirect`, `/redoc`) |
+| `Referrer-Policy` | `no-referrer` |
+| `Cache-Control` | `no-store` |
+
+The SPA build (`npm run build`) writes a `<meta>` Content-Security-Policy and a
+`<meta name="referrer" content="no-referrer">` into `dist/index.html`, directly after
+`<meta charset>`: `script-src 'self'` with no `'unsafe-inline'` and no `'unsafe-eval'`;
+`style-src 'self' 'unsafe-inline'` (Radix's scroll lock injects a `<style>` with
+runtime-computed text); `connect-src 'self'` plus the origin of `VITE_API_BASE_URL`;
+everything else `'none'` or `'self'`. The build then runs
+`scripts/assert-csp-build.mjs`, which fails it if the policy is missing, changed,
+placed after a resource-loading tag, or does not match the one API origin compiled into
+the bundle, if an inline `<script>` appears, or if a direct `eval(` / `new Function(`
+appears. It detects only those two literal forms — other code-evaluation forms need a
+real browser to notice. The build also fails unless `dist/index.html` opens with exactly
+the prefix our template produces — `<!doctype html>`, `<html …>`, `<head>`,
+`<meta charset="UTF-8" />`, the policy `<meta>` and the referrer `<meta>` — so no
+comment, unclosed `<title>` or other markup can come before the policy and make the
+browser ignore it. An absolute URL the bundle never fetches may be added to the guard's
+never-fetched list only with that evidence; never add it to `connect-src` to make a
+build pass.
+
+**What does not ship (UNDELIVERED — tracked as `P6-INF-19`).** A `<meta>` policy cannot
+carry `frame-ancestors`, and HSTS, `X-Frame-Options`, `X-Content-Type-Options`,
+`Permissions-Policy` and the SPA's CSP and Referrer-Policy *as response headers* need a
+CloudFront response-headers policy, which the edge decision in
+[aws-staging-iac-plan.md](./aws-staging-iac-plan.md) §23 (decision 4) still excludes.
+Until `P6-INF-19` ships, the SPA can be framed. The browser token also stays in
+`localStorage` (founder decision FD-A5-1 (i)); moving it is deferred to Phase 7.
+
+**Build inputs.** Build the SPA with `VITE_API_BASE_URL` set to the API's `https`
+origin (a path is allowed; an empty value or a same-origin path such as `/backend`
+yields `connect-src 'self'` only). Anything else — `//host`, another scheme, a bare
+host — fails the build. The API's `CORS_ORIGINS` must contain the SPA's origin.
+
+**Verify after every SPA publish — cutover step 8 included — and after every API
+deploy** (read-only):
+
+```bash
+shasum -a 256 apps/web/dist/index.html       # at build time, after both guards pass: <index_sha256>
+curl -sI https://<web_fqdn>/                 # 200; no security headers until P6-INF-19
+curl -s  https://<web_fqdn>/ | shasum -a 256                # must equal <index_sha256>
+curl -s  https://<web_fqdn>/reset-password | shasum -a 256  # deep link: must equal it too
+curl -s  https://<web_fqdn>/ | grep -o 'http-equiv="Content-Security-Policy" content="[^"]*"'
+curl -s -D - -o /dev/null https://<api_host>/health                # 200 GET: the six API headers
+curl -s -D - -o /dev/null https://<api_host>/api/v1/no-such-route  # 404: the same six
+```
+
+Equal hashes prove the published page is, byte for byte, the page the guard checked
+(`curl` without `--compressed` receives the stored bytes); the `grep` line only echoes
+the policy for a reader and cannot tell a live policy from an inert copy of it. The
+`connect-src` origin in the published page must equal the origin of the
+`VITE_API_BASE_URL` the SPA was built with; a mismatch blocks every API call, and the
+SPA then drops every returning user's stored token. For the AUTH4 cutover, build and
+run the guard on the step-8 SPA before step 0, so a guard failure cannot strand a
+half-finished cutover.
+
+**Rollback.** There is no runtime switch that turns the headers off, by design. A defect
+is fixed by rolling forward. If the AUTH4 cutover image is built from a commit that
+contains P6-AUTH-5, the API headers are part of the image recorded as
+`AUTH4_ROLLBACK_FLOOR`: they can be changed only by a later image, and the emergency
+pre-AUTH4 restore removes them. A bad SPA policy is replaced by republishing a previous
+build. HSTS already sent by the API stays in browsers for its `max-age`, harmless because
+the API host is HTTPS-only (the SPA sends no HSTS until P6-INF-19).
+
+**Browser verification (closure evidence).** One recorded real-browser run of a
+production build (`npm run build` with `VITE_API_BASE_URL=http://127.0.0.1:8000`), served
+by `vite preview` — which sends no CSP or Referrer-Policy header, so what is enforced is
+the `<meta>` policy — against a local API whose `CORS_ORIGINS` contains the preview
+origin: the app loads, sign-in, authenticated calls, reload and sign-out work, normal
+use raises no CSP violation, an injected inline script and a `javascript:` URL are
+blocked, and a fetch to another origin is refused. The run proves the tested source
+tree, not a later published artifact; the live checks above cover that.
+
 ## Local full-mode stack (optional)
 
 `infra/docker-compose.yml` runs the production images against real PostgreSQL and

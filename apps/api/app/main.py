@@ -18,7 +18,12 @@ from app.core.errors import register_exception_handlers
 from app.core.lifecycle import graceful_shutdown
 from app.core.logging import configure_logging, get_logger
 from app.core.metrics import SERVICE_SHUTDOWNS_TOTAL, SERVICE_STARTUPS_TOTAL, get_metrics
-from app.core.middleware import CorrelationMiddleware, RateLimitMiddleware
+from app.core.middleware import (
+    CorrelationMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    html_docs_paths,
+)
 from app.core.tracing import configure_tracing_from_settings
 
 logger = get_logger("signalnest.main")
@@ -97,6 +102,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["x-request-id"],
     )
+    # Added last, so it is the outermost user middleware and also covers CORS
+    # preflight answers and rate-limit 429s (P6-AUTH-5).
+    app.add_middleware(SecurityHeadersMiddleware, csp_exempt_paths=html_docs_paths(app))
 
     register_exception_handlers(app)
 
