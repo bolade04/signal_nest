@@ -44,6 +44,14 @@ interface AuthContextValue {
    */
   clearLocalSession: () => void;
   /**
+   * End this browser's session after the SERVER has already ended every session of the
+   * account — a completed password change (P6-UI-017). Aborts session re-reads in flight,
+   * then clears locally as `clearLocalSession()` does. Sends nothing: no `/auth/logout` or
+   * `/auth/logout-all` (every token is already refused, so either would answer 401) and no
+   * `/auth/me`. The caller navigates to `/sign-in` in the same tick.
+   */
+  endSessionAfterCredentialChange: () => void;
+  /**
    * Sign out: revoke this session on the server (`POST /auth/logout`, bounded), then
    * clear locally whatever the answer. The outcome says what the server confirmed.
    */
@@ -106,6 +114,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStatus('unauthenticated');
     queryClient.clear();
   }, [queryClient]);
+
+  const endSessionAfterCredentialChange = useCallback(() => {
+    // Every token of the account is already refused, so a re-read still in flight would
+    // answer 401 — possibly after the user has signed in again here, when the 401 handler
+    // would clear THAT session. Abort first, then forget this one.
+    abortRefreshes();
+    clearLocalSession();
+  }, [abortRefreshes, clearLocalSession]);
 
   const signOut = useCallback(async (): Promise<SignOutOutcome> => {
     const stored = localStorage.getItem(TOKEN_KEY);
@@ -257,6 +273,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       acceptInvitation,
       refreshSession,
       clearLocalSession,
+      endSessionAfterCredentialChange,
       signOut,
       signOutEverywhere,
       intendedPath,
@@ -273,6 +290,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       acceptInvitation,
       refreshSession,
       clearLocalSession,
+      endSessionAfterCredentialChange,
       signOut,
       signOutEverywhere,
       intendedPath,

@@ -724,6 +724,19 @@ function boundedString(value: unknown, min: number, max: number): value is strin
   return typeof value === 'string' && value.length >= min && value.length <= max;
 }
 
+/**
+ * `verify_password(plain, hash)` for a stored plain password (apps/api/app/core/security.py:
+ * bcrypt, which reads only the first 72 UTF-8 bytes). A null password (the demo account's)
+ * matches nothing.
+ */
+function bcryptMatches(plain: string, stored: string | null): boolean {
+  if (stored === null) return false;
+  const encoder = new TextEncoder();
+  const a = encoder.encode(plain).slice(0, 72);
+  const b = encoder.encode(stored).slice(0, 72);
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
+}
+
 /** OrganizationContext: a non-member is refused before any role check (403). */
 function orgActor(orgId: string, user: ModelUser | null): ModelMembership | Response {
   if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');
@@ -1240,6 +1253,42 @@ export const handlers = [
     revokeOpenAccountTokens('password_reset', user.id, row);
     return new HttpResponse(null, { status: 204 });
   }),
+
+  // ---- Password change (P6-UI-017; auth/service.py change_password, session Model A) ----
+  // Bearer-authenticated; both passwords only in the JSON body. Order as the server:
+  // 401, then the body's shape (422 validation_error), then the current password
+  // (422 current_password_incorrect — never 401), then the same-credential rule
+  // (422 password_unchanged, checked only after the current password verified).
+  // Success is an empty 204 after which EVERY token of the account is refused.
+  http.post(P('/auth/password/change'), async ({ request }) => {
+    const { user, body } = await record(request);
+    tokenOnlyInBody('password change', request);
+    if (!user) return modelError(401, 'unauthorized', 'Invalid or expired token.');
+    const bad = exactKeys('password change', body, ['current_password', 'new_password']);
+    if (bad) return bad;
+    if (!boundedString(body.current_password, 1, 128) || !boundedString(body.new_password, 8, 128)) {
+      return modelError(422, 'validation_error', 'Request validation failed');
+    }
+    // The demo account's token is the fixed 'test-token' and its sign-in accepts any
+    // password: a change test must use a model user of its own (orgModel.addUser).
+    if (user.id === demoUser.id) model.violations.push('password change as the demo account: use a model user');
+    if (!bcryptMatches(body.current_password, user.password)) {
+      return modelError(422, 'current_password_incorrect', 'The current password is incorrect.');
+    }
+    if (bcryptMatches(body.new_password, user.password)) {
+      return modelError(422, 'password_unchanged', 'Choose a password different from your current one.');
+    }
+    user.password = body.new_password;
+    // auth_epoch + 1: every access token of the account stops working, the one that sent
+    // this request included. No session is revoked or created (Model A, as after a reset).
+    for (const [accessToken, sessionId] of [...model.accessTokens]) {
+      if (model.sessions.get(sessionId)?.user_id === user.id) model.accessTokens.delete(accessToken);
+    }
+    // FD-U17-3: open reset links die with the old password; verification tokens stay.
+    revokeOpenAccountTokens('password_reset', user.id);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   http.post(P('/auth/email-verification/request'), async ({ request }) => {
     const { user } = await record(request);
     if (!user) return modelError(401, 'unauthorized', 'Not authenticated.');

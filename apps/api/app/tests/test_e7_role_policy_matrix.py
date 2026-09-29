@@ -381,6 +381,10 @@ AUTHENTICATED_ONLY = {
     ("POST", f"{API}/auth/email-verification/confirm"),
     ("POST", f"{API}/auth/logout"),
     ("POST", f"{API}/auth/logout-all"),
+    # P6-UI-017: a signed-in user changes their own password (get_current_user). It acts on
+    # the caller's own account only and takes no organization or workspace, so no role or
+    # membership applies -- never PUBLIC: the current password alone must not be enough.
+    ("POST", f"{API}/auth/password/change"),
 }
 #: Routes with no authentication dependency at all.
 PUBLIC = {
@@ -546,7 +550,9 @@ class TestPolicyTableCompleteness:
             if method in {"get", "post", "put", "delete", "patch"}
         }
         assert served == published
-        assert len(served) == 105
+        # 105 -> 106 (P6-UI-017): the one new operation is POST /auth/password/change, an
+        # AUTHENTICATED_ONLY route; the equality above proves no other route came or went.
+        assert len(served) == 106
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]

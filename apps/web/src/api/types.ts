@@ -37,6 +37,10 @@ export type PasswordResetConfirmRequest = S['PasswordResetConfirmRequest'];
 export type EmailVerificationRequest = S['EmailVerificationRequest'];
 export type EmailVerificationConfirmRequest = S['EmailVerificationConfirmRequest'];
 
+// P6-UI-017 authenticated password change. The answer is an empty 204; the confirm
+// field is the client's own and is never sent.
+export type ChangePasswordRequest = S['ChangePasswordRequest'];
+
 export type BusinessProfileBase = S['BusinessProfileBase'];
 export type BusinessProfileOut = S['BusinessProfileOut'];
 
