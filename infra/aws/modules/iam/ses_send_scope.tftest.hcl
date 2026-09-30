@@ -6,7 +6,9 @@
 # rendered JSON; negative runs prove the inputs that would silently widen or break the
 # grant are REFUSED before any plan is produced. The data sources are overridden with
 # the AWS documentation placeholder account, so the ARN is deterministic and the
-# expected rendering can be pinned as decoded-JSON equality in tests/fixtures.
+# expected rendering can be pinned as decoded-JSON equality in this module's fixtures/ directory
+# (deliberately NOT under tests/fixtures/, whose JSON keys the site-coverage gate treats as
+# requirement-key sites of the CI guard suite — this file is a rendering pin, not a guard input).
 #
 # The display-name header (ses:FromDisplayName) is deliberately NOT conditioned here;
 # that is a separate decision (docs/operations/aws-staging-runtime-contract.md §F), and
@@ -115,15 +117,15 @@ run "ses_grant_is_one_action_one_identity_one_from_address_v2_only" {
 }
 
 # --- Positive: the rendered policy equals the tracked expected rendering (decoded JSON) ---
-# The fixture is the SAME document tests/test_ses_send_policy.py evaluates with the
+# The fixture (fixtures/api-ses-send-policy.expected.json) is the SAME document tests/test_ses_send_policy.py evaluates with the
 # repository's independent IAM evaluator, so the Python semantics run against what
 # OpenTofu really renders, not a hand-copied restatement.
 run "rendered_policy_matches_the_tracked_fixture" {
   command = plan
 
   assert {
-    condition     = jsondecode(aws_iam_role_policy.api_ses_send.policy) == jsondecode(file("${path.module}/../../../../tests/fixtures/api-ses-send-policy.expected.json"))
-    error_message = "the rendered SES send policy drifted from tests/fixtures/api-ses-send-policy.expected.json — update the fixture in the same reviewed change"
+    condition     = jsondecode(aws_iam_role_policy.api_ses_send.policy) == jsondecode(file("${path.module}/fixtures/api-ses-send-policy.expected.json"))
+    error_message = "the rendered SES send policy drifted from fixtures/api-ses-send-policy.expected.json (this module) — update the fixture in the same reviewed change"
   }
 }
 

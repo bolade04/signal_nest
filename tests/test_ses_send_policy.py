@@ -4,7 +4,7 @@ WHAT IS UNDER TEST. `infra/aws/modules/iam/main.tf` declares `aws_iam_role_polic
 on the API task role: `ses:SendEmail` on exactly ONE identity ARN (the sending domain),
 conditioned on the ONE bare From address and the SES v2 API. OpenTofu renders that policy
 offline in `ses_send_scope.tftest.hcl`, which asserts the rendering equals the tracked
-fixture `tests/fixtures/api-ses-send-policy.expected.json` as decoded-JSON equality (the
+fixture `infra/aws/modules/iam/fixtures/api-ses-send-policy.expected.json` as decoded-JSON equality (the
 fixture's formatting is not compared). This module takes
 THAT fixture and evaluates its semantics with the repository's independent IAM evaluator
 (`scripts/iam_eval.py`), so the semantics below are proven against what OpenTofu really
@@ -32,7 +32,10 @@ import iam_eval
 import terraform_role_inventory as tf_roles
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = REPO_ROOT / "tests" / "fixtures" / "api-ses-send-policy.expected.json"
+# The rendering pin lives beside the tftest (NOT under tests/fixtures/: the site-coverage gate
+# treats every JSON key there as a requirement-key site of the CI guard suite, which this
+# file is not — it is the OpenTofu rendering pin).
+FIXTURE = REPO_ROOT / "infra" / "aws" / "modules" / "iam" / "fixtures" / "api-ses-send-policy.expected.json"
 
 IDENTITY = "arn:aws:ses:us-east-1:111122223333:identity/mail.staging.example.com"
 OTHER_IDENTITY = "arn:aws:ses:us-east-1:111122223333:identity/other.example.com"
