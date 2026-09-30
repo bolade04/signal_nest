@@ -32,3 +32,8 @@ alarm_thresholds = {
   redis_cpu_high_percent        = 80
   redis_memory_high_percent     = 80
 }
+
+# 6B-4C (P6-AUTH-2, FD-1): transactional-mail inputs, REQUIRED at the root. Synthetic
+# documentation values only — a bare FQDN and one bare address at it.
+mail_sending_identity_domain = "mail.synthetic.example.com"
+mail_from_address            = "no-reply@mail.synthetic.example.com"

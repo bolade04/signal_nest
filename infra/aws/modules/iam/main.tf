@@ -281,6 +281,68 @@ resource "aws_iam_role_policy" "app_s3" {
   })
 }
 
+# --- API task role: SES v2 send grant (P6-AUTH-2 / 6B-4C, founder decision FD-1) ------
+# Mirrors the executable client exactly (apps/api/app/infra/mail.py, SesMailSender.send):
+# one `sesv2 SendEmail` call with FromEmailAddress, Destination.ToAddresses and
+# Content.Simple. The mail seam is reached ONLY from the auth routes inside the API
+# process (app/auth/mail_dispatch.py); the worker never imports it, so the grant is on
+# the API task role ONLY (the worker carries the MAIL_* environment to boot, nothing
+# more). Least privilege, all three axes:
+#   Action    ses:SendEmail only — no ses:SendRawEmail (unused), no ses:* .
+#   Resource  exactly ONE identity ARN, the sending DOMAIN identity
+#             (arn:<partition>:ses:<region>:<account>:identity/<domain>, the format AWS
+#             documents for sending identities) — no identity/* wildcard, no
+#             configuration-set resource (none is configured), no recipient identities.
+#   Condition ses:FromAddress must equal the ONE bare From address (AWS documents the
+#             key as restricting the "From" address and ses:FromDisplayName as a separate
+#             key for the display name; its FromAddress examples are bare addresses).
+#             The client sends FromEmailAddress as `SignalNest <address>` (formataddr),
+#             so the ASSUMPTION that SES populates ses:FromAddress with the bare address
+#             is confirmed only by the authorized pre-E8 smoke send (E8 plan P6/S7): an
+#             AccessDenied there (surfacing as error_class=provider_error) is the signal
+#             to revisit this condition by a reviewed change — never by widening.
+#             ses:ApiVersion must be "2" (the SES v2 API the client calls; AWS documents
+#             this key and value). ses:FromDisplayName is deliberately NOT
+#             conditioned: the display name is a separate header and a separate
+#             decision, recorded in docs/operations/aws-staging-runtime-contract.md §F.
+# The identity is created OUT OF BAND (never by this module) and its ARN is composed
+# from data sources at plan time — no account id or real domain is committed. A From
+# address outside the identity domain can never match both the Resource and the
+# Condition, so the precondition below refuses it before any plan is produced.
+locals {
+  ses_sending_identity_arn = "arn:${data.aws_partition.current.partition}:ses:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:identity/${var.mail_sending_identity_domain}"
+}
+
+resource "aws_iam_role_policy" "api_ses_send" {
+  name = "${var.name_prefix}-api-ses-send"
+  role = aws_iam_role.api_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "SesV2SendFromApprovedIdentity"
+        Effect   = "Allow"
+        Action   = ["ses:SendEmail"]
+        Resource = local.ses_sending_identity_arn
+        Condition = {
+          StringEquals = {
+            "ses:FromAddress" = var.mail_from_address
+            "ses:ApiVersion"  = "2"
+          }
+        }
+      },
+    ]
+  })
+
+  lifecycle {
+    precondition {
+      condition     = endswith(var.mail_from_address, "@${var.mail_sending_identity_domain}")
+      error_message = "mail_from_address must be an address AT mail_sending_identity_domain: otherwise the identity Resource and the ses:FromAddress condition could never both match, and every send would be denied."
+    }
+  }
+}
+
 # --- CI image-publisher role (GitHub OIDC → ECR push, INFRA-9) ----------------------
 # Authored per staging-publish-workflow.md §4. Created ONLY when the caller
 # supplies github_oidc_provider_arn (the account-wide OIDC provider is consumed,

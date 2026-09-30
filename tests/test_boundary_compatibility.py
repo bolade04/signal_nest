@@ -53,7 +53,9 @@ INTENDED = {
         ("kms:Decrypt", gb.SECRETS_CMK),
     ],
     "api-task": [("s3:ListBucket", APP_BUCKET), ("s3:GetObject", f"{APP_BUCKET}/x"),
-                 ("s3:PutObject", f"{APP_BUCKET}/x"), ("s3:DeleteObject", f"{APP_BUCKET}/x")],
+                 ("s3:PutObject", f"{APP_BUCKET}/x"), ("s3:DeleteObject", f"{APP_BUCKET}/x"),
+                 # 6B-4C: the SES send grant on the API task role (one identity ARN)
+                 ("ses:SendEmail", f"arn:aws:ses:{R}:{A}:identity/mail.staging.example.com")],
     "worker-task": [("s3:ListBucket", APP_BUCKET), ("s3:GetObject", f"{APP_BUCKET}/x"),
                     ("s3:PutObject", f"{APP_BUCKET}/x"), ("s3:DeleteObject", f"{APP_BUCKET}/x")],
     "migration-task": [],  # inline policy is deliberately empty

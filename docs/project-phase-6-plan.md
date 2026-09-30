@@ -881,7 +881,12 @@ enablement without a tranche authorization that names the provider and the legal
 
 ### 10.5 Billing & spend
 No billing code, no payment integration, no customer charge. AWS spend remains under the
-existing hard ceiling; any change to it is an operator act.
+existing hard ceiling; any change to it is an operator act. **Operator limit recorded
+2026-09-30: USD $20 total per month for staging** — stricter than the $200 ceiling and
+*below* the runtime contract's planning estimate for the foundation that already exists
+(`docs/operations/aws-staging-runtime-contract.md` §M). The conflict is recorded, not
+resolved: no plan text authorizes raising the limit or removing resources, and no workload
+apply (6E, 6B-4C/E8) may proceed until the operator reconciles it with a fresh dated estimate.
 
 ---
 
@@ -892,7 +897,7 @@ existing hard ceiling; any change to it is an operator act.
 | `P6-D01` | Does Phase 6 subsume the unbuilt Phase 5A–5E product loop? | — | — | — | **✅ RESOLVED 2026-09-19 — (a) NO.** `PHASE_6_DOES_NOT_SUBSUME_PHASE_5A_THROUGH_5E`. Binding text in §0 | **CLOSED** |
 | `P6-D02` | Is the first launch paid? | — | — | — | **✅ RESOLVED 2026-09-19 — (a) UNPAID PILOT.** `FIRST_EXTERNAL_LAUNCH = UNPAID_PILOT`. Binding text in §0 | **CLOSED** |
 | `P6-D03` | Which live data source goes first, and is its ToS cleared? | RSS (PR #34, already built) vs. another | RSS is the only one with an implementation | Determines what a customer actually sees | **RSS**, conditional on legal sign-off — PR #34 is 13 files and +1,901/−0 of already-written work (the committed connector module itself is 676 lines and already at HEAD) | **Yes — `P6-DATA-1`** |
-| `P6-D04` | LLM provider and credentials (O-7, still `UNDECIDED_RESERVED_TO_OPERATOR`) | OpenAI · Anthropic · both behind the seam | Both adapters exist and are untested | Blocks all generation and all real classification | Choose one for launch; test it properly under `P6-LLM-1` | **Yes** |
+| `P6-D04` | LLM provider and credentials (O-7, ~~still `UNDECIDED_RESERVED_TO_OPERATOR`~~) | OpenAI · Anthropic · both behind the seam | Both adapters exist and are untested | Blocks all generation and all real classification | ~~Choose one for launch; test it properly under `P6-LLM-1`~~ **✅ PROVIDER RESOLVED 2026-09-30 by operator decision: `LLM_PROVIDER=anthropic` for staging** (recorded in the 6B-4C decision packet; supplied via the git-ignored `llm_provider` tfvars value, never committed). **Credential readiness is NOT resolved by this**: whether the existing `LLM_API_KEY` secret holds a valid provider key is unverified (no secret value has been read), and `P6-LLM-1` (both adapters untested) stays open | **Yes** — key readiness and `P6-LLM-1` |
 | `P6-D05` | Retention/deletion durations per data class (O-5, `UNDECIDED_RESERVED_TO_OPERATOR_LEGAL`) | Fixed tiers · delete-on-request · jurisdiction-dependent | No soft-delete column exists anywhere; the mechanism must be built either way | GDPR/CCPA erasure and portability are unserviceable until decided | Decide durations early — the mechanism is `L` effort and on the critical path | **Yes** |
 | `P6-D06` | Promote `Container build and security` and `Revision reader` to required contexts? | Yes · No | Currently the whole container/IaC security apparatus is advisory | — | **Yes** — already decided as O-9 on 2026-09-01; only the GitHub action is outstanding | Non-blocking but `S` and high-value |
 | `P6-D07` | Commit the six untracked Phase-5 plan files? | Yes · No · Redact first | They hold frozen contracts and authorization digests and exist in exactly one working tree | Loss would destroy the Phase-5 specification | **Yes** — verify no secret/account identifier first | Non-blocking, **urgent** |
@@ -917,7 +922,7 @@ Only items the audit proved are actually missing or undecided.
 | X5 | GitHub ruleset change (2 contexts) + creation of `staging-reader-publish` / `staging-reader-run` **with protection rules** | Both are operator-side GitHub actions; neither environment exists today | `P6-CI-1`, `P6-INF-8` |
 | X6 | SNS alarm destination (email/pager) | No SNS topic exists; 11 alarms fire into `[]` | `P6-INF-4` |
 | X7 | Production domain, DNS zone and ACM certificate decisions | Zone and certs are consumed by id/ARN, never created | `P6-INF-1`, `P6-INF-3` |
-| X8 | Email sending domain + verification | For live password-reset and verification mail (`P6-AUTH-2` itself closed under FD-13) — **still pending (6B-4C)**: SES v2 chosen (FD-1); sender domain, From and support-contact values deferred to 6B-4C (FD-2); no SES identity or sending domain is defined in the repository's infrastructure code, and 6B-4A provisioned none | ~~`P6-AUTH-2`,~~ E8 (`P6-AUTH-2` closed under FD-13 on 6B-4A + 6B-4B; X8 no longer blocks it) |
+| X8 | Email sending domain + verification | For live password-reset and verification mail (`P6-AUTH-2` itself closed under FD-13) — **still pending (6B-4C)**: SES v2 chosen (FD-1); ~~sender domain, From and support-contact values deferred to 6B-4C (FD-2)~~ **the sending subdomain and From address were chosen by operator decision on 2026-09-30** (6B-4C decision packet; support contact left unset for E8) — the values are operator-supplied through git-ignored tfvars and are **not committed**; the repository now carries the seams only (branch `feat/p6-6b4c-mail-iac`: `MAIL_*`/`PUBLIC_WEB_ORIGIN`/`CORS_ORIGINS` task environment, the API task role's scoped `ses:SendEmail` grant, runtime contract §F). **the repository defines no SES identity or DKIM record and this change creates nothing in AWS (live state was not read here)**; creating them, and every live step to E8, needs its own authorization (`docs/operations/p6-e8-real-mail-reset-proof.md`) | ~~`P6-AUTH-2`,~~ E8 (`P6-AUTH-2` closed under FD-13 on 6B-4A + 6B-4B; X8 no longer blocks it) |
 | X9 | Production spend ceiling decision | The existing hard ceiling is a staging figure | `P6-INF-1` |
 
 **Already present and verified — do not re-request:** AWS account and Identity Center

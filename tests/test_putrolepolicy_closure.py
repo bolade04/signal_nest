@@ -73,8 +73,8 @@ def test_the_classification_is_required_temporarily_not_excluded():
 def test_the_classification_is_derived_from_declared_resources_not_a_constant():
     """If the .tf files stopped declaring inline policies, the answer must change by itself."""
     declared = prp.declared_inline_policy_resources()
-    assert len(declared) == 6, declared
-    assert {d["name"] for d in declared} >= {"reader_publisher", "reader_execution",
+    assert len(declared) == 7, declared
+    assert {d["name"] for d in declared} >= {"api_ses_send", "reader_publisher", "reader_execution",
                                              "reader_runner"}
 
 

@@ -38,6 +38,10 @@ variables {
   # ci_publisher is count-gated on this being non-null. Supplying it means all FIVE roles
   # are exercised; without it the fifth would silently drop out of the assertions.
   github_oidc_provider_arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+  # 6B-4C: the module now REQUIRES the sending identity and From address (synthetic
+  # documentation values here; the SES grant itself is exercised by ses_send_scope.tftest.hcl).
+  mail_sending_identity_domain = "mail.staging.example.com"
+  mail_from_address            = "no-reply@mail.staging.example.com"
 }
 
 run "every_role_carries_the_boundary_when_it_is_supplied" {

@@ -113,3 +113,34 @@ variable "role_boundary_mode" {
     error_message = "role_boundary_mode must be exactly 'disabled' or 'required'."
   }
 }
+
+# --- Transactional mail send grant (P6-AUTH-2 / 6B-4C, FD-1) ------------------------
+# The API task role receives exactly one SES permission: ses:SendEmail on the ONE
+# domain identity named here, conditioned on the ONE From address. The identity is
+# created out of band (never by this module); these inputs only name it so the grant
+# and the application's environment agree. No real domain or address is committed —
+# both arrive from a git-ignored *.tfvars at the root.
+variable "mail_sending_identity_domain" {
+  description = "Verified SES DOMAIN identity (bare hostname) the API sends from; becomes the single identity ARN in the API task role's ses:SendEmail grant. Created out of band."
+  type        = string
+
+  validation {
+    condition     = !can(regex("[/?#:@ ]", var.mail_sending_identity_domain))
+    error_message = "mail_sending_identity_domain must be a bare hostname: no scheme, port, path, query, fragment, '@' or whitespace."
+  }
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.mail_sending_identity_domain))
+    error_message = "mail_sending_identity_domain must be a valid lowercase multi-label FQDN, e.g. mail.staging.example.com."
+  }
+}
+
+variable "mail_from_address" {
+  description = "The exact bare From address (local-part@mail_sending_identity_domain) the API task role's ses:FromAddress condition requires. No display name, angle brackets or whitespace — the application adds the display name."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+([._+-][a-z0-9]+)*@[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.mail_from_address))
+    error_message = "mail_from_address must be one bare lowercase address (local-part@fqdn) with no display name, angle brackets or whitespace and no leading, trailing or doubled separator in the local part."
+  }
+}
