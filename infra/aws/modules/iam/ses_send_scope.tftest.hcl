@@ -6,7 +6,7 @@
 # rendered JSON; negative runs prove the inputs that would silently widen or break the
 # grant are REFUSED before any plan is produced. The data sources are overridden with
 # the AWS documentation placeholder account, so the ARN is deterministic and the
-# expected rendering can be pinned byte-for-byte in tests/fixtures.
+# expected rendering can be pinned as decoded-JSON equality in tests/fixtures.
 #
 # The display-name header (ses:FromDisplayName) is deliberately NOT conditioned here;
 # that is a separate decision (docs/operations/aws-staging-runtime-contract.md §F), and
@@ -114,7 +114,7 @@ run "ses_grant_is_one_action_one_identity_one_from_address_v2_only" {
   }
 }
 
-# --- Positive: the rendered policy equals the tracked expected rendering, byte-for-byte ---
+# --- Positive: the rendered policy equals the tracked expected rendering (decoded JSON) ---
 # The fixture is the SAME document tests/test_ses_send_policy.py evaluates with the
 # repository's independent IAM evaluator, so the Python semantics run against what
 # OpenTofu really renders, not a hand-copied restatement.
