@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -216,6 +218,59 @@ def _envelope(code: str, message: str, details: object | None = None) -> dict:
     return body
 
 
+# --- Public validation-error items (P6-UI-017, FD-U17-5 = A) ------------------
+#
+# Pydantic's ``exc.errors()`` items carry ``input``: the submitted value itself -- the
+# password for a too-short password, and for a ``missing`` field the WHOLE request body
+# (every other password and token in it). Nothing of the request is ever echoed: each
+# public item is REBUILT from an allowlist, never copied and pruned, so a key Pydantic or
+# FastAPI adds later (``url``, say) cannot reach the client by default. Kept: ``type``,
+# ``loc`` and ``msg``, which the web client reads to label field errors (``loc`` names the
+# field -- for an unknown field the caller's own key, never its value). ``ctx`` survives
+# only as the schema's own constraint parameters with plain scalar values; ``error``
+# (for a ``field_validator``, an exception object that is not JSON-serializable),
+# ``actual_length``, a discriminator ``tag`` and every other key describe the request and
+# are dropped. The removed values are not logged either.
+_PUBLIC_CTX_KEYS = frozenset(
+    {
+        "min_length",
+        "max_length",
+        "gt",
+        "ge",
+        "lt",
+        "le",
+        "multiple_of",
+        "max_digits",
+        "decimal_places",
+        "expected",
+        "pattern",
+    }
+)
+
+
+def _public_validation_errors(errors: Sequence[Any]) -> list[dict]:
+    items: list[dict] = []
+    for err in errors:
+        if not isinstance(err, dict):
+            continue
+        item = {
+            "type": str(err.get("type", "")),
+            "loc": list(err.get("loc", ())),
+            "msg": str(err.get("msg", "")),
+        }
+        ctx = err.get("ctx")
+        if isinstance(ctx, dict):
+            safe = {
+                key: value
+                for key, value in ctx.items()
+                if key in _PUBLIC_CTX_KEYS and isinstance(value, (bool, int, float, str))
+            }
+            if safe:
+                item["ctx"] = safe
+        items.append(item)
+    return items
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(SignalNestError)
     async def _domain(_: Request, exc: SignalNestError):
@@ -225,7 +280,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _validation(_: Request, exc: RequestValidationError):
         return JSONResponse(
             status_code=422,
-            content=_envelope("validation_error", "Request validation failed", exc.errors()),
+            content=_envelope(
+                "validation_error",
+                "Request validation failed",
+                _public_validation_errors(exc.errors()),
+            ),
         )
 
     @app.exception_handler(Exception)

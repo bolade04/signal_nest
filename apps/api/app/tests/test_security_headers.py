@@ -16,7 +16,13 @@ The CSP is left off exactly three routes -- FastAPI's HTML documentation pages
 assets and run inline scripts (their hardening is P6-INF-18) -- and those still carry every
 other header. The set holds on success, 401, 404, 422, CORS preflight, the rate limiter's 429
 and the catch-all 500, which Starlette's ServerErrorMiddleware answers outside every user
-middleware. No response sets a cookie: a cookie would need a CSRF design first.
+middleware -- and on the password change's own 422s (P6-UI-017). No response sets a cookie:
+a cookie would need a CSRF design first.
+
+Placement: the headers middleware is the outermost user middleware, directly under
+ServerErrorMiddleware. The one layer allowed between them is FastAPI 0.142.0's
+``ExceptionTelemetryMiddleware``, a pass-through that observes an exception and re-raises it;
+any other layer there fails, as a positive control proves.
 """
 
 from __future__ import annotations
@@ -29,6 +35,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from starlette.middleware.errors import ServerErrorMiddleware
+
+try:  # FastAPI >= 0.142.0 (upstream change): a telemetry layer under ServerErrorMiddleware.
+    from fastapi.telemetry._asgi import ExceptionTelemetryMiddleware
+except ImportError:  # FastAPI 0.141.1 and earlier: no such layer.
+    ExceptionTelemetryMiddleware = None
 
 from app.core.config import get_settings
 from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
@@ -44,6 +55,7 @@ from app.tests._auth2_support import (
     LOGOUT,
     LOGOUT_ALL,
     ME,
+    NEW_PASSWORD,
     OLD_PASSWORD,
     REGISTER,
     Env,
@@ -63,6 +75,7 @@ API_HEADERS = {
 }
 API_CSP = "default-src 'none'; frame-ancestors 'none'"
 DOCS_ROUTES = {f"{API}/docs", "/docs/oauth2-redirect", "/redoc"}
+CHANGE_PASSWORD = f"{API}/auth/password/change"
 ALLOWED_ORIGIN = "http://localhost:3000"  # the default CORS_ORIGINS entry
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -107,6 +120,28 @@ def _chain(stack) -> list[object]:
     return nodes
 
 
+def _assert_headers_outermost(chain: list[object]) -> None:
+    """ServerErrorMiddleware, then -- only when the installed FastAPI has it, and at most once
+    -- exactly FastAPI 0.142.0's ExceptionTelemetryMiddleware (a pass-through that observes an
+    exception and re-raises it; it never writes a response), then SecurityHeadersMiddleware.
+    Anything else above SecurityHeadersMiddleware, user or framework, fails."""
+    assert isinstance(chain[0], ServerErrorMiddleware), type(chain[0])
+    below = 1
+    if ExceptionTelemetryMiddleware is not None and type(chain[1]) is ExceptionTelemetryMiddleware:
+        below = 2
+    assert isinstance(chain[below], SecurityHeadersMiddleware), [type(n) for n in chain[:4]]
+
+
+class _ForeignLayer:
+    """A pass-through ASGI middleware that is neither of the two allowed classes."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        await self.app(scope, receive, send)
+
+
 # --------------------------------------------------------------------------- #
 # T11 / T14 / T15 / T16 / T18: the header set on every response class
 # --------------------------------------------------------------------------- #
@@ -136,6 +171,19 @@ class TestEveryResponseClass:
         r = env.client.post(LOGIN, json={})
         assert r.status_code == 422, r.text
         assert_security_headers(r)
+
+    def test_password_change_422s(self, env: Env):  # P6-UI-017: its own refusals and schema's
+        token, _ = open_session(env.request_engine, ALICE)
+        for body, code in (
+            (
+                {"current_password": "not-the-current-one", "new_password": NEW_PASSWORD},
+                "current_password_incorrect",
+            ),
+            ({"current_password": OLD_PASSWORD, "new_password": "short"}, "validation_error"),
+        ):
+            r = post(env, CHANGE_PASSWORD, body, token=token)
+            assert (r.status_code, r.json()["error"]["code"]) == (422, code), r.text
+            assert_security_headers(r)
 
     def test_openapi_json_keeps_the_csp(self, env: Env):
         r = env.client.get(f"{API}/openapi.json")
@@ -261,17 +309,60 @@ class TestPlacement:
     def test_outermost_user_middleware_and_the_limiter_stays_reachable(self, env: Env):
         env.client.get("/health")
         chain = _chain(app.middleware_stack)
-        assert isinstance(chain[0], ServerErrorMiddleware)
-        assert isinstance(chain[1], SecurityHeadersMiddleware)
+        # FastAPI 0.142.0 (upstream) inserts ExceptionTelemetryMiddleware directly under
+        # ServerErrorMiddleware, above every user middleware; the check allows exactly that
+        # one pass-through class there, and nothing else.
+        _assert_headers_outermost(chain)
         assert any(isinstance(n, RateLimitMiddleware) for n in chain)
         assert isinstance(active_rate_limiter(), RateLimitMiddleware)
+
+    def test_the_placement_check_fails_on_any_other_outer_layer(
+        self, env: Env, fresh_client: TestClient
+    ):
+        """Positive control: the check above is not vacuous."""
+        env.client.get("/health")
+        chain = _chain(app.middleware_stack)
+        headers_at = next(
+            i for i, n in enumerate(chain) if isinstance(n, SecurityHeadersMiddleware)
+        )
+        foreign = _ForeignLayer(app=None)
+        broken = {
+            "foreign layer under ServerErrorMiddleware": [chain[0], foreign, *chain[1:]],
+            "foreign layer just above the headers": [
+                *chain[:headers_at],
+                foreign,
+                *chain[headers_at:],
+            ],
+            "headers middleware gone": [*chain[:headers_at], *chain[headers_at + 1 :]],
+            "not under ServerErrorMiddleware": chain[1:],
+        }
+        if ExceptionTelemetryMiddleware is not None:
+
+            class _Lookalike(ExceptionTelemetryMiddleware):
+                pass
+
+            telemetry = ExceptionTelemetryMiddleware(app=None)
+            broken["telemetry layer twice"] = [chain[0], telemetry, telemetry, chain[headers_at]]
+            broken["a telemetry subclass"] = [chain[0], _Lookalike(app=None), chain[headers_at]]
+        for name, variant in broken.items():
+            with pytest.raises(AssertionError):
+                _assert_headers_outermost(variant)
+                pytest.fail(f"accepted: {name}")  # pragma: no cover - reached only on a defect
+        # The real factory: passes as built, fails once a user middleware wraps the headers.
+        fresh = fresh_client.app
+        _assert_headers_outermost(_chain(fresh.build_middleware_stack()))
+        fresh.add_middleware(_ForeignLayer)
+        outer = _chain(fresh.build_middleware_stack())
+        assert any(isinstance(n, _ForeignLayer) for n in outer)
+        with pytest.raises(AssertionError):
+            _assert_headers_outermost(outer)
 
 
 # --------------------------------------------------------------------------- #
 # T20': no cookie anywhere (a cookie would need a CSRF design first)
 # --------------------------------------------------------------------------- #
 class TestNoCookie:
-    def test_the_seven_session_routes_set_no_cookie(self, env: Env):
+    def test_the_session_routes_set_no_cookie(self, env: Env):
         registered = post(
             env,
             REGISTER,
@@ -299,11 +390,23 @@ class TestNoCookie:
         bob_token, _ = open_session(env.request_engine, BOB)
         accepted = post(env, INVITATION_ACCEPT, {"token": existing["token"]}, token=bob_token)
         assert accepted.status_code == 200, accepted.text
+        # P6-UI-017: the password change ends every session of the account (Model A) and must
+        # not set a cookie either.
+        changed = post(
+            env,
+            CHANGE_PASSWORD,
+            {"current_password": OLD_PASSWORD, "new_password": NEW_PASSWORD},
+            token=bob_token,
+        )
+        assert (changed.status_code, changed.content) == (204, b""), changed.text
         logged_out = post(env, LOGOUT, {}, token=token)
         assert logged_out.status_code == 204, logged_out.text
         everywhere = post(env, LOGOUT_ALL, {}, user_id=ALICE)
         assert everywhere.status_code == 204, everywhere.text
-        for r in (registered, logged_in, me, joined, accepted, logged_out, everywhere):
+        # Eight session routes (seven before P6-UI-017 added the password change).
+        battery = (registered, logged_in, me, joined, accepted, changed, logged_out, everywhere)
+        assert len(battery) == 8
+        for r in battery:
             assert_security_headers(r)
 
     def test_no_cookie_writer_in_the_application_source(self):

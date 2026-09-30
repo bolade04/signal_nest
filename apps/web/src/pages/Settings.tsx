@@ -33,6 +33,7 @@ import { useTheme, type Theme } from '@/app/theme';
 import { roleLabels } from '@/lib/labels';
 import { canCreateWorkspace, useActorRole } from '@/lib/roles';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { ChangePasswordDialog } from './settings/ChangePasswordDialog';
 import { OrganizationMembers } from './settings/OrganizationMembers';
 
 const wsSchema = z.object({ name: z.string().min(1, 'Workspace name is required') });
@@ -96,8 +97,10 @@ export function SettingsPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>Account</CardTitle>
+            {/* Every signed-in account, whatever its role (P6-UI-017). */}
+            {user ? <ChangePasswordDialog email={user.email} /> : null}
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex justify-between">

@@ -97,6 +97,21 @@ class PasswordResetConfirmRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    """Change the signed-in account's password.
+
+    The current password is required and verified by the server; the new password is
+    bounded as in :class:`RegisterRequest`. There is no confirmation field: matching two
+    typed entries is the client's job. The account is the signed-in caller's and is never
+    taken from the body. Unknown fields are rejected.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class EmailVerificationRequest(BaseModel):
     """Ask for a verification email for the signed-in account's stored address.
 

@@ -105,6 +105,13 @@ export function useFragmentToken(): FragmentToken {
  */
 export const PASSWORD_RESET_NOTICE = 'password-reset';
 
+/**
+ * The `/sign-in` router state (`{ notice }`) a completed password change in Settings
+ * hands over (P6-UI-017): the change ended every session, this one included. Distinct
+ * from the reset and sign-out notices. Router state only: never the URL.
+ */
+export const PASSWORD_CHANGED_NOTICE = 'password-changed';
+
 // --- Error copy ----------------------------------------------------------------
 
 /** Every error code the 6B-4A reset and verification routes can return. */

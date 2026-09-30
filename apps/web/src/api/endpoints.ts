@@ -10,6 +10,7 @@ import type {
   CapabilityOverridePage,
   CapabilityOverrideSetIn,
   CapabilityRegistry,
+  ChangePasswordRequest,
   BusinessProfileBase,
   BusinessProfileOut,
   CampaignIn,
@@ -179,6 +180,13 @@ export const requestEmailVerification = (signal?: AbortSignal) => {
 
 export const confirmEmailVerification = (body: EmailVerificationConfirmRequest, signal?: AbortSignal) =>
   apiRequest<void>('/auth/email-verification/confirm', { method: 'POST', body, signal });
+
+// ---- Password change (P6-UI-017) ----
+// Bearer-authenticated; both passwords travel only in the JSON body. The answer is an
+// empty 204, after which the server refuses EVERY token of the account — the one that
+// sent this request included — and returns no session: the caller signs in again.
+export const changePassword = (body: ChangePasswordRequest, signal?: AbortSignal) =>
+  apiRequest<void>('/auth/password/change', { method: 'POST', body, signal });
 
 // ---- Organizations / workspaces ----
 export const listOrganizations = (signal?: AbortSignal) =>

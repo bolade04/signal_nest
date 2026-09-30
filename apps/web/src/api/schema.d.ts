@@ -241,6 +241,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Change the signed-in account's password.
+         *
+         *     The current password is required. A wrong current password, or a new password that
+         *     is the same as the current one, is a 422 and the account stays signed in. On success
+         *     the answer is an empty 204 and every session of the account, this one included, is
+         *     signed out: sign in again with the new password.
+         */
+        post: operations["change_password_api_v1_auth_password_change_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/register": {
         parameters: {
             query?: never;
@@ -2159,6 +2184,21 @@ export interface components {
         CapabilityRegistryOut: {
             /** Items */
             items: components["schemas"]["CapabilityRegistryItemOut"][];
+        };
+        /**
+         * ChangePasswordRequest
+         * @description Change the signed-in account's password.
+         *
+         *     The current password is required and verified by the server; the new password is
+         *     bounded as in :class:`RegisterRequest`. There is no confirmation field: matching two
+         *     typed entries is the client's job. The account is the signed-in caller's and is never
+         *     taken from the body. Unknown fields are rejected.
+         */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
         };
         /** ChannelPrefIn */
         ChannelPrefIn: {
@@ -4341,6 +4381,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_api_v1_auth_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
             };
         };
         responses: {

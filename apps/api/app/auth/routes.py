@@ -13,6 +13,7 @@ from app.auth.dependencies import (
 )
 from app.auth.models import AuthSession
 from app.auth.schemas import (
+    ChangePasswordRequest,
     EmailVerificationConfirmRequest,
     EmailVerificationRequest,
     InvitationPreviewOut,
@@ -195,11 +196,11 @@ def accept_invitation(
     return _session(db, authenticated.user, authenticated.session)
 
 
-# --- Password reset and email verification ------------------------------------------------
+# --- Password reset, password change and email verification --------------------------------
 # The token travels only in the request body, never in a path or query string. Each route
 # commits before it schedules mail and before it answers, so a message is only sent for a
 # committed token and a 204 only reports a committed change. Security events carry no
-# email address, token, digest or link.
+# email address, password, token, digest or link.
 
 
 @router.post("/password-reset/request", status_code=204)
@@ -238,6 +239,28 @@ def confirm_password_reset(
     account_tokens.confirm_password_reset(db, token=body.token, new_password=body.new_password)
     db.commit()
     log_event(logger, "security.password_reset.completed", outcome="success")
+    return Response(status_code=204)
+
+
+@router.post("/password/change", status_code=204)
+def change_password(
+    body: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Change the signed-in account's password.
+
+    The current password is required. A wrong current password, or a new password that
+    is the same as the current one, is a 422 and the account stays signed in. On success
+    the answer is an empty 204 and every session of the account, this one included, is
+    signed out: sign in again with the new password.
+    """
+    user_id = user.id
+    service.change_password(
+        db, user=user, current_password=body.current_password, new_password=body.new_password
+    )
+    db.commit()
+    log_event(logger, "security.password.changed", outcome="success", user_id=user_id)
     return Response(status_code=204)
 
 
