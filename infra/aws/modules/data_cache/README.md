@@ -100,3 +100,5 @@ rule. The root `infra/aws/README.md` inventory refresh (7→8 implemented, 4→5
 records 8/3/5/4. INFRA-4 remains incomplete; INFRA-5 remains unstarted.
 
 **Staging window (`enabled`, root `staging_window_active`):** the replication group exists only while `enabled = true` and its contents are not preserved across windows; the subnet group, parameter group and security group persist; endpoint outputs are null while closed. See `docs/operations/staging-window.md`.
+
+**CI:** `window.tftest.hcl` runs in the `revision-reader` job (`window_tests_data_cache`); this module therefore carries the root's byte-identical provider constraint in `versions.tf` and its cache is a classified member of `EXPECTED_CACHE_ROOTS`.

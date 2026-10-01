@@ -147,12 +147,13 @@ None of these is amended by this change; each is a ruling for the operator.
 
 ## 11. Limitations
 
-Nothing here has been planned or applied against AWS. The module tests prove open/closed shapes with a mocked provider but are LOCAL-ONLY: CI runs `tofu test` only in `modules/iam` and
-`modules/revision_reader`. Adding the three modules to CI was attempted and reverted in this round because it needs (a) the provider version constraint
-(`>= 6.55.0, < 6.56.0`) in each module's `versions.tf`, as `iam` and `revision_reader` carry (no module tracks a lockfile; an unconstrained init
-pulls a newer provider than the pinned 6.55.0), (b) an amendment of the review-pinned
-`check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS` collection (a pin change fails security-collection assurance — an operator ruling / review-record
-entry, not a code change) and (c) coverage of the new graded step in `tests/fixtures/ci-invocation-contract.json`. Until then the window-shape proof is
-the local run recorded in the round's evidence, and nothing in CI guards regression of the `count`/`one()` wiring. The root is validated and
+Nothing here has been planned or applied against AWS. The module tests prove open/closed shapes with a mocked provider and RUN IN CI as graded steps of the `revision-reader` job
+(`window_tests_alb` 3 runs, `window_tests_data_cache` 2, `window_tests_network` 2; offline, fully mocked, no AWS call), followed by
+`window_negative_control`, which initialises a doctored copy of the network module offline from the already-verified network cache and
+requires its one false assertion to FAIL `tofu test`. Each module carries the root's byte-identical provider constraint (the modules/iam Gate
+4N-I8 rule; committed child-module lock files stay prohibited), and the three module caches are members of the review-pinned
+`check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS` collection under ledger record `REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS`:
+classified by the post-init step (expected version, binary provenance), not exempted. `tests/test_window_module_ci.py` pins the wiring
+hermetically; `scripts/failure_propagation.py` and `scripts/ci_invocation_model.py` grade the step shells. The root is validated and
 structurally tested, not planned (the repository's root positive-control plan runs with the window OPEN so its resource set is unchanged). The
 Redis endpoint determinism, the second EIP, real transition durations and the exact billed hours are to be measured at the first authorized window.

@@ -55,6 +55,17 @@ EXPECTED_CACHE_ROOTS = (
     # provider, no backend. Adding the path deliberately rather than deleting the cache,
     # because CI needs it to exist.
     Path("infra/aws/modules/iam"),
+    # Staging window (docs/operations/staging-window.md): alb, data_cache and network carry
+    # window.tftest.hcl, run by CI's window_tests_* steps — offline, mocked provider, no
+    # backend, same shape as iam/revision_reader; each module declares the byte-identical
+    # root provider constraint so its standalone init resolves the pinned version. Each cache
+    # is CLASSIFIED (version + binary provenance), not exempted. Amendment reviewed under
+    # REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS. NOTE: scripts/root_wiring_check.py
+    # CACHE_ROOTS (the provider-MIRROR source set) is deliberately NOT widened: a mirror
+    # source needs only the already-reviewed roots; this set classifies, that set serves.
+    Path("infra/aws/modules/alb"),
+    Path("infra/aws/modules/data_cache"),
+    Path("infra/aws/modules/network"),
 )
 
 # Environment variables that can silently redefine what runs or where it reads from.

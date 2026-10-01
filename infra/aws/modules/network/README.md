@@ -78,3 +78,5 @@ INFRA-4 network resource-definition tranche. Remote-state bootstrap and any
 `apply` remain later, separately authorized tranches (`apply` is INFRA-9).
 
 **Staging window:** the root sets `enable_nat_gateway = var.enable_nat_gateway && var.staging_window_active`, so a closed window destroys the NAT gateway, releases its EIP and removes the private default route while the VPC, subnets and route tables persist. See `docs/operations/staging-window.md`.
+
+**CI:** `window.tftest.hcl` runs in the `revision-reader` job (`window_tests_network`); this module therefore carries the root's byte-identical provider constraint in `versions.tf` and its cache is a classified member of `EXPECTED_CACHE_ROOTS`.
