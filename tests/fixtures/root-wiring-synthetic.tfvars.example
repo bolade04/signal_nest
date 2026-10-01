@@ -32,3 +32,9 @@ alarm_thresholds = {
   redis_cpu_high_percent        = 80
   redis_memory_high_percent     = 80
 }
+
+# Staging window (REQUIRED root input, no default). true keeps the positive-control
+# plan's resource set identical to the always-on composition it has always planned;
+# the closed state is proven by the module tests (alb/data_cache/network window tests)
+# and by tests/test_staging_window.py.
+staging_window_active = true

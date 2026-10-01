@@ -106,6 +106,13 @@ sequence.
 Set the orchestrator's termination grace period **≥ `WORKER_SHUTDOWN_GRACE_SECONDS`**
 so a draining worker can finish in-flight jobs before the runtime sends `SIGKILL`.
 
+## Staging operating window
+
+Staging runs **windowed** (`staging_window_active`, `docs/operations/staging-window.md`): the NAT gateway and its EIP, the ALB with listener and
+target group, and the ElastiCache replication group exist only inside an authorized window; RDS is stopped between windows by the runbook; the
+workload stage is refused outside a window. Every procedure below executes inside an open window. The rollback floor (next section) is compared by
+image digest and source revision, because task-definition revisions are re-registered per window.
+
 ## Rolling deployment
 
 1. Build and publish the images at the new revision.

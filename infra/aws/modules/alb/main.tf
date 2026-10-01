@@ -68,6 +68,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
 
 # --- Application Load Balancer -----------------------------------------------------
 resource "aws_lb" "this" {
+  count = var.enabled ? 1 : 0
+
   name               = "${var.name_prefix}-alb"
   internal           = false
   load_balancer_type = "application"
@@ -207,6 +209,8 @@ resource "aws_s3_bucket_policy" "alb_logs" {
 
 # --- API target group (IP targets; private API tasks on port 8000) ----------------
 resource "aws_lb_target_group" "api" {
+  count = var.enabled ? 1 : 0
+
   name        = "${var.name_prefix}-api-tg"
   target_type = "ip"
   protocol    = "HTTP"
@@ -253,7 +257,9 @@ resource "aws_lb_target_group" "api" {
 # Consumes the existing regional ACM certificate by ARN (never created/queried).
 # No HTTP:80 listener and no HTTP->HTTPS redirect exist (§24.3): HTTPS is mandatory.
 resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.this.arn
+  count = var.enabled ? 1 : 0
+
+  load_balancer_arn = aws_lb.this[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -261,10 +267,28 @@ resource "aws_lb_listener" "https" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
+    target_group_arn = aws_lb_target_group.api[0].arn
   }
 
   tags = {
     Name = "${var.name_prefix}-https-listener"
   }
+}
+
+# Staging window: these three resources gained `count` (docs/operations/staging-window.md).
+# The moved blocks make the first plan from the pre-window state a deterministic rename
+# (`has moved to [0]`) instead of an implied move; module-level only (the root forbids moved).
+moved {
+  from = aws_lb.this
+  to   = aws_lb.this[0]
+}
+
+moved {
+  from = aws_lb_target_group.api
+  to   = aws_lb_target_group.api[0]
+}
+
+moved {
+  from = aws_lb_listener.https
+  to   = aws_lb_listener.https[0]
 }

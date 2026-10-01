@@ -112,3 +112,15 @@ variable "kms_key_id" {
   type        = string
   default     = null
 }
+
+# --- Staging window (docs/operations/staging-window.md) ------------------------------
+# When false the replication group is NOT created (planned for destruction if it
+# exists — its queue/cache contents are NOT preserved; see the runbook on draining
+# jobs before a window closes); the subnet group, parameter group and security
+# group PERSIST. Endpoint outputs are null while closed. Root sets this from
+# staging_window_active; the module default keeps standalone behaviour unchanged.
+variable "enabled" {
+  description = "Create the Redis replication group (true) or leave it absent (false, window closed). Subnet group, parameter group and security group always exist."
+  type        = bool
+  default     = true
+}

@@ -98,3 +98,5 @@ rule. The root `infra/aws/README.md` inventory refresh (7→8 implemented, 4→5
 5→4 stubs) was **completed by the follow-up truthfulness pass** (PR #112, squash commit
 `5f32d4b6a2ae` on `main` — its subject records the PR number); the root inventory now
 records 8/3/5/4. INFRA-4 remains incomplete; INFRA-5 remains unstarted.
+
+**Staging window (`enabled`, root `staging_window_active`):** the replication group exists only while `enabled = true` and its contents are not preserved across windows; the subnet group, parameter group and security group persist; endpoint outputs are null while closed. See `docs/operations/staging-window.md`.
