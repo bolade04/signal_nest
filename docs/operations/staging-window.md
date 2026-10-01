@@ -37,7 +37,7 @@ formerly listed here as deferred under §24.7, is now a windowed row above: IaC-
 ## 3. Transition runbook (each step is a separately authorized act; every mutation from a saved, inspected plan)
 
 **OPEN (closed → open), target ≈ 1 billable hour of provisioning:**
-1. Pre-check (read-only): window state recorded as CLOSED in the previous close receipt; RDS instance status `stopped` or `available`; no ECS deployment in progress; the planned apply identity holds the §8 actions (including `route53:ChangeResourceRecordSets`/`GetChange` on the one zone and, while the live budget still differs from the root bound, `budgets:ModifyBudget`); the `hosted_zone_id` in the tfvars is the identity-tier zone the reviewed `Route53Read` statement names (an exact-ARN statement — a different zone id would fail at refresh); write down the EXPECTED NON-WINDOW DIFFS this plan will carry (repository changes merged since the last apply that are not window resources — see step 4), so the abort rule in step 4 is an enumeration, not a guess.
+1. Pre-check (read-only): window state recorded as CLOSED in the previous close receipt; RDS instance status `stopped` or `available`; no ECS deployment in progress; the planned apply identity holds the §8 actions — for the alias record, `route53:ChangeResourceRecordSets` on the intended hosted-zone ARN (`arn:aws:route53:::hostedzone/<hosted_zone_id>`, scoped by the record condition keys to `api_fqdn` / type `A` / CREATE, UPSERT, DELETE as §8 recommends — the drifted live W0 holds the action unconditioned and would NOT satisfy this pre-check as worded, deliberately) AND, separately, `route53:GetChange` on change resources (`arn:aws:route53:::change/*`; `GetChange` is change-scoped, never zone-scoped) and, while the live budget still differs from the root bound, `budgets:ModifyBudget` on the one budget ARN (§8); the `hosted_zone_id` in the tfvars is the identity-tier zone the reviewed `Route53Read` statement names (an exact-ARN statement — a different zone id would fail at refresh); write down the EXPECTED NON-WINDOW DIFFS this plan will carry (repository changes merged since the last apply that are not window resources — see step 4), so the abort rule in step 4 is an enumeration, not a guess.
 2. RDS: `aws rds start-db-instance --db-instance-identifier <prefix>-postgres` (outside OpenTofu); wait for `available` (5–10 min).
 3. tfvars: `staging_window_active = true`, `deploy_workload = false` (first apply of a window never creates services — §7).
 4. `tofu plan -out window-open.plan` → `tofu show -json` → review: the window creates — NAT gateway, EIP, private default route, ALB, listener, target group, API alias record (`module.alb.aws_route53_record.api[0]`), replication group — PLUS the **expected non-window diffs enumerated in the pre-read of step 1** (today: the `module.cost.aws_budgets_budget.monthly` in-place update 150 → ≤ 20, because this root now rejects `monthly_budget_limit > 20` and the live budget is the attested 150; the 6B-4C creates from #194 that were never applied — `module.iam.aws_iam_role_policy.api_ses_send` — and, on the very first execution, the four `moved` lines below); **reject** any destroy, any replace, and any change outside that enumerated list. `tofu apply window-open.plan`. A plan that cannot be reconciled line-by-line with the enumeration is not applied; it is recorded and the enumeration is corrected under its own authorization first.
@@ -161,11 +161,27 @@ DeleteService/RegisterTaskDefinition`) is **not** in W0 — the cutover's separa
   (= `CREATE`/`UPSERT`/`DELETE`). The plan-time and read-after-write reads (`route53:GetHostedZone`, `route53:ListResourceRecordSets`) ARE in the
   reviewed W0 (`Route53Read`, an exact-ARN statement on the identity-tier zone — so the tfvars `hosted_zone_id` must be that zone; apply-time pre-check).
 - `module.cost.aws_budgets_budget.monthly` (the 150 → ≤ 20 update the next apply necessarily carries) needs `budgets:ModifyBudget` on
-  `arn:aws:budgets::<account>:budget/<prefix>-monthly` (it also covers the provider's notification re-sync; there is no `budgets:UpdateBudget` or
-  `ModifyNotification` IAM action); `budgets:TagResource`/`UntagResource` only if the live budget's tags drifted from `default_tags`. The reads
-  (`budgets:ViewBudget`, `ListTagsForResource`) ARE in the reviewed W0 (`BudgetsRead`).
-- The repository-reviewed W0 (`scripts/gen_operator_policies.py`, Sids `Route53Read`, `BudgetsRead`) holds NONE of the four write actions; they are
-  implicitly denied (absent from every Allow, absent from the explicit deny lists). **No reviewed principal can create or delete the alias record or
+  `arn:aws:budgets::<account>:budget/<prefix>-monthly` (the service authorization reference maps the `UpdateBudget`, `CreateNotification`,
+  `DeleteNotification` and `UpdateNotification` API operations to that one IAM action on the `budget` resource; there is no `budgets:UpdateBudget`
+  or `budgets:ModifyNotification` IAM action); `budgets:TagResource`/`UntagResource` only if the live budget's tags drifted from `default_tags`.
+  The reads (`budgets:ViewBudget`, `ListTagsForResource`) ARE in the reviewed W0 (`BudgetsRead`).
+  - Legacy portal vs programmatic authorization (qualified 2026-10-01 from current official AWS documentation): the Budgets operations table also
+    lists `aws-portal:ModifyBilling` (writes) / `aws-portal:ViewBilling` (reads). Those are the LEGACY console-era billing permissions: AWS states
+    the `aws-portal` namespace "reached the end of standard support on July 2023", that the fine-grained replacement actions (`account`, `billing`,
+    `payments`, …) are already in effect for accounts and organizations created on or after 2023-03-06 11:00 PDT, and that "API access to AWS Cost
+    Explorer, AWS Cost and Usage Reports, and AWS Budgets remains unaffected" by the migration. The OpenTofu provider's Budgets calls are
+    programmatic API requests, so the repository does NOT treat `aws-portal:*` as a universally required grant for the budget update. The separate
+    "Activate IAM Access" console setting is documented by AWS as governing the Billing and Cost Management console pages and NOT the Budgets API
+    ("doesn't control access to … The Billing and Cost Management SDK APIs (AWS Cost Explorer, AWS Budgets, and AWS Cost and Usage Reports APIs)"),
+    so it is not a precondition for the provider's call. What the repository cannot see and records as **UNKNOWN**: whether THIS account /
+    organization predates the 2023-03-06 cutover and still evaluates legacy `aws-portal` grants, and whether any live grant or SCP references
+    `aws-portal` — to be read (read-only) before the budget grant is designed. Sources: Service Authorization Reference "Actions, resources, and
+    condition keys for AWS Budget Service" (and "… for Amazon Route 53" for the alias actions); AWS Billing user guide "Migrating access control for
+    AWS Billing" and "Overview of managing access permissions". Nothing here grants, changes or adopts any permission.
+- The repository-reviewed W0 (`scripts/gen_operator_policies.py`, Sids `Route53Read`, `BudgetsRead`) holds none of the write-path actions
+  (`route53:ChangeResourceRecordSets`, `route53:GetChange` — access level List in the reference, but needed only by the write path —
+  `budgets:ModifyBudget`) nor the conditional `budgets:TagResource`/`UntagResource`; they are implicitly denied (absent from every Allow, absent from
+  the explicit deny lists). **No reviewed principal can create or delete the alias record or
   correct the budget — two MISSING GRANTS, recorded here, not added.** The live drifted W0 (sealed 2026-09-30 captures; `P6-W0-remediation-design/
   LIVE-VS-REVIEWED-MATRIX.txt` Route 53 and Budgets rows) DOES carry `route53:ChangeResourceRecordSets` on the zone WITHOUT any record-name/type/action
   condition, `route53:GetChange` on `change/*` and `budgets:ModifyBudget` on `budget/*` — exactly the unreviewed over-grant FV-20 records; this change
