@@ -60,6 +60,13 @@ phase        = "4B-C"
 # monthly_budget_limit      = <1-200>                       # USD; ADR-0001 §M hard ceiling
 # budget_notification_email = "<ops-alias@example.com>"
 
+# --- Staging operating window (docs/operations/staging-window.md) --------------------
+# REQUIRED, no default. false = CLOSED: the NAT gateway (+EIP), ALB (+listener, target
+# group) and the ElastiCache replication group are absent/destroyed and their public
+# IPv4 addresses released; the workload stage is refused. true = an AUTHORIZED window is
+# open. Does not stop or start RDS (runbook). Every execution states the target state.
+staging_window_active = false
+
 # --- Transactional account mail (P6-AUTH-2 / 6B-4C, founder decision FD-1) ------------
 # AWS SES v2 through the API task role: no SMTP credential, no mail secret. The SES
 # DOMAIN identity and its DKIM DNS records are provisioned OUT OF BAND under their own

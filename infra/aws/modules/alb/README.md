@@ -78,3 +78,7 @@ provisioning have occurred. Nothing exists in AWS.**
 INFRA-4 alb resource-definition tranche; access/connection logging added by the
 INFRA-4 pre-live tranche. Live remote-state bootstrap and any `apply` remain
 later, separately authorized (`apply` is INFRA-9).
+
+**Staging window (`enabled`, root `staging_window_active`):** the load balancer, HTTPS listener and API target group exist only while `enabled = true`; the security group, its ingress rule and the private log bucket persist; windowed outputs are null while closed. See `docs/operations/staging-window.md`.
+
+**CI:** `window.tftest.hcl` runs in the `revision-reader` job (`window_tests_alb`); this module therefore carries the root's byte-identical provider constraint in `versions.tf` and its cache is a classified member of `EXPECTED_CACHE_ROOTS`.

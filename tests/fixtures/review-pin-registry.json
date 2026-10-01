@@ -110,8 +110,8 @@
   "check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS": {
    "collection_id": "check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS",
    "ordered": true,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:ca6cffd87f2712fc967425e376f8c4cd6a48410184c5618f22fd42c3538c5fc9",
+   "review_record_id": "REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS",
+   "reviewed_digest": "sha256:6886954c2bf9fdf401889cba22429840843da0955c0146ce3800128b6e4670c7",
    "source": "live"
   },
   "check_toolchain_integrity.py::FORBIDDEN_ENV": {

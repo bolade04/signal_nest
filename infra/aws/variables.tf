@@ -262,6 +262,24 @@ variable "redis_engine_version" {
   }
 }
 
+# Staging operating WINDOW (budget-fit design; docs/operations/staging-window.md).
+# The sealed September 2026 attestation shows the always-on foundation alone
+# (NAT gateway, ALB, ElastiCache, their public IPv4 addresses) billing ~5× the
+# operator's USD 20 TOTAL monthly limit. This input is the single switch that
+# makes the chargeable, re-creatable resources EXIST ONLY INSIDE AN AUTHORIZED
+# WINDOW: with `false`, the root plans the DESTRUCTION of the NAT gateway and
+# its EIP, the ALB with its listener and target group, and the ElastiCache
+# replication group, and refuses the workload stage; everything that holds data
+# or identity (VPC, subnets, security groups, RDS, S3, ECR, secrets, KMS,
+# CloudFront, DNS, roles, log groups, alarms) stays. RDS is NOT touched by this
+# input: stopping/starting it is an API action outside OpenTofu (runbook).
+# REQUIRED with no default — a window that defaults open is how spend happens;
+# every execution must state which state it is driving to.
+variable "staging_window_active" {
+  description = "true = an authorized staging window is OPEN: the NAT gateway (+EIP), ALB (+listener, target group) and ElastiCache replication group exist and the workload stage may run. false = CLOSED: those resources are destroyed/absent, their public IPv4 addresses released, and deploy_workload must be false. Does not stop/start RDS (runbook). REQUIRED, no default (docs/operations/staging-window.md)."
+  type        = bool
+}
+
 # Foundation-vs-workload execution stage (INFRA-9 target-free sequencing).
 # The default `false` is the SAFE foundation stage for a fresh staging deploy:
 # it lets the composed root create everything EXCEPT the API/worker task
@@ -272,9 +290,17 @@ variable "redis_engine_version" {
 # true->false after workloads exist plans their DESTROY; treat as a one-way
 # ratchet once live and review every workload-stage plan for ECS destroy lines.
 variable "deploy_workload" {
-  description = "Whether to create the API/worker ECS task definitions and services (workload stage). Default false = foundation stage (creates ECR repos, cluster, log groups, SGs, roles, data stores, secret containers — everything digests are not needed for). Set true only with real immutable digests supplied (INFRA-9 workload apply)."
+  description = "Whether to create the API/worker ECS task definitions and services (workload stage). Default false = foundation stage (creates ECR repos, cluster, log groups, SGs, roles, data stores, secret containers — everything digests are not needed for). Set true only with real immutable digests supplied (INFRA-9 workload apply) AND inside an open staging window (staging_window_active = true)."
   type        = bool
   default     = false
+
+  validation {
+    # The workload needs the ALB target group and the Redis cluster, which exist
+    # only inside a window; outside one this would plan services with no target
+    # group and no cache — refused before planning, never discovered mid-apply.
+    condition     = !var.deploy_workload || var.staging_window_active
+    error_message = "deploy_workload = true requires staging_window_active = true: the API/worker services need the ALB target group and the ElastiCache cluster, which exist only inside an open window (docs/operations/staging-window.md)."
+  }
 }
 
 # Nullable in the foundation stage (no digest exists until INFRA-5 publishes

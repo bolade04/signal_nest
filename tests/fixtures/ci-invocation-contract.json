@@ -348,11 +348,35 @@
     "scripts/security_collection_assurance.py"
    ],
    "run_form": "single"
+  },
+  "window_tests_alb": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
+  },
+  "window_tests_data_cache": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
+  },
+  "window_tests_network": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
+  },
+  "window_negative_control": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
   }
  },
  "totals": {
-  "graded_steps": 46,
-  "multiline_run_blocks": 7,
+  "graded_steps": 50,
+  "multiline_run_blocks": 11,
   "single_line_run": 39
  }
 }

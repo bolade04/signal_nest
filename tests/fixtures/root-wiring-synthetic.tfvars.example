@@ -33,6 +33,12 @@ alarm_thresholds = {
   redis_memory_high_percent     = 80
 }
 
+# Staging window (REQUIRED root input, no default). true keeps the positive-control
+# plan's resource set identical to the always-on composition it has always planned;
+# the closed state is proven by the module tests (alb/data_cache/network window tests)
+# and by tests/test_staging_window.py.
+staging_window_active = true
+
 # 6B-4C (P6-AUTH-2, FD-1): transactional-mail inputs, REQUIRED at the root. Synthetic
 # documentation values only — a bare FQDN and one bare address at it.
 mail_sending_identity_domain = "mail.synthetic.example.com"
