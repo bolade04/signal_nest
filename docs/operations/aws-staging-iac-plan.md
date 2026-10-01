@@ -804,7 +804,10 @@ tuning defaults are not duplicated. The minimum explicit set (executable names):
 `APP_MODE=full`, `LLM_PROVIDER` (openai/anthropic — mock forbidden), `STORAGE_BACKEND=s3`,
 `S3_BUCKET`, `S3_REGION`, `QUEUE_BACKEND`/`CACHE_BACKEND`/`VECTOR_BACKEND` (per workload; migration
 uses non-Redis backends per §26.3), and the three global capability flags explicitly **`false`**
-(`OPPORTUNITY_FEEDBACK_ENABLED`, `SCOUT_SCHEDULING_ENABLED`, `CONNECTOR_RSS_ENABLED`). AWS access-key
+(`OPPORTUNITY_FEEDBACK_ENABLED`, `SCOUT_SCHEDULING_ENABLED`, `CONNECTOR_RSS_ENABLED`), and — since
+6B-4C (P6-AUTH-2, FD-1) — the transactional-mail set on the API **and** worker (`MAIL_BACKEND=ses`,
+`MAIL_FROM_ADDRESS`, `MAIL_SES_REGION`, `PUBLIC_WEB_ORIGIN`) plus `CORS_ORIGINS` on the API only
+(runtime contract §F). AWS access-key
 env vars remain unset (task-role credential chain). If the ECS interface uses per-workload
 `map(string)` env inputs, it must enforce a **denylist precondition** rejecting at least:
 `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`, `LLM_API_KEY`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,

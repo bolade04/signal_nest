@@ -406,6 +406,43 @@ variable "llm_provider" {
   }
 }
 
+# --- Transactional account mail (P6-AUTH-2 / 6B-4C, founder decision FD-1) -----------
+# The API sends password-reset and email-verification mail through AWS SES v2 using
+# the API TASK ROLE (no SMTP credential, no mail secret). The SES domain identity and
+# its DKIM DNS records are provisioned OUT OF BAND under their own authorization —
+# never by this configuration, which only NAMES the identity so the IAM grant and the
+# task environment agree. Both values are supplied via a git-ignored *.tfvars; no real
+# domain or address is committed (same rule as web_fqdn).
+variable "mail_sending_identity_domain" {
+  description = "The verified SES DOMAIN identity the API sends from (bare hostname, e.g. \"mail.staging.example.com\"; passed to the iam module, where it becomes the single identity ARN the API task role may send from). Created out of band, never here. Supplied via a git-ignored *.tfvars; no real domain is committed."
+  type        = string
+
+  validation {
+    condition     = !can(regex("[/?#:@ ]", var.mail_sending_identity_domain))
+    error_message = "mail_sending_identity_domain must be a bare hostname: no scheme, port, path, query, fragment, '@' or whitespace."
+  }
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.mail_sending_identity_domain))
+    error_message = "mail_sending_identity_domain must be a valid lowercase multi-label FQDN (labels 1-63 chars, no empty labels, no trailing dot), e.g. mail.staging.example.com."
+  }
+
+  validation {
+    condition     = length(var.mail_sending_identity_domain) <= 253
+    error_message = "mail_sending_identity_domain must be <= 253 characters."
+  }
+}
+
+variable "mail_from_address" {
+  description = "The bare From address of account mail (MAIL_FROM_ADDRESS, §26.11; and the exact ses:FromAddress the API task role is conditioned on). A single lowercase address at mail_sending_identity_domain — no display name, no angle brackets, no whitespace; the application adds the display name itself. Supplied via a git-ignored *.tfvars; no real address is committed."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]+([._+-][a-z0-9]+)*@[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.mail_from_address))
+    error_message = "mail_from_address must be one bare lowercase address (local-part@fqdn) with no display name, angle brackets or whitespace and no leading, trailing or doubled separator in the local part, e.g. no-reply@mail.staging.example.com."
+  }
+}
+
 variable "alarm_thresholds" {
   description = "Caller-supplied observability alarm thresholds (passed through to the observability module; the plan documents alarm CATEGORIES, not values — §14). Supplied via a git-ignored *.tfvars."
   type = object({

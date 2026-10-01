@@ -145,6 +145,32 @@ creates no role or policy.**
   (`REDIS_URL`); S3 access configuration (prefer IAM task role over static
   `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`); LLM provider key (`LLM_API_KEY`) with provider
   (`LLM_PROVIDER=openai|anthropic`).
+- **Transactional account mail (P6-AUTH-2 / 6B-4C, founder decision FD-1):** password-reset
+  and email-verification mail is sent through **AWS SES v2 using the API task role's
+  credential chain** — the repository defines no SMTP credential and **no mail secret**, and this wiring creates none.
+  Ordinary (non-secret) environment, injected on the **API and the worker** (both import
+  the same settings module and fail closed at import without them; only the API process
+  ever sends): `MAIL_BACKEND=ses`, `MAIL_FROM_ADDRESS` (one bare address at the sending
+  domain), `MAIL_SES_REGION` (= the staging region), `PUBLIC_WEB_ORIGIN` (`https://` +
+  the SPA FQDN — the only source of the link host). **API only:** `CORS_ORIGINS`, a JSON
+  list holding exactly the SPA origin (SPA and API are different origins). **Not
+  injected** (application defaults / unset by decision): `MAIL_FROM_NAME` (default
+  display name), `MAIL_REPLY_TO_ADDRESS`, `MAIL_SUPPORT_CONTACT`,
+  `MAIL_SES_CONFIGURATION_SET`, `MAIL_SEND_TIMEOUT_SECONDS`. The migration workload needs
+  none of them (migration mode). **IAM:** the API task role holds `ses:SendEmail` on
+  exactly one identity ARN (the sending domain), conditioned on the exact
+  `ses:FromAddress` and `ses:ApiVersion = "2"`; the **display-name** header
+  (`ses:FromDisplayName`) is deliberately **not** conditioned — it is a separate
+  decision, to be taken with the pilot sender identity, and a change there needs its own
+  reviewed policy change. **Retirement:** removing or renaming the inline policy calls
+  `iam:DeleteRolePolicy`, which the permissions boundary denies and no repository principal
+  holds; the only in-window path is an in-place `iam:PutRolePolicy` overwrite that narrows
+  the document (down to a Deny-only statement). A removal therefore needs its own reviewed
+  `DeleteRolePolicy` delta — recorded here so the grant is not mistaken for freely
+  reversible. **The SES domain identity, its DKIM DNS records and any
+  sandbox exit are provisioned out of band under their own authorization; the
+  repository only names the identity.** No real domain or address is committed
+  (git-ignored `*.tfvars`).
 - **Validation path preserved:** SIGNALNEST_STAGING uses the real production-like validation
   (`ENVIRONMENT=staging`, `APP_MODE=full`) which **rejects** SQLite, in-process queue,
   in-memory cache, local storage, a weak `SECRET_KEY`, and a `mock` LLM provider
@@ -295,6 +321,17 @@ Definitions:
 ## M. Cost contract
 
 - **Hard ceiling:** USD **$200/month** — a guardrail, not a target.
+- **Operator limit (recorded 2026-09-30, stricter than the ceiling):** the operator has set
+  the staging budget at **USD $20 total per month** — total, not incremental. The
+  planning estimate below (~$95 low / ~$119 planning) **exceeds that limit**, and the
+  largest fixed drivers (NAT ~$33, ALB ~$18, RDS ~$16, ElastiCache ~$12) are foundation
+  resources that already exist. This document records the limit and the conflict; it
+  does **not** resolve it: neither raising the limit nor removing or downsizing resources
+  is authorized by this text. **No workload apply may proceed until the operator
+  reconciles the limit with a fresh dated estimate** (the mandatory pre-provisioning
+  recalculation below) — the reconciliation is an operator act. The `cost/` module's
+  `monthly_budget_limit` accepts 20 (its validation bounds 1–200), so the AWS Budget can
+  encode the operator limit without a code change once the operator supplies it.
 - **Pricing basis:** dated **planning estimate**, us-east-1, **2026-07-21**, standard
   on-demand pricing (no promotional credits). Amounts are planning estimates pending the
   **mandatory pre-provisioning pricing recalculation gate** (INFRA-9) using current official

@@ -45,7 +45,7 @@ phase        = "4B-C"
 # redis_engine_version      = "<redis-version, e.g. 7.1>"
 # api_image_digest          = "sha256:<64-hex-digest-of-verified-api-image>"     # exists only after INFRA-5
 # worker_image_digest       = "sha256:<64-hex-digest-of-verified-worker-image>"  # exists only after INFRA-5
-# llm_provider              = "<openai|anthropic>"
+# llm_provider              = "<openai|anthropic>"                                # the operator's settled choice is recorded in docs/project-phase-6-plan.md P6-D04
 # alarm_thresholds = {
 #   ecs_cpu_high_percent          = <1-100>
 #   ecs_memory_high_percent       = <1-100>
@@ -67,6 +67,16 @@ phase        = "4B-C"
 # open. Does not stop or start RDS (runbook). Every execution states the target state.
 staging_window_active = false
 
+# --- Transactional account mail (P6-AUTH-2 / 6B-4C, founder decision FD-1) ------------
+# AWS SES v2 through the API task role: no SMTP credential, no mail secret. The SES
+# DOMAIN identity and its DKIM DNS records are provisioned OUT OF BAND under their own
+# authorization — never by this IaC, which only names the identity so the IAM grant and
+# the task environment agree. NO real domain or address is committed; supply real values
+# at plan time via a git-ignored *.tfvars file. Placeholder tokens only:
+#
+# mail_sending_identity_domain = "<MAIL_SENDING_IDENTITY_FQDN>"                    # e.g. mail.staging.example.com (bare hostname; the SES domain identity)
+# mail_from_address            = "<ROLE_LOCAL_PART>@<MAIL_SENDING_IDENTITY_FQDN>"  # one bare address AT that domain; no display name
+
 # --- IAM role permissions boundary (Gate 4N-I8) --------------------------------------
 #
 # DURABILITY. `permissions_boundary` is a MANAGED attribute on all eight roles. If the
@@ -74,11 +84,17 @@ staging_window_active = false
 # REMOVAL and the next apply strips it from every deployed role. That is the Gate 4N-I7
 # durability defect, so the mode is now explicit and "disabled" must be chosen deliberately.
 #
-# disabled : no boundary is attached. This is the currently deployed state.
-# enforced : role_permissions_boundary_arn is REQUIRED and must name the reviewed policy
+# disabled : no boundary is attached — the pre-rollout dark state. (An earlier revision of
+#            this comment called it "the currently deployed state"; this file does not
+#            know the deployed state and no longer claims it. Against roles that already
+#            carry the boundary, "disabled" would PLAN ITS REMOVAL — Gate 4N-I7 — so read
+#            the live state first and choose "required" for any such execution.)
+# required : role_permissions_boundary_arn is REQUIRED and must name the reviewed policy
 #            signalnest-staging-role-boundary, or the plan fails before any mutation.
+#            (The variable accepts exactly "disabled" or "required"; an earlier revision of
+#            this comment wrote "enforced", which the validation rejects.)
 #
-# Switch to "enforced" only after an authorized gate has created the boundary policy in AWS.
+# Switch to "required" only after an authorized gate has created the boundary policy in AWS.
 # REQUIRED. There is no default — omitting this fails before planning, because a boundary
 # that vanishes through omission is not a boundary (Gate 4N-I14 Defect 3).
 role_boundary_mode = "disabled"

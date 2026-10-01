@@ -138,10 +138,11 @@ None of these is amended by this change; each is a ruling for the operator.
 
 ## 10. Dependencies
 
-- PR #194 (6B-4C mail wiring) and this change are logically independent, but NOT conflict-free: `main.tf` and `variables.tf` hunks do not overlap;
-  `terraform.tfvars.example` (both insert after the same base line) and the synthetic root fixture (both append at end of file) WILL conflict in git.
-  Whichever lands second must resolve both and carry BOTH sets of required root inputs, or the required-variable parity test
-  (`tests/test_root_wiring_check.py`) fails. Mail is only exercised inside a window.
+- PR #194 (6B-4C mail wiring) and this change are logically independent, but were NOT conflict-free: `main.tf` and `variables.tf` hunks did not
+  overlap; `terraform.tfvars.example` (both inserted after the same base line) and the synthetic root fixture (both appended at end of file) collided.
+  RESOLVED in the #194 integration (merge of main into its branch): both files carry BOTH sets of required root inputs — the example keeps
+  `staging_window_active = false` and the placeholder mail tokens, the positive-control fixture keeps `staging_window_active = true` and the
+  synthetic mail values — so the required-variable parity test (`tests/test_root_wiring_check.py`) passes. Mail is only exercised inside a window.
 - The first live open/close needs: the W0 ruling (§8), the RDS stop/start grant, the §24.7 alias design, the cost budget corrected to the limit
   (separate package), and a window authorization naming date, duration, purpose and the apply identity.
 

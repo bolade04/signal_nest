@@ -51,6 +51,20 @@ locals {
     OPPORTUNITY_FEEDBACK_ENABLED = "false"
     SCOUT_SCHEDULING_ENABLED     = "false"
     CONNECTOR_RSS_ENABLED        = "false"
+    # Transactional account mail (P6-AUTH-2 / 6B-4C, FD-1). Staging Settings
+    # fail closed at import unless all four are set (app/core/config.py, the
+    # is_production_like block), for the API AND the worker: both import the
+    # same settings module, although only the API process ever sends (the mail
+    # seam is reached solely from the auth routes). MAIL_FROM_NAME keeps the
+    # application default; reply-to, support-contact and configuration-set are
+    # deliberately NOT injected (unset, per the 6B-4C decision packet). The link
+    # origin is the SPA's own FQDN — the only source of the link host.
+    MAIL_BACKEND      = "ses"
+    MAIL_FROM_ADDRESS = var.mail_from_address
+    MAIL_SES_REGION   = var.aws_region
+    # lower(): web_fqdn validation lower-cases before matching, but browsers send the
+    # Origin host lower-cased and Starlette compares origins exactly.
+    PUBLIC_WEB_ORIGIN = "https://${lower(var.web_fqdn)}"
   }
   workload_env_redis = merge(local.workload_env_common, {
     QUEUE_BACKEND = "redis"
@@ -66,6 +80,11 @@ locals {
   # trusted. The worker/migration workloads serve no HTTP and never set it.
   workload_env_api = merge(local.workload_env_redis, {
     FORWARDED_ALLOW_IPS = var.vpc_cidr
+    # Browser CORS (6B-4C): the SPA (CloudFront, web_fqdn) and the API (ALB) are
+    # different origins, so the API must name the SPA origin exactly — one
+    # https origin, no wildcard. The application parses this list field from
+    # JSON (pydantic-settings); the value is a JSON array with one element.
+    CORS_ORIGINS = jsonencode(["https://${lower(var.web_fqdn)}"])
   })
   # The one-shot migration task runs the hardened `app.db.migrate` entrypoint in
   # migration mode: ENVIRONMENT=staging selects staging validation, and
@@ -186,6 +205,11 @@ module "iam" {
   kms_key_arn     = module.secrets.kms_key_arn
   bucket_arn      = module.storage.bucket_arn
   repository_arns = module.registry.repository_arns
+
+  # 6B-4C (FD-1): the ONE SES identity the API task role may send from, and the
+  # exact From address it is conditioned on. The identity is created out of band.
+  mail_sending_identity_domain = var.mail_sending_identity_domain
+  mail_from_address            = var.mail_from_address
 
   # Gate 4N-I3: permissions boundary for every role this module creates. Null by
   # default, so composition remains byte-identical in effect until separately applied.

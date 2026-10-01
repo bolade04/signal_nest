@@ -9,7 +9,7 @@ role exists in AWS** and nothing is provisioned. The module **is root-composed**
 (wired in `infra/aws/main.tf` by the root-composition tranche, PR #120;
 composition is configuration only).
 
-## 2. Implemented AWS scope (seven ECS-role resources + up to two publisher-role resources)
+## 2. Implemented AWS scope (eight ECS-role resources + up to two publisher-role resources)
 - `aws_iam_role.execution` — `<name_prefix>-ecs-execution`, trust
   `ecs-tasks.amazonaws.com` (all four roles add an `aws:SourceAccount`
   condition against the deploying account — confused-deputy guard).
@@ -27,7 +27,20 @@ composition is configuration only).
   5. `kms:Decrypt` scoped to exactly the secrets CMK, conditioned on
      `kms:ViaService = secretsmanager.<region>.amazonaws.com`.
 - `aws_iam_role.api_task` + `aws_iam_role_policy.app_s3["api"]` — API task role
-  with the application-bucket S3 policy only.
+  with the application-bucket S3 policy, **plus (6B-4C, founder decision FD-1)
+  `aws_iam_role_policy.api_ses_send`** — the transactional-mail send grant:
+  `ses:SendEmail` on **exactly one** identity ARN, the sending **domain** identity
+  named by `mail_sending_identity_domain`
+  (`arn:<partition>:ses:<region>:<account>:identity/<domain>`, composed from data
+  sources at plan time), conditioned on `ses:FromAddress` **equal to the one bare
+  From address** `mail_from_address` and `ses:ApiVersion = "2"` (the SES v2 API the
+  client calls). No `ses:SendRawEmail`, no `identity/*`, no configuration-set
+  resource, no recipient identities, no `ses:FromDisplayName` condition (the display
+  name is a separate header and a separate decision — runtime contract §F). The
+  policy name is pinned (`<name_prefix>-api-ses-send`): renaming or removing an
+  inline policy needs `iam:DeleteRolePolicy`, which no repository principal holds.
+  A precondition refuses a From address outside the identity domain before any plan.
+  The SES identity and its DKIM records are created **out of band**, never here.
 - `aws_iam_role.worker_task` + `aws_iam_role_policy.app_s3["worker"]` — worker
   task role with the same application-bucket S3 policy.
 - `aws_iam_role.migration_task` — **intentionally empty** (no attached policy):
@@ -81,7 +94,10 @@ See `docs/operations/aws-staging-iac-plan.md` §26.8/§26.15.
 `name_prefix` (≤48 chars so every derived role name fits IAM's 64-char limit),
 `secret_arns` (map, from `secrets`), `kms_key_arn` (from `secrets`),
 `bucket_arn` (from `storage` — singular; the `storage` module outputs exactly
-one `bucket_arn`), `repository_arns` (map, from `registry`). ARN inputs are
+one `bucket_arn`), `repository_arns` (map, from `registry`),
+`mail_sending_identity_domain` and `mail_from_address` (6B-4C; root variables
+supplied via a git-ignored `*.tfvars` — a bare FQDN and one bare address at it;
+no real domain or address is committed). ARN inputs are
 statically validated for the expected service prefix. No `log_group_arns` input
 (removed by §26.8). No `tags` input (root provider `default_tags`; this module
 adds only per-resource `Name` tags).
@@ -103,8 +119,11 @@ containers never receive execution-role credentials. **Execution role:** ECR
 retrieval, prefix-scoped log delivery, retrieval of only the referenced secret
 ARNs, `kms:Decrypt` only on the secrets CMK via Secrets Manager. **Application
 task roles:** only the AWS API calls the code actually makes — S3 for API and
-worker (proven use), **no** RDS/Redis IAM permission, **no**
-ECR/Logs-driver/secret-injection permission; migration task role empty. All
+worker (proven use), and `ses:SendEmail` for the **API only** (the mail seam is
+reached solely from the auth routes in the API process; the worker never imports
+it), scoped to one identity ARN and one From address — **no** RDS/Redis IAM
+permission, **no** ECR/Logs-driver/secret-injection permission; migration task
+role empty. All
 policies are resource-scoped by ARN or deterministic name prefix; the only
 `Resource: "*"` is `ecr:GetAuthorizationToken`. Trust policies are limited to
 `ecs-tasks.amazonaws.com` with an `aws:SourceAccount` condition. No ARN,

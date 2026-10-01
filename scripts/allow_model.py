@@ -79,7 +79,7 @@ EXEMPTIONS = {
         # resource AND explicitly denied on every out-of-scope resource — whereas removing
         # the action from FORBIDDEN_CAPABILITIES would simply stop asking the question.
         #
-        # Why the capability is needed: the composition declares six aws_iam_role_policy
+        # Why the capability is needed: the composition declares seven aws_iam_role_policy
         # resources and creating an inline-policy resource calls PutRolePolicy, so an
         # ordinary Stage-A apply cannot complete without it. Gate 4N-I15 concealed this by
         # EXCLUDING the action from the closure verifier on a false premise.

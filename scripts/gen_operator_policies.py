@@ -275,7 +275,8 @@ TEMP_SCOPED_CAPABILITIES = frozenset({
     # flatly denied.
     #
     # GATE 4N-I16 DEFECT 3. iam:PutRolePolicy is NOT in that category and is fenced back in.
-    # The composition declares six aws_iam_role_policy resources; creating an inline-policy
+    # The composition declares seven aws_iam_role_policy resources (6B-4C added the API
+    # task role's SES send grant); creating an inline-policy
     # resource calls PutRolePolicy whether or not the role pre-exists, so an ordinary Stage-A
     # apply cannot complete without it. Gate 4N-I15 hid that by EXCLUDING the action from the
     # closure check on the false premise that it applies only to pre-existing roles — while
@@ -704,7 +705,7 @@ def bootstrap_temp_policy(expiry: str, *, issuance: str | None = None) -> dict:
                 # and it supports iam:PermissionsBoundary, so the grant above cannot even
                 # reach a role that is not carrying the reviewed ceiling.
                 #
-                # The composition declares six aws_iam_role_policy resources. Denying the
+                # The composition declares seven aws_iam_role_policy resources. Denying the
                 # action here while the closure verifier EXCLUDED it (Gate 4N-I15) meant an
                 # ordinary Stage-A apply would have failed with AccessDenied after the ECR
                 # resources already existed — the exact partial apply the Stage-A guards are
