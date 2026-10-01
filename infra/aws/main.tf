@@ -87,7 +87,10 @@ module "network" {
   vpc_cidr           = var.vpc_cidr
   availability_zones = var.availability_zones
   subnet_newbits     = var.subnet_newbits
-  enable_nat_gateway = var.enable_nat_gateway
+  # Windowed (docs/operations/staging-window.md): the NAT gateway and its EIP
+  # exist only inside an open window. The operator's enable_nat_gateway choice
+  # is preserved; the window can only turn it OFF, never on.
+  enable_nat_gateway = var.enable_nat_gateway && var.staging_window_active
 }
 
 # Web/SPA edge (private S3 SPA origin + CloudFront/OAC + web DNS aliases). The ACM
@@ -112,6 +115,9 @@ module "alb" {
   vpc_id              = module.network.vpc_id
   public_subnet_ids   = module.network.public_subnet_ids
   api_certificate_arn = var.api_certificate_arn
+  # Windowed: the load balancer, listener and target group exist only inside an
+  # open window; the ALB security group and the log bucket persist.
+  enabled = var.staging_window_active
 }
 
 # Four EMPTY Secrets Manager containers + one customer-managed KMS key/alias.
@@ -163,6 +169,10 @@ module "data_cache" {
   vpc_id             = module.network.vpc_id
   private_subnet_ids = module.network.private_subnet_ids
   engine_version     = var.redis_engine_version
+  # Windowed: the replication group exists only inside an open window (its
+  # contents — queue, cache — are NOT preserved across windows); the subnet
+  # group, parameter group and security group persist.
+  enabled = var.staging_window_active
 }
 
 # One shared execution role + three application task roles (§26.8). Consumes

@@ -83,3 +83,16 @@ variable "health_check_path" {
     error_message = "health_check_path must be an absolute path beginning with '/'."
   }
 }
+
+# --- Staging window (docs/operations/staging-window.md) ------------------------------
+# When false the load balancer, its HTTPS listener and the API target group are
+# NOT created (planned for destruction if they exist); the ALB security group,
+# its ingress rule, the private log bucket and its policy PERSIST (free, and the
+# bucket holds delivered logs). Outputs that name an absent resource are null.
+# The root sets this from staging_window_active; the module default keeps the
+# module's standalone behaviour unchanged.
+variable "enabled" {
+  description = "Create the ALB, HTTPS listener and API target group (true) or leave them absent (false, window closed). Security group and log bucket always exist."
+  type        = bool
+  default     = true
+}

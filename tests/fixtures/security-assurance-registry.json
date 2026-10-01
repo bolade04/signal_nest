@@ -137,7 +137,10 @@
    "justifications": {
     "infra/aws": "the root Terraform/OpenTofu module directory that legitimately initialises providers",
     "infra/aws/modules/iam": "a real child module that is init'd and thus has its own provider cache",
-    "infra/aws/modules/revision_reader": "a real child module that is init'd and thus has its own provider cache"
+    "infra/aws/modules/revision_reader": "a real child module that is init'd and thus has its own provider cache",
+    "infra/aws/modules/alb": "a real child module CI inits standalone for its offline mocked window contract test (window.tftest.hcl); carries the byte-identical root provider constraint; cache classified, not exempted (REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS)",
+    "infra/aws/modules/data_cache": "a real child module CI inits standalone for its offline mocked window contract test (window.tftest.hcl); carries the byte-identical root provider constraint; cache classified, not exempted (REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS)",
+    "infra/aws/modules/network": "a real child module CI inits standalone for its offline mocked window contract test (window.tftest.hcl); carries the byte-identical root provider constraint; cache classified, not exempted (REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS)"
    },
    "subtype": "D1"
   },

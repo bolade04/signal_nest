@@ -74,6 +74,8 @@ resource "aws_elasticache_parameter_group" "this" {
 
 # --- Private ElastiCache for Redis replication group ------------------------------
 resource "aws_elasticache_replication_group" "this" {
+  count = var.enabled ? 1 : 0
+
   replication_group_id = local.replication_group_id
   description          = "${var.name_prefix} staging Redis (cache/queue/notify)"
 
@@ -113,4 +115,11 @@ resource "aws_elasticache_replication_group" "this" {
       error_message = "multi_az_enabled requires automatic_failover_enabled and num_cache_clusters >= 2."
     }
   }
+}
+
+# Staging window: the replication group gained `count` (docs/operations/staging-window.md);
+# the moved block makes the first plan from the pre-window state a deterministic rename.
+moved {
+  from = aws_elasticache_replication_group.this
+  to   = aws_elasticache_replication_group.this[0]
 }

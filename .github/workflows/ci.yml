@@ -525,6 +525,80 @@ jobs:
           tofu init -backend=false -input=false
           tofu test
 
+      # Staging window (docs/operations/staging-window.md): alb, data_cache and network prove
+      # their open/closed shapes in window.tftest.hcl — offline, fully mocked provider, no
+      # backend, no AWS call; each module carries the root's byte-identical provider
+      # constraint so its standalone init resolves the pinned 6.55.0. The three caches are
+      # classified by the post-init step below (EXPECTED_CACHE_ROOTS, reviewed under
+      # REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS). Expected runs: alb 3, data_cache 2,
+      # network 2. The negative control proves a failing window suite fails its step: a
+      # doctored copy of the network module with one false assertion, initialised offline
+      # from the already-verified network cache, must make `tofu test` exit non-zero.
+      - name: Staging-window contract tests — alb (offline, fully mocked provider)
+        id: window_tests_alb
+        if: always()
+        working-directory: infra/aws/modules/alb
+        run: |
+          tofu fmt -check -diff .
+          tofu init -backend=false -input=false
+          tofu test
+
+      - name: Staging-window contract tests — data_cache (offline, fully mocked provider)
+        id: window_tests_data_cache
+        if: always()
+        working-directory: infra/aws/modules/data_cache
+        run: |
+          tofu fmt -check -diff .
+          tofu init -backend=false -input=false
+          tofu test
+
+      - name: Staging-window contract tests — network (offline, fully mocked provider)
+        id: window_tests_network
+        if: always()
+        working-directory: infra/aws/modules/network
+        run: |
+          tofu fmt -check -diff .
+          tofu init -backend=false -input=false
+          tofu test
+
+      - name: Staging-window negative control — a failing window suite must fail
+        id: window_negative_control
+        if: always()
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          python3 - "$work" <<'PY'
+          import pathlib, shutil, sys
+          # Copy the real network module OUTSIDE the tree (so the post-init classification sees no
+          # unexpected cache) and doctor its suite: the real 2 runs plus one always-false assertion
+          # that references a module input (OpenTofu rejects a bare `false` as "checking nothing").
+          work = pathlib.Path(sys.argv[1])
+          shutil.copytree("infra/aws/modules/network", work / "network",
+                          ignore=shutil.ignore_patterns(".terraform", ".terraform.lock.hcl"))
+          (work / "network" / "window.tftest.hcl").open("a").write(
+              '\nrun "negative_control_must_fail" {\n  command = plan\n  assert {\n'
+              '    condition     = var.name_prefix != var.name_prefix\n'
+              '    error_message = "negative control: a failing window suite must fail its CI step"\n'
+              '  }\n}\n')
+          PY
+          cd "$work/network"
+          tofu init -backend=false -input=false -plugin-dir="$GITHUB_WORKSPACE/infra/aws/modules/network/.terraform/providers"
+          python3 - "$work/negative.log" <<'PY'
+          import pathlib, subprocess, sys
+          # The doctored suite MUST fail. A zero exit, or a log that does not show exactly that run
+          # failing while the two real runs still pass, fails this step.
+          log = pathlib.Path(sys.argv[1])
+          proc = subprocess.run(["tofu", "test", "-no-color"], capture_output=True, text=True)
+          text = proc.stdout + proc.stderr
+          log.write_text(text)
+          sys.stdout.write(text)
+          ok = (proc.returncode != 0
+                and 'run "negative_control_must_fail"... fail' in text
+                and "1 failed" in text and "2 passed" in text)
+          print(f"negative control: exit={proc.returncode} verdict={'FAILED_AS_REQUIRED' if ok else 'DID_NOT_FAIL_AS_REQUIRED'}")
+          sys.exit(0 if ok else 1)
+          PY
+
       - name: Toolchain integrity — post-init cache classification
         id: toolchain_post
         if: always() && steps.toolchain_pre.outcome != 'skipped'
@@ -989,6 +1063,10 @@ jobs:
           fail=0
           for r in "toolchain_pre=${{ steps.toolchain_pre.outcome }}" \
                    "module_tests=${{ steps.module_tests.outcome }}" \
+                   "window_tests_alb=${{ steps.window_tests_alb.outcome }}" \
+                   "window_tests_data_cache=${{ steps.window_tests_data_cache.outcome }}" \
+                   "window_tests_network=${{ steps.window_tests_network.outcome }}" \
+                   "window_negative_control=${{ steps.window_negative_control.outcome }}" \
                    "iam_module_tests=${{ steps.iam_module_tests.outcome }}" \
                    "toolchain_post=${{ steps.toolchain_post.outcome }}" \
                    "root_wiring=${{ steps.root_wiring.outcome }}" \

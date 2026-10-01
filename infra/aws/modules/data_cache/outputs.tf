@@ -7,14 +7,15 @@
 # `redis_security_group_id` is consumed by the future `ecs` module to author the
 # task↔Redis 6379 rules (API and worker only; migration excluded).
 
+# Windowed outputs (docs/operations/staging-window.md): null while the window is closed.
 output "redis_primary_endpoint" {
   description = "Primary endpoint hostname of the Redis replication group. Composed into REDIS_URL out-of-band with the rediss:// scheme; contains no credential."
-  value       = aws_elasticache_replication_group.this.primary_endpoint_address
+  value       = one(aws_elasticache_replication_group.this[*].primary_endpoint_address)
 }
 
 output "redis_port" {
   description = "TCP port the Redis replication group listens on (6379)."
-  value       = aws_elasticache_replication_group.this.port
+  value       = one(aws_elasticache_replication_group.this[*].port)
 }
 
 output "cache_subnet_group_name" {
