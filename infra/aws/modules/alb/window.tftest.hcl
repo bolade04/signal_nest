@@ -23,6 +23,8 @@ variables {
   vpc_id              = "vpc-0123456789abcdef0"
   public_subnet_ids   = ["subnet-0123456789abcdef1", "subnet-0123456789abcdef2"]
   api_certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/00000000-0000-0000-0000-000000000000"
+  hosted_zone_id      = "ZSYNTH00000000000000"
+  api_fqdn            = "api.synthetic.example.com"
 }
 
 run "window_open_creates_lb_listener_and_target_group" {

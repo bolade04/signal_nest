@@ -12,7 +12,9 @@
 # authorization with the pre-live requirements (§25/§26.14) resolved first.
 #
 # Locked graph (§26.12; arrow points at the consumer):
-#   network -> alb (vpc_id, public_subnet_ids)
+#   network -> alb (vpc_id, public_subnet_ids)   [alb also takes the root vars
+#                    hosted_zone_id + api_fqdn for the windowed API alias record
+#                    (P6-INF-3); no edge->alb edge — the zone id is a root value]
 #   network -> data_sql, data_cache, ecs (private subnets / vpc)
 #   edge     : independent (root vars only; no network edge)
 #   secrets -> iam (secret_arns, kms_key_arn) ; secrets -> ecs (secret_arns)
@@ -134,8 +136,14 @@ module "alb" {
   vpc_id              = module.network.vpc_id
   public_subnet_ids   = module.network.public_subnet_ids
   api_certificate_arn = var.api_certificate_arn
-  # Windowed: the load balancer, listener and target group exist only inside an
-  # open window; the ALB security group and the log bucket persist.
+  # API Route 53 alias (P6-INF-3): the record api_fqdn -> ALB lives in the SAME
+  # consumed hosted zone as the web aliases (edge). Both are root values; the root
+  # rejects api_fqdn == web_fqdn. The record shares the ALB's window gate below, so a
+  # re-created ALB is re-pointed automatically each window (staging-window.md §4).
+  hosted_zone_id = var.hosted_zone_id
+  api_fqdn       = var.api_fqdn
+  # Windowed: the load balancer, listener, target group and API alias record exist
+  # only inside an open window; the ALB security group and the log bucket persist.
   enabled = var.staging_window_active
 }
 
@@ -271,8 +279,10 @@ module "observability" {
 }
 
 # One monthly AWS Budget with fixed 50/75/90/100% ACTUAL notifications (§15).
-# Observational only; the $200 ADR-§M ceiling is enforced statically at the
-# input boundary. Independent module (§26.12).
+# Observational only — notifications e-mail, they never stop spending. The limit is
+# bounded statically at THIS root's input boundary by the operator's USD 20 TOTAL
+# monthly limit (variables.tf); the module's own interface keeps the historical
+# USD 200 ADR-§M ceiling unchanged. Independent module (§26.12).
 module "cost" {
   source = "./modules/cost"
 

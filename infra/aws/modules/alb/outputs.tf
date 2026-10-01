@@ -1,9 +1,10 @@
-# outputs.tf — non-sensitive ALB outputs for downstream modules (ecs, future DNS)
+# outputs.tf — non-sensitive ALB outputs for downstream modules (ecs) and operators
 #
-# Only non-sensitive identifiers/ARNs are exported. The consumed certificate ARN is
-# an input and is NOT re-exported. No account id or secret is exposed. `ecs` consumes
-# `alb_security_group_id` and `api_target_group_arn`; a later, separately authorized
-# DNS pass consumes `alb_dns_name` and `alb_canonical_hosted_zone_id`.
+# Only non-sensitive identifiers/ARNs are exported. The consumed certificate ARN and
+# hosted-zone id are inputs and are NOT re-exported. No account id or secret is
+# exposed. `ecs` consumes `alb_security_group_id` and `api_target_group_arn`;
+# `alb_dns_name` and `alb_canonical_hosted_zone_id` are consumed INSIDE this module
+# by the API alias record (P6-INF-3) and re-exported for operator verification.
 
 # Windowed outputs (docs/operations/staging-window.md): each resolves to null while
 # the window is closed (`one()` over an empty count), so consumers can test for it.
@@ -35,4 +36,9 @@ output "api_target_group_arn" {
 output "alb_security_group_id" {
   description = "ID of the ALB-owned security group (consumed by the ecs module, which owns both ALB<->API cross-SG rules)."
   value       = aws_security_group.alb.id
+}
+
+output "api_alias_record_name" {
+  description = "Name of the API Route 53 alias record (api_fqdn) while the window is open; null while closed (the record does not exist then)."
+  value       = one(aws_route53_record.api[*].name)
 }

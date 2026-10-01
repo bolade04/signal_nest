@@ -122,8 +122,13 @@ acyclic: `ecs -> alb`. The regional ACM certificate is supplied through the requ
 `api_certificate_arn` input (no real ARN is committed); tags are applied by the
 provider `default_tags` (no module-level `tags` input). The ALB plane still has
 **no** HTTP/port-80 listener, no public port 8000, no IPv6 ingress, no unrestricted
-ALB egress, no certificate creation, no Route 53 record, and no WAF (WAF and the API
-Route 53 alias remain deferred by locked decision).
+ALB egress, no certificate creation, and no WAF (deferred by locked decision). Since
+2026-10-01 the `alb` module also owns the **windowed API Route 53 alias record**
+(P6-INF-3; §24.7 deferral lifted for a windowed record only): one `A` alias
+`api_fqdn` → the ALB inside the consumed hosted zone, sharing the ALB's window gate so
+it exists only while `staging_window_active = true` and re-points to each window's
+re-created ALB automatically; `api_fqdn` is a required root input rejected when it
+equals `web_fqdn`. Code and mocked tests only — no record exists in AWS.
 
 The `secrets`, `registry`, `storage`, `data_sql`, `data_cache`, `iam`, `ecs`, `observability`, and `cost` modules are **now wired
 into `main.tf`** by the root-composition tranche, exactly along the locked §26.12
@@ -253,9 +258,13 @@ threshold (50/75/90/100%, §15) delivered to a caller-supplied email address.
 It is **independent** (§26.12 — no sibling input, no data source, no
 consumer), **observational only** (a budget alert never stops or remediates
 spending; no budget action, SNS topic, or IAM resource is created), and the
-`monthly_budget_limit` input is statically validated at or below the
-**$200/month ADR-§M hard ceiling** so an over-ceiling budget cannot validate.
-**No budget exists in AWS.**
+`monthly_budget_limit` input is statically validated by the module at or below the
+historical **$200/month ADR-§M architecture ceiling**, and — since 2026-10-01 — by the
+**staging root at or below the operator's current limit of USD 20 TOTAL per month**
+(recorded 2026-09-30; the stricter of the two governs). Neither bound enforces
+spending: validation constrains the declared limit and the budget's notifications
+only e-mail. The last attested live budget is 150; this repository change alters no
+budget in AWS until an authorized apply.
 
 ## 6. Planned module responsibilities
 
@@ -413,9 +422,11 @@ rate-limiting-behind-proxy fix — uvicorn trusted-proxy resolution, VPC-CIDR-on
 trust, pinned by `apps/api/app/tests/test_rate_limit.py`; API graceful shutdown
 via the earlier ECS `stopTimeout` work), and the **remote-state bootstrap
 configuration** (`bootstrap/` + `backend.hcl.example`). Everything is
-offline-validated only — **nothing provisioned or deployed**. WAF, the API
-Route 53 alias, ACM creation, and the interactive-docs path restriction remain
-**deferred by locked decision** (§23/§24.7/§25; runtime contract §N). Remaining
+offline-validated only — **nothing provisioned or deployed**. WAF, ACM creation,
+and the interactive-docs path restriction remain **deferred by locked decision**
+(§23/§24.7/§25; runtime contract §N); the API Route 53 alias is now authored as a
+windowed `alb`-owned record (§24.7, 2026-10-01 — configuration and tests, not
+applied). Remaining
 (each separately authorized):
 
 1. **INFRA-5 (workflow authoring): COMPLETE.** The protected staging publish

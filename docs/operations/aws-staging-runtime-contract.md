@@ -329,9 +329,14 @@ Definitions:
   does **not** resolve it: neither raising the limit nor removing or downsizing resources
   is authorized by this text. **No workload apply may proceed until the operator
   reconciles the limit with a fresh dated estimate** (the mandatory pre-provisioning
-  recalculation below) — the reconciliation is an operator act. The `cost/` module's
-  `monthly_budget_limit` accepts 20 (its validation bounds 1–200), so the AWS Budget can
-  encode the operator limit without a code change once the operator supplies it.
+  recalculation below) — the reconciliation is an operator act. The generic `cost/` module's
+  `monthly_budget_limit` interface still bounds 1–200 (the historical ceiling); since
+  2026-10-01 the **staging root** bounds the same input at **1–20** (at most 20), so a
+  `*.tfvars` value above the operator limit fails validation before any plan. Input
+  validation and the AWS Budget's 50/75/90/100 % notifications are **observational**: they
+  constrain what the budget declares and e-mail when actual spend crosses a threshold; they
+  do not stop, cap or remediate spending. The repository change does not alter the budget
+  that exists in AWS — the last attested live budget is 150 until an authorized apply.
 - **Pricing basis:** dated **planning estimate**, us-east-1, **2026-07-21**, standard
   on-demand pricing (no promotional credits). Amounts are planning estimates pending the
   **mandatory pre-provisioning pricing recalculation gate** (INFRA-9) using current official

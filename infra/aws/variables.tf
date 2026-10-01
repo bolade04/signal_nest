@@ -161,7 +161,7 @@ variable "web_fqdn" {
 }
 
 variable "hosted_zone_id" {
-  description = "Existing Route 53 hosted-zone id that owns web_fqdn (passed to the edge module; CONSUMED, never created). Supplied at plan time via a git-ignored *.tfvars; no real id is committed. Statically validated only — never queried against AWS."
+  description = "Existing Route 53 hosted-zone id that owns web_fqdn AND api_fqdn (passed to the edge module for the web aliases and to the alb module for the windowed API alias; CONSUMED, never created). Supplied at plan time via a git-ignored *.tfvars; no real id is committed. Statically validated only — never queried against AWS."
   type        = string
 
   validation {
@@ -204,6 +204,44 @@ variable "api_certificate_arn" {
   validation {
     condition     = can(regex("^arn:aws[a-zA-Z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$", var.api_certificate_arn))
     error_message = "api_certificate_arn must be an ACM certificate ARN in us-east-1 (arn:aws:acm:us-east-1:<account>:certificate/<id>)."
+  }
+}
+
+# --- API Route 53 alias (P6-INF-3; windowed) -------------------------------------------
+# The hostname the API alias record is created for, inside the SAME consumed hosted
+# zone as web_fqdn (var.hosted_zone_id is passed to BOTH edge and alb). The record is
+# owned by the alb module and exists only while staging_window_active = true, aliased
+# to the ALB planned in the same run (docs/operations/staging-window.md §4). The §24.7
+# alias deferral was lifted for exactly this windowed record by operator authorization
+# on 2026-10-01; nothing here creates a zone or a certificate, and api_certificate_arn
+# must already cover this name (not verifiable statically). REQUIRED, no default — no
+# real hostname is committed.
+variable "api_fqdn" {
+  description = "One complete API hostname for the windowed Route 53 alias to the ALB (passed to the alb module; e.g. \"api.staging.example.com\"). Must differ from web_fqdn (same hosted zone; one name cannot be both the CloudFront and the ALB alias). Supplied at plan time via a git-ignored *.tfvars; no real domain is committed. Bare hostname only — no scheme, port, path, query, fragment or trailing dot."
+  type        = string
+
+  validation {
+    condition     = !can(regex("[/?#:@[:space:]]", var.api_fqdn))
+    error_message = "api_fqdn must be a bare hostname: no scheme (https://), port, path, query string, fragment, '@' or whitespace."
+  }
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", lower(var.api_fqdn)))
+    error_message = "api_fqdn must be a valid multi-label FQDN (labels 1-63 chars, no empty labels, no trailing dot), e.g. api.staging.example.com."
+  }
+
+  validation {
+    condition     = length(var.api_fqdn) <= 253
+    error_message = "api_fqdn must be <= 253 characters."
+  }
+
+  validation {
+    # Cross-variable rule (OpenTofu >= 1.9 evaluates other variables in a validation):
+    # DNS names are case-insensitive, so the comparison is too. Both records live in
+    # var.hosted_zone_id; the same name as A->CloudFront (edge) and A->ALB (alb) would
+    # be a record-set collision that only an apply could discover.
+    condition     = lower(var.api_fqdn) != lower(var.web_fqdn)
+    error_message = "api_fqdn must differ from web_fqdn: both aliases live in the same hosted zone, and one name cannot point at CloudFront (web) and the ALB (API) at once."
   }
 }
 
@@ -469,13 +507,24 @@ variable "sns_topic_arn" {
   }
 }
 
+# Two different numbers govern this input and must not be conflated:
+#   * the HISTORICAL ARCHITECTURE CEILING, USD 200/month (ADR-0001 §M; the generic cost
+#     module's own interface still bounds its input at 200 and is unchanged), and
+#   * the CURRENT OPERATOR LIMIT, USD 20 TOTAL per month (recorded 2026-09-30; runtime
+#     contract §M; docs/operations/staging-window.md), which is STRICTER and is what this
+#     staging root encodes: a value above 20 fails validation before any plan.
+# Neither bound enforces spending. Input validation only constrains what the AWS Budget
+# resource DECLARES; AWS Budgets notifications are observational (they e-mail at the
+# 50/75/90/100 % thresholds and stop nothing). Changing this value here does NOT change
+# the budget that exists in AWS until an authorized apply does — the last attested live
+# budget is 150 and remains so until then.
 variable "monthly_budget_limit" {
-  description = "Monthly cost-budget limit in USD (passed to the cost module; statically bounded by the $200/month ADR-0001 §M staging hard ceiling). Supplied via a git-ignored *.tfvars."
+  description = "Monthly cost-budget limit in USD declared by the AWS Budget (passed to the cost module). Statically bounded at this staging root by the CURRENT OPERATOR LIMIT of USD 20 TOTAL per month (2026-09-30), stricter than the historical USD 200 ADR-0001 §M architecture ceiling the cost module still bounds. Observational: neither the validation nor the budget's notifications stop spending. Supplied via a git-ignored *.tfvars."
   type        = number
 
   validation {
-    condition     = var.monthly_budget_limit > 0 && var.monthly_budget_limit <= 200
-    error_message = "monthly_budget_limit must be greater than 0 and at most 200 USD (the ADR-0001 §M staging hard ceiling)."
+    condition     = var.monthly_budget_limit > 0 && var.monthly_budget_limit <= 20
+    error_message = "monthly_budget_limit must be greater than 0 and at most 20 USD: the operator's recorded limit is USD 20 TOTAL per month (2026-09-30), stricter than the historical USD 200 ADR-0001 §M ceiling; raising it is an operator ruling, not an input change."
   }
 }
 

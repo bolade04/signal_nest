@@ -22,12 +22,15 @@
 # earlier storage-owned phrasing. `access_logs`/`connection_logs` consume the
 # bucket NAME, never an ARN (§24.7).
 #
-# Deferred (§24.7): WAF and the API Route 53 alias. No ACM certificate is
-# created; none is queried.
+# API Route 53 alias (P6-INF-3; the §24.7 alias deferral was lifted by operator
+# authorization on 2026-10-01 for a WINDOWED record — see the record below). WAF
+# stays deferred. No ACM certificate is created; none is queried.
 #
-# CONSUME, not create: the ACM certificate (var.api_certificate_arn, us-east-1) is
-# supplied by value; no ACM/route53 resource or data source is declared. No provider
-# block/alias is declared; the root AWS provider and its committed lock are inherited.
+# CONSUME, not create: the ACM certificate (var.api_certificate_arn, us-east-1) and
+# the Route 53 hosted zone (var.hosted_zone_id) are supplied by value; no ACM or
+# route53-ZONE resource or data source is declared — the only Route 53 resource is
+# the API alias RECORD inside the consumed zone. No provider block/alias is
+# declared; the root AWS provider and its committed lock are inherited.
 #
 # Tagging: the authoritative eight-tag common set is applied to every taggable
 # resource by the root provider's `default_tags` (providers.tf). This module only
@@ -272,6 +275,46 @@ resource "aws_lb_listener" "https" {
 
   tags = {
     Name = "${var.name_prefix}-https-listener"
+  }
+}
+
+# --- API Route 53 alias record (P6-INF-3; windowed) --------------------------------
+# One alias record, `api_fqdn` -> this ALB, inside the CONSUMED hosted zone (the same
+# zone the edge module writes the web aliases into; the root rejects api_fqdn ==
+# web_fqdn so the two modules can never contend for one record name). It shares the
+# ALB's `count`, so:
+#   * window OPEN  : the record is created AFTER the load balancer (it references the
+#                    LB's dns_name/zone_id, which also makes a RE-CREATED ALB re-point
+#                    the record automatically — no hand edit per window);
+#   * window CLOSED: the record is destroyed BEFORE the load balancer; the hostname
+#                    then resolves to nothing (no record for the name) and resolvers may
+#                    keep the previous answer for up to the alias TTL (60 s, an AWS-
+#                    documented value for ALB aliases, not derivable here).
+#   * ALB REPLACEMENT inside a window (not a window transition): aws_lb.this has no
+#                    create_before_destroy, so OpenTofu destroys the old ALB, creates the
+#                    new one, THEN upserts this record — for that interval the name still
+#                    answers with the destroyed ALB's DNS name. Only the open/close
+#                    ordering above is guaranteed by the count; a replacement is not.
+# Record type is `A` ONLY: the ALB is IPv4-only (`ip_address_type = "ipv4"`, §24.3),
+# so an AAAA alias would advertise an address family the target cannot serve. The
+# alias target uses the LB's exported canonical hosted-zone id, never a hard-coded
+# regional ELB zone id. evaluate_target_health is false: a single record with no
+# failover/weighted sibling gains nothing from health evaluation, and this keeps the
+# API alias byte-for-byte in the same shape as the web aliases.
+resource "aws_route53_record" "api" {
+  count = var.enabled ? 1 : 0
+
+  zone_id = var.hosted_zone_id
+  # lower(): Route 53 stores record names case-folded, so a mixed-case input would
+  # otherwise differ from the stored name after apply (and from the root's lower()ed
+  # collision rule and api_url); DNS names are case-insensitive.
+  name = lower(var.api_fqdn)
+  type = "A"
+
+  alias {
+    name                   = aws_lb.this[0].dns_name
+    zone_id                = aws_lb.this[0].zone_id
+    evaluate_target_health = false
   }
 }
 

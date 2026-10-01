@@ -354,4 +354,4 @@ def test_the_clean_workflow_is_still_accepted():
     assert result["masked_lines"] == 0, result["problems"]
     assert result["unknown_lines"] == 0, result["problems"]
     assert result["clean"] is True, result["problems"]
-    assert result["graded_steps"] == 50, "the graded set changed size unexpectedly"  # +1: Gate 4N-I28BH-B security_collection_assurance step  # INFRA-9-B3: +1 (root_wiring)  # P6-STAGING-WINDOW-CI: +4 (window_tests_alb, window_tests_data_cache, window_tests_network, window_negative_control)
+    assert result["graded_steps"] == 51, "the graded set changed size unexpectedly"  # +1: Gate 4N-I28BH-B security_collection_assurance step  # INFRA-9-B3: +1 (root_wiring)  # P6-STAGING-WINDOW-CI: +4 (window_tests_alb, window_tests_data_cache, window_tests_network, window_negative_control)  # P6-WINDOW-DNS-BUDGET: +1 (root_boundary_tests — root input-boundary/alias-wiring tofu test)
