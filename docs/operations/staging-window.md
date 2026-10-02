@@ -1,6 +1,7 @@
 # Staging operating window — resource-effect ledger, transition runbook, cost model
 
-**Status: implemented in code and tests only (window 2026-09-30/10-01; API alias record and the USD 20 root budget bound 2026-10-01). No window
+**Status: implemented in code and tests only (window 2026-09-30/10-01; API alias record and the USD 20 root budget bound 2026-10-01; the
+window-transition principal's policy documents 2026-10-02 — generated, tested, NOT provisioned, §8/§12). No window
 has been opened or closed live, no DNS record and no budget change exist in AWS; nothing in this document authorizes a plan, an apply, a shutdown,
 a start, a record change or a deployment.** Governing numbers: the operator's limit is **USD 20 TOTAL per month** (tax-inclusive, since the bill is); the
 attested September 2026 bill for the always-on foundation is **USD 91–95/month** (sealed attestation and its supplement, 2026-09-30); the
@@ -37,7 +38,7 @@ formerly listed here as deferred under §24.7, is now a windowed row above: IaC-
 ## 3. Transition runbook (each step is a separately authorized act; every mutation from a saved, inspected plan)
 
 **OPEN (closed → open), target ≈ 1 billable hour of provisioning:**
-1. Pre-check (read-only): window state recorded as CLOSED in the previous close receipt; RDS instance status `stopped` or `available`; no ECS deployment in progress; the planned apply identity holds the §8 actions — for the alias record, `route53:ChangeResourceRecordSets` on the intended hosted-zone ARN (`arn:aws:route53:::hostedzone/<hosted_zone_id>`, scoped by the record condition keys to `api_fqdn` / type `A` / CREATE, UPSERT, DELETE as §8 recommends — the drifted live W0 holds the action unconditioned and would NOT satisfy this pre-check as worded, deliberately) AND, separately, `route53:GetChange` on change resources (`arn:aws:route53:::change/*`; `GetChange` is change-scoped, never zone-scoped) and, while the live budget still differs from the root bound, `budgets:ModifyBudget` on the one budget ARN (§8); the `hosted_zone_id` in the tfvars is the identity-tier zone the reviewed `Route53Read` statement names (an exact-ARN statement — a different zone id would fail at refresh); write down the EXPECTED NON-WINDOW DIFFS this plan will carry (repository changes merged since the last apply that are not window resources — see step 4), so the abort rule in step 4 is an enumeration, not a guess.
+1. Pre-check (read-only): window state recorded as CLOSED in the previous close receipt; RDS instance status `stopped` or `available`; no ECS deployment in progress; the window form (§12) is filled and its **expiry rule** holds — the apply identity is the window-transition principal of §8 whose inline and read-closure documents expire at the form's `expiry_utc` (≤ 24 h after `issuance_utc`), and **no plan or apply may START within 3 hours of that expiry** (`latest_start_utc` = expiry − 3 h: an apply that crosses expiry loses state persistence and lock release mid-run — stranded resources plus a lock the principal can no longer release); the Name tags the ec2 conditions rely on were read (`ec2 describe-route-tables/subnets/vpcs` → `<prefix>-private-rt`, `<prefix>-public-<az>`, `<prefix>-vpc`); a read-only `tofu state list` confirmed the four un-indexed addresses for the `moved` blocks and whether a reader task definition is in state; the planned apply identity holds the §8 actions — for the alias record, `route53:ChangeResourceRecordSets` on the intended hosted-zone ARN (`arn:aws:route53:::hostedzone/<hosted_zone_id>`, scoped by the record condition keys to `api_fqdn` / type `A` / CREATE, UPSERT, DELETE as §8 recommends — the drifted live W0 holds the action unconditioned and would NOT satisfy this pre-check as worded, deliberately) AND, separately, `route53:GetChange` on change resources (`arn:aws:route53:::change/*`; `GetChange` is change-scoped, never zone-scoped) and, while the live budget still differs from the root bound, `budgets:ModifyBudget` on the one budget ARN (§8); the `hosted_zone_id` in the tfvars is the identity-tier zone the reviewed `Route53Read` statement names (an exact-ARN statement — a different zone id would fail at refresh); write down the EXPECTED NON-WINDOW DIFFS this plan will carry (repository changes merged since the last apply that are not window resources — see step 4), so the abort rule in step 4 is an enumeration, not a guess.
 2. RDS: `aws rds start-db-instance --db-instance-identifier <prefix>-postgres` (outside OpenTofu); wait for `available` (5–10 min).
 3. tfvars: `staging_window_active = true`, `deploy_workload = false` (first apply of a window never creates services — §7).
 4. `tofu plan -out window-open.plan` → `tofu show -json` → review: the window creates — NAT gateway, EIP, private default route, ALB, listener, target group, API alias record (`module.alb.aws_route53_record.api[0]`), replication group — PLUS the **expected non-window diffs enumerated in the pre-read of step 1** (today: the `module.cost.aws_budgets_budget.monthly` in-place update 150 → ≤ 20, because this root now rejects `monthly_budget_limit > 20` and the live budget is the attested 150; the 6B-4C creates from #194 that were never applied — `module.iam.aws_iam_role_policy.api_ses_send` — and, on the very first execution, the four `moved` lines below); **reject** any destroy, any replace, and any change outside that enumerated list. `tofu apply window-open.plan`. A plan that cannot be reconciled line-by-line with the enumeration is not applied; it is recorded and the enumeration is corrected under its own authorization first.
@@ -47,11 +48,21 @@ formerly listed here as deferred under §24.7, is now a windowed row above: IaC-
 6. Workload (only if this window's purpose needs it, and only as the AUTH4 cutover prescribes): tfvars `deploy_workload = true` + digests + desired counts per `deployment.md` ("P6-AUTH-4 one-way cutover" Apply 1/2/3), run the migration task if the head moved, verify.
 
 **CLOSE (open → closed), target ≈ 1 billable hour of cleanup:**
-0. Pre-read (read-only), as for OPEN step 1: write down the EXPECTED NON-WINDOW DIFFS this plan will carry (repository changes merged since the last apply that are not window resources — today the same (b)/(c) as the first-execution paragraph below: the budget update 150 → ≤ 20 and the #194 IAM policy create, if a previous apply has not already carried them); the apply identity holds the §8 actions.
+0. Pre-read (read-only), as for OPEN step 1 (window form §12, expiry rule: no START within 3 h of `expiry_utc`, tag and state-list reads): write down the EXPECTED NON-WINDOW DIFFS this plan will carry (repository changes merged since the last apply that are not window resources — today the same (b)/(c) as the first-execution paragraph below: the budget update 150 → ≤ 20 and the #194 IAM policy create, if a previous apply has not already carried them); the apply identity holds the §8 actions.
 1. Drain: stop accepting work (`api_desired_count = 0`, `worker_desired_count = 0` apply, or the cutover's quiesce step), wait for in-flight jobs; Redis contents will be lost — the durable jobs table is in PostgreSQL, in-flight queue entries are not.
 2. tfvars: `deploy_workload = false`, `staging_window_active = false`.
 3. `tofu plan -out window-close.plan` → review: the window destroys — services/task definitions (if any), replication group, API alias record, listener, target group, ALB, private default route, NAT gateway, EIP — PLUS the **expected non-window diffs enumerated in step 0** (and, on the very first execution, the four `moved` lines); **reject** any destroy of RDS, buckets, secrets, KMS, roles, SGs, subnets, CloudFront or the web `A`/`AAAA` aliases, any replace, and any change outside that enumerated list — the same rule as OPEN step 4, so a first live execution that happens to be a CLOSE is judged by the same enumeration. `tofu apply window-close.plan`.
-4. RDS: `aws rds stop-db-instance --db-instance-identifier <prefix>-postgres` (optionally `--db-snapshot-identifier` for a dated snapshot); wait for `stopped`.
+   **Expected, non-fatal denial (pre-listed so the abort rule is not tripped):** after `DeleteLoadBalancer` the provider's ENI clean-up looks for
+   lingering `ELB app/…` interfaces (`ec2:DescribeNetworkInterfaces`, granted) and may try `DetachNetworkInterface`/`DeleteNetworkInterface`,
+   which the window principal deliberately does NOT hold; the provider logs that `AccessDenied` as a WARN and continues. It is the ONE denial the
+   window form lists as expected; any OTHER permission denial is a STOP under the abort rule — never an escalation. **Recovery prerequisite
+   (stale EIP association):** the `aws_eip` destroy may call `DisassociateAddress` with the association id still held in state from the
+   pre-destroy refresh (the NAT gateway is already gone). If EC2 answers `InvalidAssociationID.NotFound` the provider continues; if it answers
+   `UnauthorizedOperation` the CLOSE fails at its LAST step with the EIP still allocated (IPv4 charge continues) — the recovery is a re-plan
+   (refresh clears `association_id`) and a re-apply that skips the call; record which happened in the close receipt. Window resources carry no
+   data, so a partial OPEN/CLOSE is recoverable by a corrected re-plan — but only from a saved, inspected plan, never by widening a grant.
+4. RDS: `aws rds stop-db-instance --db-instance-identifier <prefix>-postgres` — **NO `--db-snapshot-identifier` under the window-transition principal**
+   (`rds:CreateDBSnapshot` is in its deny ceiling, §8/§12; a dated snapshot would be a second, unexpected denial and therefore a STOP); wait for `stopped`.
 5. Verify (read-only): the 3 RDS + 2 Redis alarms go to ALARM (expected; acknowledge, do not "fix"); `ec2 describe-nat-gateways` none `available`; `ec2 describe-addresses` lists NO allocation owned by this composition; `elbv2 describe-load-balancers` none; `elasticache describe-replication-groups` none; `rds describe-db-instances` status `stopped`; write the close receipt with the UTC times and the billable-hour count.
 
 **Seven-day automatic restart (§5) is part of every CLOSED period, not of the transition.**
@@ -142,16 +153,41 @@ PostgreSQL and survive closes; Redis does not hold them.
 
 ## 8. Required permissions and the W0 question
 
-Window transitions need (apply identity): `ec2:CreateNatGateway/DeleteNatGateway/AllocateAddress/ReleaseAddress/CreateRoute/DeleteRoute`,
-`elasticloadbalancing:Create/DeleteLoadBalancer, Create/DeleteTargetGroup, Create/DeleteListener`, `elasticache:Create/DeleteReplicationGroup`;
-the live W0 role's inline policy (sealed read, 2026-09-30) carries all of these, BUT that live policy is the unreviewed drifted document (FV-20 open).
-**The repository-reviewed W0 carries NONE of them**: every `ec2:`/`elasticloadbalancing:`/`elasticache:`/`rds:` action in
-`scripts/gen_operator_policies.py` is `Describe*`/`ListTags*` except `rds:DeleteDBInstance` and `rds:ModifyDBInstance`, which are in its deny list.
-So today NO repository-reviewed principal can open or close a window — a KNOWN BLOCKER, not a to-do: either the reviewed W0 is extended under
-its own authorization (and the drift adjudicated), or a new window-transition principal is designed.
-RDS stop/start needs `rds:StopDBInstance` / `rds:StartDBInstance`: **held by no repository principal** (W0's Rds statement has neither) — a new,
-narrowly scoped grant (resource = the one instance ARN) under separate authorization. Service creation/deletion (`ecs:CreateService/UpdateService/
-DeleteService/RegisterTaskDefinition`) is **not** in W0 — the cutover's separately authorized principal, as already designed.
+**Reviewed design (2026-10-02; operator selections D1 = A, D3, D4, D5, D6 — repository delivery only):** W0 is to be RESTORED to the
+repository-reviewed document (`scripts/gen_operator_policies.py permanent_w0_policy()`, unchanged by this tranche) and window transitions run under
+a **separate, expiring window-transition principal** emitted by the same generator in three documents, because the complete window closure does not
+fit one Identity Center permission-set inline policy (quota 10,240 non-whitespace characters == the IAM role aggregate inline limit; customer managed
+policies 6,144 each):
+
+| document | emit | content | expiry |
+|---|---|---|---|
+| permission-set INLINE policy | `--emit window-transition-inline --expiry <utc> --api-fqdn <api_fqdn> [--issuance <utc>]` | state backend (exact state object, lock table, state CMK via s3/dynamodb only); the window writes on their exact resources — `ec2:AllocateAddress`/`ReleaseAddress`/`DisassociateAddress`, `CreateNatGateway`/`DeleteNatGateway`, `CreateRoute`/`DeleteRoute`, `CreateTags` (Name-tag and `ec2:CreateAction` conditions), `elasticloadbalancing` load balancer/target group/listener (+ `AddTags` tag-on-create; `CreateListener` authorizes against the load balancer), `elasticache` replication group (encryption `Bool` keys on CREATE only), `route53:ChangeResourceRecordSets` on the ONE consumed zone confined to `api_fqdn` / `A` / `CREATE,UPSERT,DELETE` by the three record condition keys, `route53:GetChange` on `change/*` (change-scoped, never zone-scoped), `budgets:ModifyBudget` on the one budget, `iam:PutRolePolicy` on the api-task role ONLY and ONLY with the reviewed permissions boundary (D5, the #194 `api_ses_send` create), `rds:StartDBInstance`/`StopDBInstance` on the one instance (D4; **no dated snapshot** — `rds:CreateDBSnapshot` stays denied, so the optional `--db-snapshot-identifier` is NOT available to this principal); five `NotResource` fences | every Allow `DateLessThan` the window expiry |
+| customer managed policy 1 | `--emit window-transition-read-closure --expiry <utc>` | the full refresh read closure (identical action sets to W0) + `ec2:DescribeNetworkInterfaces` (the ALB-destroy ENI clean-up look-up) + `ecs:DescribeTaskDefinition` (kept: the reader task definition is gated by the reader flags, not `deploy_workload`) | every Allow expiring |
+| customer managed policy 2 | `--emit window-transition-deny-ceiling` | the flat deny ceiling: `PERMANENT_DENY ∪ FORBIDDEN_CAPABILITIES` minus the seven scoped capabilities (re-denied by the fences); `ecs:RegisterTaskDefinition`, `iam:CreateRole`, `iam:PassRole`, `rds:CreateDBSnapshot`, `cloudtrail:StopLogging` … stay flatly denied | never |
+
+`--emit window-transition-effective` renders the three concatenated — what the reserved role effectively evaluates; it is the document the
+allow-model ceiling proof, the deny probes and the action classifier analyse, and it is never provisioned as one document. The generator refuses
+to emit a document above its quota, a malformed or placeholder `api_fqdn`, or an expiry that is not authorized against its issuance
+(`expiry_authorization`, purpose `window_transition`, ≤ 24 h, ≥ 15 min). The two operator-held inputs (`api_fqdn` from the tfvars; the per-window
+issuance/expiry) are supplied at generation and never committed. `infra/aws/operator-closure-contract.json` → `window_transition_closure` is the
+independently authored expectation the generator is tested against (`tests/test_window_transition_policy.py`). **Digest supersession:** the generator's
+Sids carry a `Win` prefix (e.g. `WinDenyDangerous`), so its canonical digests differ from the hand-built candidate documents of the sealed preparation
+set (`candidate-policies/A1s-*`, digests `602f0977…` / `5044dfc0…` / `1b8c6863…`); every readback expectation at execution (the sealed proposal's steps
+3.3 / 4.4 / 4.6, §12 `document_digests`) is the GENERATOR's digest of the FILLED documents, computed at fill time — never the candidate digest.
+
+**What this repository change does NOT do:** it restores nothing, creates no permission set, no customer managed policy and no assignment, and
+provisions nothing. Those are live acts under their own authorization (sealed `P6-W0-TRANSITION-PERMS-prep`, `EXECUTION-PROPOSAL.txt`; operator
+decisions D2 — provisioning path and mechanism — and D7 — fill values — remain open). **A stored permission-set document is NOT a provisioned
+principal:** `PutInlinePolicyToPermissionSet` + a readback proves only the store; provisioning is proven by a TERMINAL `ProvisionPermissionSet`
+status (`SUCCEEDED`, never `IN_PROGRESS`) AND an effective-role read (`iam get-role-policy` on the reserved role whose canonical digest equals the
+stored document, both customer managed policies attached). The 2026-08-17 W0 attempt stored the reviewed document and never reached the role.
+
+The live W0 role's inline policy (sealed reads 2026-09-27 and 2026-09-30) is the unreviewed drifted document (FV-20): it carries the window writes
+unconditioned plus role minting, zone-wide DNS write, CloudTrail stop and KMS/RDS destruction; it is adopted nowhere. **The repository-reviewed W0
+carries NONE of the window writes** (every `ec2:`/`elasticloadbalancing:`/`elasticache:`/`rds:` action in `permanent_w0_policy()` is
+`Describe*`/`ListTags*` except the denied `rds:DeleteDBInstance`/`ModifyDBInstance`), which is why the window principal exists. Service
+creation/deletion (`ecs:CreateService/UpdateService/DeleteService/RegisterTaskDefinition`) is in NEITHER — the cutover's separately authorized
+principal, as already designed.
 
 **API alias record and budget correction (added 2026-10-01; mapped to the reviewed apply identity, nothing granted):**
 - `module.alb.aws_route53_record.api` (create on OPEN, UPSERT on an in-window ALB replacement, delete on CLOSE) needs `route53:ChangeResourceRecordSets`
@@ -202,7 +238,9 @@ DeleteService/RegisterTaskDefinition`) is **not** in W0 — the cutover's separa
 - The IaC plan's "no targeted apply" rule is **preserved** (the window is a declared input, not a `-target`).
 - ~~P6-INF-3 (API alias) must be designed as a windowed/conditional record (§4) — its §24.7 deferral still stands.~~ Done in code 2026-10-01 (§4; the
   §24.7 deferral was lifted for exactly this windowed record by operator authorization). Live creation remains a separate act (§8 grant missing).
-None of the remaining items is amended by this change; each is a ruling for the operator. The W0 drift adjudication also remains pending.
+None of the remaining items is amended by this change; each is a ruling for the operator. The W0 drift adjudication was answered in design on
+2026-10-02 (D1 = A: restore W0 to the reviewed baseline + the separate window principal of §8); the RESTORE itself and the provisioning are live
+acts that remain pending (D2).
 
 ## 10. Dependencies
 
@@ -211,8 +249,9 @@ None of the remaining items is amended by this change; each is a ruling for the 
   RESOLVED in the #194 integration (merge of main into its branch): both files carry BOTH sets of required root inputs — the example keeps
   `staging_window_active = false` and the placeholder mail tokens, the positive-control fixture keeps `staging_window_active = true` and the
   synthetic mail values — so the required-variable parity test (`tests/test_root_wiring_check.py`) passes. Mail is only exercised inside a window.
-- The first live open/close needs: the W0 ruling (§8), the RDS stop/start grant, the Route 53 record-change grant for the alias (§8), the budget
-  grant (`budgets:ModifyBudget`, §8) — the budget correction is NO LONGER a separable package: the root REJECTS `monthly_budget_limit > 20`, so the
+- The first live open/close needs: the W0 RESTORE and the window principal PROVISIONED (§8: permission set + two customer managed policies +
+  one assignment; D2 path/mechanism open) — which together carry the RDS stop/start grant, the Route 53 record-change grant for the alias and the budget
+  grant (`budgets:ModifyBudget`) — the budget correction is NO LONGER a separable package: the root REJECTS `monthly_budget_limit > 20`, so the
   next authorized apply of this root necessarily carries the 150 → ≤ 20 update (§3 step 4), while nothing changes in AWS until then (the live budget
   is still the attested 150) — and a window authorization naming date, duration, purpose and the apply identity.
 - Budget semantics (2026-10-01): the root's `monthly_budget_limit <= 20` validation and the AWS Budget's 50/75/90/100 % notifications are
@@ -244,3 +283,32 @@ references, i.e. an ungated record cannot even plan while closed — and the res
 structurally tested, not planned against AWS (the repository's root positive-control plan runs with the window OPEN so its resource set is unchanged
 except for the one added alias record). The
 Redis endpoint determinism, the second EIP, real transition durations and the exact billed hours are to be measured at the first authorized window.
+
+## 12. Window authorization form (one per window; nothing opens without it)
+
+Every field is operator-filled; the form travels with the window's evidence set. Fields marked ★ are new with the window-transition principal.
+
+```
+window_id:              W-YYYY-MM-DD-nn
+purpose:                (e.g. "E8 real-mail reset proof", "AUTH4 cutover Apply 1-3")
+opens_utc / closes_utc: max 8 h operating + 2 h transitions = 10 billable hours (a 16-hour purpose counts as TWO windows against the target of 4)
+apply_identity:         the window-transition principal (§8) — permission-set name only, no ids in the repository
+rds_identity:           the same principal (D4) — rds:StartDBInstance / StopDBInstance on the one instance, NO dated snapshot
+★ issuance_utc:          the window's issuance instant; expiry_utc ≤ issuance_utc + 24 h (expiry_authorization, purpose window_transition)
+★ expiry_utc:            the DateLessThan stamped into the inline + read-closure documents (the deny ceiling never expires)
+★ latest_start_utc:      expiry_utc − 3 h — NO plan or apply may START after this instant (an apply crossing expiry strands resources and the lock)
+★ document_digests:      canonical sha256 of the FILLED inline, read-closure and deny-ceiling documents (measured at fill time; inline ≤ 10,240,
+                         managed ≤ 6,144 non-whitespace characters — the generator refuses otherwise) and of the effective composition
+★ provisioning_evidence: ProvisionPermissionSet requestId + TERMINAL status (SUCCEEDED) + iam get-role-policy digest of the reserved role ==
+                         inline digest + the two customer managed policy ARNs attached (a stored-document readback alone is NOT provisioning)
+★ pre_reads:             Name tags of <prefix>-private-rt / <prefix>-public-<az> / <prefix>-vpc confirmed; `tofu state list` (four un-indexed
+                         addresses; reader task definition present/absent); no IN_PROGRESS permission-set provisioning
+workload_stage:         none | cutover-apply-1..3 | rolling-deploy (each only as deployment.md prescribes; a DIFFERENT principal)
+expected_cost:          1.55 pre-tax (10 billable hours) + any workload extras; running month-to-date from the attested bills must be shown
+★ expected_denials:      exactly ONE, at CLOSE: the provider's ALB ENI clean-up Detach/DeleteNetworkInterface AccessDenied WARN (non-fatal, §3)
+abort_criteria:         any planned destroy outside the ledger's windowed set; any planned change to RDS, secrets, KMS, buckets, roles, CloudFront;
+                        RDS not `available` after 15 min; a plan touching more than the expected addresses; ANY permission denial other than the
+                        one expected (stop, do not escalate); the current time past latest_start_utc before `tofu apply` begins
+★ recovery_prerequisites: a stale-EIP-association failure at the last CLOSE step is recovered by re-plan + re-apply (never by widening); the
+                         close receipt records which EC2 answer (NotFound vs UnauthorizedOperation) was observed
+```

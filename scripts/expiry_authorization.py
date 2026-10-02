@@ -217,7 +217,10 @@ MIN_DURATION = datetime.timedelta(minutes=15)
 ACTIVE_ISSUANCE_UTC = "2026-08-14T12:00:00Z"
 ACTIVE_EXPIRY_UTC = "2026-08-15T10:00:00Z"
 
-PURPOSES = ("stage_a_operator", "role_bootstrap", "boundary_bootstrap", "readonly_verifier")
+# P6-W0-TRANSITION (2026-10-02): the separate, expiring window-transition principal (D3: per-window
+# expiry, ≤ 24 h, re-stamped each window). Same bound as every other temporary purpose.
+PURPOSES = ("stage_a_operator", "role_bootstrap", "boundary_bootstrap", "readonly_verifier",
+            "window_transition")
 
 
 class ExpiryAuthorizationError(ValueError):

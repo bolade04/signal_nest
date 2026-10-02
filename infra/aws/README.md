@@ -426,7 +426,11 @@ offline-validated only — **nothing provisioned or deployed**. WAF, ACM creatio
 and the interactive-docs path restriction remain **deferred by locked decision**
 (§23/§24.7/§25; runtime contract §N); the API Route 53 alias is now authored as a
 windowed `alb`-owned record (§24.7, 2026-10-01 — configuration and tests, not
-applied). Remaining
+applied); the separate, expiring **window-transition principal** is emitted by
+`scripts/gen_operator_policies.py` in three documents (inline + two customer
+managed policies, 2026-10-02 — generated and tested, NOT provisioned; W0 itself is
+unchanged and is to be restored to its reviewed document under a separate live
+authorization; `docs/operations/staging-window.md` §8/§12). Remaining
 (each separately authorized):
 
 1. **INFRA-5 (workflow authoring): COMPLETE.** The protected staging publish

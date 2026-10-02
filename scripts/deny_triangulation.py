@@ -70,11 +70,13 @@ def policies() -> dict[str, dict]:
         "temporary_operator": gen.bootstrap_temp_policy(EXPIRY),
         "bootstrap_operator": boot.bootstrap_operator_policy(EXPIRY),
         "role_bootstrap_operator": rb.role_bootstrap_policy(EXPIRY),
+        # P6-W0-TRANSITION: the window principal's EFFECTIVE policy (inline + both customer managed).
+        "window_transition": gen.window_transition_effective_policy(EXPIRY, "api.synthetic.example.com"),
     }
 
 
 def _ctx(name: str) -> dict:
-    if name in ("temporary_operator", "bootstrap_operator", "role_bootstrap_operator"):
+    if name in ("temporary_operator", "bootstrap_operator", "role_bootstrap_operator", "window_transition"):
         return {**IN_WINDOW, "iam:PermissionsBoundary": identity.BOUNDARY_POLICY_ARN}
     return {}
 

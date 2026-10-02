@@ -108,7 +108,7 @@ def validate_a1a(adj: dict, classifications: dict, discovered: set) -> list:
 
 def test_a1a_scope_is_exactly_the_six_generators_both_directions():
     assert set(ADJ) == _discovered_a1a()
-    assert len(ADJ) == 36  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
+    assert len(ADJ) == 39  # INFRA-9-B3 +2; P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +3 (WINDOW_TRANSITION_WRITES, WINDOW_READ_ADDITIONS, WINDOW_SCOPED_CAPABILITIES)
 
 
 def test_the_authored_adjudication_is_well_formed():
@@ -118,11 +118,11 @@ def test_the_authored_adjudication_is_well_formed():
 def test_class_distribution_matches_the_reported_adjudication():
     from collections import Counter
     dist = Counter(r["cls"] for r in ADJ.values())
-    assert dist["SECURITY_CRITICAL_SOURCE"] == 23  # INFRA-9-B3 apply-identity: +1 (W0_APPLY_CLOSURE)
-    assert dist["SECURITY_CRITICAL_DERIVED"] == 4  # INFRA-9-B3 apply-identity: +1 (W0_SCOPED_CAPABILITIES)
+    assert dist["SECURITY_CRITICAL_SOURCE"] == 25  # INFRA-9-B3 +1; P6-W0-TRANSITION 2026-10-02: +2 (WINDOW_TRANSITION_WRITES, WINDOW_READ_ADDITIONS)
+    assert dist["SECURITY_CRITICAL_DERIVED"] == 5  # INFRA-9-B3 +1; P6-W0-TRANSITION 2026-10-02: +1 (WINDOW_SCOPED_CAPABILITIES)
     assert dist["TEST_ONLY_LOAD_BEARING"] == 4
     assert dist["NON_SECURITY_CONFIGURATION"] == 5
-    assert sum(dist.values()) == 36  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
+    assert sum(dist.values()) == 39  # INFRA-9-B3 +2; P6-W0-TRANSITION 2026-10-02: +3
 
 
 # The A1a ids that were SECURITY_CRITICAL_LIST BEFORE this gate (frozen as the independent

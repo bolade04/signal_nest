@@ -244,6 +244,96 @@
     "_verify_closure_limitation": "provider-api-operation-map.json's aws_ecs_task_definition entry deliberately gains NO create axis: verify_closure checks create actions against the TEMPORARY operator, which correctly DENIES registration — the joiner has no model of the W0-versus-temporary ownership split for create actions. The ENTIRE task-definition surface sits outside the join, not just the create axis: the map entry is dark:true and verify_closure routes dark reads into deferred_dark, which is never checked against permanent W0, so ecs:DescribeTaskDefinition is outside the joiner too (permissions-lane round-2 N3). Both axes are therefore validated by this contract plus tests/test_operator_policies.py only; extending the joiner with per-principal create ownership is a recorded Part-B follow-up (six-lane architect-lane finding 6).",
     "_excluded": "ecs:DeregisterTaskDefinition is excluded: the delta covers create-only registration; revision replacement/retirement is a separate future adjudication. dynamodb:DescribeTable and kms:Encrypt — present in the LIVE 2026-07-27 policy — are excluded as proven unused by the OpenTofu 1.12.5 backend (DescribeTable is a management event, observable and never observed from the backend; kms:Encrypt per the S3 SSE-KMS model). dynamodb:UpdateItem is excluded on BACKEND-SOURCE grounds, not observation: DynamoDB data events are not on this trail, so absence of observation proves nothing — the S3 backend's lock client calls exactly GetItem, conditional PutItem and DeleteItem (six-lane permissions-lane finding 7)."
   },
+  "window_transition_closure": {
+    "_scope": "P6-W0-TRANSITION (2026-10-02; operator selections D1 = A, D3, D4, D5, D6 — repository delivery only). The SEPARATE, EXPIRING window-transition principal that performs the staging-window OPEN and CLOSE transitions of docs/operations/staging-window.md §3 after W0 is restored to the reviewed baseline. Authored from the sealed preparation set P6-W0-TRANSITION-PERMS-prep (REQUIRED-PERMISSIONS-DERIVATION, DOC-VERIFICATION; manifest sha256 def6cfd779d92bc09f3a744bc7e767607191dcea7f7c22c455c750eb23367bcf), NOT from the generator: tests compare the generator's window_transition_* output AGAINST this section. The principal's requirement set is refresh_closure + state_backend_closure + THIS section; it registers no task definition and creates no role, so stage_a/stage_b are not its requirements.",
+    "_split_form": "Three documents, because the complete closure does not fit ONE permission-set inline policy: the Identity Center quota is 10,240 non-whitespace characters (== the IAM role aggregate inline limit) and customer managed policies are 6,144 each (IAM and Identity Center quota pages, read 2026-10-02). inline = state backend + the writes below + RDS stop/start + the one IAM write + the five NotResource fences, every Allow expiring; customer managed 1 = refresh_closure + reads_added, every Allow expiring; customer managed 2 = the flat deny ceiling (PERMANENT_DENY ∪ FORBIDDEN_CAPABILITIES minus the seven scoped capabilities), NOT expiring. The generator refuses to emit any of the three above its quota (require_window_policy_quotas).",
+    "network_create": [
+      "ec2:AllocateAddress",
+      "ec2:CreateNatGateway",
+      "ec2:CreateRoute",
+      "ec2:CreateTags"
+    ],
+    "network_destroy": [
+      "ec2:DeleteNatGateway",
+      "ec2:DeleteRoute",
+      "ec2:DisassociateAddress",
+      "ec2:ReleaseAddress"
+    ],
+    "_network_note": "module.network: aws_eip.nat[0], aws_nat_gateway.this[0], aws_route.private_default[0] (count on enable_nat_gateway && staging_window_active). Scopes (Service Authorization Reference, list_ec2.html, read 2026-10-02): AllocateAddress on elastic-ip/* with aws:RequestTag/Name = <prefix>-nat-eip; CreateNatGateway on natgateway/* with aws:RequestTag/Name = <prefix>-nat AND on subnet/*, elastic-ip/*, vpc/* with ec2:ResourceTag/Name (the SAR lists all four resource types; every leg is covered so none falls to implicit deny); CreateTags on elastic-ip/* and natgateway/* with ec2:CreateAction in {AllocateAddress, CreateNatGateway} (tag-on-create — the provider sends default_tags in TagSpecifications); Create/DeleteRoute on route-table/* with ec2:ResourceTag/Name = <prefix>-private-rt; DeleteNatGateway on natgateway/* with ec2:ResourceTag/Name = <prefix>-nat; ReleaseAddress on elastic-ip/* with ec2:ResourceTag/Name = <prefix>-nat-eip; DisassociateAddress on elastic-ip/* (same tag) AND on network-interface/* (region only — the NAT ENI carries no Name tag; both resource legs are evaluated when present). The Name tags of the route table, subnets and VPC are IaC-deterministic but were never read live: a read-only tag pre-check precedes the first window (runbook §3).",
+    "alb_load_balancer": [
+      "elasticloadbalancing:CreateLoadBalancer",
+      "elasticloadbalancing:DeleteLoadBalancer",
+      "elasticloadbalancing:ModifyLoadBalancerAttributes"
+    ],
+    "alb_target_group": [
+      "elasticloadbalancing:CreateTargetGroup",
+      "elasticloadbalancing:DeleteTargetGroup",
+      "elasticloadbalancing:ModifyTargetGroupAttributes"
+    ],
+    "alb_listener": [
+      "elasticloadbalancing:CreateListener",
+      "elasticloadbalancing:DeleteListener",
+      "elasticloadbalancing:ModifyListenerAttributes"
+    ],
+    "alb_tag_on_create": [
+      "elasticloadbalancing:AddTags"
+    ],
+    "_alb_note": "module.alb: aws_lb.this[0] (loadbalancer/app/<prefix>-alb/*), aws_lb_target_group.api[0] (targetgroup/<prefix>-api-tg/*), aws_lb_listener.https[0] (listener/app/<prefix>-alb/*/*). CreateListener authorizes against the LOAD BALANCER resource (no listener ARN exists yet — SAR list_elbv2.html); DeleteListener/ModifyListenerAttributes against listener/app. Modify*Attributes are provider post-create calls (attribute-class arguments in the module; registry docs NOT STATED — provider knowledge, defensive on resources this principal creates anyway). AddTags with elasticloadbalancing:CreateAction in {CreateLoadBalancer, CreateTargetGroup, CreateListener} on all three ARN patterns (which resource the listener tag-on-create check evaluates is NOT STATED, so both are listed). Provider 6.x ALB destroy then runs an ENI clean-up: the READ is granted (reads_added); DetachNetworkInterface/DeleteNetworkInterface stay UNGRANTED and their AccessDenied is an EXPECTED, non-fatal WARN of a CLOSE apply log (runbook §3 pre-lists it so the abort rule is not tripped).",
+    "cache_create": [
+      "elasticache:CreateReplicationGroup"
+    ],
+    "cache_destroy_and_tag": [
+      "elasticache:AddTagsToResource",
+      "elasticache:DeleteReplicationGroup"
+    ],
+    "_cache_note": "module.data_cache: aws_elasticache_replication_group.this[0] (replicationgroup:<prefix>-redis). CreateReplicationGroup with Bool elasticache:AtRestEncryptionEnabled = true and TransitEncryptionEnabled = true on the CREATE statement ONLY — the keys are request parameters of Create ('default false if the parameter is not present') and their population on Delete/AddTagsToResource is NOT STATED, so a Bool there is a dead grant (the sealed round-1 BLOCKING finding; iam_eval registers the keys for Create only so the detector fires). Create also authorizes against parametergroup:<prefix>-redis-params (the SAR's only REQUIRED resource type) and subnetgroup:<prefix>-redis-subnets; Delete + AddTagsToResource are unconditioned on the exact replication-group ARN. Defensive (disclosed): Create/Delete/AddTags on cluster:<prefix>-redis-00* — the SAR lists `cluster` as evaluable and the member cluster is named <group>-001; whether it is evaluated is NOT STATED. elasticache:CreateSnapshot (final snapshot) is NOT granted: the module sets no final_snapshot_identifier. kms_key_id is null (AWS-managed key): no KMS grant.",
+    "dns_record": [
+      "route53:ChangeResourceRecordSets"
+    ],
+    "dns_change_poll": [
+      "route53:GetChange"
+    ],
+    "_dns_note": "module.alb aws_route53_record.api[0]: ChangeResourceRecordSets on the ONE consumed hosted zone (identity-tier arn:aws:route53:::hostedzone/<id>) with ForAllValues:StringEquals route53:ChangeResourceRecordSetsNormalizedRecordNames = [api_fqdn] (lowercase, no trailing dot — the operator-held tfvars value, supplied at generation, never committed), ...RecordTypes = [A], ...Actions = [CREATE, UPSERT, DELETE] (the three keys are ArrayOfString; the developer guide's examples use ForAllValues). GetChange is CHANGE-scoped (arn:aws:route53:::change/*) and never zone-scoped: the SAR gives it only the `change` resource type, so a zone-scoped grant would be dead. The hosted-zone and change scopes are DISTINCT statements by design; a NotResource fence re-denies ChangeResourceRecordSets on every other zone.",
+    "budget_update": [
+      "budgets:ModifyBudget"
+    ],
+    "_budget_note": "module.cost aws_budgets_budget.monthly: the first apply of this root carries the 150 → ≤ 20 limit update (the root rejects > 20). UpdateBudget, Create/Update/DeleteNotification and the Subscriber operations all map to budgets:ModifyBudget (no budgets:UpdateBudget IAM action exists) on arn:aws:budgets::<account>:budget/<prefix>-monthly. budgets:TagResource/UntagResource are NOT granted (needed only if the live budget's tags drifted — a plan line outside the enumeration, rejected). No aws-portal:* grant: the Budgets API is documented as unaffected by the legacy-permission migration; a denial naming aws-portal is recorded as a new denial, never cured by blanket Billing grants.",
+    "api_role_policy_write": [
+      "iam:PutRolePolicy"
+    ],
+    "_api_role_policy_note": "D5. module.iam aws_iam_role_policy.api_ses_send (merged 6B-4C, never applied) is created by the first window apply: iam:PutRolePolicy on exactly arn:aws:iam::<account>:role/<prefix>-api-task, Condition StringEquals iam:PermissionsBoundary = the reviewed boundary ARN (the SAR lists the key for PutRolePolicy; the role carries the boundary — sealed capture 015), expiring, and a NotResource fence denies the action on every other role. The policy content it writes grants ses:SendEmail to the API task role only (modules/iam fixture). No PassRole: no window-transition API takes a role ARN.",
+    "rds_stop_start": [
+      "rds:StartDBInstance",
+      "rds:StopDBInstance"
+    ],
+    "_rds_note": "D4. Outside OpenTofu (runbook §5): on arn:aws:rds:<region>:<account>:db:<prefix>-postgres only (SAR: db* resource). rds:CreateDBSnapshot stays in the ceiling, so the runbook's OPTIONAL --db-snapshot-identifier flag is NOT available to this principal (StopDBInstance with a snapshot id additionally authorizes CreateDBSnapshot — SAR ops table). The seven-day automatic restart (RDS user guide) makes a re-stop a recurring act under the same two actions.",
+    "reads_added": [
+      "ec2:DescribeNetworkInterfaces",
+      "ecs:DescribeTaskDefinition"
+    ],
+    "_reads_added_note": "Beyond refresh_closure: ec2:DescribeNetworkInterfaces (List, no resource type, ec2:Region) for the provider's ALB-destroy ENI clean-up look-up; ecs:DescribeTaskDefinition (no resource scoping exists) KEPT because module.revision_reader's task definition is gated by the reader flags, not deploy_workload, and the live flags/state are unobserved — whether one is in state is settled by the read-only `tofu state list` precondition, not assumed.",
+    "scoped_capabilities": [
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "iam:PutRolePolicy",
+      "kms:Decrypt",
+      "s3:GetObject",
+      "s3:PutObject"
+    ],
+    "_scoped_note": "The forbidden capabilities the principal holds SCOPED (subtracted from its flat ceiling and re-denied by NotResource fences): the state object, the lock table, the state CMK (ViaService s3/dynamodb only), the api-task role. ecs:RegisterTaskDefinition is NOT scoped — it stays flatly denied (the workload stage is the cutover principal's).",
+    "fences": [
+      "WinDenyStateObjectAccessOutsideTheStateObject",
+      "WinDenyLockItemsOutsideTheLockTable",
+      "WinDenyStateCmkUseOutsideTheStateCmk",
+      "WinDenyInlinePolicyOutsideTheApiTaskRole",
+      "WinDenyRecordChangesOutsideTheConsumedZone"
+    ],
+    "_expiry": "D3: every Allow in the inline and read-closure documents carries DateLessThan aws:CurrentTime = <expiry>; the expiry is authorized against an issuance by expiry_authorization.authorize(purpose='window_transition') — ≤ 24 h, ≥ 15 min — and re-stamped PER WINDOW. The ceiling carries no date. Scheduling rule the policy cannot express: no plan or apply may START within WINDOW_NO_START_BEFORE_EXPIRY (3 h) of the expiry (an apply crossing expiry would strand created/destroyed resources outside state and leave a lock the principal can no longer release — provider timeouts: ElastiCache delete 45 m / create 60 m, NAT 30 m, record 30 m, LB 10 m). Session duration PT12H, set at CreatePermissionSet.",
+    "_not_granted": "iam:CreateRole/DeleteRole/DeleteRolePolicy/TagRole/UntagRole/PassRole; route53 writes on any other name/type/action; cloudtrail/kms/secretsmanager/s3-bucket/logs/cloudwatch/cloudfront/ecr/ecs-cluster writes; ec2 VPC/IGW/subnet/route-table/SG writes; ec2:DetachNetworkInterface/DeleteNetworkInterface; dynamodb:UpdateItem/DescribeTable; kms:Encrypt; iam:CreateServiceLinkedRole (the SLRs exist); ecs:RegisterTaskDefinition/CreateService/UpdateService; budgets:TagResource/UntagResource; rds:CreateDBSnapshot/ModifyDBInstance; elasticache:CreateSnapshot; any aws-portal:*.",
+    "_uncertainties_carried": "Recorded, not resolved (sealed OPERATOR-DECISIONS D8): EC2's answer to a stale DisassociateAddress under a tag-conditioned grant (if UnauthorizedOperation rather than NotFound, the CLOSE fails at its last step with the EIP still allocated; recovery = a re-plan refreshes association_id to empty and the retry skips the call); ElastiCache member-cluster evaluation; the live Name tags of route table/subnets/VPC; a reader task definition in state; the current live W0 after 2026-09-30. Each surfaces fail-closed under the runbook abort rule; window resources carry no data, so a partial OPEN/CLOSE is recoverable by a corrected re-plan.",
+    "_provisioning_truth": "A stored permission-set document (PutInlinePolicyToPermissionSet readback) is NOT a provisioned principal: provisioning requires a TERMINAL ProvisionPermissionSet status (SUCCEEDED, never IN_PROGRESS) AND an effective-role-policy read (iam get-role-policy on the reserved role whose canonical digest equals the stored document; the two customer managed policies attached). The 2026-08-17 W0 attempt stored the reviewed document and never reached the role. Nothing in this section authorizes any of those acts."
+  },
   "explicitly_not_required": {
     "audit_bucket_mutation": "s3:PutBucketPolicy and s3:PutBucketPublicAccessBlock on the audit bucket are NOT required for the current Gate 4N plan. Live evidence: the trail has been logging since 2026-07-27 and is delivering; the audit bucket policy and PAB are already converged and were read successfully by the reference refresh. Gate 4N-I3 granted them unnecessarily, covering only 2 of the 6 module-owned observability resources, and thereby opened a path to halt log delivery without calling cloudtrail:StopLogging.",
     "cloudtrail_create": "cloudtrail:CreateTrail and StartLogging are NOT required: the trail exists and is logging.",

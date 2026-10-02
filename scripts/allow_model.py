@@ -154,6 +154,57 @@ EXEMPTIONS = {
     # names, and explicitly denied everywhere else by its NotResource fence. The proof
     # below requires both directions for every entry, so a fence that silently widens or
     # an allow that silently narrows is an escape or a loss, never a pass.
+    # P6-W0-TRANSITION (2026-10-02): the window principal's seven scoped capabilities — the same
+    # state-backend carve as permanent W0 plus the ONE boundary-conditioned IAM write (D5) on the
+    # api-task role, fenced everywhere else.
+    "window_transition": {
+        "s3:GetObject": {
+            "reason": "reads the encrypted state object for the window plan/apply; state_backend_closure.read",
+            "in_scope": lambda: gen.ARN["state_object"],
+            "out_of_scope": lambda: [f"{gen.ARN['audit_bucket']}/AWSLogs/x",
+                                     f"{identity.s3_bucket_arn(identity.APP_BUCKET_NAME)}/x"],
+        },
+        "s3:PutObject": {
+            "reason": "writes the new state object on a window apply; state_backend_closure.write_apply_only",
+            "in_scope": lambda: gen.ARN["state_object"],
+            "out_of_scope": lambda: [f"{gen.ARN['audit_bucket']}/AWSLogs/x",
+                                     f"{gen.ARN['state_bucket']}/other/object"],
+        },
+        "dynamodb:GetItem": {
+            "reason": "inspects the state lock before a window plan or apply acquires it",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "dynamodb:PutItem": {
+            "reason": "acquires the Terraform state lock for the window apply",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "dynamodb:DeleteItem": {
+            "reason": "releases the Terraform state lock the window apply acquired",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "kms:Decrypt": {
+            "reason": "decrypts the state object under the state CMK, ONLY via the S3 and DynamoDB "
+                      "backend services (kms:ViaService); the SECRETS CMK is fenced off",
+            "context": lambda: {"kms:ViaService": f"s3.{gen.REGION}.amazonaws.com"},
+            "in_scope": lambda: gen.ARN["cmk_state"],
+            "out_of_scope": lambda: [gen.ARN["cmk_secrets"]],
+        },
+        "iam:PutRolePolicy": {
+            "reason": "D5: the merged #194 api_ses_send role policy is created by the first window apply; "
+                      "ONE role (the api-task role), conditioned on the reviewed permissions boundary, "
+                      "fenced to that role everywhere else",
+            "in_scope": lambda: gen.window_resource_arns()["api_task_role"],
+            "out_of_scope": lambda: [identity.iam_role_arn(identity.MODULE_IAM_ROLE_NAMES[0]),
+                                     gen.READER_ROLE_ARNS[0],
+                                     f"arn:aws:iam::{gen.ACCOUNT}:role/anything"],
+        },
+    },
     "permanent_w0": {
         "s3:GetObject": {
             "reason": "reads the encrypted state object; state_backend_closure.read "
@@ -456,9 +507,18 @@ def role_bootstrap_required_actions() -> dict[str, str]:
 
 
 # Principals whose requirement set is not the OpenTofu refresh closure.
+def window_required_actions() -> dict[str, str]:
+    """The window-transition principal's OWN requirement set (P6-W0-TRANSITION, 2026-10-02): the
+    refresh closure, the state backend and the window_transition_closure the contract authors
+    independently. stage_a/stage_b are deliberately excluded — the window principal registers no
+    task definition and creates no role."""
+    return _sections_required(("refresh_closure", "state_backend_closure", "window_transition_closure"))
+
+
 EXTRA_REQUIRED_SOURCES = {
     "bootstrap_operator": rollout_required_actions,
     "role_bootstrap_operator": role_bootstrap_required_actions,
+    "window_transition": window_required_actions,
 }
 
 
@@ -661,8 +721,17 @@ import expiry_authorization as _ea  # noqa: E402
 MODEL_EXPIRY = _ea.ACTIVE_EXPIRY_UTC
 IN_WINDOW = {"aws:CurrentTime": "2026-07-31T12:00:00Z"}
 
+# P6-W0-TRANSITION: the window principal is modelled on its EFFECTIVE policy (inline + both customer
+# managed documents) under an in-window clock, the region and the reviewed boundary; the synthetic
+# hostname is the analysis value, never a real one.
+WINDOW_API_FQDN = "api.synthetic.example.com"
+WINDOW_CONTEXT = {**IN_WINDOW, "aws:RequestedRegion": gen.REGION,
+                  "iam:PermissionsBoundary": identity.BOUNDARY_POLICY_ARN}
+
 TARGETS = {
     "boundary": (gb.boundary_policy, {}, boundary_probe),
+    "window_transition": (lambda: gen.window_transition_effective_policy(MODEL_EXPIRY, WINDOW_API_FQDN),
+                          WINDOW_CONTEXT, boundary_probe),
     "permanent_w0": (gen.permanent_w0_policy, {}, boundary_probe),
     "temporary_operator": (lambda: gen.bootstrap_temp_policy(MODEL_EXPIRY),
                            IN_WINDOW, boundary_probe),
@@ -693,6 +762,16 @@ def run() -> dict:
         if name == "temporary_operator":
             entry.update(prove_no_losses(name, policy, context, probe,
                                          required=temporary_required_actions()))
+        elif name == "window_transition":
+            # route53:ChangeResourceRecordSets is fenced to the ONE consumed hosted zone (it is not
+            # forbidden, so it has no EXEMPTIONS entry to supply an in-scope probe); the generic probe
+            # ("*") lands on the fence BY DESIGN — probe it at the zone the closure grants, the same
+            # verifiable-override idiom permanent_w0 uses for ecs:TagResource. The record-name/type/
+            # action keys are ForAllValues (vacuously satisfied with no values); the pytest suite
+            # proves them positively and negatively with real contexts.
+            entry.update(prove_no_losses(
+                name, policy, context, probe, required=window_required_actions(),
+                probe_overrides={"route53:ChangeResourceRecordSets": identity.route53_hosted_zone_arn()}))
         elif name == "permanent_w0":
             # ecs:TagResource is fenced but NOT forbidden, so it has no EXEMPTIONS entry to
             # supply an in-scope probe; the generic ecs probe ("*") lands on the fence BY

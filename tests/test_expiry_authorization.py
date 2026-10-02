@@ -168,6 +168,9 @@ GENERATORS = {
     "role_bootstrap": ("gen_role_bootstrap_policy", "role_bootstrap_policy"),
     "boundary_bootstrap": ("gen_bootstrap_operator_policy", "bootstrap_operator_policy"),
     "readonly_verifier": ("gen_readonly_verifier_policy", "readonly_verifier_policy"),
+    # P6-W0-TRANSITION: the window principal's single-input document (the inline document also
+    # takes the hostname and is exercised by tests/test_window_transition_policy.py).
+    "window_transition": ("gen_operator_policies", "window_transition_read_closure_policy"),
 }
 
 

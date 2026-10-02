@@ -62,12 +62,14 @@ def _policies() -> dict[str, dict]:
         "temporary_operator": gen.bootstrap_temp_policy(EXPIRY),
         "bootstrap_operator": boot.bootstrap_operator_policy(EXPIRY),
         "role_bootstrap_operator": rb.role_bootstrap_policy(EXPIRY),
+        # P6-W0-TRANSITION: the window principal's EFFECTIVE policy (inline + both customer managed).
+        "window_transition": gen.window_transition_effective_policy(EXPIRY, "api.synthetic.example.com"),
     }
 
 
 def _ctx(policy_name: str) -> dict:
     return BOUNDARY_CTX if policy_name in (
-        "temporary_operator", "bootstrap_operator", "role_bootstrap_operator") else {}
+        "temporary_operator", "bootstrap_operator", "role_bootstrap_operator", "window_transition") else {}
 
 
 # Every resource-scoped protection, named at the resource it actually protects.
@@ -135,6 +137,19 @@ PROBES = [
      f"arn:aws:ecs:{gen.REGION}:{gen.ACCOUNT}:task-definition/{gen.PREFIX}-evil:*",
      gen.TASK_DEFINITION_FAMILY_ARNS[0],
      "task-definition tag-on-create outside the four composition families"),
+    # --- window-transition principal fences (P6-W0-TRANSITION, 2026-10-02) ----------------
+    # The state/lock/CMK fences are also moved by the allow-model ceiling proof (their actions
+    # are forbidden capabilities with exemptions); the two below are NOT forbidden capabilities,
+    # so without a probe here deleting either fence would be noticed by nothing.
+    ("window_transition", "route53:ChangeResourceRecordSets",
+     "arn:aws:route53:::hostedzone/ZSYNTHOTHER0000000000", identity.route53_hosted_zone_arn(),
+     "record changes outside the ONE consumed hosted zone (inside the zone the three record "
+     "condition keys are ForAllValues — vacuously satisfied by this contextless probe — and are "
+     "proven positively and negatively by tests/test_window_transition_policy.py)"),
+    ("window_transition", "iam:PutRolePolicy", gen.READER_ROLE_ARNS[0],
+     gen.window_resource_arns()["api_task_role"],
+     "inline-policy writes outside the ONE api-task role (D5: boundary-conditioned; the probe "
+     "context carries the reviewed boundary)"),
     # --- temporary operator fences -----------------------------------------------------
     ("temporary_operator", "s3:PutObject", f"{gb.STATE_BUCKET}/other/object",
      gen.ARN["state_object"], "state writes outside the exact state object"),
