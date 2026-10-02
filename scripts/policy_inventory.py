@@ -46,8 +46,8 @@ DISCOVERY_EXPIRY = _ea.ACTIVE_EXPIRY_UTC
 # table, so a generator whose operator-held inputs are more than an expiry (the window principal
 # also takes the API hostname) is still discovered and validated rather than failing generation and
 # being skipped. A required parameter whose name is NOT here is a GENERATION_FAILED row — a new
-# input must be written down here, never guessed. The hostname is the synthetic fixture value
-# (tests/fixtures/root-wiring-synthetic.tfvars.example); no real hostname exists in the repository.
+# input must be written down here, never guessed. The hostname is the synthetic value from the
+# root-inputs example fixture that root_wiring_check.py reads; no real hostname exists in the repository.
 DISCOVERY_ARGS = {
     "expiry": DISCOVERY_EXPIRY,
     "api_fqdn": "api.synthetic.example.com",
