@@ -42,6 +42,17 @@ import expiry_authorization as _ea  # noqa: E402
 
 DISCOVERY_EXPIRY = _ea.ACTIVE_EXPIRY_UTC
 
+# P6-W0-TRANSITION (2026-10-02). Discovery binds required positional parameters BY NAME from this
+# table, so a generator whose operator-held inputs are more than an expiry (the window principal
+# also takes the API hostname) is still discovered and validated rather than failing generation and
+# being skipped. A required parameter whose name is NOT here is a GENERATION_FAILED row — a new
+# input must be written down here, never guessed. The hostname is the synthetic fixture value
+# (tests/fixtures/root-wiring-synthetic.tfvars.example); no real hostname exists in the repository.
+DISCOVERY_ARGS = {
+    "expiry": DISCOVERY_EXPIRY,
+    "api_fqdn": "api.synthetic.example.com",
+}
+
 # Modules that produce IAM policy documents. DISCOVERED by filename convention, not listed:
 # a new gen_*polic*.py is picked up with no edit here.
 #
@@ -82,7 +93,10 @@ def discover() -> dict[str, dict]:
                         if p.default is inspect.Parameter.empty
                         and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
             try:
-                doc = fn(DISCOVERY_EXPIRY) if required else fn()
+                unknown = [p.name for p in required if p.name not in DISCOVERY_ARGS]
+                if unknown:
+                    raise ValueError(f"required parameter(s) {unknown} have no DISCOVERY_ARGS entry")
+                doc = fn(*[DISCOVERY_ARGS[p.name] for p in required]) if required else fn()
             except Exception as exc:  # noqa: BLE001
                 found[f"{name}.{attr}"] = {"module": name, "callable": attr,
                                            "error": f"{type(exc).__name__}: {exc}"}

@@ -320,7 +320,42 @@ CURATED_HIGH_RISK = {
     "iam:GetRole": (READ_ONLY_CONFIGURATION,),
 }
 
+# ---- P6-W0-TRANSITION (2026-10-02): the window-transition principal's surface -------------------
+# Categorised from the Service Authorization Reference access levels read 2026-10-02 (sealed
+# DOC-VERIFICATION): Write -> MUTATING; a Write that destroys a resource -> + DESTRUCTIVE;
+# Tagging -> MUTATING; List/Read -> READ_ONLY. Stop/Start of the one database instance are
+# mutations that interrupt or resume service, not data destruction.
+WINDOW_TRANSITION_METADATA = {
+    "ec2:AllocateAddress": (MUTATING,),
+    "ec2:CreateNatGateway": (MUTATING,),
+    "ec2:CreateRoute": (MUTATING,),
+    "ec2:CreateTags": (MUTATING,),
+    "ec2:DeleteNatGateway": (MUTATING, DESTRUCTIVE),
+    "ec2:DeleteRoute": (MUTATING, DESTRUCTIVE),
+    "ec2:DisassociateAddress": (MUTATING,),
+    "ec2:ReleaseAddress": (MUTATING, DESTRUCTIVE),
+    "ec2:DescribeNetworkInterfaces": (READ_ONLY,),
+    "elasticloadbalancing:CreateLoadBalancer": (MUTATING,),
+    "elasticloadbalancing:DeleteLoadBalancer": (MUTATING, DESTRUCTIVE),
+    "elasticloadbalancing:ModifyLoadBalancerAttributes": (MUTATING,),
+    "elasticloadbalancing:CreateTargetGroup": (MUTATING,),
+    "elasticloadbalancing:DeleteTargetGroup": (MUTATING, DESTRUCTIVE),
+    "elasticloadbalancing:ModifyTargetGroupAttributes": (MUTATING,),
+    "elasticloadbalancing:CreateListener": (MUTATING,),
+    "elasticloadbalancing:DeleteListener": (MUTATING, DESTRUCTIVE),
+    "elasticloadbalancing:ModifyListenerAttributes": (MUTATING,),
+    "elasticloadbalancing:AddTags": (MUTATING,),
+    "elasticache:CreateReplicationGroup": (MUTATING,),
+    "elasticache:DeleteReplicationGroup": (MUTATING, DESTRUCTIVE),
+    "elasticache:AddTagsToResource": (MUTATING,),
+    "route53:ChangeResourceRecordSets": (MUTATING,),
+    "route53:GetChange": (READ_ONLY,),
+    "rds:StartDBInstance": (MUTATING,),
+    "rds:StopDBInstance": (MUTATING,),
+}
+
 ACTION_METADATA.update(CURATED_REMAINDER)
+ACTION_METADATA.update(WINDOW_TRANSITION_METADATA)
 ACTION_METADATA.update(CURATED_HIGH_RISK)
 
 _READ_PREFIXES = ("Describe", "List", "Get", "Lookup", "BatchGet", "Search", "Query", "Scan",
@@ -420,6 +455,10 @@ def is_read_only(action: str) -> bool:
     return result["is_read_only"]
 
 
+# The synthetic API hostname the window principal is rendered with for analysis (never a real one).
+WINDOW_API_FQDN = "api.synthetic.example.com"
+
+
 def reviewed_policy_actions() -> dict:
     """Every action in every reviewed policy — Phase O coverage, no exception list."""
     import gen_boundary_policy as gb
@@ -442,6 +481,8 @@ def reviewed_policy_actions() -> dict:
         "boundary": gb.boundary_policy(),
         "boundary_bootstrap": boot.bootstrap_operator_policy(expiry),
         "readonly_verifier": rv.readonly_verifier_policy(expiry),
+        # P6-W0-TRANSITION: the window principal's EFFECTIVE policy (inline + both customer managed).
+        "window_transition": gen.window_transition_effective_policy(expiry, WINDOW_API_FQDN),
     }
     out = {}
     for name, doc in documents.items():

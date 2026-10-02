@@ -71,13 +71,13 @@ def test_inventory_is_complete_zero_ungoverned():
     assert result["unclassified"] == []
     assert result["stale_classifications"] == []
     assert result["stale_assurance"] == []
-    assert result["security_critical_count"] == 182  # BH-C: +2 discovery-recovered SECURITY roots  # INFRA-9-B3: +2 (BATTERY, CACHE_ROOTS)  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
+    assert result["security_critical_count"] == 186  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +4 (WINDOW_TRANSITION_WRITES, WINDOW_READ_ADDITIONS, WINDOW_SCOPED_CAPABILITIES, DISCOVERY_ARGS)  # BH-C: +2 discovery-recovered SECURITY roots  # INFRA-9-B3: +2 (BATTERY, CACHE_ROOTS)  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
 
 
 def test_every_assignment_accepts_at_baseline():
     result = sca.assess()
     assert result["clean"], result["problems"][:5]
-    assert result["assigned"] == result["accepted"] == 182  # BH-C: +2  # INFRA-9-B3: +2 (BATTERY review_pin, CACHE_ROOTS exclusion D1)  # INFRA-9-B3 apply-identity: +2 review_pin (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
+    assert result["assigned"] == result["accepted"] == 186  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +4 review_pin  # BH-C: +2  # INFRA-9-B3: +2 (BATTERY review_pin, CACHE_ROOTS exclusion D1)  # INFRA-9-B3 apply-identity: +2 review_pin (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
 
 
 def test_assignment_covers_exactly_the_security_collections(registry):

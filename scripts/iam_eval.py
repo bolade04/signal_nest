@@ -166,6 +166,64 @@ ACTION_CONDITION_KEYS: dict[str, set[str]] = {
     # boundary-conditioned statement as a dead grant.
     "iam:DeleteRolePolicy": {"iam:PermissionsBoundary"},
     "iam:PutRolePermissionsBoundary": {"iam:PermissionsBoundary"},
+    # P6-W0-TRANSITION (2026-10-02): the window principal's write actions, keys per the Service
+    # Authorization Reference pages read 2026-10-02 (sealed DOC-VERIFICATION, P6-W0-TRANSITION-PERMS-prep).
+    # Templated tag keys ("aws:RequestTag/${TagKey}") match any concrete tag key of that form.
+    "ec2:AllocateAddress": {"aws:RequestTag/${TagKey}", "aws:TagKeys", "ec2:Region"},
+    "ec2:CreateNatGateway": {"aws:RequestTag/${TagKey}", "aws:TagKeys", "aws:ResourceTag/${TagKey}",
+                             "ec2:ResourceTag/${TagKey}", "ec2:Region", "ec2:AvailabilityZone",
+                             "ec2:AvailabilityZoneId", "ec2:SubnetID", "ec2:Vpc", "ec2:VpcID", "ec2:Tenancy",
+                             "ec2:AllocationId", "ec2:Domain", "ec2:PublicIpAddress"},
+    "ec2:DeleteNatGateway": {"aws:ResourceTag/${TagKey}", "ec2:ResourceTag/${TagKey}", "ec2:Region"},
+    "ec2:CreateRoute": {"aws:ResourceTag/${TagKey}", "ec2:ResourceTag/${TagKey}", "ec2:Region", "ec2:RouteTableID", "ec2:Vpc"},
+    "ec2:DeleteRoute": {"aws:ResourceTag/${TagKey}", "ec2:ResourceTag/${TagKey}", "ec2:Region", "ec2:RouteTableID", "ec2:Vpc"},
+    "ec2:CreateTags": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys", "ec2:CreateAction",
+                       "ec2:ResourceTag/${TagKey}", "ec2:Region"},
+    "ec2:ReleaseAddress": {"aws:ResourceTag/${TagKey}", "ec2:ResourceTag/${TagKey}", "ec2:AllocationId", "ec2:Domain",
+                           "ec2:PublicIpAddress", "ec2:Region"},
+    "ec2:DisassociateAddress": {"aws:ResourceTag/${TagKey}", "ec2:ResourceTag/${TagKey}", "ec2:AllocationId", "ec2:Domain",
+                                "ec2:PublicIpAddress", "ec2:Region", "ec2:AvailabilityZone", "ec2:ManagedResourceOperator",
+                                "ec2:NetworkInterfaceID", "ec2:Subnet", "ec2:Vpc"},
+    "elasticloadbalancing:CreateLoadBalancer": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys",
+                                                "elasticloadbalancing:ResourceTag/${TagKey}", "elasticloadbalancing:Scheme",
+                                                "elasticloadbalancing:SecurityGroup", "elasticloadbalancing:Subnet"},
+    "elasticloadbalancing:DeleteLoadBalancer": {"aws:ResourceTag/${TagKey}", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:ModifyLoadBalancerAttributes": {"aws:ResourceTag/${TagKey}", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:CreateTargetGroup": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys",
+                                               "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:DeleteTargetGroup": {"aws:ResourceTag/${TagKey}", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:ModifyTargetGroupAttributes": {"aws:ResourceTag/${TagKey}", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:CreateListener": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys",
+                                            "elasticloadbalancing:ListenerProtocol", "elasticloadbalancing:ResourceTag/${TagKey}",
+                                            "elasticloadbalancing:SecurityPolicy"},
+    "elasticloadbalancing:DeleteListener": {"aws:ResourceTag/${TagKey}", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:ModifyListenerAttributes": {"aws:ResourceTag/${TagKey}", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    "elasticloadbalancing:AddTags": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys",
+                                     "elasticloadbalancing:CreateAction", "elasticloadbalancing:ResourceTag/${TagKey}"},
+    # The encryption keys are REQUEST parameters of CreateReplicationGroup ("default false if the
+    # parameter is not present"); population on Delete/AddTagsToResource is NOT STATED, so they are
+    # registered for Create ONLY — a Bool on the delete path is reported as a dead grant here, which is
+    # exactly the sealed round-1 blocking finding turned into a detector.
+    "elasticache:CreateReplicationGroup": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys",
+                                           "elasticache:AtRestEncryptionEnabled", "elasticache:TransitEncryptionEnabled",
+                                           "elasticache:AuthTokenEnabled", "elasticache:AutomaticFailoverEnabled",
+                                           "elasticache:CacheNodeType", "elasticache:CacheParameterGroupName",
+                                           "elasticache:ClusterModeEnabled", "elasticache:Durability", "elasticache:EngineType",
+                                           "elasticache:EngineVersion", "elasticache:KmsKeyId", "elasticache:MultiAZEnabled",
+                                           "elasticache:NumNodeGroups", "elasticache:ReplicasPerNodeGroup",
+                                           "elasticache:SnapshotRetentionLimit"},
+    "elasticache:DeleteReplicationGroup": {"aws:ResourceTag/${TagKey}"},
+    "elasticache:AddTagsToResource": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys"},
+    "route53:ChangeResourceRecordSets": {"route53:ChangeResourceRecordSetsActions",
+                                         "route53:ChangeResourceRecordSetsNormalizedRecordNames",
+                                         "route53:ChangeResourceRecordSetsRecordTypes"},
+    "route53:GetChange": set(),
+    "budgets:ModifyBudget": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys"},
+    "rds:StartDBInstance": {"aws:ResourceTag/${TagKey}", "rds:db-tag/${TagKey}", "rds:DatabaseClass", "rds:DatabaseEngine",
+                            "rds:DatabaseName", "rds:MultiAz", "rds:Piops", "rds:StorageEncrypted", "rds:StorageSize", "rds:Vpc"},
+    "rds:StopDBInstance": {"aws:ResourceTag/${TagKey}", "rds:db-tag/${TagKey}", "rds:snapshot-tag/${TagKey}", "rds:DatabaseClass",
+                           "rds:DatabaseEngine", "rds:DatabaseName", "rds:MultiAz", "rds:Piops", "rds:StorageEncrypted",
+                           "rds:StorageSize", "rds:Vpc"},
     # INFRA-9 B-3 (adversarial-lane finding 4): the apply identity's state-CMK statement
     # conditions these two actions on kms:ViaService; entering them here puts the delta's
     # only new condition under the same dead-grant detector Gate 4N-I2 motivated. Both
@@ -188,6 +246,14 @@ _GLOBAL_KEYS = {
     "aws:PrincipalOrgID", "aws:ResourceAccount", "aws:SecureTransport", "aws:SourceArn",
     "aws:SourceAccount", "aws:UserAgent", "aws:TokenIssueTime", "aws:MultiFactorAuthPresent",
 }
+
+
+def _templated_tag_key(key: str) -> str:
+    """`aws:RequestTag/Name` -> `aws:RequestTag/${TagKey}`: the Service Authorization Reference lists
+    tag-valued keys by template, and a concrete tag key is an instance of that template. Keys without
+    a slash are returned unchanged (so a non-tag key still has to be listed verbatim)."""
+    prefix, sep, _ = key.partition("/")
+    return f"{prefix}/${{TagKey}}" if sep else key
 
 
 def _as_list(value: Any) -> list:
@@ -603,7 +669,7 @@ def validate_policy(policy: dict, kind: str = "identity") -> list[str]:
                     supported = ACTION_CONDITION_KEYS.get(act)
                     if supported is None:
                         continue  # unknown action: no claim either way
-                    if key not in supported:
+                    if key not in supported and _templated_tag_key(key) not in supported:
                         problems.append(
                             f"{sid}: {act} does not support condition key {key} — the key is "
                             "absent from the request context, so this statement can never match"

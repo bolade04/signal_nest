@@ -350,7 +350,9 @@ def _reviewed_documents() -> dict:
             "stage_a": gen.bootstrap_temp_policy(expiry),
             "role_bootstrap": rb.role_bootstrap_policy(expiry),
             "boundary": gb.boundary_policy(),
-            "boundary_bootstrap": boot.bootstrap_operator_policy(expiry)}
+            "boundary_bootstrap": boot.bootstrap_operator_policy(expiry),
+            # P6-W0-TRANSITION: the window principal's EFFECTIVE policy (inline + both customer managed).
+            "window_transition": gen.window_transition_effective_policy(expiry, "api.synthetic.example.com")}
 
 def independence() -> dict:
     """Phase B: independence must be MEANINGFUL, not merely file separation."""

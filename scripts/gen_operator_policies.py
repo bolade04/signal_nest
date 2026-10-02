@@ -890,6 +890,353 @@ def merge_icpermadmin_delta(captured: object, reserved_role_arn: str) -> dict:
     return {**captured, "Statement": [*statements, delta_statement]}
 
 
+
+# --- P6-W0-TRANSITION (2026-10-02): the SEPARATE, EXPIRING window-transition principal ----------
+#
+# Operator selections D1 = A, D3, D4, D5 (sealed preparation set P6-W0-TRANSITION-PERMS-prep,
+# manifest sha256 def6cfd7…): W0 is restored to the reviewed baseline (permanent_w0_policy above,
+# unchanged byte-for-byte) and the staging-window OPEN/CLOSE transitions run under a NEW permission
+# set that holds exactly the window closure and nothing else. Three documents are emitted because
+# the complete closure does not fit the IAM Identity Center permission-set inline quota (10,240
+# non-whitespace characters, == the IAM role aggregate inline limit; verified against the IAM and
+# Identity Center quota pages in the sealed DOC-VERIFICATION):
+#
+#   window_transition_inline_policy        the permission set's INLINE policy: state backend +
+#                                          window writes + RDS stop/start (D4) + the ONE bounded
+#                                          IAM write (D5) + the NotResource fences — every Allow
+#                                          expiring (D3)
+#   window_transition_read_closure_policy  CUSTOMER MANAGED policy 1: the full refresh read closure
+#                                          (REFRESH_CLOSURE, identical action sets to W0) plus the two
+#                                          reads the window needs beyond it — every Allow expiring
+#   window_transition_deny_ceiling_policy  CUSTOMER MANAGED policy 2: the flat DenyDangerous ceiling
+#                                          (PERMANENT_DENY ∪ FORBIDDEN_CAPABILITIES minus the seven
+#                                          scoped capabilities re-denied by the fences) — NOT expiring
+#   window_transition_effective_policy     the three concatenated: what the reserved role EFFECTIVELY
+#                                          evaluates. This is what the allow-model ceiling proof, the
+#                                          deny probes, the action classifier and the deny-mutation
+#                                          hook consume; it is never provisioned as one document.
+#
+# Scoping follows the sealed derivation: every write is bound to the exact window resources by the
+# module-deterministic names (Name tag or resource name derived from name_prefix) and, where AWS
+# offers them, by request/resource condition keys verified in the Service Authorization Reference;
+# the ONE Route 53 write is confined to the ONE record name/type/actions by the three record
+# condition keys; the ONE IAM write is bound to the api-task role AND conditioned on the reviewed
+# permissions boundary; RDS stop/start name the ONE instance ARN and rds:CreateDBSnapshot stays in
+# the ceiling, so the runbook's optional dated-snapshot flag is NOT available to this principal.
+#
+# Two operator-held inputs reach these documents at generation time and are NEVER committed:
+#   api_fqdn   the tfvars API hostname (route53 normalized record name: lowercase, no trailing dot)
+#   expiry     the window's expiry (RFC 3339 UTC), authorized against the issuance by
+#              expiry_authorization.authorize(purpose="window_transition") — ≤ 24 h, ≥ 15 min.
+# The runbook's D3 rule "no plan or apply may START within three hours of expiry" is a scheduling
+# rule the policy cannot express; it is a constant here so the window form and tests pin ONE value.
+
+import datetime as _datetime
+
+WINDOW_PRINCIPAL_PURPOSE = "window_transition"
+WINDOW_NO_START_BEFORE_EXPIRY = _datetime.timedelta(hours=3)
+WINDOW_SESSION_DURATION = "PT12H"  # set at CreatePermissionSet; the reserved role is created with 12 h
+
+# IAM quotas the emitted documents are measured against (characters, whitespace excluded — the
+# canonical rendering has none, so len(canonical(doc)) IS the IAM-counted size).
+IAM_ROLE_INLINE_POLICY_MAX_CHARS = 10240
+IAM_MANAGED_POLICY_MAX_CHARS = 6144
+
+# route53:ChangeResourceRecordSetsNormalizedRecordNames rules (Route 53 developer guide): lowercase,
+# no trailing dot, labels of a-z 0-9 - _ joined by dots (other characters need octal escapes, which
+# this design refuses rather than encodes — an api_fqdn is a plain hostname by the root's own
+# variables.tf validation).
+_API_FQDN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+# The window write surface, grouped by the module resource it serves. Resource scopes and
+# conditions are applied in window_transition_inline_policy; this collection is the ACTION truth
+# the contract (window_transition_closure) is compared against.
+WINDOW_TRANSITION_WRITES = {
+    # module.network: EIP + NAT gateway + private default route (OPEN create / CLOSE destroy)
+    "network_create": ["ec2:AllocateAddress", "ec2:CreateNatGateway", "ec2:CreateRoute", "ec2:CreateTags"],
+    "network_destroy": ["ec2:DeleteNatGateway", "ec2:DeleteRoute", "ec2:DisassociateAddress", "ec2:ReleaseAddress"],
+    # module.alb: load balancer + target group + HTTPS listener (+ provider attribute calls after create)
+    "alb_load_balancer": ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:DeleteLoadBalancer",
+                          "elasticloadbalancing:ModifyLoadBalancerAttributes"],
+    "alb_target_group": ["elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:DeleteTargetGroup",
+                         "elasticloadbalancing:ModifyTargetGroupAttributes"],
+    "alb_listener": ["elasticloadbalancing:CreateListener", "elasticloadbalancing:DeleteListener",
+                     "elasticloadbalancing:ModifyListenerAttributes"],
+    "alb_tag_on_create": ["elasticloadbalancing:AddTags"],
+    # module.data_cache: the replication group only (subnet/parameter groups and the SG persist)
+    "cache_create": ["elasticache:CreateReplicationGroup"],
+    "cache_destroy_and_tag": ["elasticache:AddTagsToResource", "elasticache:DeleteReplicationGroup"],
+    # module.alb: the windowed API alias record (hosted-zone scope) + change polling (change scope)
+    "dns_record": ["route53:ChangeResourceRecordSets"],
+    "dns_change_poll": ["route53:GetChange"],
+    # first-apply carry-overs that ride the next apply of this root (not window resources)
+    "budget_update": ["budgets:ModifyBudget"],
+    "api_role_policy_write": ["iam:PutRolePolicy"],
+    # D4: RDS stop/start inside the window principal; outside OpenTofu (runbook §5)
+    "rds_stop_start": ["rds:StartDBInstance", "rds:StopDBInstance"],
+}
+
+# Reads the window needs beyond REFRESH_CLOSURE: the provider's ALB-destroy ENI clean-up LOOKS for
+# lingering interfaces (the Detach/Delete writes stay ungranted — their denial is an expected,
+# non-fatal WARN, runbook §3), and the reader task definition is gated by the READER flags, not by
+# deploy_workload, so the read W0 already holds at "*" is kept rather than dropped on an assumption.
+WINDOW_READ_ADDITIONS = {
+    "alb_eni_cleanup_read": ["ec2:DescribeNetworkInterfaces"],
+    "task_definition_describe": list(W0_APPLY_CLOSURE["task_definition_describe"]),
+}
+
+# The forbidden capabilities the window principal holds SCOPED: subtracted from its flat ceiling
+# and re-denied everywhere else by NotResource fences (the W0 / temporary-operator idiom).
+# ecs:RegisterTaskDefinition is NOT here — the window principal registers nothing (the workload
+# stage belongs to the separately designed cutover principal), so it stays flatly denied.
+WINDOW_SCOPED_CAPABILITIES = frozenset({
+    "s3:GetObject",        # state_backend_closure.read, exact state object
+    "s3:PutObject",        # state_backend_closure.write_apply_only, exact state object
+    "dynamodb:GetItem",    # lock inspect, exact lock table
+    "dynamodb:PutItem",    # lock acquire, exact lock table
+    "dynamodb:DeleteItem",  # lock release, exact lock table
+    "kms:Decrypt",         # state CMK only, ViaService-conditioned
+    "iam:PutRolePolicy",   # D5: the #194 api_ses_send create — ONE role, boundary-conditioned, fenced
+})
+
+
+def _window_names() -> dict:
+    """Module-deterministic names the window scopes bind to (pinned to the .tf text by tests)."""
+    return {
+        "nat_eip_name": f"{PREFIX}-nat-eip",
+        "nat_name": f"{PREFIX}-nat",
+        "private_rt_name": f"{PREFIX}-private-rt",
+        "public_subnet_glob": f"{PREFIX}-public-*",
+        "vpc_name": f"{PREFIX}-vpc",
+        "alb_name": f"{PREFIX}-alb",
+        "api_tg_name": f"{PREFIX}-api-tg",
+        "redis_group": f"{PREFIX}-redis",
+        "redis_params": f"{PREFIX}-redis-params",
+        "redis_subnets": f"{PREFIX}-redis-subnets",
+        "redis_member_glob": f"{PREFIX}-redis-00*",
+        "budget_name": f"{PREFIX}-monthly",
+        "api_task_role_arn": identity.iam_role_arn(f"{PREFIX}-api-task"),
+    }
+
+
+def window_resource_arns() -> dict:
+    """The exact resource scopes of the window principal, as ARN strings/patterns."""
+    n = _window_names()
+    ec2 = lambda rt: f"arn:{identity.PARTITION}:ec2:{REGION}:{ACCOUNT}:{rt}"  # noqa: E731
+    elb = lambda path: f"arn:{identity.PARTITION}:elasticloadbalancing:{REGION}:{ACCOUNT}:{path}"  # noqa: E731
+    cache = lambda rt, name: f"arn:{identity.PARTITION}:elasticache:{REGION}:{ACCOUNT}:{rt}:{name}"  # noqa: E731
+    return {
+        "elastic_ip": ec2("elastic-ip/*"), "natgateway": ec2("natgateway/*"), "route_table": ec2("route-table/*"),
+        "subnet": ec2("subnet/*"), "vpc": ec2("vpc/*"), "network_interface": ec2("network-interface/*"),
+        "load_balancer": elb(f"loadbalancer/app/{n['alb_name']}/*"),
+        "target_group": elb(f"targetgroup/{n['api_tg_name']}/*"),
+        "listener": elb(f"listener/app/{n['alb_name']}/*/*"),
+        "replication_group": cache("replicationgroup", n["redis_group"]),
+        "parameter_group": cache("parametergroup", n["redis_params"]),
+        "subnet_group": cache("subnetgroup", n["redis_subnets"]),
+        "member_clusters": cache("cluster", n["redis_member_glob"]),
+        "hosted_zone": identity.route53_hosted_zone_arn(),
+        "change": f"arn:{identity.PARTITION}:route53:::change/*",
+        "budget": f"arn:{identity.PARTITION}:budgets::{ACCOUNT}:budget/{n['budget_name']}",
+        "api_task_role": n["api_task_role_arn"],
+        "db": ARN["db"],
+    }
+
+
+def require_valid_api_fqdn(api_fqdn: object) -> str:
+    """Fail-closed validation of the operator-held API hostname (the route53 normalized name)."""
+    if not isinstance(api_fqdn, str) or not api_fqdn:
+        raise ValueError("api_fqdn is REQUIRED and must be a non-empty string; there is no default")
+    if any(marker in api_fqdn for marker in ("<", ">", "{", "}", "$", "PLACEHOLDER")):
+        raise ValueError("api_fqdn carries a placeholder marker")
+    if api_fqdn != api_fqdn.lower() or api_fqdn.endswith("."):
+        raise ValueError("api_fqdn must be the route53 NORMALIZED record name: lowercase, no trailing dot")
+    if len(api_fqdn) > 253 or not _API_FQDN_RE.fullmatch(api_fqdn):
+        raise ValueError("api_fqdn must be a valid multi-label hostname (labels 1-63 of a-z 0-9 -, no empty "
+                         "labels, no scheme/port/path; characters outside that set are refused, not escaped)")
+    return api_fqdn
+
+
+def _window_authorize(expiry: str, issuance: str | None) -> None:
+    """The window must be AUTHORIZED, not merely well-formed (Gate 4N-I19 rule, same as bootstrap-temp)."""
+    import expiry_authorization
+
+    expiry_authorization.authorize(
+        issuance=issuance if issuance is not None else expiry_authorization.ACTIVE_ISSUANCE_UTC,
+        expiry=expiry, purpose=WINDOW_PRINCIPAL_PURPOSE)
+    require_valid_expiry(expiry)
+
+
+def latest_window_start(expiry: str) -> str:
+    """D3: the last instant a plan or apply may START under this expiry (expiry − 3 h)."""
+    parsed = iam_eval.parse_iam_date(expiry, what="window expiry")
+    return (parsed - WINDOW_NO_START_BEFORE_EXPIRY).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _expiring(expiry: str, cond: dict | None = None) -> dict:
+    merged = {"DateLessThan": {"aws:CurrentTime": expiry}}
+    for op, kv in (cond or {}).items():
+        merged.setdefault(op, {}).update(kv)
+    return merged
+
+
+def _window_read_statements(expiry: str) -> list[dict]:
+    c = REFRESH_CLOSURE
+    e = lambda cond=None: _expiring(expiry, cond)  # noqa: E731
+    return [
+        {"Sid": "WinEstateReadRegional", "Effect": "Allow", "Action": c["star_regional"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "WinRdsDescribeInstancesStar", "Effect": "Allow", "Action": c["rds_star"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "WinRdsReadExact", "Effect": "Allow", "Action": c["rds_exact"], "Resource": [ARN["db"], ARN["pg"], ARN["subgrp"]], "Condition": e()},
+        {"Sid": "WinBucketReadWorkload", "Effect": "Allow", "Action": c["s3_bucket"], "Resource": WORKLOAD_BUCKETS, "Condition": e()},
+        {"Sid": "WinKmsReadExact", "Effect": "Allow", "Action": c["kms_exact"], "Resource": [ARN["cmk_state"], ARN["cmk_secrets"]], "Condition": e()},
+        {"Sid": "WinSecretsMetadataRead", "Effect": "Allow", "Action": c["secrets"], "Resource": f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:{PREFIX}/*", "Condition": e()},
+        {"Sid": "WinIamRoleRead", "Effect": "Allow", "Action": c["iam_read"], "Resource": f"arn:aws:iam::{ACCOUNT}:role/{PREFIX}-*", "Condition": e()},
+        {"Sid": "WinRoute53Read", "Effect": "Allow", "Action": c["route53"], "Resource": identity.route53_hosted_zone_arn(), "Condition": e()},
+        {"Sid": "WinCloudFrontRead", "Effect": "Allow", "Action": c["cloudfront_read"], "Resource": [ARN["distribution"], ARN["oac"]], "Condition": e()},
+        {"Sid": "WinAuditTrailReadExact", "Effect": "Allow", "Action": c["cloudtrail_read_exact"], "Resource": ARN["trail"], "Condition": e()},
+        {"Sid": "WinAuditTrailListStar", "Effect": "Allow", "Action": c["cloudtrail_read_star"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "WinBudgetsRead", "Effect": "Allow", "Action": c["budgets"], "Resource": f"arn:aws:budgets::{ACCOUNT}:budget/*", "Condition": e()},
+        {"Sid": "WinAlbEniCleanupRead", "Effect": "Allow", "Action": WINDOW_READ_ADDITIONS["alb_eni_cleanup_read"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "WinTaskDefinitionDescribeStar", "Effect": "Allow", "Action": WINDOW_READ_ADDITIONS["task_definition_describe"], "Resource": "*", "Condition": e(REGION_COND)},
+    ]
+
+
+def _window_inline_statements(expiry: str, api_fqdn: str) -> list[dict]:
+    w = W0_APPLY_CLOSURE
+    x = WINDOW_TRANSITION_WRITES
+    r = window_resource_arns()
+    n = _window_names()
+    e = lambda cond=None: _expiring(expiry, cond)  # noqa: E731
+    return [
+        # --- state backend: identical scopes to the reviewed W0 apply surface ----------------
+        {"Sid": "WinStateBucketRead", "Effect": "Allow", "Action": w["state_bucket_read"], "Resource": ARN["state_bucket"], "Condition": e()},
+        {"Sid": "WinStateObjectReadWrite", "Effect": "Allow", "Action": w["state_object_rw"], "Resource": ARN["state_object"], "Condition": e()},
+        {"Sid": "WinStateLock", "Effect": "Allow", "Action": w["state_lock"], "Resource": ARN["lock"], "Condition": e()},
+        {"Sid": "WinStateCmkUseViaBackendServices", "Effect": "Allow", "Action": w["state_cmk_use"], "Resource": ARN["cmk_state"],
+         "Condition": e({"StringEquals": {"kms:ViaService": [f"dynamodb.{REGION}.amazonaws.com", f"s3.{REGION}.amazonaws.com"]}})},
+        # --- network: EIP, NAT gateway, private default route --------------------------------
+        {"Sid": "WinEipAllocate", "Effect": "Allow", "Action": ["ec2:AllocateAddress"], "Resource": r["elastic_ip"],
+         "Condition": e({"StringEquals": {"aws:RequestTag/Name": n["nat_eip_name"]}})},
+        {"Sid": "WinNatCreateGateway", "Effect": "Allow", "Action": ["ec2:CreateNatGateway"], "Resource": r["natgateway"],
+         "Condition": e({"StringEquals": {"aws:RequestTag/Name": n["nat_name"]}})},
+        # CreateNatGateway also authorizes against the subnet, elastic-ip and vpc resources when present
+        # (Service Authorization Reference): all three legs are covered so none falls to implicit deny.
+        {"Sid": "WinNatCreateInputs", "Effect": "Allow", "Action": ["ec2:CreateNatGateway"], "Resource": [r["subnet"], r["elastic_ip"], r["vpc"]],
+         "Condition": e({"StringLike": {"ec2:ResourceTag/Name": [n["public_subnet_glob"], n["nat_eip_name"], n["vpc_name"]]}})},
+        {"Sid": "WinEc2TagOnCreate", "Effect": "Allow", "Action": ["ec2:CreateTags"], "Resource": [r["elastic_ip"], r["natgateway"]],
+         "Condition": e({"StringEquals": {"ec2:CreateAction": ["AllocateAddress", "CreateNatGateway"]}})},
+        {"Sid": "WinPrivateDefaultRoute", "Effect": "Allow", "Action": ["ec2:CreateRoute", "ec2:DeleteRoute"], "Resource": r["route_table"],
+         "Condition": e({"StringEquals": {"ec2:ResourceTag/Name": n["private_rt_name"]}})},
+        {"Sid": "WinNatDelete", "Effect": "Allow", "Action": ["ec2:DeleteNatGateway"], "Resource": r["natgateway"],
+         "Condition": e({"StringEquals": {"ec2:ResourceTag/Name": n["nat_name"]}})},
+        {"Sid": "WinEipRelease", "Effect": "Allow", "Action": ["ec2:ReleaseAddress"], "Resource": r["elastic_ip"],
+         "Condition": e({"StringEquals": {"ec2:ResourceTag/Name": n["nat_eip_name"]}})},
+        # DisassociateAddress authorizes against elastic-ip AND network-interface (both evaluated when present);
+        # the NAT ENI carries no Name tag, so the interface leg is region-conditioned only — the address leg
+        # keeps the Name-tag condition, so the effective grant is "disassociate the NAT EIP", never the
+        # ALB-service-managed second address.
+        {"Sid": "WinEipDisassociate", "Effect": "Allow", "Action": ["ec2:DisassociateAddress"], "Resource": r["elastic_ip"],
+         "Condition": e({"StringEquals": {"ec2:ResourceTag/Name": n["nat_eip_name"]}})},
+        {"Sid": "WinEipDisassociateInterfaceLeg", "Effect": "Allow", "Action": ["ec2:DisassociateAddress"], "Resource": r["network_interface"],
+         "Condition": e(REGION_COND)},
+        # --- alb: load balancer, target group, HTTPS listener --------------------------------
+        {"Sid": "WinAlbLoadBalancer", "Effect": "Allow", "Action": x["alb_load_balancer"], "Resource": r["load_balancer"], "Condition": e()},
+        {"Sid": "WinAlbTargetGroup", "Effect": "Allow", "Action": x["alb_target_group"], "Resource": r["target_group"], "Condition": e()},
+        # CreateListener authorizes against the LOAD BALANCER resource (no listener ARN exists yet);
+        # Delete/ModifyListenerAttributes authorize against listener/app.
+        {"Sid": "WinAlbListenerCreate", "Effect": "Allow", "Action": ["elasticloadbalancing:CreateListener"], "Resource": r["load_balancer"], "Condition": e()},
+        {"Sid": "WinAlbListener", "Effect": "Allow", "Action": ["elasticloadbalancing:DeleteListener", "elasticloadbalancing:ModifyListenerAttributes"],
+         "Resource": r["listener"], "Condition": e()},
+        {"Sid": "WinAlbTagOnCreate", "Effect": "Allow", "Action": x["alb_tag_on_create"], "Resource": [r["load_balancer"], r["target_group"], r["listener"]],
+         "Condition": e({"StringEquals": {"elasticloadbalancing:CreateAction": ["CreateLoadBalancer", "CreateTargetGroup", "CreateListener"]}})},
+        # --- data_cache: the replication group -----------------------------------------------
+        # The encryption keys are REQUEST parameters of CreateReplicationGroup; a Bool on an absent key never
+        # matches, so they condition the CREATE statement only. Delete + AddTagsToResource are unconditioned
+        # on the same exact ARN (sealed review finding, permissions F1 / adversarial F2).
+        {"Sid": "WinRedisReplicationGroupCreate", "Effect": "Allow", "Action": x["cache_create"], "Resource": r["replication_group"],
+         "Condition": e({"Bool": {"elasticache:AtRestEncryptionEnabled": "true", "elasticache:TransitEncryptionEnabled": "true"}})},
+        {"Sid": "WinRedisReplicationGroupDeleteTag", "Effect": "Allow", "Action": x["cache_destroy_and_tag"], "Resource": r["replication_group"], "Condition": e()},
+        {"Sid": "WinRedisCreateInputs", "Effect": "Allow", "Action": x["cache_create"], "Resource": [r["parameter_group"], r["subnet_group"]], "Condition": e()},
+        # Defensive (disclosed): the SAR lists `cluster` among the evaluable resources and the member cluster is
+        # named <group>-001 by the service; whether it is evaluated is NOT STATED.
+        {"Sid": "WinRedisMemberClusters", "Effect": "Allow", "Action": x["cache_create"] + x["cache_destroy_and_tag"], "Resource": r["member_clusters"], "Condition": e()},
+        # --- Route 53: the API alias record only; hosted-zone scope and change scope are DISTINCT ----
+        {"Sid": "WinApiAliasRecord", "Effect": "Allow", "Action": x["dns_record"], "Resource": r["hosted_zone"],
+         "Condition": e({"ForAllValues:StringEquals": {
+             "route53:ChangeResourceRecordSetsNormalizedRecordNames": [api_fqdn],
+             "route53:ChangeResourceRecordSetsRecordTypes": ["A"],
+             "route53:ChangeResourceRecordSetsActions": ["CREATE", "UPSERT", "DELETE"]}})},
+        {"Sid": "WinRoute53ChangePoll", "Effect": "Allow", "Action": x["dns_change_poll"], "Resource": r["change"], "Condition": e()},
+        # --- first-apply carry-overs -----------------------------------------------------------
+        {"Sid": "WinFirstApplyBudgetBound", "Effect": "Allow", "Action": x["budget_update"], "Resource": r["budget"], "Condition": e()},
+        {"Sid": "WinFirstApplyApiSesSendInlinePolicyBounded", "Effect": "Allow", "Action": x["api_role_policy_write"], "Resource": r["api_task_role"],
+         "Condition": e({"StringEquals": {"iam:PermissionsBoundary": ARN["boundary"]}})},
+        # --- D4: RDS stop/start on the ONE instance (no snapshot: rds:CreateDBSnapshot stays in the ceiling) ---
+        {"Sid": "WinRdsStopStart", "Effect": "Allow", "Action": x["rds_stop_start"], "Resource": r["db"], "Condition": e()},
+        # --- fences: the carved capabilities re-denied everywhere else (never expiring) ------------
+        {"Sid": "WinDenyStateObjectAccessOutsideTheStateObject", "Effect": "Deny", "Action": w["state_object_rw"], "NotResource": ARN["state_object"]},
+        {"Sid": "WinDenyLockItemsOutsideTheLockTable", "Effect": "Deny", "Action": w["state_lock"], "NotResource": ARN["lock"]},
+        {"Sid": "WinDenyStateCmkUseOutsideTheStateCmk", "Effect": "Deny", "Action": w["state_cmk_use"], "NotResource": ARN["cmk_state"]},
+        {"Sid": "WinDenyInlinePolicyOutsideTheApiTaskRole", "Effect": "Deny", "Action": x["api_role_policy_write"], "NotResource": r["api_task_role"]},
+        {"Sid": "WinDenyRecordChangesOutsideTheConsumedZone", "Effect": "Deny", "Action": x["dns_record"], "NotResource": r["hosted_zone"]},
+    ]
+
+
+def _window_ceiling_statement() -> dict:
+    return {"Sid": "WinDenyDangerous", "Effect": "Deny",
+            "Action": sorted((set(PERMANENT_DENY) | set(FORBIDDEN_CAPABILITIES)) - WINDOW_SCOPED_CAPABILITIES),
+            "Resource": "*"}
+
+
+def require_window_policy_quotas(inline: dict, read_closure: dict, deny_ceiling: dict) -> dict:
+    """Measure the FILLED documents against the quotas; refuse to emit an unprovisionable one."""
+    sizes = {"inline": len(canonical(inline)), "read_closure": len(canonical(read_closure)),
+             "deny_ceiling": len(canonical(deny_ceiling))}
+    limits = {"inline": IAM_ROLE_INLINE_POLICY_MAX_CHARS, "read_closure": IAM_MANAGED_POLICY_MAX_CHARS,
+              "deny_ceiling": IAM_MANAGED_POLICY_MAX_CHARS}
+    over = {k: (sizes[k], limits[k]) for k in sizes if sizes[k] > limits[k]}
+    if over:
+        raise ValueError(f"window-transition document(s) exceed the IAM quota and cannot be provisioned: {over}")
+    return {"sizes": sizes, "limits": limits}
+
+
+def _require_managed_quota(doc: dict, what: str) -> dict:
+    size = len(canonical(doc))
+    if size > IAM_MANAGED_POLICY_MAX_CHARS:
+        raise ValueError(f"the window-transition {what} document ({size} chars) exceeds the customer managed "
+                         f"policy quota ({IAM_MANAGED_POLICY_MAX_CHARS}) and cannot be provisioned")
+    return doc
+
+
+def window_transition_read_closure_policy(expiry: str, *, issuance: str | None = None) -> dict:
+    """CUSTOMER MANAGED policy 1 — the refresh read closure + the two window reads, expiring."""
+    _window_authorize(expiry, issuance)
+    return _require_managed_quota({"Version": "2012-10-17", "Statement": _window_read_statements(expiry)}, "read-closure")
+
+
+def window_transition_deny_ceiling_policy() -> dict:
+    """CUSTOMER MANAGED policy 2 — the flat ceiling. Never expires (a Deny that lapses stops protecting)."""
+    return _require_managed_quota({"Version": "2012-10-17", "Statement": [_window_ceiling_statement()]}, "deny-ceiling")
+
+
+def window_transition_inline_policy(expiry: str, api_fqdn: str, *, issuance: str | None = None) -> dict:
+    """The permission set's INLINE policy — state backend, window writes, RDS, the one IAM write, fences."""
+    _window_authorize(expiry, issuance)
+    api_fqdn = require_valid_api_fqdn(api_fqdn)
+    doc = {"Version": "2012-10-17", "Statement": _window_inline_statements(expiry, api_fqdn)}
+    require_window_policy_quotas(doc, window_transition_read_closure_policy(expiry, issuance=issuance),
+                                 window_transition_deny_ceiling_policy())
+    return doc
+
+
+def window_transition_effective_policy(expiry: str, api_fqdn: str, *, issuance: str | None = None) -> dict:
+    """The three documents concatenated — what the reserved role EFFECTIVELY evaluates (analysis only)."""
+    inline = window_transition_inline_policy(expiry, api_fqdn, issuance=issuance)
+    reads = window_transition_read_closure_policy(expiry, issuance=issuance)
+    ceiling = window_transition_deny_ceiling_policy()
+    return {"Version": "2012-10-17", "Statement": inline["Statement"] + reads["Statement"] + ceiling["Statement"]}
+
+
 def require_valid_expiry(expiry: object) -> None:
     """Reject a missing, placeholder or malformed expiry at GENERATION time."""
     if expiry is None or expiry == "":
@@ -904,7 +1251,9 @@ def canonical(doc: dict) -> bytes:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--emit",
-                        choices=["permanent-w0", "bootstrap-temp", "icpermadmin-provisioning-delta"],
+                        choices=["permanent-w0", "bootstrap-temp", "icpermadmin-provisioning-delta",
+                                 "window-transition-inline", "window-transition-read-closure",
+                                 "window-transition-deny-ceiling", "window-transition-effective"],
                         default="permanent-w0")
     # GATE 4N-I10 DEFECT 4. This CLI still defaulted to "<EXPIRY-ISO8601>". Gate 4N-I8
     # removed the placeholder from the FUNCTION signature and I reported the defect closed —
@@ -914,6 +1263,15 @@ def main() -> int:
     parser.add_argument("--expiry", default=None,
                         help="RFC 3339 UTC expiry; REQUIRED with --emit bootstrap-temp")
     parser.add_argument("--hash", action="store_true", help="print canonical + file-byte hashes only")
+    # P6-W0-TRANSITION: the window principal's operator-held inputs. --api-fqdn is REQUIRED with the
+    # inline and effective emits; --issuance is the window's issuance instant (the per-window re-stamp
+    # under D3 — ≤ 24 h before --expiry, enforced by expiry_authorization). Neither has a default.
+    parser.add_argument("--api-fqdn", default=None,
+                        help="the tfvars api_fqdn (lowercase, no trailing dot); REQUIRED with "
+                             "--emit window-transition-inline|window-transition-effective")
+    parser.add_argument("--issuance", default=None,
+                        help="RFC 3339 UTC issuance of the window expiry (window-transition emits only); "
+                             "defaults to the reviewed ACTIVE_ISSUANCE_UTC when omitted")
     # INFRA-9 B-3 Part-B remediation: the ICPermAdmin delta takes the exact W0 reserved-role
     # ARN from the approved operator-held inputs at generation time (the bootstrap-temp
     # --expiry precedent: operator-supplied, validated, refused-if-placeholder) plus the
@@ -942,10 +1300,37 @@ def main() -> int:
             if value is not None:
                 parser.error(f"{flag} is only meaningful with --emit icpermadmin-provisioning-delta")
 
+    window_emits = ("window-transition-inline", "window-transition-read-closure",
+                    "window-transition-deny-ceiling", "window-transition-effective")
+    if args.emit not in window_emits:
+        for flag, value in (("--api-fqdn", args.api_fqdn), ("--issuance", args.issuance)):
+            if value is not None:
+                parser.error(f"{flag} is only meaningful with the window-transition emits")
+
     if args.emit == "bootstrap-temp":
         if args.expiry is None:
             parser.error("--expiry is REQUIRED with --emit bootstrap-temp; there is no default")
         doc = bootstrap_temp_policy(args.expiry)
+    elif args.emit == "window-transition-deny-ceiling":
+        if args.expiry is not None:
+            parser.error("--expiry is meaningless for the deny ceiling; a Deny that lapses stops protecting")
+        doc = window_transition_deny_ceiling_policy()
+    elif args.emit in window_emits:
+        if args.expiry is None:
+            parser.error(f"--expiry is REQUIRED with --emit {args.emit}; there is no default")
+        try:
+            if args.emit == "window-transition-read-closure":
+                if args.api_fqdn is not None:
+                    parser.error("--api-fqdn is not an input of the read-closure document")
+                doc = window_transition_read_closure_policy(args.expiry, issuance=args.issuance)
+            else:
+                if args.api_fqdn is None:
+                    parser.error(f"--api-fqdn is REQUIRED with --emit {args.emit}; there is no default")
+                build = (window_transition_inline_policy if args.emit == "window-transition-inline"
+                         else window_transition_effective_policy)
+                doc = build(args.expiry, args.api_fqdn, issuance=args.issuance)
+        except ValueError as exc:
+            parser.error(str(exc))
     elif args.emit == "icpermadmin-provisioning-delta":
         if args.expiry is not None:
             parser.error("--expiry is meaningless for the ICPermAdmin delta; the grant is "

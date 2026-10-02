@@ -12,15 +12,15 @@
   "allow_model.py::EXEMPTIONS": {
    "collection_id": "allow_model.py::EXEMPTIONS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
-   "reviewed_digest": "sha256:8e2a9a36ccee2f7d678779ce0f2b1fb326b2c3a5ad50a5b9448814a0de49d5bd",
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:310b93c07d4bc8f858381c56f8355868f978e117f16e116d91e22b2f3a9f53e3",
    "source": "live"
   },
   "allow_model.py::EXTRA_REQUIRED_SOURCES": {
    "collection_id": "allow_model.py::EXTRA_REQUIRED_SOURCES",
    "ordered": false,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:b2b07ed254b31f5d7587104e160471151d037effa9d2fafecd66ecfcf8f4eecc",
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:f454fca14f1cbd3e795eabab9a94d253d932bd2adfa72f2e1235733133e71f04",
    "source": "live"
   },
   "allow_model.py::PERMITTED_WILDCARDS": {
@@ -33,8 +33,8 @@
   "allow_model.py::TARGETS": {
    "collection_id": "allow_model.py::TARGETS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-16-INFRA9-B3-APPLY-IDENTITY",
-   "reviewed_digest": "sha256:c89b508124ccb5b0ab98e207f79602c9f69f50f3d82e32e1881b99a1736bdba3",
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:676733b3caa1dcef9102a175fc126f1cd0870f950dd67ccb6a6345a1d97f946a",
    "source": "live"
   },
   "anchor_loader.py::REQUIRED_FIELDS": {
@@ -348,8 +348,8 @@
   "expiry_authorization.py::PURPOSES": {
    "collection_id": "expiry_authorization.py::PURPOSES",
    "ordered": true,
-   "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
-   "reviewed_digest": "sha256:15b334c3aa2be66a364602c63cf2be4689bad7d729108253cfcd4894c50ae776",
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:e96546aabe2cc25adb8deccec589ca2e88242a8a90a4817356be17c9b4637ac1",
    "source": "live"
   },
   "external_executable_trust.py::FATAL_STEERING_VARIABLES": {
@@ -488,8 +488,8 @@
   "iam_eval.py::ACTION_CONDITION_KEYS": {
    "collection_id": "iam_eval.py::ACTION_CONDITION_KEYS",
    "ordered": false,
-   "review_record_id": "REV-2026-08-17-INFRA9-B3-ICPERMADMIN-DELTA",
-   "reviewed_digest": "sha256:63599212a0b8843f64c57e4624b9939a9921923a458b87a80186781756ef852a",
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:1ca6c1741aad76316d02cc4c9103a8abb364fd6f5c0052be04a812246de15edd",
    "source": "live"
   },
   "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {
@@ -987,6 +987,34 @@
    "ordered": true,
    "review_record_id": "REV-2026-08-10-BH-B-ARCH-BASELINE",
    "reviewed_digest": "sha256:e9677a9648ffe5c27fac404f0bd080e6ad1554e7c98ea2db10c00454ea2826f2",
+   "source": "live"
+  },
+  "gen_operator_policies.py::WINDOW_TRANSITION_WRITES": {
+   "collection_id": "gen_operator_policies.py::WINDOW_TRANSITION_WRITES",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:c3eda781b15e31d0b27433aee94eb0b147f5b521e9104d3f82e2694847a5792c",
+   "source": "live"
+  },
+  "gen_operator_policies.py::WINDOW_READ_ADDITIONS": {
+   "collection_id": "gen_operator_policies.py::WINDOW_READ_ADDITIONS",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:0b1891a8ec44e55a95f5ce83f44ac43b299119302868e02688093464ca98117e",
+   "source": "live"
+  },
+  "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": {
+   "collection_id": "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:102195e2aaa06488028b3cf224eb9c505a3b29109dd20d1830ca38f4a6d6ffca",
+   "source": "live"
+  },
+  "policy_inventory.py::DISCOVERY_ARGS": {
+   "collection_id": "policy_inventory.py::DISCOVERY_ARGS",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
+   "reviewed_digest": "sha256:831d5b9596e8c6f02b922b872e827c8ddc46ceb16d23919db339c6c9f4aecccb",
    "source": "live"
   }
  }

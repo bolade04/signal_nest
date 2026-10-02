@@ -174,6 +174,13 @@ def check_policies(result: dict) -> dict:
     perm_decision = iam_eval.decide(perm, ACTION, role_arn,
                                     {"aws:RequestedRegion": identity.REGION})
     boot_decision = iam_eval.decide(boot, ACTION, role_arn, EXPIRY_PROBE)
+    # P6-W0-TRANSITION (D5): the window principal carries the action for exactly ONE role (the
+    # api-task role, for the merged #194 api_ses_send create), boundary-conditioned and expiring; on
+    # every other role — the reader role probed here included — it must be EXPLICITLY denied.
+    window = gen.window_transition_effective_policy(expiry, "api.synthetic.example.com")
+    window_api_role = gen.window_resource_arns()["api_task_role"]
+    window_in = iam_eval.decide(window, ACTION, window_api_role, EXPIRY_PROBE)
+    window_out = iam_eval.decide(window, ACTION, role_arn, EXPIRY_PROBE)
 
     if result["classification"] == REQUIRED_TEMPORARILY:
         if temp_decision.decision is not iam_eval.Decision.EXPLICIT_ALLOW:
@@ -186,8 +193,16 @@ def check_policies(result: dict) -> dict:
     elif result["classification"] == UNRESOLVED:
         findings.append("classification is UNKNOWN — the gate fails rather than excluding "
                         "the action to make the closure green")
+    if window_in.decision is not iam_eval.Decision.EXPLICIT_ALLOW:
+        findings.append(f"the window-transition principal returns {window_in.decision.name} for {ACTION} "
+                        f"on its ONE declared role {window_api_role} (D5 grant lost)")
+    if window_out.decision is not iam_eval.Decision.EXPLICIT_DENY:
+        findings.append(f"the window-transition principal returns {window_out.decision.name} for {ACTION} "
+                        f"on {role_arn} — the D5 grant must be fenced to the api-task role")
 
     return {
+        "window_transition_api_task_role": window_in.decision.name,
+        "window_transition_other_role": window_out.decision.name,
         "stage_a": temp_decision.decision.name,
         "stage_a_supporting_sids": list(temp_decision.matching_allow_sids),
         "permanent_w0": perm_decision.decision.name,

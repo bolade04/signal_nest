@@ -458,7 +458,13 @@
   "collection_completeness.py::COMPLETENESS_REQUIRING_KINDS": "NON_SECURITY_CONFIGURATION",
   "gen_operator_policies.py::W0_APPLY_CLOSURE": "SECURITY_CRITICAL_LIST",
   "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
-  "gen_operator_policies.py::TASK_DEFINITION_FAMILY_ARNS": "NON_SECURITY_CONFIGURATION"
+  "gen_operator_policies.py::TASK_DEFINITION_FAMILY_ARNS": "NON_SECURITY_CONFIGURATION",
+  "gen_operator_policies.py::WINDOW_TRANSITION_WRITES": "SECURITY_CRITICAL_LIST",
+  "gen_operator_policies.py::WINDOW_READ_ADDITIONS": "SECURITY_CRITICAL_LIST",
+  "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
+  "policy_inventory.py::DISCOVERY_ARGS": "SECURITY_CRITICAL_LIST",
+  "action_classifier.py::WINDOW_TRANSITION_METADATA": "NON_SECURITY_CONFIGURATION",
+  "allow_model.py::WINDOW_CONTEXT": "TEST_ONLY"
  },
  "completeness_consumers": {
   "reviewer_retrieval_state.py::STATES": {
@@ -862,7 +868,13 @@
   "cache_authority.py::_PINS": "a runtime identity registry (empty-at-rest), not an enforced authored universe",
   "leak_scan.py::NON_LIVE_CLASSIFICATIONS": "an enforced security universe: leak-suppression-closed-enum",
   "gen_operator_policies.py::W0_APPLY_CLOSURE": "BH-A1a shape, added INFRA-9 B-3: SECURITY_CRITICAL_SOURCE (allow). The apply-surface closure driving permanent W0's new Allow statements; widening is caught by the INDEPENDENT operator-closure-contract sections (state_backend_closure, stage_b_task_definition_closure) plus the FLATTEN_UNION generated-contract equality and the review pin.",
-  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": "BH-A1a shape, added INFRA-9 B-3: SECURITY_CRITICAL_DERIVED (derived). Carves the apply capabilities OUT of permanent W0's flat DenyDangerous ceiling; adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence) plus the review pin."
+  "gen_operator_policies.py::W0_SCOPED_CAPABILITIES": "BH-A1a shape, added INFRA-9 B-3: SECURITY_CRITICAL_DERIVED (derived). Carves the apply capabilities OUT of permanent W0's flat DenyDangerous ceiling; adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence) plus the review pin.",
+  "gen_operator_policies.py::WINDOW_TRANSITION_WRITES": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_SOURCE (allow). The window-transition principal's write surface (EIP/NAT/route, ALB, Redis replication group, the one Route 53 record, the one budget, the one boundary-conditioned IAM write, RDS stop/start) driving its inline Allow statements; widening is caught by the INDEPENDENT operator-closure-contract section window_transition_closure (compared exactly by tests/test_window_transition_policy.py) plus the review pin.",
+  "gen_operator_policies.py::WINDOW_READ_ADDITIONS": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_SOURCE (allow). The two reads the window principal holds beyond REFRESH_CLOSURE (ec2:DescribeNetworkInterfaces for the ALB-destroy ENI clean-up look-up; ecs:DescribeTaskDefinition kept); adding a member widens the read-closure customer managed policy; caught by window_transition_closure.reads_added (exact comparison) plus the review pin.",
+  "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_DERIVED (derived). Carves the window principal's seven scoped capabilities OUT of its flat deny ceiling (the W0 idiom); adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence; window_transition_closure.scoped_capabilities compared exactly) plus the review pin.",
+  "policy_inventory.py::DISCOVERY_ARGS": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_SOURCE (discovery input). Binds a generator's required positional parameters BY NAME to the values discovery renders with; a parameter name absent here is GENERATION_FAILED (fail-closed), and a changed value renders a different document under validation. Review-pinned so a discovery input cannot drift silently; the hostname is the synthetic fixture value.",
+  "action_classifier.py::WINDOW_TRANSITION_METADATA": "a fixed configuration value or literal set, not an enforced scope (SOURCE-1 categorisation of the window principal's actions from the Service Authorization Reference access levels; merged into ACTION_METADATA, whose consumer fails closed on UNKNOWN)",
+  "allow_model.py::WINDOW_CONTEXT": "BH-A1b: TEST_ONLY_LOAD_BEARING (eval-context). the in-window evaluation context (clock, region, reviewed boundary) for the window principal's ceiling proof; not a deployed policy source; load-bearing for the proof's determinism only"
  },
  "a1a_adjudication": {
   "gen_bootstrap_operator_policy.py::BOUNDARY_ATTACH_ACTIONS": {
@@ -1680,6 +1692,76 @@
    "widen_on_add": true,
    "widen_on_remove": false,
    "note": "INFRA-9 B-3 (2026-08-16): frozenset of capabilities excluded from the flat ceiling (DenyDangerous) and re-denied by NotResource fences; the permanent-W0 analogue of TEMP_SCOPED_CAPABILITIES.",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "spec_needed": true,
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::WINDOW_TRANSITION_WRITES": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "allow",
+   "generator": "gen_operator_policies.py::window_transition_inline_policy",
+   "emitted": {
+    "effect": "Allow",
+    "sid": "WinEipAllocate+WinNatCreateGateway+WinNatCreateInputs+WinEc2TagOnCreate+WinPrivateDefaultRoute+WinNatDelete+WinEipRelease+WinEipDisassociate+WinEipDisassociateInterfaceLeg+WinAlbLoadBalancer+WinAlbTargetGroup+WinAlbListenerCreate+WinAlbListener+WinAlbTagOnCreate+WinRedisReplicationGroupCreate+WinRedisReplicationGroupDeleteTag+WinRedisCreateInputs+WinRedisMemberClusters+WinApiAliasRecord+WinRoute53ChangePoll+WinFirstApplyBudgetBound+WinFirstApplyApiSesSendInlinePolicyBounded+WinRdsStopStart"
+   },
+   "oracle_family": "AUTHORED_CONTRACT",
+   "expected_authority": "infra/aws/operator-closure-contract.json section window_transition_closure (a separate source gen_operator_policies never reads; compared exactly by tests/test_window_transition_policy.py)",
+   "observed_authority": "emitted write Allow actions of gen_operator_policies.py::window_transition_inline_policy()",
+   "independence": "adding a member widens the window principal's granted privilege; the widening is caught by the INDEPENDENT closure contract section (exact set equality of the grouped write actions), the allow-model grant audit (UNCLASSIFIED for a grant no contract section justifies) and the review-pin drop-backstop; expected root != the source list",
+   "comparison": "EXACT (union of the grouped write actions == window_transition_closure write groups)",
+   "positive_presence": "INVALID_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-W0-TRANSITION (2026-10-02): the separate, expiring window-transition principal (operator selections D1 = A, D3, D4, D5, D6; sealed P6-W0-TRANSITION-PERMS-prep def6cfd7\u2026).",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "effect": "Allow",
+    "spec_needed": true,
+    "independent_ceiling": "infra/aws/operator-closure-contract.json section window_transition_closure",
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::WINDOW_READ_ADDITIONS": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "allow",
+   "generator": "gen_operator_policies.py::window_transition_read_closure_policy",
+   "emitted": {
+    "effect": "Allow",
+    "sid": "WinAlbEniCleanupRead+WinTaskDefinitionDescribeStar"
+   },
+   "oracle_family": "AUTHORED_CONTRACT",
+   "expected_authority": "infra/aws/operator-closure-contract.json section window_transition_closure.reads_added (compared exactly by tests/test_window_transition_policy.py)",
+   "observed_authority": "emitted read Allow actions of gen_operator_policies.py::window_transition_read_closure_policy() beyond REFRESH_CLOSURE",
+   "independence": "adding a member widens the read-closure customer managed policy; caught by the contract section's exact comparison, the allow-model grant audit and the review-pin drop-backstop; expected root != the source list",
+   "comparison": "EXACT (window read closure == REFRESH_CLOSURE union reads_added)",
+   "positive_presence": "INVALID_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-W0-TRANSITION (2026-10-02): the two reads the window needs beyond W0's refresh closure.",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "effect": "Allow",
+    "spec_needed": true,
+    "independent_ceiling": "infra/aws/operator-closure-contract.json section window_transition_closure.reads_added",
+    "complexity": "LOW"
+   }
+  },
+  "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": {
+   "cls": "SECURITY_CRITICAL_DERIVED",
+   "kind": "derived",
+   "generator": "gen_operator_policies.py::window_transition_deny_ceiling_policy",
+   "emitted": null,
+   "oracle_family": "PROVENANCE_DERIVATION",
+   "expected_authority": "window_transition_closure.scoped_capabilities (authored) + must_not_contract (the forbidden set the carve is taken from)",
+   "observed_authority": "emitted policy of gen_operator_policies.py::window_transition_effective_policy(): each excepted action in an Allow Sid AND absent from the flat Deny Sid AND re-denied by its NotResource fence",
+   "independence": "carves exceptions OUT of the FORBIDDEN deny (derived from must_not_contract); adding a member REMOVES that action from the flat deny -> widens. Verified by emitted-policy correspondence (allow-model exemptions in/out of scope, resource deny probes, tests/test_window_transition_policy.py) and the contract's exact scoped_capabilities comparison",
+   "comparison": "PROVENANCE_CORRESPONDENCE (exception set == contract scoped_capabilities) + EMITTED_POLICY(in Allow AND not in flat Deny AND fenced)",
+   "positive_presence": "CONDITIONALLY_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-W0-TRANSITION (2026-10-02): frozenset of capabilities excluded from the window principal's flat ceiling and re-denied by NotResource fences; the window analogue of W0_SCOPED_CAPABILITIES (minus ecs:RegisterTaskDefinition, plus iam:PutRolePolicy for D5).",
    "bh_b": {
     "resolver": "emitted_policy",
     "spec_needed": true,

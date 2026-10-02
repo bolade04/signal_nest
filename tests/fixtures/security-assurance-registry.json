@@ -32,7 +32,14 @@
     "temporary_operator::iam:PutRolePolicy": "writes the inline policies the composition declares for its own roles; Gate 4N-I16 Defect 3 REQUIRED_TEMPORARILY",
     "temporary_operator::kms:Decrypt": "decrypts the state object under the STATE CMK (SECRETS CMK stays fenced off by in_scope predicate)",
     "temporary_operator::s3:GetObject": "reads the encrypted state object; state_backend_closure.read",
-    "temporary_operator::s3:PutObject": "writes the new Terraform state object on apply; state_backend_closure.write_apply_only"
+    "temporary_operator::s3:PutObject": "writes the new Terraform state object on apply; state_backend_closure.write_apply_only",
+    "window_transition::s3:GetObject": "the window principal reads the encrypted state object for the window plan/apply; state_backend_closure.read; exact state object, re-denied everywhere else by WinDenyStateObjectAccessOutsideTheStateObject (P6-W0-TRANSITION 2026-10-02, D1 = A)",
+    "window_transition::s3:PutObject": "the window principal writes the new state object on a window apply; state_backend_closure.write_apply_only; exact state object, fenced (P6-W0-TRANSITION 2026-10-02)",
+    "window_transition::dynamodb:GetItem": "state-lock inspection before a window plan/apply; exact lock table, re-denied elsewhere by WinDenyLockItemsOutsideTheLockTable (P6-W0-TRANSITION 2026-10-02)",
+    "window_transition::dynamodb:PutItem": "state-lock acquisition for the window apply; exact lock table, fenced (P6-W0-TRANSITION 2026-10-02)",
+    "window_transition::dynamodb:DeleteItem": "state-lock release after the window apply; exact lock table, fenced (P6-W0-TRANSITION 2026-10-02)",
+    "window_transition::kms:Decrypt": "state CMK only and only via the S3/DynamoDB backend services (kms:ViaService); the secrets CMK is re-denied by WinDenyStateCmkUseOutsideTheStateCmk (P6-W0-TRANSITION 2026-10-02)",
+    "window_transition::iam:PutRolePolicy": "D5: the merged #194 api_ses_send role policy is created by the first window apply \u2014 ONE role (the api-task role), conditioned on the reviewed permissions boundary, expiring, re-denied on every other role by WinDenyInlinePolicyOutsideTheApiTaskRole (P6-W0-TRANSITION 2026-10-02; sealed P6-W0-TRANSITION-PERMS-prep def6cfd7\u2026)"
    },
    "member_expansion": "dict_items",
    "subtype": "D1"
@@ -994,6 +1001,22 @@
    "assurance_kind": "INDEPENDENT_MEMBERSHIP_COMPLETENESS",
    "consumer_ref": "workflow_graph_validator.py::_ASSURANCE_ROLE_BY_MODE",
    "control": "collection_completeness"
+  },
+  "gen_operator_policies.py::WINDOW_TRANSITION_WRITES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::WINDOW_READ_ADDITIONS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "policy_inventory.py::DISCOVERY_ARGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
   }
  }
 }
