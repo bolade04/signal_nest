@@ -114,7 +114,7 @@ Mirrors runtime-contract §C. All compute is ECS on Fargate in a single VPC in *
 | Registry | ECR | ECR | Private | Immutable tags; digest-pinned pulls. |
 | Secrets | Secrets Manager + KMS | — | Runtime injection only | Names/ARNs referenced only; values never committed (§11). |
 | Telemetry | CloudWatch Logs + alarms; CloudTrail | — | — | JSON stdout/stderr collected; no OTLP in staging. |
-| Edge/DNS | Route53 + ACM | — | — | Public TLS certificates for ALB and CloudFront are **consumed** by ARN, not created by IaC (§23). The `edge` module owns only web/SPA CloudFront + S3 origin + web DNS aliases; the ALB cert/record is deferred to ALB work. |
+| Edge/DNS | Route53 + ACM | — | — | Public TLS certificates for ALB and CloudFront are **consumed** by ARN, not created by IaC (§23). The `edge` module owns only web/SPA CloudFront + S3 origin + web DNS aliases; the ALB cert is consumed by the `alb` module, which also owns the windowed API alias record (§24.7, 2026-10-01). |
 | Egress | NAT Gateway + VPC endpoints | — | — | Private subnets reach AWS services/pulls without public IPs. |
 
 ## 6. IaC project organization (proposed layout)
@@ -495,7 +495,9 @@ are never committed.
    Route 53 record, ALB-to-DNS integration, ECS origins, WAF, asset upload/deployment, CloudFront
    invalidation, access-log delivery, and observability integration. The API Route 53 alias is
    added only in a later, separately authorized cross-module pass after the ALB exposes its DNS
-   name and canonical hosted-zone id. After this tranche `network` and `edge` are the only
+   name and canonical hosted-zone id *[that pass happened 2026-10-01: the record is owned by the
+   `alb` module as a windowed resource — §24.7; `edge` is unchanged and still creates only the web
+   `A`/`AAAA` aliases]*. After this tranche `network` and `edge` are the only
    implemented resource modules; the root has exactly the `network` and `edge` child-module
    blocks; the other ten modules remain documentation-only stubs.
 4. **Hostnames and CloudFront SPA behavior.** The module accepts one complete, caller-supplied
@@ -586,7 +588,21 @@ are never committed. The decisions are verified against committed application be
    (added only after the ALB exposes its DNS name and canonical hosted-zone id). The future ALB
    module must eventually expose outputs: `alb_arn`, `alb_dns_name`,
    `alb_canonical_hosted_zone_id`, `https_listener_arn`, `api_target_group_arn`, and
-   `alb_security_group_id`.
+   `alb_security_group_id`. *[Alias deferral lifted 2026-10-01 by operator authorization, for
+   a **windowed** record only (P6-INF-3; code and tests, nothing applied): the `alb` module
+   owns ONE `aws_route53_record` — `api_fqdn` → the ALB, type **`A` only** because the ALB is
+   IPv4-only (decision 3; no AAAA) — inside the **consumed** hosted zone (`hosted_zone_id`,
+   the same zone as the web aliases; §23 decision 2 still forbids API records in `edge`). It
+   shares the ALB's `count`, so it exists only while `staging_window_active = true`, is created
+   after and destroyed before the load balancer, and re-points automatically to each window's
+   re-created ALB because its alias target is the planned `aws_lb` `dns_name`/`zone_id`, never
+   a literal. `api_fqdn` is a REQUIRED root input, validated statically (bare multi-label
+   hostname) and rejected when it equals `web_fqdn` case-insensitively. No zone, certificate
+   or WAF is created; `api_certificate_arn` must already cover `api_fqdn`. Transition ordering,
+   residual resolver caching and the missing live permissions
+   (`route53:ChangeResourceRecordSets` on the zone is held by no reviewed principal) are in
+   `docs/operations/staging-window.md` §4/§8. Configuration only — no record exists in AWS;
+   live creation is a separate authorization.]*
 
 8. **Naming and tagging.** Use the committed `signalnest-staging` naming convention. Tags are
    supplied through the root provider `default_tags`; the stale module-level `tags` inputs are

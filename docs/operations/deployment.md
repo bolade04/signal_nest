@@ -16,7 +16,8 @@ and the **rolling-deployment** model. Migrations are covered in
 
 The selected cloud hosting for the internal, non-customer **SIGNALNEST_STAGING** (canary)
 environment is **Amazon ECS on AWS Fargate in us-east-1**, under a hard **$200/month** budget
-ceiling. This is a *planning selection*: **no AWS environment exists** merely because the
+ceiling (the historical ADR-0001 architecture ceiling; the operator's current limit is USD 20
+TOTAL per month — see "Staging operating window" below). This is a *planning selection*: **no AWS environment exists** merely because the
 architecture was chosen, and **deployment requires the separately reviewed INFRA tranches**.
 
 - Decision record: [adr-0001-aws-ecs-fargate-staging.md](../architecture/adr-0001-aws-ecs-fargate-staging.md)
@@ -111,7 +112,12 @@ so a draining worker can finish in-flight jobs before the runtime sends `SIGKILL
 Staging runs **windowed** (`staging_window_active`, `docs/operations/staging-window.md`): the NAT gateway and its EIP, the ALB with listener and
 target group, and the ElastiCache replication group exist only inside an authorized window; RDS is stopped between windows by the runbook; the
 workload stage is refused outside a window. Every procedure below executes inside an open window. The rollback floor (next section) is compared by
-image digest and source revision, because task-definition revisions are re-registered per window.
+image digest and source revision, because task-definition revisions are re-registered per window. The API hostname (`api_fqdn`, the origin a future
+staging SPA build must receive as `VITE_API_BASE_URL` — no staging SPA build exists yet, P6-INF-2) is a windowed Route 53 alias owned by the `alb`
+module since 2026-10-01: it resolves to the window's ALB while
+open and to nothing while closed (not yet created live — `staging-window.md` §4/§8). The `$200/month` figure above is the historical ADR-0001
+architecture ceiling; the operator's current limit is USD 20 TOTAL per month, which the staging root's `monthly_budget_limit` validation now enforces
+as an input bound only (AWS Budgets notify, they do not stop spending).
 
 ## Rolling deployment
 

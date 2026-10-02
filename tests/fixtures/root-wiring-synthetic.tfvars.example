@@ -11,13 +11,14 @@ web_fqdn             = "synthetic.example.com"
 hosted_zone_id       = "ZSYNTH00000000000000"
 acm_certificate_arn  = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000"
 api_certificate_arn  = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000001"
+api_fqdn             = "api.synthetic.example.com" # P6-INF-3 windowed alias; must differ from web_fqdn
 app_bucket_name      = "synthetic-probe-bucket-000000"
 db_engine_version    = "16.4"
 db_name              = "synthetic"
 db_master_username   = "synthetic_admin"
 redis_engine_version = "7.1"
 llm_provider         = "anthropic"
-monthly_budget_limit = 1
+monthly_budget_limit = 20 # the operator limit (USD 20 TOTAL/month) is also the root's upper bound
 
 budget_notification_email = "probe@example.com"
 role_boundary_mode        = "disabled"

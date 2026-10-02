@@ -68,8 +68,9 @@ output "web_url" {
 
 # --- ALB module outputs (INFRA-4 alb tranche) ---
 # Non-sensitive identifiers/ARNs only. The consumed certificate ARN is an input and
-# is NOT re-exported. `ecs` will consume alb_security_group_id + api_target_group_arn;
-# a later authorized DNS pass consumes alb_dns_name + alb_canonical_hosted_zone_id.
+# is NOT re-exported. `ecs` consumes alb_security_group_id + api_target_group_arn;
+# alb_dns_name + alb_canonical_hosted_zone_id are the API alias target (P6-INF-3,
+# consumed inside the alb module) and are echoed for operator verification.
 
 output "alb_arn" {
   description = "ARN of the Application Load Balancer (from the alb module)."
@@ -264,4 +265,15 @@ output "revision_reader_task_definition_family" {
 output "revision_reader_container_name" {
   description = "Reader container name, needed to locate the run's log stream (<prefix>/<container>/<task-id>)."
   value       = module.revision_reader.container_name
+}
+
+# --- API Route 53 alias (P6-INF-3; windowed) ---
+output "api_alias_record_name" {
+  description = "Name of the API alias record (api_fqdn -> ALB) while the staging window is open; null while closed, when the record does not exist (from the alb module)."
+  value       = module.alb.api_alias_record_name
+}
+
+output "api_url" {
+  description = "Public HTTPS URL of the API derived from the supplied api_fqdn (echo of configuration; resolves only while a window is open)."
+  value       = "https://${lower(var.api_fqdn)}"
 }

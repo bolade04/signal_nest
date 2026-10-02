@@ -530,7 +530,8 @@ jobs:
       # backend, no AWS call; each module carries the root's byte-identical provider
       # constraint so its standalone init resolves the pinned 6.55.0. The three caches are
       # classified by the post-init step below (EXPECTED_CACHE_ROOTS, reviewed under
-      # REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS). Expected runs: alb 3, data_cache 2,
+      # REV-2026-10-01-P6-STAGING-WINDOW-CI-CACHE-ROOTS). Expected runs: alb 9 (window.tftest.hcl
+      # 3 + api_alias.tftest.hcl 6 — the P6-INF-3 windowed API alias record), data_cache 2,
       # network 2. The negative control proves a failing window suite fails its step: a
       # doctored copy of the network module with one false assertion, initialised offline
       # from the already-verified network cache, must make `tofu test` exit non-zero.
@@ -598,6 +599,25 @@ jobs:
           print(f"negative control: exit={proc.returncode} verdict={'FAILED_AS_REQUIRED' if ok else 'DID_NOT_FAIL_AS_REQUIRED'}")
           sys.exit(0 if ok else 1)
           PY
+
+      # Root input-boundary + alias-wiring contract (infra/aws/input_boundary.tftest.hcl): what
+      # only the ROOT can prove — monthly_budget_limit is bounded by the operator's USD 20 TOTAL
+      # monthly limit (21 and the historical 200 ceiling are rejected, 20 accepted), api_fqdn is
+      # rejected when it collides with web_fqdn, and the single window input gates the API alias
+      # record while the web alias persists. Offline, fully mocked provider (sibling-module
+      # validations need ARN-/id-shaped mock defaults; the network module is overridden as a
+      # whole for distinct subnet ids), `-backend=false` so the committed S3 backend is NEVER
+      # initialised, no AWS call. The root cache infra/aws is already an EXPECTED_CACHE_ROOTS
+      # member (and a root_wiring_check mirror source, verified against the committed lockfile).
+      # Expected runs: 7. Placed before toolchain_post so the cache it creates is classified.
+      - name: Root input-boundary and alias-wiring contract tests (offline, fully mocked provider)
+        id: root_boundary_tests
+        if: always()
+        working-directory: infra/aws
+        run: |
+          tofu fmt -check -diff .
+          tofu init -backend=false -input=false
+          tofu test
 
       - name: Toolchain integrity — post-init cache classification
         id: toolchain_post
@@ -1067,6 +1087,7 @@ jobs:
                    "window_tests_data_cache=${{ steps.window_tests_data_cache.outcome }}" \
                    "window_tests_network=${{ steps.window_tests_network.outcome }}" \
                    "window_negative_control=${{ steps.window_negative_control.outcome }}" \
+                   "root_boundary_tests=${{ steps.root_boundary_tests.outcome }}" \
                    "iam_module_tests=${{ steps.iam_module_tests.outcome }}" \
                    "toolchain_post=${{ steps.toolchain_post.outcome }}" \
                    "root_wiring=${{ steps.root_wiring.outcome }}" \

@@ -35,6 +35,12 @@ LEDGER = json.loads((REPO_ROOT / "tests" / "fixtures" / "review-record-ledger.js
 ROOT_VERSIONS = (REPO_ROOT / "infra" / "aws" / "versions.tf").read_text(encoding="utf-8")
 
 MODULES = {"alb": 3, "data_cache": 2, "network": 2}
+# P6-WINDOW-DNS-BUDGET: the alb step also runs api_alias.tftest.hcl (the P6-INF-3 windowed API
+# alias record — `tofu test` runs every *.tftest.hcl in the module directory), and a ROOT suite
+# proves what only the root can (budget bound, api_fqdn/web_fqdn collision, alias wiring).
+EXTRA_SUITES = {"alb": {"api_alias.tftest.hcl": 6}}
+ROOT_SUITE = ("input_boundary.tftest.hcl", 7)
+ROOT_STEP = "root_boundary_tests"
 SUITE_STEPS = {m: f"window_tests_{m}" for m in MODULES}
 NEGATIVE_STEP = "window_negative_control"
 COLLECTION = "check_toolchain_integrity.py::EXPECTED_CACHE_ROOTS"
@@ -59,7 +65,41 @@ def test_each_window_suite_declares_the_expected_run_count():
         assert 'mock_provider "aws"' in text, f"{module}: the suite must be fully mocked (no AWS call)"
 
 
+def test_the_extra_module_suites_and_the_root_suite_declare_their_run_counts():
+    for module, suites in EXTRA_SUITES.items():
+        for name, runs in suites.items():
+            text = (REPO_ROOT / "infra" / "aws" / "modules" / module / name).read_text(encoding="utf-8")
+            assert len(re.findall(r'^run "', text, re.M)) == runs, (module, name)
+            assert 'mock_provider "aws"' in text, f"{module}/{name}: the suite must be fully mocked (no AWS call)"
+    name, runs = ROOT_SUITE
+    text = (REPO_ROOT / "infra" / "aws" / name).read_text(encoding="utf-8")
+    assert len(re.findall(r'^run "', text, re.M)) == runs, name
+    assert 'mock_provider "aws"' in text and 'alias = "revision_reader"' in text, \
+        "the root suite must mock BOTH provider configurations (default + aws.revision_reader)"
+    assert "expect_failures = [var.monthly_budget_limit]" in text and "expect_failures = [var.api_fqdn]" in text, \
+        "the root suite must exercise the input-boundary rejections, not only the accepted path"
+
+
+def test_the_ci_comment_states_the_full_alb_run_count():
+    total = MODULES["alb"] + sum(EXTRA_SUITES["alb"].values())
+    assert f"Expected runs: alb {total} (window.tftest.hcl" in WORKFLOW, \
+        "ci.yml must state the alb step's complete run count (window + api_alias suites) for the log reader"
+
+
 # --------------------------------------------------------------------------- CI wiring
+def test_the_root_suite_step_is_a_graded_block_step_in_the_root_directory():
+    step = _steps().get(ROOT_STEP)
+    assert step is not None, f"{ROOT_STEP} is absent from ci.yml"
+    assert step["form"] == "block" and step["run"], ROOT_STEP
+    assert not step.get("continue_on_error"), f"{ROOT_STEP}: continue-on-error would mask failure"
+    block = re.search(r"id: %s\n(.*?)\n\n" % re.escape(ROOT_STEP), WORKFLOW, re.S).group(1)
+    assert "if: always()" in block and "working-directory: infra/aws" in block, ROOT_STEP
+    lines = [ln.strip() for ln in step["run"].splitlines() if ln.strip()]
+    assert lines == ["tofu fmt -check -diff .", "tofu init -backend=false -input=false", "tofu test"], ROOT_STEP
+    # -backend=false is load-bearing: the root declares the committed S3 backend, which CI must never initialise.
+    assert "-backend=false" in lines[1]
+
+
 def test_the_three_suite_steps_are_graded_block_steps_in_their_module_directories():
     steps = _steps()
     for module, sid in SUITE_STEPS.items():
@@ -78,12 +118,12 @@ def test_the_suite_steps_run_before_the_post_init_cache_classification():
     order = [s["id"] for s in cim.parse_steps(WORKFLOW)]
     post = order.index("toolchain_post")
     pre = order.index("toolchain_pre")
-    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP]:
+    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP, ROOT_STEP]:
         assert pre < order.index(sid) < post, f"{sid} must sit between the pre-init sanitisation and the post-init classification"
 
 
 def test_every_new_step_is_in_the_invocation_contract_with_tofu_required():
-    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP]:
+    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP, ROOT_STEP]:
         entry = CONTRACT["graded_steps"].get(sid)
         assert entry == {"must_invoke": ["TOFU"], "run_form": "block"}, sid
 
@@ -91,12 +131,12 @@ def test_every_new_step_is_in_the_invocation_contract_with_tofu_required():
 def test_the_invocation_model_and_failure_propagation_accept_the_new_steps():
     result = cim.check(WORKFLOW)
     rows = {r["id"]: r for r in result["rows"]}
-    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP]:
+    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP, ROOT_STEP]:
         assert rows[sid]["present"], sid
         assert not [p for p in result["problems"] if p.startswith(f"{sid}:")], result["problems"]
     graded = {s["id"] for s in fp.analyse()["steps"] if s.get("graded")} if isinstance(fp.analyse().get("steps"), list) else None
     if graded is not None:
-        for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP]:
+        for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP, ROOT_STEP]:
             assert sid in graded, sid
 
 
@@ -119,7 +159,7 @@ def test_the_negative_control_requires_a_doctored_suite_to_fail():
 
 
 def test_the_job_result_list_reads_every_new_step_outcome():
-    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP]:
+    for sid in list(SUITE_STEPS.values()) + [NEGATIVE_STEP, ROOT_STEP]:
         assert f"{sid}=${{{{ steps.{sid}.outcome }}}}" in WORKFLOW, f"{sid}: outcome not read by the guard result list"
 
 

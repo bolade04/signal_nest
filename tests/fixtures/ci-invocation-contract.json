@@ -372,11 +372,17 @@
     "TOFU"
    ],
    "run_form": "block"
+  },
+  "root_boundary_tests": {
+   "must_invoke": [
+    "TOFU"
+   ],
+   "run_form": "block"
   }
  },
  "totals": {
-  "graded_steps": 50,
-  "multiline_run_blocks": 11,
+  "graded_steps": 51,
+  "multiline_run_blocks": 12,
   "single_line_run": 39
  }
 }

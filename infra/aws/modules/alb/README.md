@@ -13,6 +13,13 @@ no infrastructure exists in AWS.
   health check against liveness `/health`, matcher `200`)
 - `aws_lb_listener` — HTTPS:443 listener (TLS terminates here) forwarding to the
   target group
+- `aws_route53_record` — the **windowed API alias** (P6-INF-3): one `A` alias
+  `api_fqdn` → this ALB inside the **consumed** hosted zone (`hosted_zone_id`, the
+  same zone the `edge` module writes the web aliases into). `A` only because the ALB
+  is IPv4-only; alias target = the planned `aws_lb` `dns_name`/`zone_id` (never a
+  hard-coded ELB zone id), `evaluate_target_health = false`. Shares the ALB's
+  `count`: created after the load balancer on open, destroyed before it on close,
+  re-pointed automatically to each window's re-created ALB.
 - `aws_s3_bucket` (+ ownership controls, public-access block, SSE-S3 encryption,
   versioning, bucket policy) — the dedicated private ALB log-delivery bucket;
   the ALB's **access and connection logging** both write into it (distinct
@@ -24,8 +31,11 @@ no infrastructure exists in AWS.
 
 ## 3. Out of scope
 ECS services/task definitions and the API task SG + ALB↔API cross-SG rules (`ecs`),
-certificate/DNS creation (`edge`; the ALB cert is consumed by value), VPC/subnets
-(`network`), WAF and the API Route 53 alias (deferred, §24.7).
+certificate creation and the hosted ZONE (both consumed by value), the web DNS
+aliases (`edge`), VPC/subnets (`network`), and WAF (deferred, §24.7). The API
+alias RECORD is in scope since 2026-10-01 (§24.7 deferral lifted for a windowed
+record); the root rejects `api_fqdn == web_fqdn` so the two modules never contend
+for one record name.
 
 ## 4. Upstream dependencies
 `network` (`vpc_id`, `public_subnet_ids`). The regional ACM certificate ARN is
@@ -33,8 +43,11 @@ consumed by value from a required root variable (`api_certificate_arn`), not fro
 another module. No hard dependency on `edge`.
 
 ## 5. Inputs (names only, no values)
-`vpc_id`, `public_subnet_ids`, `api_certificate_arn`, `api_target_port`,
-`health_check_path`, `name_prefix`. This module **creates and owns** the ALB security
+`vpc_id`, `public_subnet_ids`, `api_certificate_arn`, `hosted_zone_id`, `api_fqdn`,
+`api_target_port`, `health_check_path`, `name_prefix`, `enabled`. `hosted_zone_id`
+and `api_fqdn` are consumed root values (never `edge` outputs — no `edge → alb`
+edge exists); `api_fqdn` must be a bare multi-label hostname (statically validated)
+that `api_certificate_arn` covers. This module **creates and owns** the ALB security
 group, so it takes **no** security-group id input; it also takes **no** `tags` input — the
 authoritative common tag set is applied by the root provider's `default_tags`.
 `api_target_port` (8000) and `health_check_path` (`/health`) default to the locked
@@ -42,7 +55,8 @@ staging values.
 
 ## 6. Non-sensitive outputs (names only)
 `alb_arn`, `alb_dns_name`, `alb_canonical_hosted_zone_id`, `https_listener_arn`,
-`api_target_group_arn`, `alb_security_group_id`.
+`api_target_group_arn`, `alb_security_group_id`, `api_alias_record_name` (null
+while the window is closed, like every other windowed output).
 
 ## 7. Security boundaries
 Internet-facing, **HTTPS / 443 only** (consumed ACM cert `api_certificate_arn`, TLS policy
@@ -65,20 +79,21 @@ public 443 ingress is a standalone rule, and the ALB→API `:8000` egress rule i
 by the `ecs` module (no unrestricted ALB egress, no mixing of inline/standalone rules).
 Access **and** connection logging are enabled into the module-owned private log
 bucket (the §24.7 pre-live logging gate is resolved in configuration; nothing is
-provisioned). WAF and the API Route 53 alias remain deferred.
+provisioned). WAF remains deferred; the API Route 53 alias is authored as a windowed
+record (nothing provisioned).
 
 ## 9. Status
 Resource bodies authored and validated offline only (`tofu fmt`, `tofu init
 -backend=false`, `tofu validate`). The log-delivery bucket and both logging
 blocks are configuration only. **No `tofu plan`/`apply`, no AWS API call, no
-state, no certificate/DNS/WAF resource, no ECS target registration, and no
-provisioning have occurred. Nothing exists in AWS.**
+state, no certificate/WAF resource, no DNS record in AWS, no ECS target
+registration, and no provisioning have occurred. Nothing exists in AWS.**
 
 ## 10. Owning tranche
 INFRA-4 alb resource-definition tranche; access/connection logging added by the
 INFRA-4 pre-live tranche. Live remote-state bootstrap and any `apply` remain
 later, separately authorized (`apply` is INFRA-9).
 
-**Staging window (`enabled`, root `staging_window_active`):** the load balancer, HTTPS listener and API target group exist only while `enabled = true`; the security group, its ingress rule and the private log bucket persist; windowed outputs are null while closed. See `docs/operations/staging-window.md`.
+**Staging window (`enabled`, root `staging_window_active`):** the load balancer, HTTPS listener, API target group and API alias record exist only while `enabled = true`; the security group, its ingress rule and the private log bucket persist; windowed outputs are null while closed. See `docs/operations/staging-window.md` (§4 for the alias ordering and residual DNS caching).
 
-**CI:** `window.tftest.hcl` runs in the `revision-reader` job (`window_tests_alb`); this module therefore carries the root's byte-identical provider constraint in `versions.tf` and its cache is a classified member of `EXPECTED_CACHE_ROOTS`.
+**CI:** `window.tftest.hcl` (3 runs) and `api_alias.tftest.hcl` (6 runs: open/closed alias, A-only, binding to the planned ALB, malformed `api_fqdn`/`hosted_zone_id` rejected) run in the `revision-reader` job (`window_tests_alb`); this module therefore carries the root's byte-identical provider constraint in `versions.tf` and its cache is a classified member of `EXPECTED_CACHE_ROOTS`.

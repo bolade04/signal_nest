@@ -37,6 +37,16 @@ phase        = "4B-C"
 # acm_certificate_arn = "<ACM_CERT_ARN_US_EAST_1>"   # existing us-east-1 ACM cert ARN
 # price_class         = "PriceClass_100"
 
+# --- ALB inputs + API Route 53 alias (INFRA-4 alb tranche; P6-INF-3 windowed alias) ---
+# The regional ACM certificate is CONSUMED by ARN (never created). The API alias record
+# (api_fqdn -> ALB, type A, in the SAME hosted zone as web_fqdn) is created by the alb
+# module ONLY while staging_window_active = true and is re-pointed automatically at each
+# window's re-created ALB (docs/operations/staging-window.md §4). api_fqdn must differ from
+# web_fqdn. NO real hostname or ARN is committed; placeholder tokens only:
+#
+# api_certificate_arn = "<ACM_CERT_ARN_US_EAST_1_REGIONAL>"   # existing us-east-1 ACM cert ARN covering api_fqdn
+# api_fqdn            = "<API_FQDN>"                         # e.g. api.staging.example.com (bare hostname, != web_fqdn)
+
 # --- Composition inputs (INFRA-4 root-composition tranche; synthetic examples only) ---
 # app_bucket_name           = "<globally-unique-app-bucket-name>"
 # db_engine_version         = "<postgres-version, e.g. 16.4>"
@@ -57,8 +67,16 @@ phase        = "4B-C"
 #   redis_memory_high_percent     = <1-100>
 # }
 # sns_topic_arn             = null                          # or "arn:aws:sns:<region>:<account>:<topic>"
-# monthly_budget_limit      = <1-200>                       # USD; ADR-0001 §M hard ceiling
 # budget_notification_email = "<ops-alias@example.com>"
+
+# --- Monthly AWS Budget limit (USD) --------------------------------------------------
+# 20 = the operator's CURRENT limit, USD 20 TOTAL per month (recorded 2026-09-30), which
+# this root's validation enforces (values above 20 are rejected). It is STRICTER than the
+# historical USD 200/month ADR-0001 §M architecture ceiling, which the generic cost
+# module still bounds. Observational only: neither this value nor the budget's
+# 50/75/90/100 % e-mail notifications stop spending, and editing this file changes no
+# budget in AWS (the last attested live budget is 150 until an authorized apply).
+monthly_budget_limit = 20
 
 # --- Staging operating window (docs/operations/staging-window.md) --------------------
 # REQUIRED, no default. false = CLOSED: the NAT gateway (+EIP), ALB (+listener, target

@@ -94,7 +94,7 @@ def test_every_graded_step_still_satisfies_the_contract():
     """The repair must not break the forty-four steps it protects."""
     result = inv.check()
     assert result["clean"], result["problems"]
-    assert result["graded_in_workflow"] == result["graded_in_contract"] == 50  # +1: Gate 4N-I28BH-B added the security_collection_assurance graded step  # INFRA-9-B3: +1 (root_wiring graded step)  # P6-STAGING-WINDOW-CI: +4 (window_tests_alb, window_tests_data_cache, window_tests_network, window_negative_control)
+    assert result["graded_in_workflow"] == result["graded_in_contract"] == 51  # +1: Gate 4N-I28BH-B added the security_collection_assurance graded step  # INFRA-9-B3: +1 (root_wiring graded step)  # P6-STAGING-WINDOW-CI: +4 (window_tests_alb, window_tests_data_cache, window_tests_network, window_negative_control)  # P6-WINDOW-DNS-BUDGET: +1 (root_boundary_tests — root input-boundary/alias-wiring tofu test)
 
 
 # =====================================================================================
