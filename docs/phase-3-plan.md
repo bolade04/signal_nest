@@ -1,5 +1,7 @@
 # Phase 3 Implementation Plan
 
+> **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 3 plan as written before Phase 3 work began and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§4 residual-work matrix and §4.6a live-state reconciliation; §1.2 is the dated 2026-09-19 baseline snapshot).
+
 **Status: planned, not started.** Phase 1–2 is complete and accepted (see
 [`acceptance-report.md`](acceptance-report.md)). This plan starts from that accepted
 baseline and does **not** repeat Phase 1–2 work.

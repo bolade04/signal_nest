@@ -5,10 +5,14 @@ signals into **explainable, scored opportunities** for a business — separating
 was *observed* from what the AI *inferred*, and never recommending action it cannot
 justify.
 
-This repository contains a complete, reviewable vertical slice covering **Phase 1
-(foundation)** and **Phase 2 (scouting → explainable opportunities)**. Phases 3–5
-(creative generation, approvals, analytics, live integrations, billing) are out of
-scope and documented in [`docs/phase-3-plan.md`](docs/phase-3-plan.md).
+This repository contains the SignalNest product foundation: **Phase 1 (foundation)**,
+**Phase 2 (scouting → explainable opportunities)** and the Phase 3–4 tranches recorded
+under [`docs/verification/`](docs/verification/). The current track is **Project Phase 6**
+— production and pilot readiness for this foundation — in
+[`docs/project-phase-6-plan.md`](docs/project-phase-6-plan.md). The Phase 5A–5E
+guided-action product work (creative generation, approvals, analytics, live integrations,
+billing) is specified in [`docs/project-phase-5-plan.md`](docs/project-phase-5-plan.md)
+and is **excluded from Phase 6** by resolved operator decision `P6-D01`.
 
 ## Architecture at a glance
 
@@ -32,7 +36,8 @@ infra/     docker-compose (postgres+pgvector, redis) for full mode
 - **LLM is mock-first.** A deterministic offline mock provider is the default;
   OpenAI/Anthropic adapters sit behind env with identical response contracts.
 
-The API exposes **56 operations across 41 paths**. See the live OpenAPI docs at
+The API exposes **106 operations across 85 paths** (measured from `apps/api/openapi.json`
+at `2aa683d0`, 2026-10-03). See the live OpenAPI docs at
 `/api/v1/docs` when the server is running, or the committed
 [`apps/api/openapi.json`](apps/api/openapi.json).
 
@@ -89,7 +94,7 @@ isolation and geo accuracy.
   opportunity feed/detail, and the Settings runtime-status panel (coarse summary for
   every user, operator-only infrastructure detail) — including tests that prove
   Dallas/London/Lagos/Nairobi never leak across locations.
-- **Backend:** 86 tests (pytest) — pure-engine unit tests for relevance, opportunity
+- **Backend:** the pytest suite (the authoritative count is CI's `Backend quality` job) — pure-engine unit tests for relevance, opportunity
   and confidence scoring, the noise gate, validation, the decision engine, the
   geography engine, and claim safety; the Phase 3A runtime-foundation and 3A.2 hardening
   unit tests (production-stack enforcement, secret-free errors, bounded readiness probes,
@@ -99,8 +104,9 @@ isolation and geo accuracy.
   health/readiness endpoints over HTTP.
 
 **Continuous integration.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs
-four gates — **Frontend quality**, **Backend quality**, **Migrations and API contract**,
-and **Integration smoke** — on pull requests to `main`, pushes to `main` and `feature/**`,
+six jobs — **Frontend quality**, **Backend quality**, **Migrations and API contract**,
+**Integration smoke**, **Container build and security** and **Revision reader (unit, IaC
+contract, in-image)** — all six required by the `main` ruleset (observed 2026-10-03) — on pull requests to `main`, pushes to `main` and `feature/**`,
 and manual dispatch. CI runs entirely in zero-dependency local mode (SQLite, in-process
 adapters, fixture connectors, mock LLM); **no Docker, PostgreSQL, Redis or paid API keys
 are required.**

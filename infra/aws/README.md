@@ -1,5 +1,7 @@
 # SIGNALNEST_STAGING — OpenTofu IaC (INFRA-4, repository-only, fully composed, not provisioned)
 
+> **Live-state notice (2026-10-03, `P6-GOV-1` — PARTIAL reconciliation).** This README was written while nothing had been applied. The staging foundation **has since been applied**: `operator-closure-contract.json` in this directory records the complete full-graph refresh of 2026-07-28T22:01:44Z–22:01:48Z (267 CloudTrail events) and an audit trail delivering since 2026-07-27. Three summary passages below (§1, §9 bootstrap, §10) were reconciled on 2026-10-03; the **per-module statements that "nothing exists in AWS" / "no X exists in AWS" remain historical text** at the lines enumerated in `docs/project-phase-6-plan.md` row `P6-GOV-1` and are superseded by the closure contract — for what exists, read the contract and the operator-held sealed evidence, never this file. Later windowed-staging, API-alias and budget-bound changes (PRs #195, #197, #198) are repository-only and NOT applied.
+
 ## 1. Purpose and scope
 
 This directory is the **repository-only** Infrastructure-as-Code for the internal,
@@ -19,12 +21,15 @@ reader image be published (Stage A) **before** any runtime resource — in parti
 the execution role that holds the `DATABASE_URL` secret grant — exists; `runtime` requires
 `publication_bootstrap = true` **and** a pinned image digest. Both flags default to creating
 nothing. Composition is **configuration only**: "root-composed" is still
-distinct from "provisioned"/"deployed" — no live `tofu plan`/`apply` has run,
-no AWS API has been contacted, and nothing exists in AWS. "Implemented" (HCL exists and offline-validates),
+distinct from "provisioned"/"deployed". **Live state (reconciled 2026-10-03, `P6-GOV-1`):**
+the staging foundation **has** been applied — `operator-closure-contract.json` in this
+directory records the complete full-graph refresh of 2026-07-28T22:01:44Z–22:01:48Z
+(267 CloudTrail events) and a trail delivering since 2026-07-27; the later windowed-staging,
+API-alias and budget-bound changes (PRs #195, #197, #198) are repository-only and NOT applied. "Implemented" (HCL exists and offline-validates),
 "root-composed" (referenced by `main.tf`), "provisioned", and "deployed" are distinct states
-and are not equivalent. **No live `tofu plan`/`apply` has run, no AWS API has been contacted,
-and nothing has been provisioned or deployed** — the committed HCL describes intended
-resources, it does not mean any resource exists in AWS.
+and are not equivalent. **The committed HCL describes intended resources; what exists in AWS is established only
+by the closure contract and the operator-held sealed evidence records**, never by the HCL
+itself. Offline validation (§10) contacts no AWS API.
 
 Authoritative design: [`docs/operations/aws-staging-iac-plan.md`](../../docs/operations/aws-staging-iac-plan.md)
 (the INFRA-4 design), under
@@ -373,9 +378,10 @@ versioning, blocked public access, and **DynamoDB** state locking
   ARN, workspace prefix) are committed — `backend.tf` is intentionally empty,
   the bucket/table names are required git-ignored `*.tfvars` inputs, and only
   synthetic `*.example` templates are tracked.
-- **No live state bootstrap has been performed.** No state bucket, lock table,
-  or key exists in AWS; the live run is bundled with the INFRA-9
-  fresh-authorization gate (§12).
+- **Live state bootstrap (reconciled 2026-10-03, `P6-GOV-1`):** the earlier statement that no
+  state bucket, lock table or key existed described the pre-INFRA-9 state and is superseded
+  by the live execution recorded in `operator-closure-contract.json`. Bucket, table and key
+  names remain git-ignored `*.tfvars` inputs and are not tracked.
 - The S3 backend has **not** been initialized. Offline validation used
   `tofu init -backend=false`, which deliberately skips backend initialization; a
   backend-configured `tofu init` has not been run and no state exists.
@@ -396,9 +402,10 @@ run in CI against a fully mocked provider), the root composition, and the `boots
 with `tofu fmt`, `tofu init -backend=false`
 (using a disposable, repository-external data directory and the locked provider), and
 `tofu validate` — all offline, with the S3 backend disabled and AWS credentials
-suppressed. The committed `.terraform.lock.hcl` pins `hashicorp/aws 6.55.0`. **No**
-`tofu plan`, `apply`, `destroy`, `import`, `state`, or `refresh` has run; **no** AWS
-API has been contacted; **no** repository-local `.terraform` directory or state is
+suppressed. The committed `.terraform.lock.hcl` pins `hashicorp/aws 6.55.0`. This offline
+validation runs **no** `tofu plan`, `apply`, `destroy`, `import`, `state`, or `refresh` and
+contacts **no** AWS API — the live execution history of the staging foundation is recorded in
+`operator-closure-contract.json` (`P6-GOV-1` reconciliation, 2026-10-03), not here; **no** repository-local `.terraform` directory or state is
 committed. Offline validation confirms configuration validity — it does **not** mean
 any AWS resource exists.
 

@@ -1,5 +1,7 @@
 # Architecture
 
+> **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 1–2 system as built and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§4 residual-work matrix and §4.6a live-state reconciliation; §1.2 is the dated 2026-09-19 baseline snapshot).
+
 SignalNest is an AI marketing-intelligence platform whose core product is an
 **intelligence pipeline**, not a copywriting tool. This document describes the
 Phase 1–2 system.
