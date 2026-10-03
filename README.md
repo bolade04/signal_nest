@@ -94,7 +94,7 @@ isolation and geo accuracy.
   opportunity feed/detail, and the Settings runtime-status panel (coarse summary for
   every user, operator-only infrastructure detail) — including tests that prove
   Dallas/London/Lagos/Nairobi never leak across locations.
-- **Backend:** 86 tests (pytest) — pure-engine unit tests for relevance, opportunity
+- **Backend:** the pytest suite (the authoritative count is CI's `Backend quality` job) — pure-engine unit tests for relevance, opportunity
   and confidence scoring, the noise gate, validation, the decision engine, the
   geography engine, and claim safety; the Phase 3A runtime-foundation and 3A.2 hardening
   unit tests (production-stack enforcement, secret-free errors, bounded readiness probes,
@@ -104,8 +104,9 @@ isolation and geo accuracy.
   health/readiness endpoints over HTTP.
 
 **Continuous integration.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs
-four gates — **Frontend quality**, **Backend quality**, **Migrations and API contract**,
-and **Integration smoke** — on pull requests to `main`, pushes to `main` and `feature/**`,
+six jobs — **Frontend quality**, **Backend quality**, **Migrations and API contract**,
+**Integration smoke**, **Container build and security** and **Revision reader (unit, IaC
+contract, in-image)** — all six required by the `main` ruleset (observed 2026-10-03) — on pull requests to `main`, pushes to `main` and `feature/**`,
 and manual dispatch. CI runs entirely in zero-dependency local mode (SQLite, in-process
 adapters, fixture connectors, mock LLM); **no Docker, PostgreSQL, Redis or paid API keys
 are required.**

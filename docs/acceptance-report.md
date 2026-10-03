@@ -1,6 +1,6 @@
 # Phase 1–2 Acceptance Report
 
-> **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 1–2 acceptance (its Phase 3 statements describe that era) and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§1.2, §4).
+> **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 1–2 acceptance (its Phase 3 statements describe that era) and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§4 residual-work matrix and §4.6a live-state reconciliation; §1.2 is the dated 2026-09-19 baseline snapshot).
 
 Scope: foundation (Phase 1) + scouting → explainable opportunities (Phase 2), plus the
 security-remediation, CI-reliability, GitHub-Actions, and frontend-lint-toolchain work
@@ -69,7 +69,7 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 - **[T]** Domain models + Alembic migrations for the Phase 1 tables.
 - **[T]** Geography engine (haversine radius 1–200 mi, coverage, geo-relevance) — unit
   tested.
-- **[T]** REST API — **56 operations across 41 paths** — with OpenAPI documentation.
+- **[T]** REST API — **56 operations across 41 paths** *(figure at acceptance; 85 paths / 106 operations at `2aa683d0`, 2026-10-03)* — with OpenAPI documentation.
 - **[T]** Audit logging on sensitive actions.
 - **[T]** Frontend app shell (workspace/location/campaign switchers, breadcrumbs, search,
   theme, responsive), local auth screens, protected routes.

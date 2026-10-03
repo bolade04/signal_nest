@@ -1,5 +1,7 @@
 # SIGNALNEST_STAGING — OpenTofu IaC (INFRA-4, repository-only, fully composed, not provisioned)
 
+> **Live-state notice (2026-10-03, `P6-GOV-1` — PARTIAL reconciliation).** This README was written while nothing had been applied. The staging foundation **has since been applied**: `operator-closure-contract.json` in this directory records the complete full-graph refresh of 2026-07-28T22:01:44Z–22:01:48Z (267 CloudTrail events) and an audit trail delivering since 2026-07-27. Three summary passages below (§1, §9 bootstrap, §10) were reconciled on 2026-10-03; the **per-module statements that "nothing exists in AWS" / "no X exists in AWS" remain historical text** at the lines enumerated in `docs/project-phase-6-plan.md` row `P6-GOV-1` and are superseded by the closure contract — for what exists, read the contract and the operator-held sealed evidence, never this file. Later windowed-staging, API-alias and budget-bound changes (PRs #195, #197, #198) are repository-only and NOT applied.
+
 ## 1. Purpose and scope
 
 This directory is the **repository-only** Infrastructure-as-Code for the internal,
