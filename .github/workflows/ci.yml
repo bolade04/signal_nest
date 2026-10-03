@@ -125,14 +125,62 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: apps/api/requirements-dev.txt
 
       - name: Create fresh API virtualenv and install (dev extras)
         run: |
           mkdir -p ci-logs
           python -m venv apps/api/.venv
           apps/api/.venv/bin/pip install --upgrade pip
-          apps/api/.venv/bin/pip install -e "apps/api[dev]" 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --no-deps -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
+
+      - name: Lock reproducibility (linux/amd64)
+        # P6-PLAT-4: the committed locks must be exactly what the documented toolchain
+        # resolves on the deployment platform (linux/amd64, Python ${{ env.PYTHON_VERSION }}).
+        # A separate tool venv keeps pip-tools out of the application environment. pip is
+        # held at 25.1.1 because pip-tools 7.5.2 imports a pip-internal symbol pip 26 removed.
+        # Only the interpreter form (``<venv>/bin/python -m …``) is used — the executable
+        # trust policy binds the interpreter, not bare ``pip``/``pip-compile``/``diff`` names.
+        # Any difference from the committed files fails the job; the locks are never rewritten here.
+        run: |
+          python -m venv .locktools
+          .locktools/bin/python -m pip install --quiet "pip==25.1.1" "pip-tools==7.5.2"
+          .locktools/bin/python -m pip --version
+          .locktools/bin/python -m piptools compile --version
+          cd apps/api
+          ../../.locktools/bin/python -m piptools compile --quiet --generate-hashes --strip-extras --extra full \
+            --output-file /tmp/requirements-runtime.txt pyproject.toml
+          ../../.locktools/bin/python -m piptools compile --quiet --generate-hashes --strip-extras --extra full --extra dev \
+            --constraint /tmp/requirements-runtime.txt --output-file /tmp/requirements-dev.txt pyproject.toml
+          # Compare pins + hashes only. Every comment line is dropped, including pip-tools'
+          # indented annotations ("# via …", "#   -c <constraint path>"): the constraint path is
+          # recorded verbatim and differs between this /tmp compile and the committed file.
+          ../../.locktools/bin/python - <<'PY'
+          import sys
+          def body(path):
+              return [l for l in open(path, encoding="utf-8").read().splitlines() if not l.lstrip().startswith("#")]
+          bad = False
+          for committed, fresh in (("requirements-runtime.txt", "/tmp/requirements-runtime.txt"),
+                                   ("requirements-dev.txt", "/tmp/requirements-dev.txt")):
+              a, b = body(committed), body(fresh)
+              if a != b:
+                  bad = True
+                  print(f"LOCK DRIFT: {committed} differs from a fresh linux/amd64 resolve")
+                  import difflib
+                  sys.stdout.writelines(difflib.unified_diff(a, b, committed, fresh, lineterm="", n=1))
+                  print()
+              else:
+                  print(f"{committed}: reproduced exactly (pins + hashes) on this platform")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Locked environment integrity
+        # The hash-checked install above is the only source of packages: verify the
+        # resolved environment is consistent and that both entry points import.
+        run: |
+          apps/api/.venv/bin/python -m pip check
+          apps/api/.venv/bin/python -c "import app.main, app.jobs.worker; print('app.main + app.jobs.worker import OK')"
 
       - name: Ruff check
         run: apps/api/.venv/bin/python -m ruff check apps/api 2>&1 | tee ci-logs/backend-ruff.log
@@ -176,7 +224,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: apps/api/requirements-dev.txt
 
       - name: Install dependencies
         run: |
@@ -184,7 +232,8 @@ jobs:
           npm ci 2>&1 | tee ci-logs/npm-ci.log
           python -m venv apps/api/.venv
           apps/api/.venv/bin/pip install --upgrade pip
-          apps/api/.venv/bin/pip install -e "apps/api[dev]" 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --no-deps -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
 
       - name: Migration round-trip + seed idempotency
         working-directory: apps/api
@@ -388,13 +437,14 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: apps/api/requirements-dev.txt
 
       - name: Create fresh API virtualenv and install
         run: |
           python -m venv apps/api/.venv
           apps/api/.venv/bin/pip install --upgrade pip
-          apps/api/.venv/bin/pip install -e "apps/api[dev]"
+          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt
+          apps/api/.venv/bin/pip install --no-deps -e apps/api
 
       - name: Prepare a fresh, migrated + seeded demo database
         # Python-only job: call the bash script directly (no npm/Node dependency).

@@ -3,7 +3,13 @@
 #
 # Three ecosystems match the actual manifests in this repo:
 #   - npm            -> root package-lock.json (npm workspaces: apps/web, packages/*)
-#   - pip            -> apps/api/pyproject.toml (FastAPI backend)
+#   - pip            -> apps/api/pyproject.toml (FastAPI backend) and, since P6-PLAT-4, the
+#                       pip-tools locks beside it: apps/api/requirements-runtime.txt (what the
+#                       production image installs, hash-pinned) and requirements-dev.txt (CI).
+#                       Dependabot reads requirements*.txt in the watched directory, so the
+#                       locked transitive graph is now monitored and updated, not only the
+#                       open-ended pyproject ranges. Lock regeneration: see apps/api/README-deps.md
+#                       (pip-compile --generate-hashes; a manual edit of a lock breaks hashes).
 #   - github-actions -> .github/workflows/*.yml (CI quality gates)
 #
 # Security updates (vulnerability-driven) are configured separately in the repo
