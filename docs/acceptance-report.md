@@ -1,5 +1,7 @@
 # Phase 1–2 Acceptance Report
 
+> **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 1–2 acceptance (its Phase 3 statements describe that era) and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§1.2, §4).
+
 Scope: foundation (Phase 1) + scouting → explainable opportunities (Phase 2), plus the
 security-remediation, CI-reliability, GitHub-Actions, and frontend-lint-toolchain work
 that followed. Phase 3+ is intentionally out of scope; see

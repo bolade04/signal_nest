@@ -5,10 +5,14 @@ signals into **explainable, scored opportunities** for a business — separating
 was *observed* from what the AI *inferred*, and never recommending action it cannot
 justify.
 
-This repository contains a complete, reviewable vertical slice covering **Phase 1
-(foundation)** and **Phase 2 (scouting → explainable opportunities)**. Phases 3–5
-(creative generation, approvals, analytics, live integrations, billing) are out of
-scope and documented in [`docs/phase-3-plan.md`](docs/phase-3-plan.md).
+This repository contains the SignalNest product foundation: **Phase 1 (foundation)**,
+**Phase 2 (scouting → explainable opportunities)** and the Phase 3–4 tranches recorded
+under [`docs/verification/`](docs/verification/). The current track is **Project Phase 6**
+— production and pilot readiness for this foundation — in
+[`docs/project-phase-6-plan.md`](docs/project-phase-6-plan.md). The Phase 5A–5E
+guided-action product work (creative generation, approvals, analytics, live integrations,
+billing) is specified in [`docs/project-phase-5-plan.md`](docs/project-phase-5-plan.md)
+and is **excluded from Phase 6** by resolved operator decision `P6-D01`.
 
 ## Architecture at a glance
 
@@ -32,7 +36,8 @@ infra/     docker-compose (postgres+pgvector, redis) for full mode
 - **LLM is mock-first.** A deterministic offline mock provider is the default;
   OpenAI/Anthropic adapters sit behind env with identical response contracts.
 
-The API exposes **56 operations across 41 paths**. See the live OpenAPI docs at
+The API exposes **106 operations across 85 paths** (measured from `apps/api/openapi.json`
+at `2aa683d0`, 2026-10-03). See the live OpenAPI docs at
 `/api/v1/docs` when the server is running, or the committed
 [`apps/api/openapi.json`](apps/api/openapi.json).
 
