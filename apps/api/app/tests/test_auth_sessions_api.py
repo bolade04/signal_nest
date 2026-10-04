@@ -106,7 +106,8 @@ def _get(env: Env, url: str, token: str):
 
 
 def _deadline(env: Env, sid: str) -> int:
-    """The session's absolute expiry in whole epoch seconds (jose floors ``exp`` the same way)."""
+    """The session's absolute expiry in whole epoch seconds (the JWT library floors ``exp`` the
+    same way)."""
     return math.floor(as_utc(env.witness.session_row(sid)["expires_at"]).timestamp())
 
 
@@ -220,7 +221,7 @@ class TestSessionBoundaries:
 class TestTokenBuilder:
     """T-05: one clock read per mint; ``exp = min(iat + TTL, the session's deadline)``."""
 
-    #: Every exp stays in the future on jose's real clock for any run before 2100.
+    #: Every exp stays in the future on the JWT library's real clock for any run before 2100.
     BASE = datetime(2100, 1, 1, tzinfo=UTC)
 
     def _stepping(self, monkeypatch) -> list[int]:
