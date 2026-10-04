@@ -15,8 +15,8 @@ Concurrency is forced, never timed: a request is held at a named point -- after
 authentication and before its write, or after its write and before its COMMIT -- by events
 the test controls, so no outcome depends on the scheduler. Clock tests shift only the
 APPLICATION clock (``app_clock_skewed``); PostgreSQL's ``now()`` is untouched and decides
-every session lifetime. jose keeps its own, unshifted clock, so a token minted on a skewed
-application clock still decodes (disclosed, D-02).
+every session lifetime. The JWT library keeps its own, unshifted clock, so a token minted on a
+skewed application clock still decodes (disclosed, D-02).
 """
 
 from __future__ import annotations
@@ -443,7 +443,7 @@ def test_a_reissue_keeps_the_database_deadline(pg_env, skew, endpoint):  # D-02 
         _assert_skewed(shifted)
         r = reissue()
     assert r.status_code == 200, r.text
-    token = claims(r.json()["access_token"])  # decodes on jose's own, unshifted clock
+    token = claims(r.json()["access_token"])  # decodes on the JWT library's own, unshifted clock
     deadline = math.floor(as_utc(row["expires_at"]).timestamp())
     assert token["sid"] == sid
     assert env.witness.session_row(sid) == row
