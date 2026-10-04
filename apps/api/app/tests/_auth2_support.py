@@ -43,9 +43,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
-from jose import jwt
 from sqlalchemy import create_engine, event, func, insert, select, text, update
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -527,7 +527,8 @@ SKEW_60 = timedelta(minutes=60)  # > 0 and < the 720-minute TTL
 @contextmanager
 def app_clock_skewed(offset: timedelta) -> Iterator[type[datetime]]:
     """Shift the APPLICATION clock by ``offset`` in every ``app.*`` module bound to the real
-    ``datetime`` class (never the tests', never jose's). The database clock is untouched."""
+    ``datetime`` class (never the tests', never the JWT library's). The database clock is
+    untouched."""
     real = datetime
 
     class Shifted(real):
