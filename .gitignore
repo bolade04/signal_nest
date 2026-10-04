@@ -125,3 +125,5 @@ infra/aws/cloudfront-expected.json
 # runner, and a path this file does not name is a path the scanner will read. This one holds a
 # real account id on at least one machine.
 .claude/settings.local.json
+# P6-PLAT-4: tool venv created by the CI lock-reproducibility step when run locally
+.locktools/

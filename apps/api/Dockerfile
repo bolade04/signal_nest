@@ -54,16 +54,23 @@ RUN python -m venv "$VENV_PATH"
 
 WORKDIR /build
 
-# Install dependencies first (declared in pyproject) as their own layer so a code
-# change does not re-resolve the dependency graph. The ``full`` extra pulls the
-# production adapters (psycopg, pgvector, redis, boto3); dev/test deps are never
-# installed into the image.
-COPY pyproject.toml ./
-# A minimal package tree so ``pip install .`` can build the project metadata
-# without the full source; the real source is layered into the runtime image.
+# Install the LOCKED runtime dependency set first, as its own layer, so a code
+# change does not re-resolve the dependency graph. ``requirements-runtime.txt`` is
+# compiled by pip-tools from ``pyproject.toml`` with the ``full`` extra (psycopg,
+# pgvector, redis, boto3) and carries every transitive pin plus artifact hashes;
+# ``--require-hashes`` makes pip refuse any artifact not listed there (P6-PLAT-4).
+# dev/test deps are never installed into the image. Two installs stay OUTSIDE the lock, as
+# before this change: the ``pip`` upgrade below (unpinned) and the build-isolation fetch of
+# ``setuptools>=68`` that ``pip install .`` performs; neither ships application code.
+COPY requirements-runtime.txt pyproject.toml ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --require-hashes -r requirements-runtime.txt
+# The project itself (metadata only — a minimal package tree lets ``pip install .``
+# build it without the full source) with ``--no-deps``: every dependency is already
+# present from the locked set, so no application dependency can be pulled in outside
+# the lock (the build backend fetch noted above is the one remaining unpinned install).
 RUN mkdir -p app && touch app/__init__.py \
-    && python -m pip install --upgrade pip \
-    && python -m pip install ".[full]"
+    && python -m pip install --no-deps .
 
 # ---------------------------------------------------------------------------
 # runtime — the shared runtime stage (venv + application source, non-root).
