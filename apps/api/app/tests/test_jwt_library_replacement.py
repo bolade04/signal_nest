@@ -15,10 +15,14 @@ What is pinned, and against what:
   configured); non-string ``sub``/``jti`` are refused (python-jose and PyJWT share this);
 * that each :class:`app.core.security._Verifier` override is live: the plain library call is
   shown to decide the other way on the same token (a positive instance for every rule);
+* the strict UTF-8 decode of header and payload bytes python-jose performed before parsing
+  (PyJWT's ``json.loads(bytes)`` would otherwise auto-detect a BOM, UTF-16 and UTF-32 and
+  accept key-signed tokens in those encodings);
 * intentional hardenings, recorded as such, not as parity: a malformed time claim the previous
   library let escape as a Python ``TypeError``/``OverflowError`` (an unhandled 500) is a plain
-  refusal (401) here; an unsupported ``crit`` header, an empty ``crit`` list and a non-string
-  ``kid`` -- accepted by python-jose -- are refused by PyJWT's RFC 7515 header validation;
+  refusal (401) here; an unsupported ``crit`` header, an empty ``crit`` list, a non-string
+  ``kid``, ``b64: false`` and a signature segment with non-canonical base64url trailing bits
+  -- accepted by python-jose -- are refused by PyJWT's header and base64url validation;
 * signing is HS256 and verification accepts HS256 only; wrong key, altered payload or
   signature, malformed input, ``alg=none`` and every other algorithm map to ``None`` (the
   caller's 401), never to an exception;
@@ -97,12 +101,20 @@ def _enc(obj) -> str:
     return _b64(json.dumps(obj, separators=(",", ":")).encode())
 
 
-def _mint(key: str = SYNTHETIC_KEY, *, header=HS256, digest=hashlib.sha256, payload=None, **claims):
+def _mint(
+    key: str = SYNTHETIC_KEY,
+    *,
+    header=HS256,
+    digest=hashlib.sha256,
+    payload=None,
+    raw_header=None,
+    **claims,
+):
     """Hand-signed token: HMAC over exact bytes, so structure cases are byte-controlled.
 
-    ``payload`` (a ready base64url segment) overrides the claims entirely."""
+    ``payload`` / ``raw_header`` (ready base64url segments) override the claims / header."""
     p = payload if payload is not None else _enc({**BASE, **claims})
-    h = _enc(header)
+    h = raw_header if raw_header is not None else _enc(header)
     sig = hmac.new(key.encode(), f"{h}.{p}".encode(), digest).digest()
     return f"{h}.{p}.{_b64(sig)}"
 
@@ -156,7 +168,10 @@ def test_every_library_verification_stays_on():
 def test_overrides_bind_to_the_pinned_library_hooks():
     """Each override replaces a hook PyJWT 2.15.1 defines, with the same parameter list; the
     frozen-clock tests below fail outright if a later PyJWT stopped calling them."""
-    for name in ("_validate_iat", "_validate_nbf", "_validate_aud", "_validate_claims"):
+    hooks = (
+        "_validate_iat", "_validate_nbf", "_validate_aud", "_validate_claims", "_decode_payload"
+    )
+    for name in hooks:
         assert name in vars(jwt.PyJWT), name
         assert name in vars(security._Verifier), name
         ours = inspect.signature(getattr(security._Verifier, name)).parameters
@@ -404,6 +419,48 @@ def test_empty_claims_object_decodes_and_is_refused_by_the_caller_not_the_verifi
     synthetic_key, clock
 ):
     assert security.decode_access_token(_mint(payload=_enc({}))) == {}
+
+
+# --- JSON encoding of the header / payload bytes: strict UTF-8, as before ---------------------
+
+_HJ = json.dumps(HS256, separators=(",", ":"))
+_PJ = json.dumps({**BASE, "exp": T + 3600}, separators=(",", ":"))
+ENCODED = {
+    "header-utf8-bom": dict(raw_header=_b64(b"\xef\xbb\xbf" + _HJ.encode())),
+    "header-utf16le-bom": dict(raw_header=_b64(_HJ.encode("utf-16"))),
+    "header-utf16le-nobom": dict(raw_header=_b64(_HJ.encode("utf-16-le"))),
+    "payload-utf8-bom": dict(payload=_b64(b"\xef\xbb\xbf" + _PJ.encode())),
+    "payload-utf16le-bom": dict(payload=_b64(_PJ.encode("utf-16"))),
+    "payload-utf32le-bom": dict(payload=_b64(_PJ.encode("utf-32"))),
+    "payload-latin1-byte": dict(payload=_b64(_PJ.replace("u@", "u\xe9@").encode("latin-1"))),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ENCODED))
+def test_header_and_payload_must_be_strict_utf8_json(synthetic_key, clock, name):
+    assert security.decode_access_token(_mint(exp=T + 3600, **ENCODED[name])) is None
+
+
+def test_utf8_check_is_live_the_library_autodetects_other_encodings(synthetic_key, clock):
+    for name in ("header-utf16le-bom", "payload-utf16le-bom", "payload-utf8-bom"):
+        assert _plain(_mint(exp=T + 3600, **ENCODED[name])) is True, name
+
+
+def test_valid_non_ascii_utf8_still_decodes(synthetic_key, clock):
+    token = _mint(payload=_b64(_PJ.replace("u@", "u\xe9@").encode("utf-8")))
+    assert security.decode_access_token(token)["email"] == "u\xe9@example.test"
+
+
+def test_base64url_forms(synthetic_key, clock):
+    h, p, s = _split(_good())
+    assert _decodes(f"{h}.{p}.{s}" + "=" * (-len(s) % 4))  # padding characters: accepted as before
+    tail = s[:-1] + ("B" if s[-1] != "B" else "C")  # same bytes, non-canonical trailing bits
+    assert security.decode_access_token(f"{h}.{p}.{tail}") is None  # refused (python-jose accepted)
+
+
+def test_b64_false_header_is_refused(synthetic_key, clock):
+    token = _mint(header={**HS256, "b64": False, "crit": ["b64"]}, exp=T + 3600)
+    assert security.decode_access_token(token) is None  # python-jose accepted it
 
 
 # --- cross-library compatibility: tokens minted by python-jose 3.5.0 ---------------------------

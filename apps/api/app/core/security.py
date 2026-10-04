@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -48,8 +49,10 @@ class _Verifier(jwt.PyJWT):
 
     The application mints only ``sub``/``sid``/``auth_epoch``/``email``/``iat``/``exp``, but a
     presented token can carry anything, and the replacement must not accept what the previous
-    verifier refused. Four rules differ between the libraries and are pinned here, each with a
-    test that fails if the override were bypassed (``test_jwt_library_replacement.py``):
+    verifier refused. Five rules differ between the libraries and are pinned here, each with a
+    test that fails if the override were bypassed (``test_jwt_library_replacement.py``). The
+    comparison is the measured matrix in the evidence set (121 hand-signed cases, frozen
+    clocks), not a proof over every possible token.
 
     * ``iat`` -- python-jose only required a numeric value (``int()`` succeeds) and never
       compared it with the clock, so a token minted on a clock ahead of the verifier's keeps
@@ -63,6 +66,11 @@ class _Verifier(jwt.PyJWT):
       rejects every present ``aud``.
     * ``at_hash`` -- python-jose verified it by default and, with no access token to compare,
       rejected any present ``at_hash``; PyJWT never looks at it. The override rejects it.
+    * JSON encoding -- python-jose decoded the header and payload bytes strictly as UTF-8 before
+      parsing; PyJWT hands the raw bytes to ``json.loads``, which auto-detects a UTF-8 BOM,
+      UTF-16 and UTF-32, so a key-signed token in one of those encodings would be newly
+      accepted. :meth:`_decode_payload` and :func:`_require_utf8_json_header` keep the strict
+      decode (a BOM is refused by the JSON parser, as before).
 
     Every override raises a :class:`jwt.PyJWTError`, which :func:`decode_access_token` turns
     into ``None`` (the caller's 401). The clock stays the library's single reading (``now``),
@@ -91,6 +99,9 @@ class _Verifier(jwt.PyJWT):
         if "aud" in payload:
             raise jwt.InvalidAudienceError("Invalid audience")
 
+    def _decode_payload(self, decoded: dict[str, Any]) -> dict[str, Any]:
+        return _utf8_json_object(decoded["payload"], "payload")
+
     def _validate_claims(
         self,
         payload: dict[str, Any],
@@ -108,6 +119,33 @@ class _Verifier(jwt.PyJWT):
 
 
 _verifier = _Verifier()
+
+
+def _utf8_json_object(raw: bytes, what: str) -> dict[str, Any]:
+    """Parse ``raw`` exactly as python-jose did: strict UTF-8 text, then JSON, then an object."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise jwt.DecodeError(f"Invalid {what} string: not UTF-8") from None
+    try:
+        value = json.loads(text)
+    except (ValueError, RecursionError) as e:
+        raise jwt.DecodeError(f"Invalid {what} string: {e}") from None
+    if not isinstance(value, dict):
+        raise jwt.DecodeError(f"Invalid {what} string: must be a json object")
+    return value
+
+
+def _require_utf8_json_header(token: str) -> None:
+    """Refuse a header segment that is not strict UTF-8 JSON (python-jose parity; see
+    :class:`_Verifier`). Anything else about the segment -- missing parts, bad base64url, a
+    non-object -- is left to the library, which refuses it with its own error."""
+    segment = token.split(".", 1)[0]
+    try:
+        raw = jwt.utils.base64url_decode(segment)
+    except Exception:  # noqa: BLE001 - the library reports malformed base64url itself
+        return
+    _utf8_json_object(raw, "header")
 
 
 def _prepare(password: str) -> bytes:
@@ -172,14 +210,19 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
 
     Every library refusal -- bad signature, wrong or missing algorithm (``alg=none``
     included), malformed token, expired ``exp``, premature ``nbf``, non-numeric ``iat``/
-    ``exp``/``nbf``, non-string ``sub``/``jti``, any ``aud`` or ``at_hash`` claim, an
-    unsupported ``crit`` header -- maps to ``None``, and the caller turns ``None`` into its
-    usual 401. A malformed time claim that the previous library let escape as a Python
-    ``TypeError``/``OverflowError`` (an unhandled 500) is ``None`` here too. The algorithm
-    allow-list is :data:`ALLOWED_ALGORITHMS`; the token header has no say in it.
+    ``exp``/``nbf``, non-string ``sub``/``jti``, any ``aud`` or ``at_hash`` claim, a header
+    or payload that is not strict UTF-8 JSON -- maps to ``None``, and the caller turns
+    ``None`` into its usual 401. Refusals the previous library did not make, all disclosed in
+    the evidence matrix: a malformed time claim it let escape as a Python ``TypeError``/
+    ``OverflowError`` (an unhandled 500) is ``None`` here; so are an unsupported ``crit``
+    header, an empty ``crit`` list, a non-string ``kid``, ``b64: false`` and a signature
+    segment with non-canonical base64url trailing bits (PyJWT's RFC 7515 / 7797 header and
+    base64url validation). The algorithm allow-list is :data:`ALLOWED_ALGORITHMS`; the token
+    header has no say in it.
     """
     settings = get_settings()
     try:
+        _require_utf8_json_header(token)
         return _verifier.decode(
             token,
             settings.secret_key,
