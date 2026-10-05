@@ -4,7 +4,7 @@
 
 SignalNest is an AI marketing-intelligence platform whose core product is an
 **intelligence pipeline**, not a copywriting tool. This document describes the
-Phase 1–2 system.
+Phase 1–2 system; the dated section at the end records where `main` has moved since.
 
 ## Topology
 
@@ -14,7 +14,10 @@ Phase 1–2 system.
 - **`apps/web` — React SPA.** A presentation layer that calls the API through a typed
   client generated from the OpenAPI schema. It contains **no** business rules,
   scoring, authorization, or tenant-isolation logic.
-- **`packages/shared`** — generated TS API types and shared enums/constants.
+- ~~**`packages/shared`** — generated TS API types and shared enums/constants.~~ *(No
+  `packages/` directory has ever been tracked in this repository, including at the Phase 1–2
+  acceptance commit `8dca455e`; the generated types live in `apps/web/src/api/types.ts` and
+  `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)*
 
 The frontend and backend agree on exactly one contract: `apps/api/openapi.json`,
 regenerated via `npm run gen:types`.
@@ -108,3 +111,41 @@ not configured; the system never silently falls back between mock and real provi
 - `pages/` — Overview, Onboarding, CampaignContext, Locations, ScoutRequests,
   ScoutRequestDetail, Opportunities, OpportunityDetail, Settings.
 - `components/` — Radix-based shadcn-style UI primitives and layout.
+
+## Where `main` has moved since Phase 1–2 (measured 2026-10-05 on `c4315d8d`)
+
+This section exists so that the body above does not mislead by omission (`P6-GOV-5`). It
+lists what is *present* in the tree, not what is complete, enabled or deployed; status lives
+in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). None of the Phase 6 repository
+changes is deployed (plan §4.6a).
+
+- **Backend module directories** under `apps/api/app/` (26, excluding `__pycache__`): `api`,
+  `audit`, `auth`, `brands`, `business_profiles`, `campaign_context`, `capabilities`, `claims`,
+  `clustering`, `connectors`, `core`, `db`, `feedback`, `geography`, `infra`, `intelligence`,
+  `jobs`, `llm`, `locations`, `opportunities`, `organizations`, `scoring`, `scouting_requests`,
+  `signals`, `system`, `tests`. Not in the Phase 1–2 list above: `api` (router aggregation),
+  `capabilities` (Phase 4A capability registry, resolver and operator overrides —
+  `docs/verification/4a-c-*.md`), `connectors` (connector base, policy, rate limiting, retry,
+  registry and an RSS parser whose live egress is not wired on `main` — draft PR #34),
+  `core`, `db`, `feedback` (Phase 3C human feedback loop — `docs/verification/phase-3-closeout.md`),
+  `infra` (cache, mail, queue, storage and vector adapters), `intelligence` (Phase 3B signal
+  intelligence — `docs/phase-3b/signal-intelligence-design.md`), `system` (health, readiness
+  and operator-only internal routes). `workspaces` is not a module directory; the Workspace
+  model lives in `organizations/models.py`. Modules exposing a `routes.py`: `audit`, `auth`,
+  `brands`, `campaign_context`, `feedback`, `jobs`, `locations`, `opportunities`,
+  `organizations`, `scouting_requests`, `system`.
+- **Durable jobs:** `JOB_QUEUE_BACKEND` implements only `local` (SQLite-backed store + worker;
+  `docs/phase-3a-durable-jobs.md`). The "(Redis/Celery/etc. — Phase 3B)" cell in the table
+  above was a plan; Phase 3B did not deliver it.
+- **API surface:** 85 paths / 106 operations in `apps/api/openapi.json`.
+- **Frontend pages** under `apps/web/src/pages/` beyond the list above: `auth/` (SignIn,
+  Register, ForgotPassword, ResetPassword, VerifyEmail, AuthLayout, DemoSignInShortcut),
+  `invite/InvitePage`, `operations/Operations`, `settings/` (OrganizationMembers, Invitations,
+  ChangePasswordDialog), `scouts/` (JobsPanel, SchedulePanel, ScoutRequestDialog),
+  `opportunities/` (FeedbackPanel, IntelligencePanel, OpportunityCardView),
+  `locations/LocationDialog`, `NotFound`. `src/auth/` also holds `RequireOperator.tsx` and
+  `sign-out.ts`.
+- **Not described in this document:** the Phase 3–4 verification records
+  (`docs/verification/`), the AWS staging IaC and runbooks (`infra/aws/`, `docs/operations/`),
+  and the Phase 5A–5E guided-action scope (`docs/project-phase-5-plan.md`, excluded from
+  Phase 6 by `P6-D01`).

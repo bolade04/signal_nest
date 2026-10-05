@@ -2,14 +2,22 @@
 
 > **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 3 plan as written before Phase 3 work began and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§4 residual-work matrix and §4.6a live-state reconciliation; §1.2 is the dated 2026-09-19 baseline snapshot).
 
-**Status: planned, not started.** Phase 1–2 is complete and accepted (see
+~~**Status: planned, not started.**~~ **Status at writing (2026-07-12): planned, not started.
+2026-10-05: Phase 3 has since been implemented and closed, its capabilities shipped dark —
+[`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md). As executed it
+delivered the 3A runtime foundation (`docs/phase-3a-*.md`), the dark 3B scouting-schedule
+slices and the dark 3C feedback loop, not the full workstream list below; the creative
+generation, approvals, analytics, live-integration and billing work is now the Phase 5A–5E
+guided-action scope ([`docs/project-phase-5-plan.md`](project-phase-5-plan.md)), excluded from
+Phase 6 by `P6-D01`. The current track is
+[`docs/project-phase-6-plan.md`](project-phase-6-plan.md).** Phase 1–2 is complete and accepted (see
 [`acceptance-report.md`](acceptance-report.md)). This plan starts from that accepted
 baseline and does **not** repeat Phase 1–2 work.
 
 ## Ground rules
 
-- Phase 3 is **planned but not started**. No Phase 3 code exists yet; UI entry points for
-  Phase 3 render as clearly-labeled "coming in Phase 3" stubs.
+- ~~Phase 3 is **planned but not started**. No Phase 3 code exists yet; UI entry points for Phase 3 render as clearly-labeled "coming in Phase 3" stubs.~~
+  *(Ground rule at writing; superseded — see the status line above.)*
 - **`main` must remain stable and releasable throughout Phase 3.**
 - New work ships in **small vertical slices behind protected PRs** (the `main protection`
   ruleset, ID `18820692`, stays active).
@@ -213,6 +221,9 @@ operations · security review · performance and load testing · beta readiness.
 
 ## Phase 3 entry criteria
 
+*(Checklist as written in 2026-07; it was not maintained after Phase 3 began and its boxes do
+not record current state.)*
+
 Before Phase 3 implementation begins, require:
 
 - [ ] Updated docs merged.
@@ -250,6 +261,8 @@ Before Phase 3 implementation begins, require:
 ---
 
 ## Immediate maintenance queue (before Phase 3)
+
+*(As written in 2026-07; item states are not maintained in this document.)*
 
 Classification: **[R] Required before Phase 3** · **[E] Recommended early in Phase 3** ·
 **[N] Non-blocking technical debt**.

@@ -11,14 +11,21 @@ that followed. Phase 3+ is intentionally out of scope; see
 
 - **Phase 1–2 is complete and accepted.** The production-style vertical slice is
   implemented end to end (foundation → scouting → explainable, scored opportunities).
-- **`main` is green.** The latest CI run for the accepted commit passes all four
-  required jobs.
-- **Security advisories are remediated.** `npm audit` reports zero vulnerabilities and
-  there are zero open Dependabot security alerts.
+- **`main` is green** *(at acceptance)*. The latest CI run for the accepted commit passes all four
+  required jobs *(the ruleset has required six contexts since Phase 6 — see "Governance and
+  protection" below)*.
+- **Security advisories are remediated** *(at acceptance)*. `npm audit` reports zero vulnerabilities and
+  there are zero open Dependabot security alerts *(2026-10-05 measurement — 3 open MEDIUM alerts,
+  none HIGH/CRITICAL on a runtime dependency, and 3 `npm audit` advisories — is recorded in
+  [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) §19 item 12 and rows `P6-CI-6`/`P6-CI-7`)*.
 - **CI quality checks now propagate real failures.** The pipefail masking bug is fixed
   and guarded by a regression test.
 - **Frontend lint tooling is migrated and stable** (ESLint flat config on ESLint 10).
-- **Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.
+- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at
+  acceptance. Phase 3 was then implemented and closed with its capabilities shipped dark —
+  [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches
+  are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 —
+  [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)*
 
 ## Final repository baseline
 
@@ -26,10 +33,10 @@ that followed. Phase 3+ is intentionally out of scope; see
 | --- | --- |
 | Repository | `bolade04/signal_nest` |
 | Default branch | `main` |
-| Current accepted & maintained `main` SHA | `b5965d354a0c2335c2ac9cf283fd28b56d8d612d` |
+| ~~Current accepted & maintained~~ Accepted `main` SHA *(at this report; `main` has since advanced)* | `b5965d354a0c2335c2ac9cf283fd28b56d8d612d` |
 | Original Phase 1–2 implementation squash commit | `8dca455e9592fdec959e57e6d9f741007f421f5f` |
 | Working tree at acceptance | clean (no tracked changes; `git status --short` empty) |
-| Safety branch | `backup/signalnest-phase-1-2-pre-history-stitch` |
+| Safety branch | `backup/signalnest-phase-1-2-pre-history-stitch` *(2026-10-05: exists only as a local branch on the operator machine, not on `origin`; retained pending `P6-GOV-7`)* |
 
 The safety branch is retained **intentionally** as a pre-history-stitch snapshot. It is
 **not** the active development branch and should not be built on; `main` is authoritative.
@@ -42,7 +49,10 @@ The implemented stack, as present in the repository:
   React Hook Form/Zod + Tailwind + Radix.
 - **Backend:** Python 3.12 + FastAPI modular monolith — DB, migrations, domain logic,
   pure scoring/geo/claims engines, REST, auth, in-process jobs.
-- **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`).
+- **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`) *(root `package.json`
+  `workspaces` on `main` `c4315d8d`: `apps/web` and the `packages/*` glob only; no `packages/`
+  directory has ever been tracked, and `apps/api` is a Python project driven by npm scripts, not
+  a workspace — 2026-10-05)*.
 - **Default (zero-dependency) local mode:** SQLite, in-process queue, in-memory cache,
   numpy brute-force vector fallback, local-file storage, mock-first LLM.
 - **Production adapters (implemented behind `APP_MODE=full`, not necessarily deployed):**
@@ -56,7 +66,7 @@ The implemented stack, as present in the repository:
 ## Completed functional vertical slice
 
 Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
-**[P] Planned for Phase 3**.
+**[P] Planned for Phase 3** *(at writing; see the dated note on the [P] item below)*.
 
 ### Phase 1 — foundation
 - **[T]** Organization / workspace / brand / location model with server-side tenancy:
@@ -86,7 +96,9 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
   isolated per workspace+brand+location+market+campaign.
 - **[A]** Fixture-based connectors clearly labeled "Simulated"; live connectors
   (Reddit, reviews, Trends, Meta Ad Library, TikTok, RSS/news) exist as adapter
-  placeholders only.
+  placeholders only *(2026-10-05: `apps/api/app/connectors/` now holds the connector framework
+  and an RSS parser with a sandbox provider; live egress is not wired on `main` — draft PR #34;
+  plan gate E5 is not met)*.
 - **[T]** Canonical signal model, normalization, dedupe/cluster, classification.
 - **[T]** Noise gate ("collect broadly, notify selectively") — unit tested.
 - **[T]** Relevance engine with the **<40 ⇒ never recommend action** hard rule — unit tested.
@@ -105,9 +117,16 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 - **[A]** LLM is mock-first by default; OpenAI/Anthropic adapters behind env, not
   exercised in the demo.
 - **[P]** Creative generation, approvals, analytics, live integrations, billing — stubs
-  routing to "coming in Phase 3".
+  routing to "coming in Phase 3" *(2026-10-05: this scope became the Phase 5A–5E guided-action
+  work — [`docs/project-phase-5-plan.md`](project-phase-5-plan.md) — excluded from Phase 6 by
+  resolved decision `P6-D01`; Phase 3 as executed delivered the dark 3B scouting-schedule and 3C
+  feedback-loop slices on top of the 3A runtime foundation)*.
 
 ## Security and dependency status
+
+*All figures in this section are the acceptance-time measurements (2026-07-12). For the
+2026-10-05 state see [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) §19 item 12 and
+rows `P6-CI-6`, `P6-CI-7`, `P6-PLAT-4`.*
 
 | Control / package | State |
 | --- | --- |
@@ -154,9 +173,9 @@ Fix:
 > CI runs that predate this fix must not be treated as reliable acceptance evidence.
 > Acceptance evidence below is from the accepted commit, after the fix.
 
-## Current GitHub Actions versions
+## GitHub Actions versions at acceptance
 
-| Action | Version on `main` |
+| Action | Version on `main` at acceptance |
 | --- | --- |
 | `actions/checkout` | `v7` |
 | `actions/setup-node` | `v6` |
@@ -194,10 +213,11 @@ Accepted toolchain:
 - **No broad rule disabling** was introduced.
 - The React Refresh exception is **narrowly limited to UI primitive modules**
   (`src/components/ui/**`).
-- Frontend test count is now **18**.
+- Frontend test count is now **18** *(at acceptance; 763 in the Frontend quality job of CI run
+  37228710926 on `main` `c4315d8d`, 2026-10-04)*.
 - **No duplicate ESLint major and no invalid peers** remain.
 
-## Final quality evidence
+## Final quality evidence *(at the accepted commit)*
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -241,6 +261,12 @@ Final ruleset state (restored and active at acceptance):
 | Force pushes | blocked |
 | Branch deletion | blocked |
 
+*2026-10-05: ruleset 18820692 is still active and now requires **six** contexts — Frontend
+quality · Backend quality · Migrations and API contract · Integration smoke · Container build and
+security · Revision reader (unit, IaC contract, in-image) — with 1 approval, last-push approval
+and review-thread resolution (`P6-CI-1` closed; plan §4). The legacy branch-protection endpoint
+still returns 404 (`P6-GOV-6`).*
+
 A temporary review-rule relaxation was used for owner-authored PRs and **restored
 immediately, with no administrator bypass**. The authoritative final state is fully
 restored protection as tabulated above.
@@ -256,7 +282,8 @@ restored protection as tabulated above.
 - Live external data connectors are fixture-based ("Simulated") placeholders.
 - Auth is the local email/password + JWT provider only (no SSO/OAuth, refresh rotation,
   or rate-limit backend).
-- Phase 3 features are not yet implemented.
+- ~~Phase 3 features are not yet implemented.~~ *(Implemented and closed dark after acceptance —
+  see the dated note under "Executive acceptance status".)*
 - TypeScript 7 upgrade (Dependabot PR #6) is intentionally deferred.
 
 ### Completed maintenance
