@@ -92,6 +92,12 @@ Every external dependency sits behind an adapter interface selected by `APP_MODE
 Startup config validation fails fast in full/prod if a real provider or real DB is
 not configured; the system never silently falls back between mock and real providers.
 
+*(2026-10-05: two cells of this table describe adapters that are not operative on `main`
+`c4315d8d` — `build_index()` in `apps/api/app/infra/vector.py` returns `BruteForceIndex()`
+unconditionally, so the `pgvector` column is not reachable (`P6-PLAT-1`), and the `Redis` queue
+adapter `xadd`s to a stream that no consumer reads (`P6-PLAT-2`). Both rows are open in the
+Phase 6 plan.)*
+
 ## Tenancy & security
 
 - Every query is scoped server-side by `organization_id` / `workspace_id` (and
@@ -123,14 +129,15 @@ changes is deployed (plan §4.6a).
   `audit`, `auth`, `brands`, `business_profiles`, `campaign_context`, `capabilities`, `claims`,
   `clustering`, `connectors`, `core`, `db`, `feedback`, `geography`, `infra`, `intelligence`,
   `jobs`, `llm`, `locations`, `opportunities`, `organizations`, `scoring`, `scouting_requests`,
-  `signals`, `system`, `tests`. Not in the Phase 1–2 list above: `api` (router aggregation),
-  `capabilities` (Phase 4A capability registry, resolver and operator overrides —
-  `docs/verification/4a-c-*.md`), `connectors` (connector base, policy, rate limiting, retry,
-  registry and an RSS parser whose live egress is not wired on `main` — draft PR #34),
-  `core`, `db`, `feedback` (Phase 3C human feedback loop — `docs/verification/phase-3-closeout.md`),
-  `infra` (cache, mail, queue, storage and vector adapters), `intelligence` (Phase 3B signal
-  intelligence — `docs/phase-3b/signal-intelligence-design.md`), `system` (health, readiness
-  and operator-only internal routes). `workspaces` is not a module directory; the Workspace
+  `signals`, `system`, `tests`. Present at the acceptance commit `8dca455e` but not in the list above: `api` (router
+  aggregation), `core`, `db`, `infra` (cache, mail, queue, storage and vector adapters). Added
+  since: `capabilities` (Phase 4A capability registry, resolver and operator overrides —
+  `docs/verification/4a-c-*.md`), `connectors` (Phase 3B connector base, policy, rate limiting,
+  retry, registry and an RSS parser whose live egress is not wired on `main` — draft PR #34),
+  `feedback` (Phase 3C human feedback loop — `docs/verification/phase-3-closeout.md`),
+  `intelligence` (Phase 3B signal intelligence and opportunity scoring —
+  `docs/phase-3b/signal-intelligence-design.md`), `system` (health, readiness and operator-only
+  internal routes). `workspaces` is not a module directory; the Workspace
   model lives in `organizations/models.py`. Modules exposing a `routes.py`: `audit`, `auth`,
   `brands`, `campaign_context`, `feedback`, `jobs`, `locations`, `opportunities`,
   `organizations`, `scouting_requests`, `system`.

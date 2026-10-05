@@ -12,20 +12,13 @@ that followed. Phase 3+ is intentionally out of scope; see
 - **Phase 1–2 is complete and accepted.** The production-style vertical slice is
   implemented end to end (foundation → scouting → explainable, scored opportunities).
 - **`main` is green** *(at acceptance)*. The latest CI run for the accepted commit passes all four
-  required jobs *(the ruleset has required six contexts since Phase 6 — see "Governance and
-  protection" below)*.
+  required jobs *(the ruleset has required six contexts since Phase 6 — see "Governance and protection" below)*.
 - **Security advisories are remediated** *(at acceptance)*. `npm audit` reports zero vulnerabilities and
-  there are zero open Dependabot security alerts *(2026-10-05 measurement — 3 open MEDIUM alerts,
-  none HIGH/CRITICAL on a runtime dependency, and 3 `npm audit` advisories — is recorded in
-  [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) §19 item 12 and rows `P6-CI-6`/`P6-CI-7`)*.
+  there are zero open Dependabot security alerts *(the 2026-10-05 measurement — 3 open MEDIUM alerts, none HIGH/CRITICAL on a runtime dependency, and 3 `npm audit` advisories — is recorded in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) §19 item 12 and rows `P6-CI-6`/`P6-CI-7`)*.
 - **CI quality checks now propagate real failures.** The pipefail masking bug is fixed
   and guarded by a regression test.
 - **Frontend lint tooling is migrated and stable** (ESLint flat config on ESLint 10).
-- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at
-  acceptance. Phase 3 was then implemented and closed with its capabilities shipped dark —
-  [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches
-  are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 —
-  [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)*
+- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at acceptance. Phase 3 was then implemented and closed with its capabilities shipped dark — [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 — [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)*
 
 ## Final repository baseline
 
@@ -49,10 +42,7 @@ The implemented stack, as present in the repository:
   React Hook Form/Zod + Tailwind + Radix.
 - **Backend:** Python 3.12 + FastAPI modular monolith — DB, migrations, domain logic,
   pure scoring/geo/claims engines, REST, auth, in-process jobs.
-- **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`) *(root `package.json`
-  `workspaces` on `main` `c4315d8d`: `apps/web` and the `packages/*` glob only; no `packages/`
-  directory has ever been tracked, and `apps/api` is a Python project driven by npm scripts, not
-  a workspace — 2026-10-05)*.
+- **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`) *(root `package.json` `workspaces` on `main` `c4315d8d`: `apps/web` and the `packages/*` glob only; no `packages/` directory has ever been tracked, and `apps/api` is a Python project driven by npm scripts, not a workspace — 2026-10-05)*.
 - **Default (zero-dependency) local mode:** SQLite, in-process queue, in-memory cache,
   numpy brute-force vector fallback, local-file storage, mock-first LLM.
 - **Production adapters (implemented behind `APP_MODE=full`, not necessarily deployed):**
@@ -119,8 +109,10 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 - **[P]** Creative generation, approvals, analytics, live integrations, billing — stubs
   routing to "coming in Phase 3" *(2026-10-05: this scope became the Phase 5A–5E guided-action
   work — [`docs/project-phase-5-plan.md`](project-phase-5-plan.md) — excluded from Phase 6 by
-  resolved decision `P6-D01`; Phase 3 as executed delivered the dark 3B scouting-schedule and 3C
-  feedback-loop slices on top of the 3A runtime foundation)*.
+  resolved decision `P6-D01`; Phase 3 as executed delivered, dark, the 3B scouting work — connector
+  foundation with an RSS sandbox, signal intelligence and opportunity scoring, scouting schedules —
+  and the 3C feedback loop on top of the 3A runtime foundation; the closeout record lists the
+  3B/3C PRs)*.
 
 ## Security and dependency status
 
@@ -173,7 +165,7 @@ Fix:
 > CI runs that predate this fix must not be treated as reliable acceptance evidence.
 > Acceptance evidence below is from the accepted commit, after the fix.
 
-## GitHub Actions versions at acceptance
+## ~~Current~~ GitHub Actions versions at acceptance
 
 | Action | Version on `main` at acceptance |
 | --- | --- |
@@ -279,7 +271,8 @@ restored protection as tabulated above.
 - Production infrastructure adapters (PostgreSQL/pgvector/Redis/S3) are implemented but
   not necessarily deployed.
 - Real external AI/provider integrations may still use mock-first behavior.
-- Live external data connectors are fixture-based ("Simulated") placeholders.
+- Live external data connectors are fixture-based ("Simulated") placeholders *(2026-10-05: the
+  connector framework and an RSS sandbox exist; live egress is not wired — see the [A] note above)*.
 - Auth is the local email/password + JWT provider only (no SSO/OAuth, refresh rotation,
   or rate-limit backend).
 - ~~Phase 3 features are not yet implemented.~~ *(Implemented and closed dark after acceptance —

@@ -5,8 +5,10 @@
 ~~**Status: planned, not started.**~~ **Status at writing (2026-07-12): planned, not started.
 2026-10-05: Phase 3 has since been implemented and closed, its capabilities shipped dark —
 [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md). As executed it
-delivered the 3A runtime foundation (`docs/phase-3a-*.md`), the dark 3B scouting-schedule
-slices and the dark 3C feedback loop, not the full workstream list below; the creative
+delivered the 3A runtime foundation (`docs/phase-3a-*.md`), the dark 3B scouting work —
+connector foundation with an RSS sandbox, signal intelligence and opportunity scoring
+(`docs/phase-3b/`), scouting schedules — and the dark 3C feedback loop, not the full workstream
+list below; the creative
 generation, approvals, analytics, live-integration and billing work is now the Phase 5A–5E
 guided-action scope ([`docs/project-phase-5-plan.md`](project-phase-5-plan.md)), excluded from
 Phase 6 by `P6-D01`. The current track is
@@ -31,7 +33,7 @@ baseline and does **not** repeat Phase 1–2 work.
 | Accepted `main` SHA | `73c21aca819f680aa986160dba3da4f32f8981a8` |
 | Phase 1–2 squash commit | `8dca455e9592fdec959e57e6d9f741007f421f5f` |
 | Security alerts / `npm audit` | 0 / 0 |
-| Required checks | Frontend quality · Backend quality · Migrations and API contract · Integration smoke |
+| Required checks | Frontend quality · Backend quality · Migrations and API contract · Integration smoke *(four at entry; six since Phase 6 — `P6-CI-1`)* |
 | Frontend toolchain | ESLint 10.7.0 flat config · typescript-eslint 8.63.0 · TS 5.9.3 |
 
 ---
