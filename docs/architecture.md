@@ -94,8 +94,9 @@ not configured; the system never silently falls back between mock and real provi
 
 *(2026-10-05: two cells of this table describe adapters that are not operative on `main`
 `c4315d8d` — `build_index()` in `apps/api/app/infra/vector.py` returns `BruteForceIndex()`
-unconditionally, so the `pgvector` column is not reachable (`P6-PLAT-1`), and the `Redis` queue
-adapter `xadd`s to a stream that no consumer reads (`P6-PLAT-2`). Both rows are open in the
+unconditionally, so the `pgvector` cell is not operative: `vector_backend=pgvector` is accepted
+(and required in production) but the brute-force index is built regardless (`P6-PLAT-1`); and the
+`Redis` queue adapter `xadd`s to a stream that no consumer reads (`P6-PLAT-2`). Both rows are open in the
 Phase 6 plan.)*
 
 ## Tenancy & security

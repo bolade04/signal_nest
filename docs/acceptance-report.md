@@ -112,7 +112,8 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
   resolved decision `P6-D01`; Phase 3 as executed delivered, dark, the 3B scouting work — connector
   foundation with an RSS sandbox, signal intelligence and opportunity scoring, scouting schedules —
   and the 3C feedback loop on top of the 3A runtime foundation; the closeout record lists the
-  3B/3C PRs)*.
+  scheduling PRs #48–#51 and the 3C PRs, the connector and intelligence work is in git history —
+  fe78b39, #35)*.
 
 ## Security and dependency status
 
