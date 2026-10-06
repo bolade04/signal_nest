@@ -29,7 +29,9 @@ regenerated via `npm run gen:types`.
 no `repository.py` or `policies.py` file exists under `apps/api/app/` at the Phase 1–2 squash
 `8dca455e`, at the accepted commit `b5965d35` or on `main` `c5b48ed7`. Modules hold differing
 subsets of `models.py`, `schemas.py` and `routes.py`; of the module names listed below, only `audit`,
-`auth`, `brands`, `jobs` and `llm` have a `service.py` on `main`; `geography`, `claims` and `scoring` hold engine files;
+`auth`, `brands`, `jobs` and `llm` have a `service.py` on `main`; `geography` and `claims` each hold an
+`engine.py`, and `scoring` holds the scoring-engine modules (`relevance.py`, `noise.py`, `validation.py`,
+`opportunity.py`, `decision.py`, `types.py`);
 `business_profiles` and `clustering` contain only `__init__.py`; there is no `workspaces`
 directory — the Workspace model is in `organizations/models.py`.)* Domain module names as
 written:
@@ -113,20 +115,26 @@ Phase 6 plan.)*
 
 - Every query is scoped server-side by `organization_id` / `workspace_id` (and
   `location_id` / `campaign_id` where applicable) ~~in the repository layer~~ *(2026-10-06
-  correction — inaccurate when written: there is no repository layer; the tenant filters are
-  written in the route handlers and, where a module has one, in its `service.py` — for
-  example `locations/routes.py` filters on `BusinessLocation.workspace_id` and `brands/service.py`
-  writes `organization_id` / `workspace_id`)*.
+  correction — inaccurate when written: there is no repository layer. The tenant predicates are
+  written directly in the modules that run the queries — route handlers, `service.py` modules and
+  other module helpers. At `8dca455e` they appear in the route handlers, `brands/service.py`,
+  `opportunities/context.py`, `jobs/pipeline.py` and `auth/dependencies.py`; on `main` `c5b48ed7`
+  also in, for example, `jobs/store.py`, `scouting_requests/schedules.py`,
+  `intelligence/persistence.py` and `organizations/members.py`. This note does not re-verify that
+  every query is scoped)*.
   Client-supplied tenant IDs are never trusted.
 - RBAC roles: Owner, Admin, Marketer, Reviewer, Viewer, Compliance Reviewer, enforced
   ~~by per-domain policy layers~~ *(2026-10-06 correction — inaccurate when written: there are no
-  per-domain policy layers. The roles are defined in `apps/api/app/core/enums.py`; authorization
-  is a set of FastAPI dependencies in `apps/api/app/auth/dependencies.py` that routes declare:
-  `get_tenant_context` resolves the caller's organization-membership role for the workspace in the
-  path, `require_role(...)` admits every role ranked at or above the lowest-ranked role it names (the only role dependency at
-  `8dca455e` and `b5965d35`), `require_exact_roles(...)` and `require_exact_organization_roles(...)`
-  (added after acceptance) admit only the named roles, and `require_operator` gates operator-only
-  routes)*.
+  per-domain policy layers. The roles are defined in `apps/api/app/core/enums.py`. Authorization is
+  done by FastAPI dependencies from `apps/api/app/auth/dependencies.py` that routes declare, together
+  with checks inside some modules. At `8dca455e` and `b5965d35`, `get_tenant_context` resolves the
+  caller's organization-membership role for the requested workspace and `require_role(...)` admits
+  every role ranked at or above the lowest-ranked role it names; `organizations/routes.py` also
+  checks membership inline (`_assert_member`). On `main` `c5b48ed7` those two dependencies remain,
+  `require_exact_roles(...)` and `require_exact_organization_roles(...)` (added after acceptance)
+  admit only the named roles, `require_operator` gates operator-only routes, and
+  `organizations/members.py` and `organizations/invitations.py` re-check the actor's role
+  themselves. This note does not enumerate every check)*.
 - Scout requests are isolated by workspace + brand + location + market + campaign, so
   results from one city never influence another unless explicitly combined.
 
