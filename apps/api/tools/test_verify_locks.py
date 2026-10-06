@@ -406,16 +406,10 @@ class VerifyLocksTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stdout)
         self.assertIn(f"REFUSED: --find-links={self.index}", proc.stdout)
 
-    def test_find_links_must_be_an_absolute_local_directory_without_pages(self) -> None:
-        # pip follows the links on HTML pages in a --find-links directory and resolves a
-        # relative value against the project directory, so both are refused outright.
-        pages = self.tmp / "pages"
-        pages.mkdir()
-        (pages / "links.html").write_text('<a href="http://127.0.0.1:9/alpha-1.0.whl">a</a>',
-                                          encoding="utf-8")
-        for label, value in (("relative path", "index"),
-                             ("directory with an HTML page", str(pages)),
-                             ("file URL", f"file://{self.index}")):
+    def test_find_links_must_be_an_absolute_local_directory(self) -> None:
+        # pip would resolve a relative value against the project directory (or read it as a
+        # URL), so only absolute directories are accepted.
+        for label, value in (("relative path", "index"), ("file URL", f"file://{self.index}")):
             with self.subTest(label=label):
                 command = [sys.executable, str(VERIFY), "--project-dir", str(self.project),
                            "--compile-arg=--no-index", f"--compile-arg=--find-links={value}"]
@@ -423,6 +417,52 @@ class VerifyLocksTests(unittest.TestCase):
                                       cwd=self.tmp)
                 self.assertEqual(proc.returncode, 2, proc.stdout)
                 self.assertIn(f"REFUSED: --find-links={value}", proc.stdout)
+
+    def test_pages_in_a_find_links_directory_are_never_read(self) -> None:
+        vendor, extra = self.inject_vendor_alpha()
+        target = (vendor / "alpha-1.0-py3-none-any.whl").as_uri()
+        link = f'<a href="{target}">alpha-1.0-py3-none-any.whl</a>'
+        for name in ("links.html", "LINKS.HTML", "links.htm", "links.html.gz"):
+            with self.subTest(page=name):
+                page = self.index / name
+                page.write_text(link, encoding="utf-8")
+                # Positive control: plain pip-compile over this directory follows the page.
+                out = self.tmp / f"control-{name}.txt"
+                piptools_compile(self.project, [
+                    "--no-config", "--generate-hashes", "--strip-extras", "--extra", "full",
+                    *offline_args(self.index, self.cache), "--output-file", str(out),
+                    "pyproject.toml"])
+                self.assertIn(extra, out.read_text(encoding="utf-8"))
+                self.assert_fails(self.run_verifier(),
+                                  "hashes: alpha==1.0 committed-only 1, index-only 0")
+                page.unlink()
+
+    def test_find_links_snapshot_holds_only_distributions_taken_once(self) -> None:
+        (self.index / "links.html").write_text("<a href='x'>x</a>", encoding="utf-8")
+        (self.index / "notes.txt").write_text("x", encoding="utf-8")
+        into = self.tmp / "into"
+        into.mkdir()
+        args = vl.snapshot_find_links(["--no-index", f"--find-links={self.index}"], into)
+        copy = Path(args[1].partition("=")[2])
+        self.assertEqual(args[0], "--no-index")
+        self.assertEqual(copy.parent, into)
+        expected = sorted(f.name for f in self.index.iterdir()
+                          if f.name.endswith((".whl", ".tar.gz")))
+        self.assertEqual(sorted(f.name for f in copy.iterdir()), expected)
+        (self.index / "late-1.0-py3-none-any.whl").write_bytes(b"late")
+        self.assertNotIn("late-1.0-py3-none-any.whl", [f.name for f in copy.iterdir()])
+
+    def test_unreadable_toolchain_report_fails_closed(self) -> None:
+        for program in ("print('not json')", "import sys; sys.exit(3)", "print('[1]')"):
+            with self.subTest(program=program):
+                code = ("import sys; sys.path.insert(0, sys.argv[1]); import verify_locks as v; "
+                        "v._READ_VERSIONS = sys.argv[3]; "
+                        "sys.exit(v.main(['--project-dir', sys.argv[2]]))")
+                proc = subprocess.run(
+                    [sys.executable, "-c", code, str(HERE), str(self.project), program],
+                    capture_output=True, text=True, check=False)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn("TOOLCHAIN MISMATCH: pip is not installed", proc.stdout)
 
     def test_hash_source_label_follows_no_index_only(self) -> None:
         self.assertEqual(vl.hash_source([]), "the index")

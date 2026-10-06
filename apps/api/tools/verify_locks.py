@@ -24,9 +24,12 @@ site-packages), with ``--no-config``, with every inherited ``PIP_*`` variable re
 ``PIP_CONFIG_FILE`` set to ``os.devnull`` (pip then reads no configuration file), so neither a
 pip-tools config file nor pip configuration can turn verification into an upgrade or add a
 package source. ``--compile-arg`` accepts only the options the offline regression tests need,
-and ``--find-links`` only as an absolute, existing local directory holding no HTML page,
-together with ``--no-index``. The pip and pip-tools versions are read in the same isolated
-mode. The verifier's own process is not isolated; the CI step sets no ``PYTHON*`` variable.
+and ``--find-links`` only as an absolute local directory together with ``--no-index``;
+pip-compile then reads a private copy of that directory holding only its ``*.whl`` and
+``*.tar.gz`` files, so no page in it can add a source and a later change to it is not seen.
+The pip and pip-tools versions are read in the same isolated mode. The verifier's own process
+is not isolated; the CI step sets no ``PYTHON*`` variable that CPython reads (the workflow's
+``PYTHON_VERSION`` is not one).
 
 What it accepts by design: a lock whose pins all satisfy ``pyproject.toml`` and whose hashes
 match the index. A hand edit to an OLDER compatible version with its correct hashes therefore
@@ -44,6 +47,7 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -168,9 +172,13 @@ def installed_versions() -> dict[str, str | None]:
     """pip and pip-tools versions as the isolated (-I) pip-compile child will see them."""
     proc = subprocess.run([sys.executable, "-I", "-c", _READ_VERSIONS, *TOOLCHAIN],
                           capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        return dict.fromkeys(TOOLCHAIN)
-    return json.loads(proc.stdout)
+    try:
+        found = json.loads(proc.stdout) if proc.returncode == 0 else None
+    except ValueError:
+        found = None
+    if not isinstance(found, dict):
+        return dict.fromkeys(TOOLCHAIN)  # unreadable: every tool counts as not installed
+    return {dist: found.get(dist) for dist in TOOLCHAIN}
 
 
 def check_toolchain() -> list[str]:
@@ -185,9 +193,9 @@ def check_toolchain() -> list[str]:
 def forbidden_compile_args(args: list[str]) -> list[str]:
     """Every --compile-arg that is not exactly an allowed flag or an allowed ``--opt=value``.
 
-    ``--find-links`` may only name an absolute, existing local directory that holds no HTML
-    page (pip follows the links on such pages), and only together with ``--no-index``: it
-    replaces the package index for the offline tests and cannot reach another source.
+    ``--find-links`` may only name an absolute, existing local directory, and only together
+    with ``--no-index``: it replaces the package index for the offline tests. What pip-compile
+    reads from it is decided by snapshot_find_links().
     """
     bad = []
     for arg in args:
@@ -196,12 +204,33 @@ def forbidden_compile_args(args: list[str]) -> list[str]:
                    or (name in _ALLOWED_VALUED and has_value and value != ""))
         if allowed and name == "--find-links":
             path = Path(value)
-            allowed = ("--no-index" in args and "://" not in value and path.is_absolute()
-                       and path.is_dir()
-                       and not any(f.suffix.lower() in (".html", ".htm") for f in path.iterdir()))
+            allowed = "--no-index" in args and path.is_absolute() and path.is_dir()
         if not allowed:
             bad.append(arg)
     return bad
+
+
+_DISTRIBUTIONS = (".whl", ".tar.gz")
+
+
+def snapshot_find_links(compile_args: list[str], into: Path) -> list[str]:
+    """Replace each --find-links directory by a private copy holding only its distribution
+    files (``*.whl``, ``*.tar.gz``). pip treats any HTML page in a --find-links directory as a
+    further source of links, whatever its exact name, and the directory could change after it
+    was checked; the copy is taken once, before pip-compile runs, and holds no page."""
+    out = []
+    for number, arg in enumerate(compile_args):
+        name, _, value = arg.partition("=")
+        if name != "--find-links":
+            out.append(arg)
+            continue
+        copy = into / f"find-links-{number}"
+        copy.mkdir()
+        for entry in sorted(Path(value).iterdir()):
+            if entry.is_file() and entry.name.endswith(_DISTRIBUTIONS):
+                shutil.copyfile(entry, copy / entry.name)
+        out.append(f"--find-links={copy}")
+    return out
 
 
 def compile_environment() -> dict[str, str]:
@@ -262,8 +291,10 @@ def verify(project: Path, compile_args: list[str]) -> int:
     failed = False
     source = hash_source(compile_args)
     if compile_args:
-        print("NOTE: pip-compile also receives " + " ".join(compile_args))
+        print("NOTE: pip-compile also receives " + " ".join(compile_args)
+              + " (each --find-links directory as a private copy of its distribution files)")
     with tempfile.TemporaryDirectory(prefix="verify-locks-") as tmp:
+        compile_args = snapshot_find_links(compile_args, Path(tmp))
         for lock, extras, constrained_to in LOCKS:
             committed = project / lock
             try:

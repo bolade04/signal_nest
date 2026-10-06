@@ -63,10 +63,13 @@ Python's isolated mode (`-I`), with `--no-config`, with every inherited `PIP_*` 
 removed and `PIP_CONFIG_FILE` set to `/dev/null` (pip then reads no configuration file), so a
 pip-tools config file, pip configuration or a Python startup hook cannot turn the check into
 an upgrade or add a package source. The script's `--compile-arg` accepts only the offline
-options its tests need, and `--find-links` only as an absolute local directory holding no HTML
-page, together with `--no-index`; such a run reports its hashes as coming from that directory,
-not the index. The pip and pip-tools versions are checked in the same isolated mode. The
-verifier's own process is not isolated; the CI step sets no `PYTHON*` variable.
+options its tests need, and `--find-links` only as an absolute local directory together with
+`--no-index`. pip-compile then reads a private copy of that directory holding only its `*.whl`
+and `*.tar.gz` files, so no page in it can add a source and a later change to it is not seen;
+such a run reports its hashes as coming from that directory, not the index. The pip and
+pip-tools versions are checked in the same isolated mode. The verifier's own process is not
+isolated; the CI step sets no `PYTHON*` variable that CPython reads (the workflow's
+`PYTHON_VERSION` is not one).
 By design it also accepts a lock hand-edited to an older version that still satisfies
 `pyproject.toml`, with that version's correct hashes; adding an environment marker to a
 dependency needs a change to the verifier. Its regression tests,
