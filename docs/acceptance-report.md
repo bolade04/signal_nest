@@ -46,11 +46,11 @@ The implemented stack, as present in the repository:
 - **Default (zero-dependency) local mode:** SQLite, in-process queue, in-memory cache,
   numpy brute-force vector fallback, local-file storage, mock-first LLM.
 - **Production adapters (implemented behind `APP_MODE=full`, not necessarily deployed):**
-  PostgreSQL, pgvector, Redis, S3-compatible object storage, real LLM providers.
+  PostgreSQL, ~~pgvector~~, Redis, S3-compatible object storage, real LLM providers. *(2026-10-06 correction — inaccurate when written: pgvector was never an implemented adapter. `vector_backend=pgvector` is accepted by `apps/api/app/core/config.py`, but `build_index()` in `apps/api/app/infra/vector.py` returns the brute-force index unconditionally and has no callers, nothing imports the `pgvector` package and the `embedding` column is JSON — at `b5965d35` and on `main` `c5b48ed7`; see [`architecture.md`](architecture.md) and `P6-PLAT-1`. This note does not re-verify the operational status of the other adapters.)*
 - **Migrations & contracts:** Alembic migrations; generated `apps/api/openapi.json` and
   a TypeScript client generated from the OpenAPI schema.
 
-> The production adapters exist and are wired behind env selection. This report does
+> The production adapters exist and are wired behind env selection *(2026-10-06: pgvector excepted — it has no adapter, see the correction above; the others are not re-verified here)*. This report does
 > **not** claim any production service is deployed.
 
 ## Completed functional vertical slice
@@ -229,7 +229,7 @@ Accepted toolchain:
 | Four-market isolation | smoke + RTL | pass |
 | Latest `main` CI | four jobs | all passing (no annotations) |
 
-Latest verified CI run for the current accepted commit
+Latest verified CI run for the ~~current~~ accepted commit *(at this report)*
 (`b5965d354a0c2335c2ac9cf283fd28b56d8d612d`):
 
 - <https://github.com/bolade04/signal_nest/actions/runs/29215104167> — workflow **CI**,
@@ -269,8 +269,10 @@ restored protection as tabulated above.
 - Large frontend bundle/chunk warning remains (single chunk >500 kB; no route-level
   code splitting) — non-blocking.
 - Backend Pydantic v2 class-based `Config` deprecation warnings remain — non-blocking.
-- Production infrastructure adapters (PostgreSQL/pgvector/Redis/S3) are implemented but
-  not necessarily deployed.
+- Production infrastructure adapters (PostgreSQL/~~pgvector~~/Redis/S3) are implemented but
+  not necessarily deployed. *(2026-10-06 correction — inaccurate when written for pgvector, which
+  has no adapter; see the dated correction under "Delivered architecture". The other adapters'
+  operational status is not re-verified here.)*
 - Real external AI/provider integrations may still use mock-first behavior.
 - Live external data connectors are fixture-based ("Simulated") placeholders *(2026-10-05: the
   connector framework and an RSS sandbox exist; live egress is not wired — see the [A] note above)*.
@@ -282,8 +284,20 @@ restored protection as tabulated above.
 
 ### Completed maintenance
 - `actions/setup-python` was upgraded to **v6** (PR #19), and the prior Node-runtime
-  deprecation annotation is **no longer present** — this is no longer an active
-  limitation.
+  deprecation annotation is **no longer present**
+  ~~— this is no longer an active limitation~~ *(true at acceptance; stale since)*.
+  *(2026-10-06: a Node-runtime deprecation warning is active again, from other actions. CI run
+  [37445036772](https://github.com/bolade04/signal_nest/actions/runs/37445036772) — push to `main`
+  `c5b48ed7`, 2026-10-06, every job concluded success — carries the warning annotation "Node.js 20 is
+  deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24" on
+  two jobs: Container build and security (`docker/build-push-action@v6`,
+  `docker/setup-buildx-action@v3`) and Revision reader (`docker/build-push-action@v6`,
+  `opentofu/setup-opentofu@v1`); run 37228710926 on `c4315d8d` (2026-10-04) carries the same two
+  warnings. Both jobs were added after acceptance, and no annotation on those runs names
+  `actions/setup-python`. These are warnings about the runtime GitHub uses for those third-party
+  actions — not CI failures — and they are separate from the application's own Node toolchain
+  (`package.json` `engines` `node >=20 <21`; `ci.yml` `NODE_VERSION: '20'`), which this note does
+  not assess. No runtime or workflow upgrade is made here.)*
 
 ## Review checklist (for a human reviewer)
 
