@@ -41,16 +41,16 @@ The implemented stack, as present in the repository:
 - **Frontend:** React 18 + TypeScript + Vite + React Router + TanStack Query v5 +
   React Hook Form/Zod + Tailwind + Radix.
 - **Backend:** Python 3.12 + FastAPI modular monolith — DB, migrations, domain logic,
-  pure scoring/geo/claims engines, REST, auth, in-process jobs.
+  pure scoring/geo/claims engines, REST, auth, in-process jobs *(true at acceptance: `InProcessQueue` ran each job synchronously in the API process; since `67ed438` (2026-07-13) scout runs use the durable job store and a separate worker — 2026-10-06)*.
 - **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`) *(root `package.json` `workspaces` on `main` `c4315d8d`: `apps/web` and the `packages/*` glob only; no `packages/` directory has ever been tracked, and `apps/api` is a Python project driven by npm scripts, not a workspace — 2026-10-05)*.
 - **Default (zero-dependency) local mode:** SQLite, in-process queue, in-memory cache,
   numpy brute-force vector fallback, local-file storage, mock-first LLM.
-- **Production adapters (implemented behind `APP_MODE=full`, not necessarily deployed):**
-  PostgreSQL, ~~pgvector~~, Redis, S3-compatible object storage, real LLM providers. *(2026-10-06 correction — inaccurate when written: pgvector was never an implemented adapter. `vector_backend=pgvector` is accepted by `apps/api/app/core/config.py`, but `build_index()` in `apps/api/app/infra/vector.py` returns the brute-force index unconditionally and has no callers, nothing imports the `pgvector` package and the `embedding` column is JSON — at `b5965d35` and on `main` `c5b48ed7`; see [`architecture.md`](architecture.md) and `P6-PLAT-1`. This note does not re-verify the operational status of the other adapters.)*
+- **Production adapters (implemented ~~behind `APP_MODE=full`~~, not necessarily deployed):** *(2026-10-06 correction — inaccurate when written: `APP_MODE` selects no adapter; each concern has its own setting — `database_url`, `queue_backend`, `cache_backend`, `vector_backend`, `storage_backend`, `llm_provider` — and `APP_MODE=full` only adds validation; see [`architecture.md`](architecture.md) "Dual-mode infrastructure".)*
+  PostgreSQL, ~~pgvector~~, Redis, S3-compatible object storage, real LLM providers. *(2026-10-06 correction — inaccurate when written: pgvector was never an implemented adapter. `vector_backend=pgvector` is accepted by `apps/api/app/core/config.py`, but `build_index()` in `apps/api/app/infra/vector.py` returns the brute-force index unconditionally and has no callers, nothing imports the `pgvector` package and the `embedding` column is JSON — at `b5965d35` and on `main` `c5b48ed7`; see [`architecture.md`](architecture.md) and `P6-PLAT-1`. The other adapters are measured in the next note.)* *(2026-10-06, measured: at `8dca455e`/`b5965d35` the Redis queue, Redis cache and S3 storage adapters existed as classes inside their builder functions, each selected by its own setting; which application code calls them is recorded under "Dual-mode infrastructure" in [`architecture.md`](architecture.md). None of these adapters is verified against a live service here. This makes no ruling on production readiness.)*
 - **Migrations & contracts:** Alembic migrations; generated `apps/api/openapi.json` and
   a TypeScript client generated from the OpenAPI schema.
 
-> The production adapters exist and are wired behind env selection *(2026-10-06: pgvector excepted — it has no adapter, see the correction above; the others are not re-verified here)*. This report does
+> The production adapters exist ~~and are wired~~ behind env selection *(2026-10-06: pgvector excepted — it has no adapter, see the correction above)* *(2026-10-06 correction — "wired" was inaccurate when written for the cache and storage adapters: no module imported `app.infra.cache` or `app.infra.storage` at `b5965d35`. The scout run did enqueue through the queue adapter, but its Redis branch wrote to a stream that no process read, because no worker existed; the database engine and the LLM service were on the request and pipeline paths. Details: [`architecture.md`](architecture.md) "Dual-mode infrastructure".)*. This report does
 > **not** claim any production service is deployed.
 
 ## Completed functional vertical slice
@@ -64,8 +64,8 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
   trusted (proven by integration tests).
 - **[T]** Multi-location support (Dallas TX, London UK, Lagos NG, Nairobi KE demo
   markets) with strict per-location data isolation.
-- **[T]** Demo authentication flow (email/password + JWT), RBAC roles, per-domain policy
-  layers.
+- **[T]** Demo authentication flow (email/password + JWT), RBAC roles, ~~per-domain policy layers~~.
+  *(2026-10-06 correction — inaccurate when written: there was no per-domain policy layer at `8dca455e`/`b5965d35`; roles were enforced by the `require_role` dependency and an inline membership check — see [`architecture.md`](architecture.md) "Tenancy & security".)*
 - **[T]** Domain models + Alembic migrations for the Phase 1 tables.
 - **[T]** Geography engine (haversine radius 1–200 mi, coverage, geo-relevance) — unit
   tested.
@@ -185,7 +185,8 @@ Fix:
 - preserves pip caching and `cache-dependency-path` behavior,
 - introduced **no workflow-permission change** (jobs remain `contents: read`), and
 - **removed the previous Node-20 action-runtime deprecation annotation** — no CI
-  annotations remain.
+  annotations remain *(true at acceptance: run 29215104167 on `b5965d35` carried none; stale since —
+  see the 2026-10-06 note under "Completed maintenance")*.
 
 ## Frontend lint-toolchain migration
 
@@ -272,7 +273,8 @@ restored protection as tabulated above.
 - Production infrastructure adapters (PostgreSQL/~~pgvector~~/Redis/S3) are implemented but
   not necessarily deployed. *(2026-10-06 correction — inaccurate when written for pgvector, which
   has no adapter; see the dated correction under "Delivered architecture". The other adapters'
-  operational status is not re-verified here.)*
+  implementation, selection, call paths and tests are measured in [`architecture.md`](architecture.md)
+  "Dual-mode infrastructure"; none is verified against a live service here.)*
 - Real external AI/provider integrations may still use mock-first behavior.
 - Live external data connectors are fixture-based ("Simulated") placeholders *(2026-10-05: the
   connector framework and an RSS sandbox exist; live egress is not wired — see the [A] note above)*.
