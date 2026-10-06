@@ -22,7 +22,7 @@ Phase 1–2 system; the dated section at the end records where `main` has moved 
   authorization — 2026-10-06.)*
 - ~~**`packages/shared`** — generated TS API types and shared enums/constants.~~ *(No
   `packages/` directory has ever been tracked in this repository, including at the Phase 1–2
-  acceptance commit `8dca455e`; the generated types live in `apps/web/src/api/types.ts` and
+  ~~acceptance~~ squash commit `8dca455e` *(and the accepted commit `b5965d35` — 2026-10-06 clarification)*; the generated types live in `apps/web/src/api/types.ts` and
   `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)*
 
 The frontend and backend agree on exactly one contract: `apps/api/openapi.json`,
@@ -100,14 +100,19 @@ row has its own setting, named in the measured note below)*:
 | --- | --- | --- |
 | Database | SQLite | Postgres ~~+ pgvector~~ |
 | Queue | in-process | Redis |
-| Durable job queue | SQLite-backed store + worker | (Redis/Celery/etc. — Phase 3B) |
+| Durable job queue | SQLite-backed store + worker | ~~(Redis/Celery/etc. — Phase 3B)~~ the same store on PostgreSQL (since 2026-07-14) |
 | Cache | in-memory | Redis |
 | Vector search | numpy brute-force | pgvector |
 | Storage | local filesystem | S3 |
 | LLM | deterministic mock | OpenAI / Anthropic |
 
 Startup config validation fails fast in full/prod if a real provider or real DB is
-not configured; the system never silently falls back between mock and real providers.
+not configured; the system never silently falls back between mock and real providers. *(2026-10-06,
+precisely: full mode rejects SQLite but does not itself require a real LLM provider — staging and
+production do (see "Selection" below). The LLM service falls back to the mock only under the dev-only
+flag, and logs it; separately, the pipeline's explanation step returns fixed fallback text, without a
+log line, when the provider raises `LLMError` (`apps/api/app/jobs/pipeline.py`, at `8dca455e` and on
+`main`).)*
 
 *(2026-10-05: two cells of this table describe adapters that are not operative on `main`
 `c4315d8d` — `build_index()` in `apps/api/app/infra/vector.py` returns `BruteForceIndex()`
@@ -126,7 +131,7 @@ adapter is production-ready and does not revise the 2026-10-05 note above, which
 
 - **Selection.** `APP_MODE` selects nothing. Each row has its own setting: `database_url`, `queue_backend`,
   `cache_backend`, `vector_backend`, `storage_backend`, `llm_provider` (and, on `main`, `job_queue_backend`,
-  which accepts only `local`). `APP_MODE=full` only adds validation: it rejects SQLite, and a Redis backend
+  which accepts only `local`). `APP_MODE=full` only adds validation (the mode is also reported by `/health`): it rejects SQLite, and a Redis backend
   without `redis_url`. Staging and production also reject the mock LLM provider and the dev-only LLM
   fallback flag (on `main`, outside the one-shot migration mode); the fallback is opt-in and logged. On
   `main`, production additionally requires `APP_MODE=full` and rejects each local backend.
@@ -141,13 +146,25 @@ adapter is production-ready and does not revise the 2026-10-05 note above, which
   `queue_backend=redis` the job was written to the stream, and no worker existed to read it. Since `67ed438`
   (2026-07-13) scout runs use the durable job store; on `main` no non-test code enqueues on this adapter,
   and only the readiness probe references the `queue` object (`jobs/pipeline.py` imports the module for its
-  job registry). Tests: none exercise the Redis branch (marked `pragma: no
+  job registry). The same `queue_backend=redis` setting also selects the durable job store's Redis
+  wake-up notifier — see the next bullet. Tests: none exercise the Redis queue branch (marked `pragma: no
   cover`); configuration tests only select it. Live: not verified.
+- **Durable job queue.** Implementation: one backend, `local` — the SQLAlchemy-backed store
+  (`apps/api/app/jobs/store.py`) and the worker (`python -m app.jobs.worker`), both since `67ed438`
+  (2026-07-13). The store's claim follows the database dialect: an atomic compare-and-set on SQLite and,
+  since `3fefb36` (2026-07-14), `SELECT … FOR UPDATE SKIP LOCKED` on PostgreSQL. Selection:
+  `job_queue_backend` accepts only `local`; the dialect follows `database_url`; with `queue_backend=redis`,
+  each durable enqueue also publishes a Redis wake-up (`apps/api/app/jobs/coordination.py`, called from
+  `apps/api/app/jobs/service.py`, since `3fefb36`), and no non-test code subscribes to it — the worker
+  polls. Call path: scout runs enqueue through `jobs/service.py`; the worker claims. Tests: on `main` two
+  `TEST_POSTGRES_URL`-gated store tests in `test_production_adapters.py` run on the CI `postgres:16`
+  service, and the wake-up notifier is tested against `fakeredis`. Not present at acceptance. Live: not
+  verified.
 - **Cache (Redis).** Implementation: `RedisCache` (inside `build_cache()` at acceptance; a module class on
   `main`). Call path: the module-level `cache` is built when `app.infra.cache` is imported. No non-test module
   imported it at acceptance. On `main` it is imported to close the cache at shutdown
   (`apps/api/app/core/lifecycle.py`) and, for its Redis client factory, by `apps/api/app/jobs/coordination.py`
-  when `queue_backend=redis`; no non-test code reads or writes the cache. Tests: none at acceptance; on
+  when `queue_backend=redis` (for the wake-up notifier above); no non-test code reads or writes the cache. Tests: none at acceptance; on
   `main`, `apps/api/app/tests/test_production_adapters.py` exercises `RedisCache` against `fakeredis`. Live:
   not verified.
 - **Vector search (pgvector).** No implementation: see the 2026-10-05 note above (`P6-PLAT-1`). Live: not
@@ -218,7 +235,8 @@ changes is deployed (plan §4.6a).
   `audit`, `auth`, `brands`, `business_profiles`, `campaign_context`, `capabilities`, `claims`,
   `clustering`, `connectors`, `core`, `db`, `feedback`, `geography`, `infra`, `intelligence`,
   `jobs`, `llm`, `locations`, `opportunities`, `organizations`, `scoring`, `scouting_requests`,
-  `signals`, `system`, `tests`. Present at the acceptance commit `8dca455e` but not in the list above: `api` (router
+  `signals`, `system`, `tests`. Present at the ~~acceptance~~ Phase 1–2 squash commit `8dca455e` *(and the accepted commit `b5965d35`;
+  `apps/api` is identical — 2026-10-06 clarification)* but not in the list above: `api` (router
   aggregation), `core`, `db`, `infra` (cache, ~~mail,~~ queue, storage and vector adapters *(2026-10-06
   correction — inaccurate when written: `infra/mail.py` was first added on 2026-09-26, in #184)*). Added
   since: `capabilities` (Phase 4A capability registry, resolver and operator overrides —
@@ -231,7 +249,10 @@ changes is deployed (plan §4.6a).
   model lives in `organizations/models.py`. Modules exposing a `routes.py`: `audit`, `auth`,
   `brands`, `campaign_context`, `feedback`, `jobs`, `locations`, `opportunities`,
   `organizations`, `scouting_requests`, `system`.
-- **Durable jobs:** `JOB_QUEUE_BACKEND` implements only `local` (SQLite-backed store + worker;
+- **Durable jobs:** `JOB_QUEUE_BACKEND` implements only `local` (~~SQLite-backed~~ store + worker *(2026-10-06
+  correction — inaccurate when written: since `3fefb36` (2026-07-14) the `local` store also runs on
+  PostgreSQL, claiming with `FOR UPDATE SKIP LOCKED`; see "Durable job queue" in the measured note
+  under "Dual-mode infrastructure")*;
   `docs/phase-3a-durable-jobs.md`). The "(Redis/Celery/etc. — Phase 3B)" cell in the table
   above was a plan; Phase 3B did not deliver it.
 - **API surface:** 85 paths / 106 operations in `apps/api/openapi.json`.

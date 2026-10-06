@@ -61,7 +61,7 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 ### Phase 1 — foundation
 - **[T]** Organization / workspace / brand / location model with server-side tenancy:
   every query scoped by org/workspace/location; client-supplied tenant IDs never
-  trusted (proven by integration tests).
+  trusted (proven by integration tests) *(2026-10-06: the tests prove the cases they cover; the universal "every query" is not re-verified here — see [`architecture.md`](architecture.md) "Tenancy & security")*.
 - **[T]** Multi-location support (Dallas TX, London UK, Lagos NG, Nairobi KE demo
   markets) with strict per-location data isolation.
 - **[T]** Demo authentication flow (email/password + JWT), RBAC roles, ~~per-domain policy layers~~.
