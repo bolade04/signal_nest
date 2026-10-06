@@ -198,6 +198,9 @@ class VerifyLocksTests(unittest.TestCase):
         self.assertEqual(len(runtime["beta"].hashes), 2)  # wheel + sdist
         proc = self.run_verifier()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # An offline run names its real hash source; only a real run says "the index".
+        self.assertIn("recomputed from the --find-links directory", proc.stdout)
+        self.assertNotIn("recomputed from the index", proc.stdout)
 
     # ------------------------------------------------------------------ the incident
     def test_newer_compatible_release_does_not_change_the_verified_graph(self) -> None:
@@ -314,27 +317,57 @@ class VerifyLocksTests(unittest.TestCase):
         proc = self.run_verifier()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
-    def test_pip_environment_cannot_add_a_package_source(self) -> None:
+    def inject_vendor_alpha(self) -> tuple[Path, str]:
+        """A second alpha 1.0 artifact outside the index, and a runtime lock that carries its
+        hash beside the index one: valid only if pip-compile also reads the vendor directory."""
         vendor = self.tmp / "vendor"
         vendor.mkdir()
         make_wheel(vendor, "alpha", "1.0", ("beta>=1.0", "beta<9"))  # different bytes, same version
         extra = sha256(vendor / "alpha-1.0-py3-none-any.whl")
         lock = self.lock(vl.RUNTIME)
         self.replace_entry(lock, "alpha", "1.0", sorted([*self.hashes_of(lock, "alpha"), extra]))
+        return vendor, extra
+
+    def assert_control_sees_vendor_and_verifier_refuses(self, env: dict[str, str],
+                                                        extra: str, label: str) -> None:
+        # Positive control: plain pip-compile in that environment really reads the vendor file.
+        out = self.tmp / f"control-{label}.txt"
+        piptools_compile(self.project, [
+            "--no-config", "--generate-hashes", "--strip-extras", "--extra", "full",
+            *offline_args(self.index, self.cache), "--output-file", str(out),
+            "pyproject.toml"], env=env)
+        self.assertIn(extra, out.read_text(encoding="utf-8"))
+        self.assert_fails(self.run_verifier(env=env),
+                          "hashes: alpha==1.0 committed-only 1, index-only 0")
+
+    def test_user_pip_config_file_cannot_add_a_package_source(self) -> None:
+        # Guards PIP_CONFIG_FILE=os.devnull on its own: no PIP_* variable is involved here.
+        vendor, extra = self.inject_vendor_alpha()
+        home = self.tmp / "home"
+        (home / ".pip").mkdir(parents=True)
+        (home / ".pip" / "pip.conf").write_text(f"[global]\nfind-links = {vendor}\n",
+                                                encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
+        env["HOME"] = str(home)
+        self.assert_control_sees_vendor_and_verifier_refuses(env, extra, "home-pip-conf")
+
+    def test_python_startup_hook_cannot_reach_pip_compile(self) -> None:
+        vendor, extra = self.inject_vendor_alpha()
+        hook = self.tmp / "hook"
+        hook.mkdir()
+        (hook / "sitecustomize.py").write_text(
+            f"import os\nos.environ['PIP_FIND_LINKS'] = {str(vendor)!r}\n", encoding="utf-8")
+        env = {**os.environ, "PYTHONPATH": str(hook)}
+        self.assert_control_sees_vendor_and_verifier_refuses(env, extra, "sitecustomize")
+
+    def test_pip_environment_cannot_add_a_package_source(self) -> None:
+        vendor, extra = self.inject_vendor_alpha()
         conf = self.tmp / "pip.conf"
         conf.write_text(f"[global]\nfind-links = {vendor}\n", encoding="utf-8")
         for variable, value in (("PIP_FIND_LINKS", str(vendor)), ("PIP_CONFIG_FILE", str(conf))):
             with self.subTest(variable=variable):
                 env = {**os.environ, variable: value}
-                # Positive control: with that environment, plain pip-compile sees both files.
-                out = self.tmp / f"control-{variable}.txt"
-                piptools_compile(self.project, [
-                    "--no-config", "--generate-hashes", "--strip-extras", "--extra", "full",
-                    *offline_args(self.index, self.cache), "--output-file", str(out),
-                    "pyproject.toml"], env=env)
-                self.assertIn(extra, out.read_text(encoding="utf-8"))
-                self.assert_fails(self.run_verifier(env=env),
-                                  "hashes: alpha==1.0 committed-only 1, index-only 0")
+                self.assert_control_sees_vendor_and_verifier_refuses(env, extra, variable)
 
     def test_removed_dependency_is_not_retained_by_its_old_pin(self) -> None:
         self.edit(self.project / "pyproject.toml", 'full = ["delta>=1.0"]', "full = []")
@@ -358,11 +391,20 @@ class VerifyLocksTests(unittest.TestCase):
         for arg in ("--upgrade", "-U", "-qU", "--upgrade-package=alpha", "-Palpha",
                     "--reuse-hashes", "--output-file=x.txt", "-ox.txt", "--config=x.toml",
                     "--pip-args=--isolated", "--pre", "--index-url=https://example.invalid",
-                    "--no-build-isolation", "--find-links", "--cache-dir=", "--no-config"):
+                    "--no-build-isolation", "--find-links", "--cache-dir=", "--no-config",
+                    "--find-links=/nonexistent/wheels", "--find-links=https://example.invalid/w/"):
             with self.subTest(arg=arg):
                 proc = self.run_verifier(f"--compile-arg={arg}")
                 self.assertEqual(proc.returncode, 2, proc.stdout)
                 self.assertIn("REFUSED", proc.stdout)
+
+    def test_find_links_without_no_index_is_refused(self) -> None:
+        # --find-links may replace the index for the offline tests, never add a source to it.
+        command = [sys.executable, str(VERIFY), "--project-dir", str(self.project),
+                   f"--compile-arg=--find-links={self.index}"]
+        proc = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertIn(f"REFUSED: --find-links={self.index}", proc.stdout)
 
     def test_committed_hashes_never_reach_pip_tools(self) -> None:
         pins = vl.parse_lock(self.lock(vl.DEV))

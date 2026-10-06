@@ -19,10 +19,12 @@ For ``requirements-runtime.txt`` (project dependencies + extra ``full``) and
 
 A newer release of a dependency on the index is therefore not a failure. Moving to it is an
 explicit maintenance action (``pip-compile --upgrade-package NAME``; see README-deps.md).
-pip-compile runs with ``--no-config``, no ``PIP_*`` environment variable and pip's own
-configuration files disabled, so neither a pip-tools config file nor pip configuration can
-turn verification into an upgrade or add a package source. ``--compile-arg`` accepts only
-the options the offline regression tests need.
+pip-compile runs in Python's isolated mode (``-I``: no ``PYTHON*`` variable, no user
+site-packages), with ``--no-config``, with every inherited ``PIP_*`` variable removed and
+``PIP_CONFIG_FILE`` set to ``os.devnull`` (pip then reads no configuration file), so neither a
+pip-tools config file nor pip configuration can turn verification into an upgrade or add a
+package source. ``--compile-arg`` accepts only the options the offline regression tests need,
+and ``--find-links`` only as an existing local directory together with ``--no-index``.
 
 What it accepts by design: a lock whose pins all satisfy ``pyproject.toml`` and whose hashes
 match the index. A hand edit to an OLDER compatible version with its correct hashes therefore
@@ -160,21 +162,27 @@ def check_toolchain() -> list[str]:
 
 
 def forbidden_compile_args(args: list[str]) -> list[str]:
-    """Every --compile-arg that is not exactly an allowed flag or an allowed ``--opt=value``."""
+    """Every --compile-arg that is not exactly an allowed flag or an allowed ``--opt=value``.
+
+    ``--find-links`` may only name an existing local directory and only together with
+    ``--no-index``: it replaces the package index for the offline tests, never adds a source.
+    """
     bad = []
     for arg in args:
         name, has_value, value = arg.partition("=")
         allowed = (arg in _ALLOWED_FLAGS
                    or (name in _ALLOWED_VALUED and has_value and value != ""))
+        if allowed and name == "--find-links":
+            allowed = "--no-index" in args and Path(value).is_dir()
         if not allowed:
             bad.append(arg)
     return bad
 
 
 def compile_environment() -> dict[str, str]:
-    """The process environment without pip/pip-tools configuration: no ``PIP_*`` variable
-    (pip options and pip-tools' PIP_TOOLS_* both live there) and pip's configuration files
-    disabled (pip skips every config file when PIP_CONFIG_FILE is os.devnull)."""
+    """The child environment without pip/pip-tools configuration: every inherited ``PIP_*``
+    variable removed (pip options and pip-tools' PIP_TOOLS_* both live there) and
+    PIP_CONFIG_FILE set to os.devnull, which makes pip skip every configuration file."""
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
     env["PIP_CONFIG_FILE"] = os.devnull
     return env
@@ -188,7 +196,7 @@ def compile_lock(
     compile_args: list[str],
 ) -> subprocess.CompletedProcess[str]:
     command = [
-        sys.executable, "-m", "piptools", "compile", "--quiet", "--no-config",
+        sys.executable, "-I", "-m", "piptools", "compile", "--quiet", "--no-config",
         "--generate-hashes", "--no-reuse-hashes", "--strip-extras",
     ]
     for extra in extras:
@@ -220,9 +228,10 @@ def describe_difference(committed: list[Pin], fresh: list[Pin]) -> list[str]:
 
 def verify(project: Path, compile_args: list[str]) -> int:
     failed = False
+    source = "the index"
     if compile_args:
-        print("NOTE: pip-compile also receives " + " ".join(compile_args)
-              + " (offline regression-test sources, not the package index)")
+        source = "the --find-links directory (offline test run, not the index)"
+        print("NOTE: pip-compile also receives " + " ".join(compile_args))
     with tempfile.TemporaryDirectory(prefix="verify-locks-") as tmp:
         for lock, extras, constrained_to in LOCKS:
             committed = project / lock
@@ -251,7 +260,7 @@ def verify(project: Path, compile_args: list[str]) -> int:
             if a == b:
                 print(f"{lock}: verified, {len(pins)} pins and "
                       f"{sum(len(p.hashes) for p in pins)} hashes, pins kept and every hash "
-                      "recomputed from the index")
+                      f"recomputed from {source}")
                 continue
             failed = True
             print(f"LOCK MISMATCH: {lock} is not what pyproject.toml resolves to with its own pins")

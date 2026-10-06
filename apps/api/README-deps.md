@@ -58,13 +58,16 @@ Job *Backend quality*, step "Lock reproducibility (linux/amd64)", runs
   The pin list handed to pip-tools carries no hashes and `--no-reuse-hashes` is set, so the
   committed hashes never reach the recomputed output.
 
-A newer compatible release of a dependency does not fail the check. pip-compile runs with
-`--no-config`, without any `PIP_*` environment variable and with pip's configuration files
-disabled, so a pip-tools config file or pip configuration cannot turn the check into an
-upgrade or add a package source; the script's `--compile-arg` accepts only the offline
-options its tests need. By design it also accepts a lock hand-edited to an older version that
-still satisfies `pyproject.toml`, with that version's correct hashes; adding an environment
-marker to a dependency needs a change to the verifier. Its regression tests,
+A newer compatible release of a dependency does not fail the check. pip-compile runs in
+Python's isolated mode (`-I`), with `--no-config`, with every inherited `PIP_*` variable
+removed and `PIP_CONFIG_FILE` set to `/dev/null` (pip then reads no configuration file), so a
+pip-tools config file, pip configuration or a Python startup hook cannot turn the check into
+an upgrade or add a package source. The script's `--compile-arg` accepts only the offline
+options its tests need, and `--find-links` only as a local directory together with
+`--no-index`; an offline run reports its hashes as coming from that directory, not the index.
+By design it also accepts a lock hand-edited to an older version that still satisfies
+`pyproject.toml`, with that version's correct hashes; adding an environment marker to a
+dependency needs a change to the verifier. Its regression tests,
 `tools/test_verify_locks.py`, run first in the same step, offline against generated local
 wheels. They cover a newer compatible release, incompatible and unsatisfiable requirements
 for both locks, a dev lock diverging from the runtime lock, a missing dependency, a corrupted
