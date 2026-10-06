@@ -100,7 +100,7 @@ row has its own setting, named in the measured note below)*:
 | --- | --- | --- |
 | Database | SQLite | Postgres ~~+ pgvector~~ |
 | Queue | in-process | Redis |
-| Durable job queue | SQLite-backed store + worker | ~~(Redis/Celery/etc. — Phase 3B)~~ the same store on PostgreSQL (since 2026-07-14) |
+| Durable job queue | SQLite-backed store + worker | ~~(Redis/Celery/etc. — Phase 3B)~~ the same store on PostgreSQL |
 | Cache | in-memory | Redis |
 | Vector search | numpy brute-force | pgvector |
 | Storage | local filesystem | S3 |
@@ -109,7 +109,8 @@ row has its own setting, named in the measured note below)*:
 Startup config validation fails fast in full/prod if a real provider or real DB is
 not configured; the system never silently falls back between mock and real providers. *(2026-10-06,
 precisely: full mode rejects SQLite but does not itself require a real LLM provider — staging and
-production do (see "Selection" below). The LLM service falls back to the mock only under the dev-only
+production do (see "Selection" below). Staging and production did not themselves require PostgreSQL at
+`8dca455e` (only `APP_MODE=full` did); on `main`, production rejects SQLite and staging does not. The LLM service falls back to the mock only under the dev-only
 flag, and logs it; separately, the pipeline's explanation step returns fixed fallback text, without a
 log line, when the provider raises `LLMError` (`apps/api/app/jobs/pipeline.py`, at `8dca455e` and on
 `main`).)*
@@ -151,10 +152,12 @@ adapter is production-ready and does not revise the 2026-10-05 note above, which
   cover`); configuration tests only select it. Live: not verified.
 - **Durable job queue.** Implementation: one backend, `local` — the SQLAlchemy-backed store
   (`apps/api/app/jobs/store.py`) and the worker (`python -m app.jobs.worker`), both since `67ed438`
-  (2026-07-13). The store's claim follows the database dialect: an atomic compare-and-set on SQLite and,
-  since `3fefb36` (2026-07-14), `SELECT … FOR UPDATE SKIP LOCKED` on PostgreSQL. Selection:
+  (2026-07-13). The store is SQLAlchemy-based — its `67ed438` docstring already names SQLite and PostgreSQL,
+  and at `67ed438` every dialect claims with the same atomic compare-and-set; since `3fefb36` (2026-07-14)
+  PostgreSQL claims with `SELECT … FOR UPDATE SKIP LOCKED` instead. Selection:
   `job_queue_backend` accepts only `local`; the dialect follows `database_url`; with `queue_backend=redis`,
-  each durable enqueue also publishes a Redis wake-up (`apps/api/app/jobs/coordination.py`, called from
+  each immediately-due durable enqueue also publishes a Redis wake-up — scheduled, future-dated jobs are
+  not signalled (`apps/api/app/jobs/coordination.py`, called from
   `apps/api/app/jobs/service.py`, since `3fefb36`), and no non-test code subscribes to it — the worker
   polls. Call path: scout runs enqueue through `jobs/service.py`; the worker claims. Tests: on `main` two
   `TEST_POSTGRES_URL`-gated store tests in `test_production_adapters.py` run on the CI `postgres:16`
@@ -250,8 +253,9 @@ changes is deployed (plan §4.6a).
   `brands`, `campaign_context`, `feedback`, `jobs`, `locations`, `opportunities`,
   `organizations`, `scouting_requests`, `system`.
 - **Durable jobs:** `JOB_QUEUE_BACKEND` implements only `local` (~~SQLite-backed~~ store + worker *(2026-10-06
-  correction — inaccurate when written: since `3fefb36` (2026-07-14) the `local` store also runs on
-  PostgreSQL, claiming with `FOR UPDATE SKIP LOCKED`; see "Durable job queue" in the measured note
+  correction — inaccurate when written: the `local` store is SQLAlchemy-based and its `67ed438` docstring
+  already names SQLite and PostgreSQL; since `3fefb36` (2026-07-14) it claims with `FOR UPDATE SKIP LOCKED`
+  on PostgreSQL, tested in CI on `postgres:16`; see "Durable job queue" in the measured note
   under "Dual-mode infrastructure")*;
   `docs/phase-3a-durable-jobs.md`). The "(Redis/Celery/etc. — Phase 3B)" cell in the table
   above was a plan; Phase 3B did not deliver it.
