@@ -24,7 +24,9 @@ site-packages), with ``--no-config``, with every inherited ``PIP_*`` variable re
 ``PIP_CONFIG_FILE`` set to ``os.devnull`` (pip then reads no configuration file), so neither a
 pip-tools config file nor pip configuration can turn verification into an upgrade or add a
 package source. ``--compile-arg`` accepts only the options the offline regression tests need,
-and ``--find-links`` only as an existing local directory together with ``--no-index``.
+and ``--find-links`` only as an absolute, existing local directory holding no HTML page,
+together with ``--no-index``. The pip and pip-tools versions are read in the same isolated
+mode. The verifier's own process is not isolated; the CI step sets no ``PYTHON*`` variable.
 
 What it accepts by design: a lock whose pins all satisfy ``pyproject.toml`` and whose hashes
 match the index. A hand edit to an OLDER compatible version with its correct hashes therefore
@@ -39,13 +41,13 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from importlib import metadata
 from pathlib import Path
 
 from pip._vendor.packaging.version import InvalidVersion, Version
@@ -149,23 +151,43 @@ def body(path: Path) -> list[str]:
     return [line for line in lines if not line.lstrip().startswith("#")]
 
 
+_READ_VERSIONS = """\
+import json, sys
+from importlib import metadata
+found = {}
+for dist in sys.argv[1:]:
+    try:
+        found[dist] = metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        found[dist] = None
+print(json.dumps(found))
+"""
+
+
+def installed_versions() -> dict[str, str | None]:
+    """pip and pip-tools versions as the isolated (-I) pip-compile child will see them."""
+    proc = subprocess.run([sys.executable, "-I", "-c", _READ_VERSIONS, *TOOLCHAIN],
+                          capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return dict.fromkeys(TOOLCHAIN)
+    return json.loads(proc.stdout)
+
+
 def check_toolchain() -> list[str]:
+    found = installed_versions()
     problems = []
     for dist, wanted in TOOLCHAIN.items():
-        try:
-            found = metadata.version(dist)
-        except metadata.PackageNotFoundError:
-            found = None
-        if found != wanted:
-            problems.append(f"{dist} {found or 'is not installed'} (required {wanted})")
+        if found.get(dist) != wanted:
+            problems.append(f"{dist} {found.get(dist) or 'is not installed'} (required {wanted})")
     return problems
 
 
 def forbidden_compile_args(args: list[str]) -> list[str]:
     """Every --compile-arg that is not exactly an allowed flag or an allowed ``--opt=value``.
 
-    ``--find-links`` may only name an existing local directory and only together with
-    ``--no-index``: it replaces the package index for the offline tests, never adds a source.
+    ``--find-links`` may only name an absolute, existing local directory that holds no HTML
+    page (pip follows the links on such pages), and only together with ``--no-index``: it
+    replaces the package index for the offline tests and cannot reach another source.
     """
     bad = []
     for arg in args:
@@ -173,7 +195,10 @@ def forbidden_compile_args(args: list[str]) -> list[str]:
         allowed = (arg in _ALLOWED_FLAGS
                    or (name in _ALLOWED_VALUED and has_value and value != ""))
         if allowed and name == "--find-links":
-            allowed = "--no-index" in args and Path(value).is_dir()
+            path = Path(value)
+            allowed = ("--no-index" in args and "://" not in value and path.is_absolute()
+                       and path.is_dir()
+                       and not any(f.suffix.lower() in (".html", ".htm") for f in path.iterdir()))
         if not allowed:
             bad.append(arg)
     return bad
@@ -226,11 +251,17 @@ def describe_difference(committed: list[Pin], fresh: list[Pin]) -> list[str]:
     return out
 
 
+def hash_source(compile_args: list[str]) -> str:
+    """Where the recomputed hashes come from: the index, unless --no-index replaced it."""
+    if "--no-index" in compile_args:
+        return "the --find-links directory (offline test run, not the index)"
+    return "the index"
+
+
 def verify(project: Path, compile_args: list[str]) -> int:
     failed = False
-    source = "the index"
+    source = hash_source(compile_args)
     if compile_args:
-        source = "the --find-links directory (offline test run, not the index)"
         print("NOTE: pip-compile also receives " + " ".join(compile_args))
     with tempfile.TemporaryDirectory(prefix="verify-locks-") as tmp:
         for lock, extras, constrained_to in LOCKS:

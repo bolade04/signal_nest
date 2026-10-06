@@ -406,6 +406,45 @@ class VerifyLocksTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stdout)
         self.assertIn(f"REFUSED: --find-links={self.index}", proc.stdout)
 
+    def test_find_links_must_be_an_absolute_local_directory_without_pages(self) -> None:
+        # pip follows the links on HTML pages in a --find-links directory and resolves a
+        # relative value against the project directory, so both are refused outright.
+        pages = self.tmp / "pages"
+        pages.mkdir()
+        (pages / "links.html").write_text('<a href="http://127.0.0.1:9/alpha-1.0.whl">a</a>',
+                                          encoding="utf-8")
+        for label, value in (("relative path", "index"),
+                             ("directory with an HTML page", str(pages)),
+                             ("file URL", f"file://{self.index}")):
+            with self.subTest(label=label):
+                command = [sys.executable, str(VERIFY), "--project-dir", str(self.project),
+                           "--compile-arg=--no-index", f"--compile-arg=--find-links={value}"]
+                proc = subprocess.run(command, capture_output=True, text=True, check=False,
+                                      cwd=self.tmp)
+                self.assertEqual(proc.returncode, 2, proc.stdout)
+                self.assertIn(f"REFUSED: --find-links={value}", proc.stdout)
+
+    def test_hash_source_label_follows_no_index_only(self) -> None:
+        self.assertEqual(vl.hash_source([]), "the index")
+        self.assertEqual(vl.hash_source(["--cache-dir=/x"]), "the index")
+        self.assertIn("--find-links directory", vl.hash_source(["--no-index", "--find-links=/x"]))
+
+    def test_toolchain_is_read_as_the_isolated_child_sees_it(self) -> None:
+        # Shadow pip-tools metadata on PYTHONPATH: a non-isolated read is fooled, the check is not.
+        shadow = self.tmp / "shadow"
+        info = shadow / "pip_tools-7.0.0.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text("Metadata-Version: 2.1\nName: pip-tools\nVersion: 7.0.0\n",
+                                       encoding="utf-8")
+        env = {**os.environ, "PYTHONPATH": str(shadow)}
+        control = subprocess.run(
+            [sys.executable, "-c", "from importlib import metadata; "
+             "print(metadata.version('pip-tools'))"],
+            capture_output=True, text=True, check=True, env=env)
+        self.assertEqual(control.stdout.strip(), "7.0.0")
+        proc = self.run_verifier(env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
     def test_committed_hashes_never_reach_pip_tools(self) -> None:
         pins = vl.parse_lock(self.lock(vl.DEV))
         self.assertNotIn("--hash", vl.pin_list(pins))
