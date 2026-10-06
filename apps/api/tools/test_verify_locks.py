@@ -13,6 +13,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -78,16 +79,18 @@ def make_sdist(index: Path, name: str, version: str) -> None:
 
 def offline_args(index: Path, cache: Path) -> list[str]:
     return ["--no-index", f"--find-links={index}", "--no-emit-find-links",
-            "--no-build-isolation", f"--cache-dir={cache}"]
+            f"--cache-dir={cache}"]
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def piptools_compile(project: Path, args: list[str]) -> None:
+def piptools_compile(project: Path, args: list[str], env: dict[str, str] | None = None) -> None:
+    """Plain pip-compile, as maintenance would run it (fixture generation and controls)."""
     subprocess.run([sys.executable, "-m", "piptools", "compile", "--quiet", *args],
-                   cwd=project, check=True, capture_output=True, text=True)
+                   cwd=project, check=True, capture_output=True, text=True,
+                   env=vl.compile_environment() if env is None else env)
 
 
 class VerifyLocksTests(unittest.TestCase):
@@ -110,7 +113,7 @@ class VerifyLocksTests(unittest.TestCase):
         make_wheel(index, "delta", "1.0")
         make_wheel(index, "epsilon", "1.0")
         (project / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
-        args = offline_args(index, cls._root / "cache-generate")
+        args = ["--no-config", *offline_args(index, cls._root / "cache-generate")]
         # Generate the "committed" locks exactly as maintenance would (fresh, no existing pins).
         piptools_compile(project, ["--generate-hashes", "--strip-extras", "--extra", "full",
                                    *args, "--output-file", vl.RUNTIME, "pyproject.toml"])
@@ -134,11 +137,29 @@ class VerifyLocksTests(unittest.TestCase):
     def lock(self, name: str) -> Path:
         return self.project / name
 
-    def run_verifier(self, *extra: str) -> subprocess.CompletedProcess[str]:
+    def run_verifier(self, *extra: str,
+                     env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         command = [sys.executable, str(VERIFY), "--project-dir", str(self.project)]
         command += [f"--compile-arg={a}" for a in offline_args(self.index, self.cache)]
         command += list(extra)
-        return subprocess.run(command, capture_output=True, text=True, check=False)
+        return subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+
+    def replace_entry(self, path: Path, name: str, version: str, digests: list[str]) -> None:
+        """Replace one package's pin and hash lines, keeping its annotation lines."""
+        out, skipping = [], False
+        for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+            if line.startswith(f"{name}=="):
+                skipping = True
+                out.append(f"{name}=={version} \\\n")
+                tails = [" \\"] * (len(digests) - 1) + [""]
+                out += [f"    --hash=sha256:{d}{tail}\n"
+                        for d, tail in zip(digests, tails, strict=True)]
+                continue
+            if skipping and line.startswith("    --hash="):
+                continue
+            skipping = False
+            out.append(line)
+        path.write_text("".join(out), encoding="utf-8")
 
     def edit(self, path: Path, old: str, new: str) -> None:
         text = path.read_text(encoding="utf-8")
@@ -241,7 +262,79 @@ class VerifyLocksTests(unittest.TestCase):
         lock = self.lock(vl.RUNTIME)
         (digest,) = self.hashes_of(lock, "delta")
         self.edit(lock, f"delta==1.0 \\\n    --hash=sha256:{digest}\n", "delta==1.0\n")
-        self.assert_fails(self.run_verifier(), "LOCK INVALID", "delta==1.0 carries no sha256 hash")
+        self.assert_fails(self.run_verifier(), "LOCK INVALID", "'delta==1.0'")
+
+    # ------------------------------------------------------------------ the dev lock path
+    def test_dev_lock_diverging_from_runtime_fails(self) -> None:
+        # CI installs the dev lock and production the runtime lock: the dev lock is compiled
+        # against the runtime pins, so a dev pin that differs from the runtime pin must fail.
+        make_wheel(self.index, "alpha", "1.1", ("beta>=1.0",))
+        digest = sha256(self.index / "alpha-1.1-py3-none-any.whl")
+        self.replace_entry(self.lock(vl.DEV), "alpha", "1.1", [digest])
+        proc = self.run_verifier()
+        self.assert_fails(proc, f"LOCK MISMATCH: {vl.DEV}",
+                          "version: alpha committed 1.1, resolved 1.0")
+        self.assertIn(f"{vl.RUNTIME}: verified", proc.stdout)
+
+    def test_dev_only_unsatisfiable_requirement_fails(self) -> None:
+        self.edit(self.project / "pyproject.toml", '"gamma>=1.0"', '"gamma>=9"')
+        proc = self.run_verifier()
+        self.assert_fails(proc, f"LOCK UNRESOLVABLE: {vl.DEV}")
+        self.assertIn(f"{vl.RUNTIME}: verified", proc.stdout)
+
+    def test_dev_only_pin_without_hash_fails(self) -> None:
+        lock = self.lock(vl.DEV)
+        (digest,) = self.hashes_of(lock, "gamma")
+        self.edit(lock, f"gamma==1.0 \\\n    --hash=sha256:{digest}\n", "gamma==1.0\n")
+        proc = self.run_verifier()
+        self.assert_fails(proc, "LOCK INVALID", "'gamma==1.0'")
+        self.assertIn(f"{vl.RUNTIME}: verified", proc.stdout)
+
+    def test_cli_refuses_a_different_toolchain(self) -> None:
+        # setUpClass checks the toolchain itself, so this drives the CLI check directly.
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import verify_locks as v; "
+                "v.TOOLCHAIN['pip'] = '0.0.0'; sys.exit(v.main(['--project-dir', sys.argv[2]]))")
+        proc = subprocess.run([sys.executable, "-c", code, str(HERE), str(self.project)],
+                              capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("TOOLCHAIN MISMATCH: pip 25.1.1 (required 0.0.0)", proc.stdout)
+
+    # ------------------------------------------------------------------ configuration isolation
+    def test_project_pip_tools_config_cannot_turn_verification_into_an_upgrade(self) -> None:
+        make_wheel(self.index, "alpha", "1.1", ("beta>=1.0",))
+        (self.project / ".pip-tools.toml").write_text("[tool.pip-tools]\nupgrade = true\n",
+                                                      encoding="utf-8")
+        # Positive control: pip-compile WITH config reading, given the committed pins, upgrades.
+        seeded = self.tmp / "seeded-runtime.txt"
+        seeded.write_text(vl.pin_list(vl.parse_lock(self.lock(vl.RUNTIME))), encoding="utf-8")
+        piptools_compile(self.project, ["--generate-hashes", "--strip-extras", "--extra", "full",
+                                        *offline_args(self.index, self.cache),
+                                        "--output-file", str(seeded), "pyproject.toml"])
+        self.assertIn("alpha==1.1", seeded.read_text(encoding="utf-8"))
+        proc = self.run_verifier()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_pip_environment_cannot_add_a_package_source(self) -> None:
+        vendor = self.tmp / "vendor"
+        vendor.mkdir()
+        make_wheel(vendor, "alpha", "1.0", ("beta>=1.0", "beta<9"))  # different bytes, same version
+        extra = sha256(vendor / "alpha-1.0-py3-none-any.whl")
+        lock = self.lock(vl.RUNTIME)
+        self.replace_entry(lock, "alpha", "1.0", sorted([*self.hashes_of(lock, "alpha"), extra]))
+        conf = self.tmp / "pip.conf"
+        conf.write_text(f"[global]\nfind-links = {vendor}\n", encoding="utf-8")
+        for variable, value in (("PIP_FIND_LINKS", str(vendor)), ("PIP_CONFIG_FILE", str(conf))):
+            with self.subTest(variable=variable):
+                env = {**os.environ, variable: value}
+                # Positive control: with that environment, plain pip-compile sees both files.
+                out = self.tmp / f"control-{variable}.txt"
+                piptools_compile(self.project, [
+                    "--no-config", "--generate-hashes", "--strip-extras", "--extra", "full",
+                    *offline_args(self.index, self.cache), "--output-file", str(out),
+                    "pyproject.toml"], env=env)
+                self.assertIn(extra, out.read_text(encoding="utf-8"))
+                self.assert_fails(self.run_verifier(env=env),
+                                  "hashes: alpha==1.0 committed-only 1, index-only 0")
 
     def test_removed_dependency_is_not_retained_by_its_old_pin(self) -> None:
         self.edit(self.project / "pyproject.toml", 'full = ["delta>=1.0"]', "full = []")
@@ -262,8 +355,10 @@ class VerifyLocksTests(unittest.TestCase):
 
     # ------------------------------------------------------------------ the check itself
     def test_upgrade_and_hash_reuse_options_are_refused(self) -> None:
-        for arg in ("--upgrade", "-U", "--upgrade-package=alpha", "-Palpha", "--reuse-hashes",
-                    "--output-file=x.txt", "-ox.txt"):
+        for arg in ("--upgrade", "-U", "-qU", "--upgrade-package=alpha", "-Palpha",
+                    "--reuse-hashes", "--output-file=x.txt", "-ox.txt", "--config=x.toml",
+                    "--pip-args=--isolated", "--pre", "--index-url=https://example.invalid",
+                    "--no-build-isolation", "--find-links", "--cache-dir=", "--no-config"):
             with self.subTest(arg=arg):
                 proc = self.run_verifier(f"--compile-arg={arg}")
                 self.assertEqual(proc.returncode, 2, proc.stdout)
@@ -301,6 +396,33 @@ class ParseLockTests(unittest.TestCase):
         entry = "alpha==1.0 \\\n    --hash=sha256:" + "a" * 64 + "\n"
         with self.assertRaisesRegex(vl.LockError, "more than once"):
             self.parse(entry + entry)
+
+    def test_comment_inside_an_entry_is_refused(self) -> None:
+        h = "    --hash=sha256:"
+        for text in ("alpha==1.0 \\\n" + h + "a" * 64 + " \\\n    # via x\n" + h + "b" * 64 + "\n",
+                     "alpha==1.0 \\\n    # via x\n" + h + "a" * 64 + "\n",
+                     "alpha==1.0 \\\n\n" + h + "a" * 64 + "\n"):
+            with self.subTest(text=text), self.assertRaisesRegex(vl.LockError, "expected a sha256"):
+                self.parse(text)
+
+    def test_unclosed_or_hashless_entries_are_refused(self) -> None:
+        with self.assertRaisesRegex(vl.LockError, "never closed"):
+            self.parse("alpha==1.0 \\\n    --hash=sha256:" + "a" * 64 + " \\\n")
+        with self.assertRaisesRegex(vl.LockError, "expected a sha256 hash line continuing alpha"):
+            self.parse("alpha==1.0 \\\nbeta==1.0 \\\n    --hash=sha256:" + "a" * 64 + "\n")
+        with self.assertRaisesRegex(vl.LockError, "not an exact pin"):
+            self.parse("alpha==1.0\n")
+
+    def test_pre_release_dev_and_inexact_versions_are_refused(self) -> None:
+        tail = " \\\n    --hash=sha256:" + "a" * 64 + "\n"
+        for pin, message in (("alpha==1.2rc1", "pre-release"),
+                             ("alpha==1.2.dev3", "pre-release"),
+                             ("alpha==1.*", "not an exact pin"),
+                             ("alpha===1.0", "not an exact pin"),
+                             ("alpha==1.0,<2", "not an exact pin"),
+                             ('alpha==1.0 ; python_version >= "3.0"', "not an exact pin")):
+            with self.subTest(pin=pin), self.assertRaisesRegex(vl.LockError, message):
+                self.parse(pin + tail)
 
     def test_comments_and_hashes_are_parsed(self) -> None:
         pins = self.parse("# header\nalpha==1.0 \\\n    --hash=sha256:" + "a" * 64

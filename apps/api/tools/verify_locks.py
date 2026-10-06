@@ -18,8 +18,16 @@ For ``requirements-runtime.txt`` (project dependencies + extra ``full``) and
   never reach the output: a corrupted, missing or extra hash is a difference.
 
 A newer release of a dependency on the index is therefore not a failure. Moving to it is an
-explicit maintenance action (``pip-compile --upgrade-package NAME``; see README-deps.md),
-and this script refuses the options that would turn verification into an upgrade.
+explicit maintenance action (``pip-compile --upgrade-package NAME``; see README-deps.md).
+pip-compile runs with ``--no-config``, no ``PIP_*`` environment variable and pip's own
+configuration files disabled, so neither a pip-tools config file nor pip configuration can
+turn verification into an upgrade or add a package source. ``--compile-arg`` accepts only
+the options the offline regression tests need.
+
+What it accepts by design: a lock whose pins all satisfy ``pyproject.toml`` and whose hashes
+match the index. A hand edit to an OLDER compatible version with its correct hashes therefore
+passes, exactly as pip-tools itself would keep it. Pre-release and development versions,
+environment markers and anything but plain hash-carrying pins are refused.
 
 The committed files are never written. Exit status: 0 verified, 1 difference or resolution
 failure, 2 usage or toolchain error.
@@ -29,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import os
 import re
 import subprocess
 import sys
@@ -36,6 +45,8 @@ import tempfile
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
+
+from pip._vendor.packaging.version import InvalidVersion, Version
 
 # The documented lock toolchain (README-deps.md). The existing-pin and hash behaviour this
 # script relies on was measured on exactly these versions; any other version is refused.
@@ -49,13 +60,16 @@ LOCKS = (
     (DEV, ("full", "dev"), RUNTIME),
 )
 
-# pip-compile options that would turn verification into an upgrade, let pip-tools reuse the
-# committed hashes, or redirect the output. Refused when passed through --compile-arg.
-_FORBIDDEN_LONG = ("--upgrade", "--upgrade-package", "--reuse-hashes", "--output-file")
-_FORBIDDEN_SHORT = ("-U", "-P", "-o")
+# The only pip-compile options --compile-arg may pass: what the offline regression tests need
+# to resolve from a local wheel directory. Everything else is refused, so no option can turn
+# verification into an upgrade, reuse the committed hashes, redirect output or load a config.
+_ALLOWED_FLAGS = ("--no-index", "--no-emit-find-links")
+_ALLOWED_VALUED = ("--find-links", "--cache-dir")
 
-_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\;]+)\s*\\?\s*$")
-_HASH = re.compile(r"^\s+--hash=sha256:([0-9a-f]{64})\s*\\?\s*$")
+# pip-tools' own output format: "name==version \" then four-space-indented hash lines, the
+# last one without a continuation backslash.
+_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][0-9A-Za-z.!+]*) \\$")
+_HASH = re.compile(r"^    --hash=sha256:([0-9a-f]{64})( \\)?$")
 
 
 class LockError(Exception):
@@ -74,22 +88,42 @@ class Pin:
 
 
 def parse_lock(path: Path) -> list[Pin]:
-    """Parse a pip-tools lock; refuse anything that is not an exact pin with sha256 hashes."""
+    """Parse a pip-tools lock; refuse anything that is not an exact pin with sha256 hashes.
+
+    Lines are read the way pip joins them: a pin line ends with a continuation backslash and
+    is followed only by its hash lines until one without a backslash closes the entry.
+    Comments and blank lines are allowed only between entries, never inside one.
+    """
     pins: list[Pin] = []
     current: Pin | None = None
+    open_entry = False
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        where = f"{path.name}:{number}"
+        if open_entry:
+            digest = _HASH.match(line)
+            if not digest or current is None:
+                raise LockError(f"{where}: expected a sha256 hash line continuing "
+                                f"{current.name if current else 'the entry'}: {line!r}")
+            current.hashes.append(digest.group(1))
+            open_entry = digest.group(2) is not None
+            continue
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         pin = _PIN.match(line)
-        if pin:
-            current = Pin(pin.group(1), pin.group(2))
-            pins.append(current)
-            continue
-        digest = _HASH.match(line)
-        if digest and current is not None:
-            current.hashes.append(digest.group(1))
-            continue
-        raise LockError(f"{path.name}:{number}: not an exact pin or a sha256 hash line: {line!r}")
+        if not pin:
+            raise LockError(f"{where}: not an exact pin followed by sha256 hashes: {line!r}")
+        try:
+            version = Version(pin.group(2))
+        except InvalidVersion as exc:
+            raise LockError(f"{where}: invalid version {pin.group(2)!r}") from exc
+        if version.is_prerelease or version.is_devrelease:
+            raise LockError(f"{where}: {pin.group(1)}=={pin.group(2)} is a pre-release or "
+                            "development version")
+        current = Pin(pin.group(1), pin.group(2))
+        pins.append(current)
+        open_entry = True
+    if open_entry:
+        raise LockError(f"{path.name}: the last entry's continuation is never closed")
     if not pins:
         raise LockError(f"{path.name}: no pinned requirements")
     seen: set[str] = set()
@@ -126,13 +160,24 @@ def check_toolchain() -> list[str]:
 
 
 def forbidden_compile_args(args: list[str]) -> list[str]:
+    """Every --compile-arg that is not exactly an allowed flag or an allowed ``--opt=value``."""
     bad = []
     for arg in args:
-        name = arg.split("=", 1)[0]
-        short = not arg.startswith("--") and any(arg.startswith(s) for s in _FORBIDDEN_SHORT)
-        if name in _FORBIDDEN_LONG or short:
+        name, has_value, value = arg.partition("=")
+        allowed = (arg in _ALLOWED_FLAGS
+                   or (name in _ALLOWED_VALUED and has_value and value != ""))
+        if not allowed:
             bad.append(arg)
     return bad
+
+
+def compile_environment() -> dict[str, str]:
+    """The process environment without pip/pip-tools configuration: no ``PIP_*`` variable
+    (pip options and pip-tools' PIP_TOOLS_* both live there) and pip's configuration files
+    disabled (pip skips every config file when PIP_CONFIG_FILE is os.devnull)."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PIP_")}
+    env["PIP_CONFIG_FILE"] = os.devnull
+    return env
 
 
 def compile_lock(
@@ -143,7 +188,7 @@ def compile_lock(
     compile_args: list[str],
 ) -> subprocess.CompletedProcess[str]:
     command = [
-        sys.executable, "-m", "piptools", "compile", "--quiet",
+        sys.executable, "-m", "piptools", "compile", "--quiet", "--no-config",
         "--generate-hashes", "--no-reuse-hashes", "--strip-extras",
     ]
     for extra in extras:
@@ -151,7 +196,8 @@ def compile_lock(
     if constraint is not None:
         command += ["--constraint", str(constraint)]
     command += [*compile_args, "--output-file", str(output), "pyproject.toml"]
-    return subprocess.run(command, cwd=project, capture_output=True, text=True, check=False)
+    return subprocess.run(command, cwd=project, capture_output=True, text=True, check=False,
+                          env=compile_environment())
 
 
 def describe_difference(committed: list[Pin], fresh: list[Pin]) -> list[str]:
@@ -174,6 +220,9 @@ def describe_difference(committed: list[Pin], fresh: list[Pin]) -> list[str]:
 
 def verify(project: Path, compile_args: list[str]) -> int:
     failed = False
+    if compile_args:
+        print("NOTE: pip-compile also receives " + " ".join(compile_args)
+              + " (offline regression-test sources, not the package index)")
     with tempfile.TemporaryDirectory(prefix="verify-locks-") as tmp:
         for lock, extras, constrained_to in LOCKS:
             committed = project / lock
@@ -226,7 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     bad = forbidden_compile_args(args.compile_arg)
     if bad:
-        print(f"REFUSED: {' '.join(bad)} would upgrade, reuse committed hashes or redirect output")
+        print(f"REFUSED: {' '.join(bad)} (only {', '.join(_ALLOWED_FLAGS + _ALLOWED_VALUED)} "
+              "may be passed through)")
         return 2
     problems = check_toolchain()
     if problems:
