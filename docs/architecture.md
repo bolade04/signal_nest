@@ -10,13 +10,19 @@ Phase 1–2 system; the dated section at the end records where `main` has moved 
 
 - **`apps/api` — FastAPI modular monolith (authoritative).** Owns the database,
   migrations, domain logic, the pure scoring/geo/claims engines, REST endpoints,
-  authentication, RBAC, tenancy enforcement, and the in-process job runner.
+  authentication, RBAC, tenancy enforcement, and the in-process job runner *(accurate for Phase 1–2:
+  `InProcessQueue` ran each job synchronously in the API process at `8dca455e`; stale since `67ed438`
+  (2026-07-13), when scout runs moved to the durable job store and a separate worker — see "The
+  intelligence pipeline" below — 2026-10-06)*.
 - **`apps/web` — React SPA.** A presentation layer that calls the API through a typed
   client generated from the OpenAPI schema. It contains **no** business rules,
-  scoring, authorization, or tenant-isolation logic.
+  scoring, authorization, or tenant-isolation logic. *(Phase 1–2. On `main` `c5b48ed7` the SPA also
+  decides which controls to show by role — `apps/web/src/lib/roles.ts` — and guards operator routes —
+  `apps/web/src/auth/RequireOperator.tsx`; both gate what is displayed, and the API enforces
+  authorization — 2026-10-06.)*
 - ~~**`packages/shared`** — generated TS API types and shared enums/constants.~~ *(No
   `packages/` directory has ever been tracked in this repository, including at the Phase 1–2
-  acceptance commit `8dca455e`; the generated types live in `apps/web/src/api/types.ts` and
+  ~~acceptance~~ squash commit `8dca455e` *(and the accepted commit `b5965d35` — 2026-10-06 clarification)*; the generated types live in `apps/web/src/api/types.ts` and
   `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)*
 
 The frontend and backend agree on exactly one contract: `apps/api/openapi.json`,
@@ -24,8 +30,17 @@ regenerated via `npm run gen:types`.
 
 ## Backend module layout
 
-Each domain module uses layered files (`models.py`, `schemas.py`, `repository.py`,
-`service.py`, `policies.py`, `routes.py`):
+~~Each domain module uses layered files (`models.py`, `schemas.py`, `repository.py`, `service.py`, `policies.py`, `routes.py`):~~
+*(2026-10-06 correction — inaccurate when written:
+no `repository.py` or `policies.py` file exists under `apps/api/app/` at the Phase 1–2 squash
+`8dca455e`, at the accepted commit `b5965d35` or on `main` `c5b48ed7`. Modules hold differing
+subsets of `models.py`, `schemas.py` and `routes.py`; of the module names listed below, only `audit`,
+`auth`, `brands`, `jobs` and `llm` have a `service.py` on `main`; `geography` and `claims` each hold an
+`engine.py`, and `scoring` holds the scoring-engine modules (`relevance.py`, `noise.py`, `validation.py`,
+`opportunity.py`, `decision.py`, `types.py`);
+`business_profiles` and `clustering` contain only `__init__.py`; there is no `workspaces`
+directory — the Workspace model is in `organizations/models.py`.)* Domain module names as
+written:
 
 `organizations, workspaces, brands, business_profiles, locations, geography,
 campaign_context, claims, scouting_requests, signals, clustering, scoring,
@@ -77,20 +92,28 @@ Key engines and their rules:
 
 ## Dual-mode infrastructure
 
-Every external dependency sits behind an adapter interface selected by `APP_MODE`:
+Every external dependency sits behind an adapter interface ~~selected by `APP_MODE`~~ *(2026-10-06
+correction — inaccurate when written: `APP_MODE` selects no adapter at `8dca455e` or on `main`; each
+row has its own setting, named in the measured note below)*:
 
-| Concern | Local (default) | Full (`APP_MODE=full`) |
+| Concern | Local (default) | Full ~~(`APP_MODE=full`)~~ |
 | --- | --- | --- |
-| Database | SQLite | Postgres + pgvector |
+| Database | SQLite | Postgres ~~+ pgvector~~ |
 | Queue | in-process | Redis |
-| Durable job queue | SQLite-backed store + worker | (Redis/Celery/etc. — Phase 3B) |
+| Durable job queue | SQLite-backed store + worker | ~~(Redis/Celery/etc. — Phase 3B)~~ the same store on PostgreSQL |
 | Cache | in-memory | Redis |
 | Vector search | numpy brute-force | pgvector |
 | Storage | local filesystem | S3 |
 | LLM | deterministic mock | OpenAI / Anthropic |
 
 Startup config validation fails fast in full/prod if a real provider or real DB is
-not configured; the system never silently falls back between mock and real providers.
+not configured; the system never silently falls back between mock and real providers. *(2026-10-06,
+precisely: full mode rejects SQLite but does not itself require a real LLM provider — staging and
+production do (see "Selection" below). Staging and production did not themselves require PostgreSQL at
+`8dca455e` (only `APP_MODE=full` did); on `main`, production rejects SQLite and staging does not. The LLM service falls back to the mock only under the dev-only
+flag, and logs it; separately, the pipeline's explanation step returns fixed fallback text, without a
+log line, when the provider raises `LLMError` (`apps/api/app/jobs/pipeline.py`, at `8dca455e` and on
+`main`).)*
 
 *(2026-10-05: two cells of this table describe adapters that are not operative on `main`
 `c4315d8d` — `build_index()` in `apps/api/app/infra/vector.py` returns `BruteForceIndex()`
@@ -102,15 +125,97 @@ no module imports the installed `pgvector` package or issues a vector SQL operat
 `Redis` queue adapter `xadd`s to a stream that no consumer reads (`P6-PLAT-2`). Both rows are open in the
 Phase 6 plan.)*
 
+*(2026-10-06 — measured facts for every row, at the Phase 1–2 squash `8dca455e` (`apps/api` is
+byte-identical at the accepted commit `b5965d35`) and on `main` `c5b48ed7`. The list records what exists,
+what selects it, what calls it, what tests it and what is live-verified; it makes no ruling on whether any
+adapter is production-ready and does not revise the 2026-10-05 note above, which names two rows.)*
+
+- **Selection.** `APP_MODE` selects nothing. Each row has its own setting: `database_url`, `queue_backend`,
+  `cache_backend`, `vector_backend`, `storage_backend`, `llm_provider` (and, on `main`, `job_queue_backend`,
+  which accepts only `local`). `APP_MODE=full` only adds validation (the mode is also reported by `/health`): it rejects SQLite, and a Redis backend
+  without `redis_url`. Staging and production also reject the mock LLM provider and the dev-only LLM
+  fallback flag (on `main`, outside the one-shot migration mode); the fallback is opt-in and logged. On
+  `main`, production additionally requires `APP_MODE=full` and rejects each local backend.
+- **Database (Postgres).** Implementation: the SQLAlchemy engine built from `database_url`
+  (`apps/api/app/db/session.py`), which the application's database sessions use. Tests: none against Postgres at
+  acceptance (CI ran SQLite only). On `main` the Backend quality job points the `TEST_POSTGRES_URL`-gated
+  tests at a `postgres:16` service; run 37445036772 reports 2,558 passed and none skipped. Live: not
+  verified here.
+- **Queue (Redis).** Implementation: `RedisQueue`, defined inside `build_queue()` (`apps/api/app/infra/queue.py`),
+  appends jobs to the Redis stream `signalnest:jobs`. Call path: the module-level `queue` is built at import.
+  At acceptance the scout run endpoint enqueued through it — synchronously in-process by default; with
+  `queue_backend=redis` the job was written to the stream, and no worker existed to read it. Since `67ed438`
+  (2026-07-13) scout runs use the durable job store; on `main` no non-test code enqueues on this adapter,
+  and only the readiness probe references the `queue` object (`jobs/pipeline.py` imports the module for its
+  job registry). The same `queue_backend=redis` setting also selects the durable job store's Redis
+  wake-up notifier — see the next bullet. Tests: none exercise the Redis queue branch (marked `pragma: no
+  cover`); configuration tests only select it. Live: not verified.
+- **Durable job queue.** Implementation: one backend, `local` — the SQLAlchemy-backed store
+  (`apps/api/app/jobs/store.py`) and the worker (`python -m app.jobs.worker`), both since `67ed438`
+  (2026-07-13). The store is SQLAlchemy-based — its `67ed438` docstring already names SQLite and PostgreSQL,
+  and at `67ed438` every dialect claims with the same atomic compare-and-set; since `3fefb36` (2026-07-14)
+  PostgreSQL claims with `SELECT … FOR UPDATE SKIP LOCKED` instead. Selection:
+  `job_queue_backend` accepts only `local`; the dialect follows `database_url`; with `queue_backend=redis`,
+  each immediately-due durable enqueue also publishes a Redis wake-up — scheduled, future-dated jobs are
+  not signalled (`apps/api/app/jobs/coordination.py`, called from
+  `apps/api/app/jobs/service.py`, since `3fefb36`), and no non-test code subscribes to it — the worker
+  polls. Call path: scout runs enqueue through `jobs/service.py`; the worker claims. Tests: on `main` two
+  `TEST_POSTGRES_URL`-gated store tests in `test_production_adapters.py` run on the CI `postgres:16`
+  service, and the wake-up notifier is tested against `fakeredis`. Not present at acceptance. Live: not
+  verified.
+- **Cache (Redis).** Implementation: `RedisCache` (inside `build_cache()` at acceptance; a module class on
+  `main`). Call path: the module-level `cache` is built when `app.infra.cache` is imported. No non-test module
+  imported it at acceptance. On `main` it is imported to close the cache at shutdown
+  (`apps/api/app/core/lifecycle.py`) and, for its Redis client factory, by `apps/api/app/jobs/coordination.py`
+  when `queue_backend=redis` (for the wake-up notifier above); no non-test code reads or writes the cache. Tests: none at acceptance; on
+  `main`, `apps/api/app/tests/test_production_adapters.py` exercises `RedisCache` against `fakeredis`. Live:
+  not verified.
+- **Vector search (pgvector).** No implementation: see the 2026-10-05 note above (`P6-PLAT-1`). Live: not
+  applicable.
+- **Storage (S3).** Implementation: `S3Storage` (inside `build_storage()` at acceptance; a module class on
+  `main`). Call path: the module-level `storage` is built when `app.infra.storage` is imported; no non-test
+  module imports it, at acceptance or on `main`. Tests: none at acceptance; on `main`,
+  `test_production_adapters.py` exercises `S3Storage` with an injected fake client (no boto3 call, no
+  bucket). Live: not verified.
+- **LLM (OpenAI / Anthropic).** Implementation: `OpenAIProvider` and `AnthropicProvider`
+  (`apps/api/app/llm/providers_real.py`), selected by `llm_provider` (default `mock`). Call path: the
+  module-level `llm_service` builds the selected provider at import, and the scout pipeline calls it
+  (`apps/api/app/jobs/pipeline.py`, two call sites) at both commits. Tests: no test names the real provider
+  classes; CI runs with `LLM_PROVIDER=mock`. Live: not verified.
+- **Live verification, all rows:** none is recorded for this correction. It would need a recorded check
+  against deployed services, and no Phase 6 commit is deployed.
+
 ## Tenancy & security
 
 - Every query is scoped server-side by `organization_id` / `workspace_id` (and
-  `location_id` / `campaign_id` where applicable) in the repository layer.
+  `location_id` / `campaign_id` where applicable) ~~in the repository layer~~ *(2026-10-06
+  correction — inaccurate when written: there is no repository layer. The tenant predicates are
+  written directly in the modules that run the queries — route handlers, `service.py` modules and
+  other module helpers. At `8dca455e` they appear in the route handlers, `brands/service.py`,
+  `opportunities/context.py`, `jobs/pipeline.py` and `auth/dependencies.py`; on `main` `c5b48ed7`
+  also in, for example, `jobs/store.py`, `scouting_requests/schedules.py`,
+  `intelligence/persistence.py` and `organizations/members.py`. This note does not re-verify that
+  every query is scoped)*.
   Client-supplied tenant IDs are never trusted.
 - RBAC roles: Owner, Admin, Marketer, Reviewer, Viewer, Compliance Reviewer, enforced
-  by per-domain policy layers.
+  ~~by per-domain policy layers~~ *(2026-10-06 correction — inaccurate when written: there are no
+  per-domain policy layers. The roles are defined in `apps/api/app/core/enums.py`. Authorization is
+  done by FastAPI dependencies from `apps/api/app/auth/dependencies.py` that routes declare, together
+  with checks inside some modules. At `8dca455e` and `b5965d35`, `get_tenant_context` resolves the
+  caller's organization-membership role for the requested workspace and `require_role(...)` admits
+  every role ranked at or above the lowest-ranked role it names; `organizations/routes.py` also
+  checks membership inline (`_assert_member`). On `main` `c5b48ed7` those two dependencies remain,
+  `require_exact_roles(...)` and `require_exact_organization_roles(...)` (added after acceptance)
+  admit only the named roles, `require_operator` gates operator-only routes, and
+  `organizations/members.py` and `organizations/invitations.py` re-check the actor's role
+  themselves. This note does not enumerate every check)*.
 - Scout requests are isolated by workspace + brand + location + market + campaign, so
   results from one city never influence another unless explicitly combined.
+
+*(2026-10-06: the statements in this section that every query is scoped, that client-supplied tenant IDs
+are never trusted and that results never cross cities are universal properties. The evidence on record for
+them is the acceptance-time isolation testing — integration tests and the four-market HTTP smoke flow in
+[`acceptance-report.md`](acceptance-report.md); this correction did not re-verify them exhaustively.)*
 
 ## Frontend structure (`apps/web/src`)
 
@@ -133,8 +238,10 @@ changes is deployed (plan §4.6a).
   `audit`, `auth`, `brands`, `business_profiles`, `campaign_context`, `capabilities`, `claims`,
   `clustering`, `connectors`, `core`, `db`, `feedback`, `geography`, `infra`, `intelligence`,
   `jobs`, `llm`, `locations`, `opportunities`, `organizations`, `scoring`, `scouting_requests`,
-  `signals`, `system`, `tests`. Present at the acceptance commit `8dca455e` but not in the list above: `api` (router
-  aggregation), `core`, `db`, `infra` (cache, mail, queue, storage and vector adapters). Added
+  `signals`, `system`, `tests`. Present at the ~~acceptance~~ Phase 1–2 squash commit `8dca455e` *(and the accepted commit `b5965d35`;
+  `apps/api` is identical — 2026-10-06 clarification)* but not in the list above: `api` (router
+  aggregation), `core`, `db`, `infra` (cache, ~~mail,~~ queue, storage and vector adapters *(2026-10-06
+  correction — inaccurate when written: `infra/mail.py` was first added on 2026-09-26, in #184)*). Added
   since: `capabilities` (Phase 4A capability registry, resolver and operator overrides —
   `docs/verification/4a-c-*.md`), `connectors` (Phase 3B connector base, policy, rate limiting,
   retry, registry and an RSS parser whose live egress is not wired on `main` — draft PR #34),
@@ -145,7 +252,11 @@ changes is deployed (plan §4.6a).
   model lives in `organizations/models.py`. Modules exposing a `routes.py`: `audit`, `auth`,
   `brands`, `campaign_context`, `feedback`, `jobs`, `locations`, `opportunities`,
   `organizations`, `scouting_requests`, `system`.
-- **Durable jobs:** `JOB_QUEUE_BACKEND` implements only `local` (SQLite-backed store + worker;
+- **Durable jobs:** `JOB_QUEUE_BACKEND` implements only `local` (~~SQLite-backed~~ store + worker *(2026-10-06
+  correction — inaccurate when written: the `local` store is SQLAlchemy-based and its `67ed438` docstring
+  already names SQLite and PostgreSQL; since `3fefb36` (2026-07-14) it claims with `FOR UPDATE SKIP LOCKED`
+  on PostgreSQL, tested in CI on `postgres:16`; see "Durable job queue" in the measured note
+  under "Dual-mode infrastructure")*;
   `docs/phase-3a-durable-jobs.md`). The "(Redis/Celery/etc. — Phase 3B)" cell in the table
   above was a plan; Phase 3B did not deliver it.
 - **API surface:** 85 paths / 106 operations in `apps/api/openapi.json`.

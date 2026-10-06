@@ -30,7 +30,7 @@ baseline and does **not** repeat Phase 1–2 work.
 
 | Item | Value |
 | --- | --- |
-| Accepted `main` SHA | `73c21aca819f680aa986160dba3da4f32f8981a8` |
+| Accepted `main` SHA | `73c21aca819f680aa986160dba3da4f32f8981a8` *(the entry state when this plan was written, in `1d9f93a`; PR #19 then made `b5965d35` the accepted commit recorded in [`acceptance-report.md`](acceptance-report.md) — see "Completed maintenance" below — 2026-10-06)* |
 | Phase 1–2 squash commit | `8dca455e9592fdec959e57e6d9f741007f421f5f` |
 | Security alerts / `npm audit` | 0 / 0 |
 | Required checks | Frontend quality · Backend quality · Migrations and API contract · Integration smoke *(four at entry; six since Phase 6 — `P6-CI-1`)* |
@@ -284,5 +284,7 @@ Classification: **[R] Required before Phase 3** · **[E] Recommended early in Ph
 ### Completed maintenance
 - **`actions/setup-python` upgraded v5 → v6** (PR #19, merged; squash commit
   `b5965d354a0c2335c2ac9cf283fd28b56d8d612d`). The Node-runtime deprecation annotation
-  is no longer emitted; Python 3.12, pip caching, and `contents: read` permissions are
+  is no longer emitted *(true at writing; 2026-10-06: Node.js 20 deprecation warnings are emitted again
+  for other actions — see "Completed maintenance" in [`acceptance-report.md`](acceptance-report.md))*;
+  Python 3.12, pip caching, and `contents: read` permissions are
   unchanged.
