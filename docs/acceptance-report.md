@@ -18,7 +18,7 @@ that followed. Phase 3+ is intentionally out of scope; see
 - **CI quality checks now propagate real failures.** The pipefail masking bug is fixed
   and guarded by a regression test.
 - **Frontend lint tooling is migrated and stable** (ESLint flat config on ESLint 10).
-- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at acceptance. Phase 3 was then implemented and closed with its capabilities shipped dark — [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 — [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)*
+- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at acceptance. Phase 3 was then implemented and closed ~~with its capabilities shipped dark~~ — [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 — [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)* *(2026-10-07 correction — inaccurate when written: on `c4315d8d`, the commit this 2026-10-05 note was written against, the RSS connector, scouting-schedule changes and the 3C feedback loop were off by default through flags, but signal intelligence and its opportunity scoring, the SB-A run-history endpoint and the 3A durable job runtime had no flag; measured detail: the 2026-10-07 corrections in [`docs/phase-3-plan.md`](phase-3-plan.md) and in the closeout record. Repository behaviour only, not deployment)*
 
 ## Final repository baseline
 
@@ -111,11 +111,11 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 - **[P]** Creative generation, approvals, analytics, live integrations, billing — ~~stubs routing to "coming in Phase 3"~~ *(2026-10-07 correction — inaccurate when written: at `b5965d35` no route or stub existed for any of these; creative generation appeared only as notices that it "arrives in Phase 3", in the sidebar and on the opportunity detail page, and two Campaign Context descriptions mention Phase 3)*
   *(2026-10-05: this scope became the Phase 5A–5E guided-action
   work — [`docs/project-phase-5-plan.md`](project-phase-5-plan.md) — excluded from Phase 6 by
-  resolved decision `P6-D01`; Phase 3 as executed delivered, dark, the 3B scouting work — connector
+  resolved decision `P6-D01`; Phase 3 as executed delivered, ~~dark,~~ the 3B scouting work — connector
   foundation with an RSS sandbox, signal intelligence and opportunity scoring, scouting schedules —
   and the 3C feedback loop on top of the 3A runtime foundation; the closeout record lists the
   scheduling PRs #48–#51 and the 3C PRs, the connector and intelligence work is in git history —
-  fe78b39, #35)*.
+  fe78b39, #35)*. *(2026-10-07 correction — inaccurate when written: this 2026-10-05 annotation, not the original acceptance text, called the work "dark", meaning feature-flagged off by default. On `c4315d8d`, which it was written against, and on `main` `61f49eb8`, the RSS connector, scouting schedules and the 3C feedback loop were off by default through actual flags (`connector_rss_enabled`, `scout_scheduling_enabled`, `opportunity_feedback_enabled`, each `False` in `apps/api/app/core/config.py`; since Phase 4B-A, #88 of 2026-07-21, a per-workspace override can enable feedback), but signal intelligence and its opportunity scoring had no flag: for each signal its connector returns, the scout pipeline analyses and scores it and stores the result, fail-open — a fault is logged and leaves no intelligence record (`apps/api/app/jobs/pipeline.py:229`, `:268-269`) — and the intelligence API route and the opportunity detail panel have no flag check. Of the 3A runtime foundation, the durable job store and worker have no flag, and span emission is off by default (see the phase-3-plan correction). Measured evidence and enforcement points: the 2026-10-07 correction in [`docs/phase-3-plan.md`](phase-3-plan.md). Repository behaviour only, not deployment or live exposure)*
 
 *(2026-10-07 correction, measured at `b5965d35` against the automated checks listed after the Phase 1 items: "tested" was inaccurate when written for these parts of the [T] items above, which none of them asserted: scout creation (the create dialog, which is also where a scout is configured), pause and resume, and the isolation of scout requests by workspace, brand, market and campaign — listing, running and the detail view are tested, and opportunity results are tested for separation by location; the opportunity and confidence scores' per-factor breakdowns (their totals and bands are tested); the decision engine's Archive outcome (the other five are tested); the feed's confidence and risk display, sorting, risk filter and search filtering (the score labels, the search box and its reset on a location switch are tested); and the detail page's Recommended action section, geo evidence and claim warnings. Signal normalization, dedupe/clustering, classification and the explanation step have no unit tests: they run inside the scout pipeline during seeding, the API tests then read its results, and the smoke flow requires at least one in-market opportunity per city; the frontend test of the evidence/inference split runs against fixture data, and the claim-safety engine is unit-tested. Nothing notified at `b5965d35`: "notify selectively" is the noise gate's motto, and the notifications menu was a placeholder.)*
 
@@ -284,8 +284,8 @@ restored protection as tabulated above.
   connector framework and an RSS sandbox exist; live egress is not wired — see the [A] note above)*.
 - Auth is the local email/password + JWT provider only (no SSO/OAuth, refresh rotation,
   or rate-limit backend).
-- ~~Phase 3 features are not yet implemented.~~ *(Implemented and closed dark after acceptance —
-  see the dated note under "Executive acceptance status".)*
+- ~~Phase 3 features are not yet implemented.~~ *(Implemented and closed ~~dark~~ after acceptance —
+  see the dated note under "Executive acceptance status".)* *(2026-10-07 correction — inaccurate when written: not every Phase 3 feature was off by default; see the 2026-10-07 correction to that note)*
 - TypeScript 7 upgrade (Dependabot PR #6) is intentionally deferred.
 
 ### Completed maintenance

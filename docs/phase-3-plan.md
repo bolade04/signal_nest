@@ -3,16 +3,16 @@
 > **Status banner (2026-10-03, `P6-GOV-5`):** this document is a historical record of the Phase 3 plan as written before Phase 3 work began and is not updated for later phases. Current repository and readiness status lives in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) (§4 residual-work matrix and §4.6a live-state reconciliation; §1.2 is the dated 2026-09-19 baseline snapshot).
 
 ~~**Status: planned, not started.**~~ **Status at writing (2026-07-12): planned, not started.
-2026-10-05: Phase 3 has since been implemented and closed, its capabilities shipped dark —
+2026-10-05: Phase 3 has since been implemented and closed, ~~its capabilities shipped dark~~ —
 [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md). As executed it
-delivered the 3A runtime foundation (`docs/phase-3a-*.md`), the dark 3B scouting work —
+delivered the 3A runtime foundation (`docs/phase-3a-*.md`), the ~~dark~~ 3B scouting work —
 connector foundation with an RSS sandbox, signal intelligence and opportunity scoring
 (`docs/phase-3b/`), scouting schedules — and the dark 3C feedback loop, not the full workstream
 list below; the creative
 generation, approvals, analytics, live-integration and billing work is now the Phase 5A–5E
 guided-action scope ([`docs/project-phase-5-plan.md`](project-phase-5-plan.md)), excluded from
 Phase 6 by `P6-D01`. The current track is
-[`docs/project-phase-6-plan.md`](project-phase-6-plan.md).** Phase 1–2 is complete and accepted (see
+[`docs/project-phase-6-plan.md`](project-phase-6-plan.md).** *(2026-10-07 correction — inaccurate when written: the 2026-10-05 note above calls this work "dark", which the closeout record defines as feature-flagged off by default. On `c4315d8d`, the commit the note was written against, and on `main` `61f49eb8`, that holds for the RSS connector, scouting schedules and the 3C feedback loop, each off by default through a flag that is `False` in `apps/api/app/core/config.py`: `connector_rss_enabled`, checked when a scout run resolves its connector (`apps/api/app/connectors/registry.py:26`; otherwise the fixture connector serves); `scout_scheduling_enabled` — while it is off, schedule changes answer 503 and the scheduler tick enqueues no run (`apps/api/app/scouting_requests/routes.py:75`, `apps/api/app/scouting_requests/schedules.py:284`); and `opportunity_feedback_enabled`, checked on every feedback call (`apps/api/app/feedback/routes.py:90-93`) through the capability resolver since Phase 4B-A (#88, 2026-07-21), so a per-workspace override can enable it, with the panel rendering nothing while it is off — the 3C "dark" therefore stands. Signal intelligence and its opportunity scoring have no flag: for each signal its connector returns, the scout pipeline analyses and scores it and stores the result, fail-open — an analysis or storage fault is logged and leaves no intelligence record (`apps/api/app/jobs/pipeline.py:229`, `:268-269`); the intelligence API route has no capability check (`apps/api/app/opportunities/routes.py:134-156`); the opportunity detail page renders the panel with no flag check (`apps/web/src/pages/OpportunityDetail.tsx:310`); and the design record for its persistence says "there is no new feature flag" (`docs/phase-3b/signal-intelligence-design.md:217`). The 3A runtime foundation is not one gated feature: its durable job store and worker, through which the run endpoint queues scout runs, have no flag, and its span emission (3A.4b) is off by default — the API installs a tracer only when `tracing_enabled` is true and `tracing_exporter` (default `none`) names an exporter (`apps/api/app/core/tracing.py:553-564`, from `apps/api/app/main.py:39`), and the worker installs none. Repository behaviour only, not deployment or live exposure)* Phase 1–2 is complete and accepted (see
 [`acceptance-report.md`](acceptance-report.md)). This plan starts from that accepted
 baseline and does **not** repeat Phase 1–2 work.
 

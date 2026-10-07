@@ -1,10 +1,10 @@
 # Phase 3 Closeout Verification
 
 **Final status:**
-`PHASE 3 COMPLETE — CAPABILITIES DARK AND VERIFIED`
+~~`PHASE 3 COMPLETE — CAPABILITIES DARK AND VERIFIED`~~ `PHASE 3 COMPLETE — VERIFIED` *(2026-10-07 correction — "capabilities dark" was inaccurate when written; see the note below)*
 
-> This document formally closes SignalNest Phase 3. All Phase 3 product
-> capabilities ship **dark** (feature-flagged off by default). "Complete" means
+> This document formally closes SignalNest Phase 3. ~~All Phase 3 product
+> capabilities ship **dark** (feature-flagged off by default).~~ *(2026-10-07 correction — inaccurate when written: measured at this record's commit `16c0d28` (2026-07-20) and again on `main` `61f49eb8`, some Phase 3 capabilities were off by default through a flag that is `False` in `apps/api/app/core/config.py` — scheduling changes and the scheduler tick (`scout_scheduling_enabled`), the feedback loop's API and panel (`opportunity_feedback_enabled`; on `main` a per-workspace override can also enable feedback, since #88 of 2026-07-21) and the RSS connector (`connector_rss_enabled`) — and others had no flag: signal intelligence and its opportunity scoring (#35, #37, #40, #42, merged 2026-07-15/16, before this record), which the scout pipeline analyses, scores and stores fail-open for each fetched signal and which the intelligence API route and the opportunity detail panel serve with no flag check; the SB-A run-history endpoint (#48) and schedule reads; and the 3A durable job runtime. Per-feature evidence: the 2026-10-07 correction in [`docs/phase-3-plan.md`](../phase-3-plan.md). Repository behaviour only, not deployment or public exposure)* "Complete" means
 > implemented, merged through the protected workflow, and verified — **not**
 > publicly enabled or rolled out. Production rollout of any Phase 3 capability
 > remains a separate, explicitly-approved decision.
@@ -13,7 +13,7 @@
 
 Phase 3 delivered the following, all merged to `main` and verified:
 
-- **Phase 3B — scouting foundation and hardening (dark):**
+- **Phase 3B — scouting foundation and hardening ~~(dark)~~:** *(2026-10-07 correction — inaccurate when written for SB-A: the run-history endpoint (#48) has no flag, nor do schedule reads; schedule changes and the scheduler tick are off by default, as the items below say)*
   - Read-only scouting run-history endpoint (SB-A, PR #48).
   - Dark-deployed scouting-schedule foundation (SB-B, PR #49).
   - Customer-facing scouting schedule API and controls (SB-C, PR #50).
@@ -25,8 +25,8 @@ Phase 3 delivered the following, all merged to `main` and verified:
   - Feature-gated feedback API (3C-C, PR #54).
   - Intelligence-record-id contract addendum (3C-C.1, PR #56).
   - Feedback UI and rollout readiness (3C-D, PR #58).
-- **Cross-cutting:** four-market isolation, stale-context isolation, dark
-  deployment and capability gating throughout.
+- **Cross-cutting:** four-market isolation, stale-context isolation, ~~dark
+  deployment and capability gating throughout~~. *(2026-10-07 correction — inaccurate when written: capability gating covered schedule changes, feedback and the RSS connector, not signal intelligence, its opportunity scoring, the SB-A run history or the 3A job runtime; "dark deployment" is a deployment phrase this correction does not assess)*
 
 ## 2. Phase 3C batch matrix
 
@@ -73,7 +73,7 @@ The exact-head and the exact-merge-SHA check-runs each report all five jobs
 | `scout_scheduling_enabled` | `False` |
 | `connector_rss_enabled` | `False` |
 
-All Phase 3 capabilities remain **dark** by default. No Phase 3 feature is
+~~All Phase 3 capabilities remain **dark** by default.~~ *(2026-10-07 correction — inaccurate when written: the three flags above are off by default, but signal intelligence and its opportunity scoring, the SB-A run history and the 3A job runtime have no flag; see the note at the top. The sentence that follows is a deployment statement, not assessed here.)* No Phase 3 feature is
 publicly enabled or rolled out by this closeout.
 
 ## 5. Database and contract state
@@ -132,7 +132,7 @@ These do **not** block Phase 3 closeout and are **not** completed by it:
 
 ## 9. Final declaration
 
-`PHASE 3 COMPLETE — CAPABILITIES DARK AND VERIFIED`
+~~`PHASE 3 COMPLETE — CAPABILITIES DARK AND VERIFIED`~~ `PHASE 3 COMPLETE — VERIFIED` *(2026-10-07 correction — see the note at the top)*
 
 The next implementation phase (Phase 4 or the Phase 3B-track Batch 5 successor)
 must begin only under a separate, approved plan and a separate branch. This
