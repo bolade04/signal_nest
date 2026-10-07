@@ -18,7 +18,7 @@ that followed. Phase 3+ is intentionally out of scope; see
 - **CI quality checks now propagate real failures.** The pipefail masking bug is fixed
   and guarded by a regression test.
 - **Frontend lint tooling is migrated and stable** (ESLint flat config on ESLint 10).
-- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at acceptance. Phase 3 was then implemented and closed with its capabilities shipped dark — [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 — [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)*
+- ~~**Phase 3 has not started.** All Phase 3 surface remains stubbed/planned only.~~ *(True at acceptance. Phase 3 was then implemented and closed ~~with its capabilities shipped dark~~ — [`docs/verification/phase-3-closeout.md`](verification/phase-3-closeout.md); Phase 4 tranches are recorded under [`docs/verification/`](verification/); the current track is Project Phase 6 — [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). Nothing from Phase 6 is deployed.)* *(2026-10-07 correction — inaccurate when written: on `c4315d8d`, the commit this 2026-10-05 note was written against, the RSS connector, scouting-schedule changes and the 3C feedback loop were off by default through flags, but signal intelligence and its opportunity scoring, the SB-A run-history endpoint and the 3A durable job runtime had no flag; measured detail: the 2026-10-07 corrections in [`docs/phase-3-plan.md`](phase-3-plan.md) and in the closeout record. Repository behaviour only, not deployment)*
 
 ## Final repository baseline
 
@@ -284,8 +284,8 @@ restored protection as tabulated above.
   connector framework and an RSS sandbox exist; live egress is not wired — see the [A] note above)*.
 - Auth is the local email/password + JWT provider only (no SSO/OAuth, refresh rotation,
   or rate-limit backend).
-- ~~Phase 3 features are not yet implemented.~~ *(Implemented and closed dark after acceptance —
-  see the dated note under "Executive acceptance status".)*
+- ~~Phase 3 features are not yet implemented.~~ *(Implemented and closed ~~dark~~ after acceptance —
+  see the dated note under "Executive acceptance status".)* *(2026-10-07 correction — inaccurate when written: not every Phase 3 feature was off by default; see the 2026-10-07 correction to that note)*
 - TypeScript 7 upgrade (Dependabot PR #6) is intentionally deferred.
 
 ### Completed maintenance
