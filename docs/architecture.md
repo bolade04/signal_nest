@@ -23,7 +23,7 @@ Phase 1–2 system; the dated section at the end records where `main` has moved 
 - ~~**`packages/shared`** — generated TS API types and shared enums/constants.~~ *(No
   `packages/` directory has ever been tracked in this repository, including at the Phase 1–2
   ~~acceptance~~ squash commit `8dca455e` *(and the accepted commit `b5965d35` — 2026-10-06 clarification)*; the generated types live in `apps/web/src/api/types.ts` and
-  `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)*
+  `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)* *(2026-10-07 clarification: `schema.d.ts` is the generated file; `types.ts` holds hand-written aliases of its types.)*
 
 The frontend and backend agree on exactly one contract: `apps/api/openapi.json`,
 regenerated via `npm run gen:types`.
@@ -59,7 +59,7 @@ run_scout_request → ingest_source_data → normalize_signal → classify_signa
   → validate → score_opportunity → generate_explanation
 ```
 
-*(2026-10-07 correction — inaccurate when written: the chain above gives stage labels in an order the code does not follow. Of its names only `run_scout_request` (the job entrypoint in `apps/api/app/jobs/pipeline.py`), `score_relevance` and `score_opportunity` are functions, and `classify_signal` is the name of an LLM task; the scoring, geography and claim engines are pure, but classification and the explanation are calls to the LLM service. At `8dca455e` the job fetches fixture signals from the connector; for each signal it first evaluates noise (`evaluate_noise`), then embeds it and marks it a duplicate if it is close to a signal already seen in the run, classifies only signals that are neither noise nor duplicates, stores the normalized signal and resolves its geo evidence; it then clusters the remaining signals by pain-point DNA and, for each cluster, scores relevance, validation, opportunity and confidence, bands the classification and confidence level, resolves the cluster's geography, checks claim safety, decides the action (`decide`) and builds the explanation — the LLM task `explain_opportunity` when relevance is at or above the action floor, fixed text otherwise. `main` keeps this order and adds, for each signal, an intelligence read (`_analyze_candidate`) that the code describes as advisory metadata that does not alter these outputs.)*
+*(2026-10-07 correction — inaccurate when written: the chain above gives stage labels in an order the code does not follow. Of its names only `run_scout_request` (the job entrypoint in `apps/api/app/jobs/pipeline.py`), `score_relevance` and `score_opportunity` are functions, and `classify_signal` is the name of an LLM task; the scoring, geography and claim engines are pure, but classification and the explanation are calls to the LLM service. At `8dca455e` the job fetches fixture signals from the connector; for each signal it stores the raw signal, evaluates noise (`evaluate_noise`), embeds it and marks it a duplicate if it is close to a signal already kept in the run, classifies only signals that are neither noise nor duplicates, and stores the normalized signal with its geo evidence; it then clusters the kept signals by pain-point DNA (falling back to the signal type) and, for each cluster, scores relevance, validation, opportunity and confidence, bands the classification and confidence level, resolves the cluster's geography, checks claim safety, decides the action (`decide`) and builds the explanation — the LLM task `explain_opportunity` when relevance is at or above the action floor, fixed text otherwise. `main` keeps this order and adds, for each signal, an intelligence read (`_analyze_candidate`), persisted as an intelligence record, that the code describes as advisory metadata that does not alter these outputs.)*
 
 Since Phase 3A.3 this pipeline runs as a **durable background job** (`app/jobs/`),
 not synchronously inside the run request. The scout run endpoint atomically flips the
@@ -75,7 +75,7 @@ Key engines and their rules:
 - **Relevance** (`scoring/relevance.py`) — blends keyword/pain-point/audience/
   competitor overlap. Hard rule: **relevance < 40 ⇒ never recommend action.**
 - **Noise gate** (`scoring/noise.py`) — "collect broadly, notify selectively";
-  spam/bot/engagement-bait/unsafe content is hard noise; full analysis begins at ≥ 50.
+  spam/bot/engagement-bait/unsafe content is hard noise; ~~full analysis begins at ≥ 50~~ *(2026-10-07 correction — inaccurate when written: `scoring/noise.py` defines a 50 threshold (`PRE_ANALYSIS_FULL_THRESHOLD`) that only a unit test reads; the pipeline treats a signal as noise when a hard-noise rule fires or its pre-analysis score is below 25, and classifies and scores every other signal that is not a duplicate — at `8dca455e` and on `main`)*.
 - **Validation** (`scoring/validation.py`) — cross-source agreement, volume,
   engagement, ads, news, trends, buying intent.
 - **Opportunity + confidence scoring** (`scoring/opportunity.py`) — weighted 0–100
@@ -84,7 +84,7 @@ Key engines and their rules:
   levels (Low/Med/High).
 - **Decision engine** (`scoring/decision.py`) — Act now / Act soon / Monitor /
   Archive / Stay silent / Block. Core rule: if it cannot explain *why the user should
-  care*, it does not alert.
+  care*, it does not alert. *(2026-10-07 clarification: `decide()` does not test for an explanation — it returns Stay silent below the relevance floor and Monitor when audience fit is unclear, and the explanation is built after the decision; nothing alerts at `8dca455e` or on `main`, where the notifications menu is a placeholder.)*
 - **Geography engine** (`geography/engine.py`) — haversine radius matching (1–200 mi),
   coverage evaluation, and geo-relevance resolution from weighted evidence with a
   confidence score.
@@ -217,12 +217,12 @@ adapter is production-ready and does not revise the 2026-10-05 note above, which
 *(2026-10-06: the statements in this section that every query is scoped, that client-supplied tenant IDs
 are never trusted and that results never cross cities are universal properties. The evidence on record for
 them is the acceptance-time isolation testing — integration tests and the four-market HTTP smoke flow in
-[`acceptance-report.md`](acceptance-report.md); this correction did not re-verify them exhaustively.)*
+[`acceptance-report.md`](acceptance-report.md); this correction did not re-verify them exhaustively.)* *(2026-10-07 correction — inaccurate when written: that testing covers only the separation of opportunity results by location inside one workspace. No acceptance-time test or smoke step read across organizations or workspaces or sent another tenant's identifiers, so the first two properties had no test evidence at acceptance; this note does not assess later tests.)*
 
 ## Frontend structure (`apps/web/src`)
 
 - `api/` — typed fetch client (correlation IDs, normalized errors, ~~retry only on safe reads~~), query-key factory embedding
-  `workspace_id`/`location` for cache isolation. *(2026-10-07 correction — inaccurate when written: nothing in `api/` retries. `apiRequest` in `apps/web/src/api/client.ts` sends one `fetch` per call and turns a failure into an `ApiError` — status 0 when the server could not be reached. Retrying is the TanStack Query default set in `apps/web/src/app/providers.tsx`, unchanged from `8dca455e` to `main`: a query is retried after an `ApiError` with status 0 or 500 and above, at most twice (three attempts in all), and never after any other status or any other error; mutations are never retried; and a query can set its own `retry` — two queries did at `8dca455e`, six do on `main`. The policy keys on query versus mutation and on the error, not on the HTTP method; that every query currently reads with `GET` — all 17 at `8dca455e`, all 32 on `main` — is a property of the call sites, not something the policy enforces.)*
+  `workspace_id`/`location` for cache isolation. *(2026-10-07 correction — inaccurate when written: nothing in `api/` retries. `apiRequest` in `apps/web/src/api/client.ts` sends one `fetch` per call and turns a network failure or an error response into an `ApiError` — status 0 when the server could not be reached; an aborted request is re-thrown unchanged. Retrying is the TanStack Query default set in `apps/web/src/app/providers.tsx`, unchanged from `8dca455e` to `main`: a query is retried after an `ApiError` with status 0 or 500 and above, at most twice (three attempts in all), and never after any other status or any other error; mutations are never retried; and a query can set its own `retry` — two queries did at `8dca455e`, six do on `main`. The policy keys on query versus mutation and on the error, not on the HTTP method; that every query currently reads with `GET` — the 17 query calls at `8dca455e` and the 33 on `main` (32 `useQuery` calls and one `fetchQuery`, which also takes the default policy) — is a property of the call sites, not something the policy enforces.)*
 - `workspace/` — `WorkspaceContext` (active org/workspace/brand/location).
 - `auth/` — session + protected routes.
 - `pages/` — Overview, Onboarding, CampaignContext, Locations, ScoutRequests,
@@ -270,7 +270,7 @@ changes is deployed (plan §4.6a).
   `opportunities/` (FeedbackPanel, IntelligencePanel, OpportunityCardView),
   `locations/LocationDialog`, `NotFound`. `src/auth/` also holds `RequireOperator.tsx` and
   `sign-out.ts`. *(2026-10-07 clarification: of these, `auth/` SignIn, Register and AuthLayout, `locations/LocationDialog`, `opportunities/OpportunityCardView`, `scouts/ScoutRequestDialog` and `NotFound` already existed at `8dca455e` but were not in the list above; the others were added since.)*
-- **Top-level layout** *(2026-10-07, measured on `main` `c0989789`; not in the 2026-10-05 list)*: `apps/` holds `api`, `web` and, since #140 (`0ccd39d`, 2026-07-29), `revision-reader` — a separate Python program with its own `pyproject.toml`, `Dockerfile` and tests that reads the live Alembic revision from the database and prints it; its README records it as authored, not provisioned, and CI tests it in the required "Revision reader (unit, IaC contract, in-image)" job. Also added at the top level since `8dca455e`: `infra/` (the AWS staging IaC), `tests/` (repository-level tests) and `.env.canary.example`. This document describes none of these beyond this entry.
+- **Top-level layout** *(2026-10-07, measured on `main` `c0989789`; not in the 2026-10-05 list)*: `apps/` holds `api`, `web` and, since #140 (`0ccd39d`, 2026-07-29), `revision-reader` — a separate Python program with its own `pyproject.toml`, `Dockerfile` and tests that reads the live Alembic revision from the database and prints it; its README records it as authored, not provisioned, and CI tests it in the required "Revision reader (unit, IaC contract, in-image)" job. Also added at the top level since `8dca455e`: `infra/` (the AWS staging IaC and a local full-mode Docker Compose stack), `tests/` (repository-level tests) and `.env.canary.example`. This document describes none of these beyond this entry.
 - **Not described in this document:** the Phase 3–4 verification records
   (`docs/verification/`), the AWS staging IaC and runbooks (`infra/aws/`, `docs/operations/`),
   and the Phase 5A–5E guided-action scope (`docs/project-phase-5-plan.md`, excluded from
