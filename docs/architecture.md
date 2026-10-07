@@ -23,7 +23,7 @@ Phase 1–2 system; the dated section at the end records where `main` has moved 
 - ~~**`packages/shared`** — generated TS API types and shared enums/constants.~~ *(No
   `packages/` directory has ever been tracked in this repository, including at the Phase 1–2
   ~~acceptance~~ squash commit `8dca455e` *(and the accepted commit `b5965d35` — 2026-10-06 clarification)*; the generated types live in `apps/web/src/api/types.ts` and
-  `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)* *(2026-10-07 clarification: `schema.d.ts` is the generated file; `types.ts` holds hand-written aliases of its types.)*
+  `apps/web/src/api/schema.d.ts` — measured on `main` `c4315d8d`, 2026-10-05.)* *(2026-10-07 clarification: `schema.d.ts` is the generated file; `types.ts` holds hand-written aliases of its types and a few hand-written types of its own.)*
 
 The frontend and backend agree on exactly one contract: `apps/api/openapi.json`,
 regenerated via `npm run gen:types`.
@@ -59,7 +59,7 @@ run_scout_request → ingest_source_data → normalize_signal → classify_signa
   → validate → score_opportunity → generate_explanation
 ```
 
-*(2026-10-07 correction — inaccurate when written: the chain above gives stage labels in an order the code does not follow. Of its names only `run_scout_request` (the job entrypoint in `apps/api/app/jobs/pipeline.py`), `score_relevance` and `score_opportunity` are functions, and `classify_signal` is the name of an LLM task; the scoring, geography and claim engines are pure, but classification and the explanation are calls to the LLM service. At `8dca455e` the job fetches fixture signals from the connector; for each signal it stores the raw signal, evaluates noise (`evaluate_noise`), embeds it and marks it a duplicate if it is close to a signal already kept in the run, classifies only signals that are neither noise nor duplicates, and stores the normalized signal with its geo evidence; it then clusters the kept signals by pain-point DNA (falling back to the signal type) and, for each cluster, scores relevance, validation, opportunity and confidence, bands the classification and confidence level, resolves the cluster's geography, checks claim safety, decides the action (`decide`) and builds the explanation — the LLM task `explain_opportunity` when relevance is at or above the action floor, fixed text otherwise. `main` keeps this order and adds, for each signal, an intelligence read (`_analyze_candidate`), persisted as an intelligence record, that the code describes as advisory metadata that does not alter these outputs.)*
+*(2026-10-07 correction — inaccurate when written: the chain above gives stage labels in an order the code does not follow. Of its names only `run_scout_request` (the job entrypoint in `apps/api/app/jobs/pipeline.py`), `score_relevance` and `score_opportunity` are functions, and `classify_signal` is the name of an LLM task; the scoring, geography and claim engines are pure, but classification and the explanation are calls to the LLM service. At `8dca455e` the job fetches fixture signals from the connector; for each signal it stores the raw signal, evaluates noise (`evaluate_noise`), embeds it and marks it a duplicate if it is close to a signal already kept in the run, classifies only signals that are neither noise nor duplicates, and stores the normalized signal with its geo evidence; it then clusters the kept signals by pain-point DNA (falling back to the signal type, then to "general") and, for each cluster, scores relevance, validation, opportunity and confidence, bands the classification and confidence level, resolves the cluster's geography, checks claim safety, decides the action (`decide`) and builds the explanation — the LLM task `explain_opportunity` when relevance is at or above the action floor, fixed text otherwise. `main` keeps this order and adds, for each signal, an intelligence read (`_analyze_candidate`), persisted as an intelligence record, that the code describes as advisory metadata that does not alter these outputs.)*
 
 Since Phase 3A.3 this pipeline runs as a **durable background job** (`app/jobs/`),
 not synchronously inside the run request. The scout run endpoint atomically flips the
@@ -75,7 +75,7 @@ Key engines and their rules:
 - **Relevance** (`scoring/relevance.py`) — blends keyword/pain-point/audience/
   competitor overlap. Hard rule: **relevance < 40 ⇒ never recommend action.**
 - **Noise gate** (`scoring/noise.py`) — "collect broadly, notify selectively";
-  spam/bot/engagement-bait/unsafe content is hard noise; ~~full analysis begins at ≥ 50~~ *(2026-10-07 correction — inaccurate when written: `scoring/noise.py` defines a 50 threshold (`PRE_ANALYSIS_FULL_THRESHOLD`) that only a unit test reads; the pipeline treats a signal as noise when a hard-noise rule fires or its pre-analysis score is below 25, and classifies and scores every other signal that is not a duplicate — at `8dca455e` and on `main`)*.
+  spam/bot/engagement-bait/unsafe content is hard noise; ~~full analysis begins at ≥ 50~~ *(2026-10-07 correction — inaccurate when written: `scoring/noise.py` defines a 50 threshold (`PRE_ANALYSIS_FULL_THRESHOLD`) that only a unit test reads; the pipeline treats a signal as noise when a hard-noise rule fires or its pre-analysis score is below 25, and attempts classification of every other signal that is not a duplicate, then scores the clusters those signals form — at `8dca455e` and on `main`)*.
 - **Validation** (`scoring/validation.py`) — cross-source agreement, volume,
   engagement, ads, news, trends, buying intent.
 - **Opportunity + confidence scoring** (`scoring/opportunity.py`) — weighted 0–100
@@ -84,7 +84,7 @@ Key engines and their rules:
   levels (Low/Med/High).
 - **Decision engine** (`scoring/decision.py`) — Act now / Act soon / Monitor /
   Archive / Stay silent / Block. Core rule: if it cannot explain *why the user should
-  care*, it does not alert. *(2026-10-07 clarification: `decide()` does not test for an explanation — it returns Stay silent below the relevance floor and Monitor when audience fit is unclear, and the explanation is built after the decision; nothing alerts at `8dca455e` or on `main`, where the notifications menu is a placeholder.)*
+  care*, it does not alert. *(2026-10-07 clarification: `decide()` does not test for an explanation — after returning Block for blocked claim risk, Stay silent for noise and Monitor outside the scout area, it returns Stay silent below the relevance floor and then Monitor when audience fit is unclear, and the explanation is built after the decision; nothing alerts at `8dca455e` or on `main`, where the notifications menu is a placeholder.)*
 - **Geography engine** (`geography/engine.py`) — haversine radius matching (1–200 mi),
   coverage evaluation, and geo-relevance resolution from weighted evidence with a
   confidence score.
@@ -217,7 +217,7 @@ adapter is production-ready and does not revise the 2026-10-05 note above, which
 *(2026-10-06: the statements in this section that every query is scoped, that client-supplied tenant IDs
 are never trusted and that results never cross cities are universal properties. The evidence on record for
 them is the acceptance-time isolation testing — integration tests and the four-market HTTP smoke flow in
-[`acceptance-report.md`](acceptance-report.md); this correction did not re-verify them exhaustively.)* *(2026-10-07 correction — inaccurate when written: that testing covers only the separation of opportunity results by location inside one workspace. No acceptance-time test or smoke step read across organizations or workspaces or sent another tenant's identifiers, so the first two properties had no test evidence at acceptance; this note does not assess later tests.)*
+[`acceptance-report.md`](acceptance-report.md); this correction did not re-verify them exhaustively.)* *(2026-10-07 correction — inaccurate when written: that testing covers only the separation of opportunity results by location inside one workspace. No acceptance-time test or smoke step read across organizations or workspaces or sent another tenant's identifiers, so the first two properties had no test evidence beyond that at acceptance; this note does not assess later tests.)*
 
 ## Frontend structure (`apps/web/src`)
 
