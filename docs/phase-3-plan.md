@@ -19,7 +19,7 @@ baseline and does **not** repeat Phase 1–2 work.
 ## Ground rules
 
 - ~~Phase 3 is **planned but not started**. No Phase 3 code exists yet; UI entry points for Phase 3 render as clearly-labeled "coming in Phase 3" stubs.~~
-  *(Ground rule at writing; superseded — see the status line above.)*
+  *(Ground rule at writing; superseded — see the status line above. Its "coming in Phase 3" stubs were also inaccurate when written: at `73c21aca` no Phase 3 route or stub existed, only notices that creative generation "arrives in Phase 3" — 2026-10-07 correction.)*
 - **`main` must remain stable and releasable throughout Phase 3.**
 - New work ships in **small vertical slices behind protected PRs** (the `main protection`
   ruleset, ID `18820692`, stays active).

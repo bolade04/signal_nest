@@ -108,8 +108,8 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 - **[T]** HTTP smoke flow proving four-market isolation over the real API.
 - **[A]** LLM is mock-first by default; OpenAI/Anthropic adapters behind env, not
   exercised in the demo.
-- **[P]** Creative generation, approvals, analytics, live integrations, billing — stubs
-  routing to "coming in Phase 3" *(2026-10-05: this scope became the Phase 5A–5E guided-action
+- **[P]** Creative generation, approvals, analytics, live integrations, billing — ~~stubs routing to "coming in Phase 3"~~ *(2026-10-07 correction — inaccurate when written: at `b5965d35` no route or stub existed for any of these; creative generation appeared only as notices that it "arrives in Phase 3", in the sidebar and on the opportunity detail page, and two Campaign Context descriptions mention Phase 3)*
+  *(2026-10-05: this scope became the Phase 5A–5E guided-action
   work — [`docs/project-phase-5-plan.md`](project-phase-5-plan.md) — excluded from Phase 6 by
   resolved decision `P6-D01`; Phase 3 as executed delivered, dark, the 3B scouting work — connector
   foundation with an RSS sandbox, signal intelligence and opportunity scoring, scouting schedules —
