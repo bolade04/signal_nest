@@ -14,7 +14,7 @@ that followed. Phase 3+ is intentionally out of scope; see
 - **`main` is green** *(at acceptance)*. The latest CI run for the accepted commit passes all four
   required jobs *(the ruleset has required six contexts since Phase 6 — see "Governance and protection" below)*.
 - **Security advisories are remediated** *(at acceptance)*. `npm audit` reports zero vulnerabilities and
-  there are zero open Dependabot security alerts *(the 2026-10-05 measurement — 3 open MEDIUM alerts, none HIGH/CRITICAL on a runtime dependency, and 3 `npm audit` advisories — is recorded in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) §19 item 12 and rows `P6-CI-6`/`P6-CI-7`)*.
+  there are zero open Dependabot security alerts *(the 2026-10-05 measurement — 3 open MEDIUM alerts, none HIGH/CRITICAL on a runtime dependency, and 3 `npm audit` advisories — is recorded in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md) §19 item 12 and ~~rows `P6-CI-6`/`P6-CI-7`~~ row `P6-CI-7`)* *(2026-10-07 correction — inaccurate when written: row `P6-CI-6` carries none of these figures; §19 item 12 carries all three and row `P6-CI-7` the alert figures)*.
 - **CI quality checks now propagate real failures.** The pipefail masking bug is fixed
   and guarded by a regression test.
 - **Frontend lint tooling is migrated and stable** (ESLint flat config on ESLint 10).
@@ -48,7 +48,7 @@ The implemented stack, as present in the repository:
 - **Production adapters (implemented ~~behind `APP_MODE=full`~~, not necessarily deployed):** *(2026-10-06 correction — inaccurate when written: `APP_MODE` selects no adapter; each concern has its own setting — `database_url`, `queue_backend`, `cache_backend`, `vector_backend`, `storage_backend`, `llm_provider` — and `APP_MODE=full` only adds validation; see [`architecture.md`](architecture.md) "Dual-mode infrastructure".)*
   PostgreSQL, ~~pgvector~~, Redis, S3-compatible object storage, real LLM providers. *(2026-10-06 correction — inaccurate when written: pgvector was never an implemented adapter. `vector_backend=pgvector` is accepted by `apps/api/app/core/config.py`, but `build_index()` in `apps/api/app/infra/vector.py` returns the brute-force index unconditionally and has no callers, nothing imports the `pgvector` package and the `embedding` column is JSON — at `b5965d35` and on `main` `c5b48ed7`; see [`architecture.md`](architecture.md) and `P6-PLAT-1`. The other adapters are measured in the next note.)* *(2026-10-06, measured: at `8dca455e`/`b5965d35` the Redis queue, Redis cache and S3 storage adapters existed as classes inside their builder functions, each selected by its own setting; which application code calls them is recorded under "Dual-mode infrastructure" in [`architecture.md`](architecture.md). None of these adapters is verified against a live service here. This makes no ruling on production readiness.)*
 - **Migrations & contracts:** Alembic migrations; generated `apps/api/openapi.json` and
-  a TypeScript client generated from the OpenAPI schema.
+  a TypeScript client ~~generated from the OpenAPI schema~~ *(2026-10-07 correction — inaccurate when written: the client in `apps/web/src/api/client.ts` and `endpoints.ts` is hand-written; what is generated from `openapi.json` is its types, `schema.d.ts` — see [`architecture.md`](architecture.md) "Topology")*.
 
 > The production adapters exist ~~and are wired~~ behind env selection *(2026-10-06: pgvector excepted — it has no adapter, see the correction above)* *(2026-10-06 correction — "wired" was inaccurate when written for the cache and storage adapters: no module imported `app.infra.cache` or `app.infra.storage` at `b5965d35`. The scout run did enqueue through the queue adapter, but its Redis branch wrote to a stream that no process read, because no worker existed; the database engine and the LLM service were on the request and pipeline paths. Details: [`architecture.md`](architecture.md) "Dual-mode infrastructure".)*. This report does
 > **not** claim any production service is deployed.
@@ -71,22 +71,24 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
   tested.
 - **[T]** REST API — **56 operations across 41 paths** *(figure at acceptance; 85 paths / 106 operations at `2aa683d0`, 2026-10-03)* — with OpenAPI documentation.
 - **[T]** Audit logging on sensitive actions.
-- **[T]** Frontend app shell (workspace/location/campaign switchers, breadcrumbs, search,
+- **[T]** Frontend app shell (workspace/location/~~campaign~~ switchers *(2026-10-07 correction — inaccurate when written: the shell at `b5965d35` had organization, workspace and location switchers and no campaign switcher)*, breadcrumbs, search,
   theme, responsive), local auth screens, protected routes.
 - **[T]** Onboarding wizard covering every presence path (website / social / both / GBP /
   marketplace / offline / brand-new), with autosave + resume.
 - **[T]** Campaign Context Center (products, audiences, competitors, brand voice, offers,
   claims, source/channel preferences, campaigns) with brand-wide + override model.
 - **[T]** Location & coverage configuration (multi-location manager + Scout Reach radius UI).
-- **[T]** Typed API client generated from OpenAPI; TanStack Query hooks; loading/empty/
+- **[T]** Typed API client ~~generated from OpenAPI~~ *(2026-10-07 correction — inaccurate when written: hand-written, with types generated from OpenAPI — see the correction under "Delivered architecture")*; TanStack Query hooks; loading/empty/
   error states.
+
+*(2026-10-07 correction, measured at the accepted commit `b5965d35`: the automated tests then were 38 backend tests — engine unit tests plus four API tests against the seeded demo database (unauthenticated rejection, login, per-location feed isolation) — 18 frontend tests and the HTTP smoke flow. Parts of the [T] items above were implemented but asserted by none of them, so "tested" was inaccurate when written for: role enforcement (only the rejection of unauthenticated requests is tested); audit logging; the organization/workspace switcher, breadcrumbs, header search, theme toggle and mobile layout; onboarding resume (autosave is tested); the Campaign Context sections other than products and claims, and its brand-wide/per-location model; the Scout Reach radius control (the geography engine behind it is unit-tested); and the loading and error states (an empty state is tested).)*
 
 ### Phase 2 — scouting → explainable opportunities
 - **[T]** Scout request workflow: create / configure / pause / resume / run / review,
   isolated per workspace+brand+location+market+campaign.
 - **[A]** Fixture-based connectors clearly labeled "Simulated"; live connectors
-  (Reddit, reviews, Trends, Meta Ad Library, TikTok, RSS/news) exist as adapter
-  placeholders only *(2026-10-05: `apps/api/app/connectors/` now holds the connector framework
+  (Reddit, reviews, Trends, Meta Ad Library, TikTok, RSS/news) exist as ~~adapter~~
+  placeholders only *(2026-10-07 correction — inaccurate when written: no per-source adapter existed at `b5965d35`; `apps/api/app/scouting_requests/connectors.py` defined one generic `Connector` protocol, the `FixtureConnector` and `get_connector()`, and the listed sources existed only as `SourceType` values)* *(2026-10-05: `apps/api/app/connectors/` now holds the connector framework
   and an RSS parser with a sandbox provider; live egress is not wired on `main` — draft PR #34;
   plan gate E5 is not met)*.
 - **[T]** Canonical signal model, normalization, dedupe/cluster, classification.
@@ -114,6 +116,8 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
   and the 3C feedback loop on top of the 3A runtime foundation; the closeout record lists the
   scheduling PRs #48–#51 and the 3C PRs, the connector and intelligence work is in git history —
   fe78b39, #35)*.
+
+*(2026-10-07 correction, measured at `b5965d35`: "tested" was inaccurate when written for these parts of the [T] items above, which no automated test asserted: scout creation (the create dialog, which is also where a scout is configured), pause and resume — listing, running and the detail view are tested; the feed's sorting and risk filter; the detail page's geo evidence and claim warnings; and the backend explanation step — the frontend test of the evidence/inference split runs against fixture data, and the claim-safety engine is unit-tested. Signal normalization, dedupe/clustering and classification have no unit tests; they run inside the scout pipeline, which seeds the demo database that the API tests and the smoke flow read.)*
 
 ## Security and dependency status
 
@@ -300,6 +304,7 @@ restored protection as tabulated above.
   actions — not CI failures — and they are separate from the application's own Node toolchain
   (`package.json` `engines` `node >=20 <21`; `ci.yml` `NODE_VERSION: '20'`), which this note does
   not assess. No runtime or workflow upgrade is made here.)*
+  *(2026-10-07 addition: the runs named above also carry a notice-level annotation, "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026", on every job of run 37228710926 and on four of the six jobs of run 37445036772; it concerns the runner image, not an action's Node runtime, and nothing here assesses it.)*
 
 ## Review checklist (for a human reviewer)
 
