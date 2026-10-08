@@ -24,7 +24,7 @@ baseline and does **not** repeat Phase 1–2 work.
 - New work ships in **small vertical slices behind protected PRs** (the `main protection`
   ruleset, ID `18820692`, stays active).
 - **Every slice must preserve strict market/request isolation** (Dallas / London / Lagos /
-  Nairobi and any future market never blend unless the user explicitly opts in).
+  Nairobi and any future market never blend unless the user explicitly opts in). *(2026-10-08: a ground rule as written; Phase 1–2 did not meet it for a run's scoring context — see [`architecture.md`](architecture.md) "Tenancy & security")*
 
 ## Accepted baseline (entry state)
 
@@ -44,7 +44,7 @@ Deliver **production-grade AI scouting and actionable marketing intelligence**: 
 data-source connectors, a continuous scouting pipeline, a production scoring framework,
 evidence-backed opportunity reports, a recommendation-to-creative workflow, and the
 production infrastructure/tenancy/compliance foundations to run it safely — all while
-preserving the Phase 1–2 isolation and explainability guarantees. *(2026-10-08: the Phase 1–2 isolation statements this goal relies on were not established as universal guarantees; their measured scope and limits are in [`architecture.md`](architecture.md) "Tenancy & security")*
+preserving the Phase 1–2 isolation and explainability guarantees. *(2026-10-08: the Phase 1–2 isolation statements this goal relies on did not hold for a run's scoring context and were otherwise not established as universal guarantees; their measured scope and limits are in [`architecture.md`](architecture.md) "Tenancy & security")*
 
 ## Phase 3 workstreams
 
