@@ -233,8 +233,8 @@ them is the acceptance-time isolation testing — integration tests and the four
 
 This section exists so that the body above does not mislead by omission (`P6-GOV-5`). It
 lists what is *present* in the tree, not what is complete, enabled or deployed; status lives
-in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). None of the Phase 6 repository
-changes is deployed (plan §4.6a).
+in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). ~~None of the Phase 6 repository~~
+~~changes is deployed (plan §4.6a).~~ *(2026-10-08 correction — the cited §4.6a does not support this sentence: it records, as of 2026-10-03, the live state of only the deliveries it lists — PRs #188, #190, #192, #194, #195, #197 and #198 — none of which it records as deployed or provisioned. The sentence's full scope rests on the Phase 6 plan's own recorded observations, entered by PR #205 against `c4315d8d`: row `P6-PLAT-4` ("no Phase 6 commit is deployed") and §19 item 12's 2026-10-05 read-only measurement ("Nothing from Phase 6 is deployed", citing the sealed `P6-closeout-reconciliation-01` record). Those are the plan's observations for that date, not a deployment check made here, and they establish nothing about deployment state after it)*
 
 - **Backend module directories** under `apps/api/app/` (26, excluding `__pycache__`): `api`,
   `audit`, `auth`, `brands`, `business_profiles`, `campaign_context`, `capabilities`, `claims`,
