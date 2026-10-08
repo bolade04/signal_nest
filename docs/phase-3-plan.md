@@ -44,7 +44,7 @@ Deliver **production-grade AI scouting and actionable marketing intelligence**: 
 data-source connectors, a continuous scouting pipeline, a production scoring framework,
 evidence-backed opportunity reports, a recommendation-to-creative workflow, and the
 production infrastructure/tenancy/compliance foundations to run it safely — all while
-preserving the Phase 1–2 isolation and explainability guarantees.
+preserving the Phase 1–2 isolation and explainability guarantees. *(2026-10-08: the Phase 1–2 isolation statements this goal relies on were not established as universal guarantees; their measured scope and limits are in [`architecture.md`](architecture.md) "Tenancy & security")*
 
 ## Phase 3 workstreams
 

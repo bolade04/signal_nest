@@ -42,7 +42,7 @@ The implemented stack, as present in the repository:
   React Hook Form/Zod + Tailwind + Radix.
 - **Backend:** Python 3.12 + FastAPI modular monolith — DB, migrations, domain logic,
   pure scoring/geo/claims engines, REST, auth, in-process jobs *(true at acceptance: `InProcessQueue` ran each job synchronously in the API process; since `67ed438` (2026-07-13) scout runs use the durable job store and a separate worker — 2026-10-06)*.
-- **Monorepo:** npm workspaces (`apps/web`, `apps/api`, `packages/*`) *(root `package.json` `workspaces` on `main` `c4315d8d`: `apps/web` and the `packages/*` glob only; no `packages/` directory has ever been tracked, and `apps/api` is a Python project driven by npm scripts, not a workspace — 2026-10-05)*.
+- **Monorepo:** npm workspaces (`apps/web`, ~~`apps/api`,~~ `packages/*`) *(root `package.json` `workspaces` on `main` `c4315d8d`: `apps/web` and the `packages/*` glob only; no `packages/` directory has ever been tracked, and `apps/api` is a Python project driven by npm scripts, not a workspace — 2026-10-05)* *(2026-10-08 correction — inaccurate when written: at the accepted commit `b5965d35` and on `main` `1a24c4fb` the root `package.json` declares two workspace patterns, `apps/web` and the glob `packages/*`. The only workspace package is `apps/web` (`@signalnest/web`); no `packages/` path exists at either commit or in any commit reachable from `main` `1a24c4fb`, so the glob matches nothing. `apps/api` is a Python project (`apps/api/pyproject.toml`, no `package.json`) that root npm scripts run through `scripts/run-api.sh` and `scripts/run-tests-api.sh`; it is not a workspace at either commit)*.
 - **Default (zero-dependency) local mode:** SQLite, in-process queue, in-memory cache,
   numpy brute-force vector fallback, local-file storage, mock-first LLM.
 - **Production adapters (implemented ~~behind `APP_MODE=full`~~, not necessarily deployed):** *(2026-10-06 correction — inaccurate when written: `APP_MODE` selects no adapter; each concern has its own setting — `database_url`, `queue_backend`, `cache_backend`, `vector_backend`, `storage_backend`, `llm_provider` — and `APP_MODE=full` only adds validation; see [`architecture.md`](architecture.md) "Dual-mode infrastructure".)*
@@ -60,10 +60,10 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 
 ### Phase 1 — foundation
 - **[T]** Organization / workspace / brand / location model with server-side tenancy:
-  every query scoped by org/workspace/location; ~~client-supplied tenant IDs never
-  trusted~~ ~~(proven by integration tests)~~ *(2026-10-07 correction — inaccurate when written: no acceptance-time test or smoke step sent another tenant's identifiers; the integration tests prove per-location separation inside one workspace — see the correction after the Phase 1 items)* *(2026-10-06: the tests prove the cases they cover; the universal "every query" is not re-verified here — see [`architecture.md`](architecture.md) "Tenancy & security")*. *(2026-10-08 correction — inaccurate when written: the struck universal did not hold at `b5965d35` and does not on `main` `1a24c4fb`. The organization and workspace context is derived on the server and a scout request's `location_id` is checked against its workspace, but a scout request's `campaign_id` and `product_profile_id` and the `location_ids` / `eligible_location_ids` lists of campaigns and offers are stored as sent, with no workspace or membership check. The location-list gap is the open launch-blocker row `P6-PLAT-8` in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md); this note changes no code. Measured detail: [`architecture.md`](architecture.md) "Tenancy & security", 2026-10-08 correction)*
+  ~~every query scoped by org/workspace/location;~~ ~~client-supplied tenant IDs never
+  trusted~~ ~~(proven by integration tests)~~ *(2026-10-07 correction — inaccurate when written: no acceptance-time test or smoke step sent another tenant's identifiers; the integration tests prove per-location separation inside one workspace — see the correction after the Phase 1 items)* *(2026-10-06: the tests prove the cases they cover; the universal "every query" is not re-verified here — see [`architecture.md`](architecture.md) "Tenancy & security")*. *(2026-10-08 correction — inaccurate when written: the struck universal did not hold at `b5965d35` and does not on `main` `1a24c4fb`. The organization and workspace context is derived on the server and a scout request's `location_id` is checked against its workspace, but a scout request's `campaign_id` and `product_profile_id` and the `location_ids` / `eligible_location_ids` lists of campaigns and offers are stored as sent, with no workspace or membership check. The location-list gap is the open launch-blocker row `P6-PLAT-8` in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md); this note changes no code. Measured detail: [`architecture.md`](architecture.md) "Tenancy & security", 2026-10-08 correction)* *(2026-10-08: the "every query" universal, struck above, was not established either — see the 2026-10-08 correction on it in [`architecture.md`](architecture.md) "Tenancy & security" for the measured scope and its limits)*
 - **[T]** Multi-location support (Dallas TX, London UK, Lagos NG, Nairobi KE demo
-  markets) with strict per-location data isolation.
+  markets) ~~with strict per-location data isolation~~. *(2026-10-08 correction — the struck universal was not established: what the tests show is that the opportunity feed's location filter returns only rows stored for that location, for the seeded locations; how runs choose signals is described in [`architecture.md`](architecture.md) "Tenancy & security")*
 - **[T]** Demo authentication flow (email/password + JWT), RBAC roles, ~~per-domain policy layers~~.
   *(2026-10-06 correction — inaccurate when written: there was no per-domain policy layer at `8dca455e`/`b5965d35`; roles were enforced by the `require_role` dependency and an inline membership check — see [`architecture.md`](architecture.md) "Tenancy & security".)*
 - **[T]** Domain models + Alembic migrations for the Phase 1 tables.
@@ -85,7 +85,7 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 
 ### Phase 2 — scouting → explainable opportunities
 - **[T]** Scout request workflow: create / configure / pause / resume / run / review,
-  isolated per workspace+brand+location+market+campaign.
+  ~~isolated per workspace+brand+location+market+campaign~~. *(2026-10-08: each request records its workspace, brand, location, market and campaign; the campaign is stored without a workspace check and the market can be typed — see [`architecture.md`](architecture.md) "Tenancy & security")*
 - **[A]** Fixture-based connectors clearly labeled "Simulated"; live connectors
   (Reddit, reviews, Trends, Meta Ad Library, TikTok, RSS/news) exist as ~~adapter~~
   placeholders only *(2026-10-07 correction — inaccurate when written: no per-source adapter existed at `b5965d35`; `apps/api/app/scouting_requests/connectors.py` defined one generic `Connector` protocol, the `FixtureConnector` and `get_connector()`, and the listed sources existed only as `SourceType` values)* *(2026-10-05: `apps/api/app/connectors/` now holds the connector framework
@@ -102,10 +102,10 @@ Legend: **[T] Implemented & tested** · **[A] Adapter-ready, not deployed** ·
 - **[T]** Explanation engine separating **Observed evidence / AI inference / Recommended
   action**, with claim-safety guard.
 - **[T]** Opportunity Feed (scores, confidence, risk, filters, sorting, search, strict
-  per-location separation) — isolation proven by tests on all four cities.
+  per-location separation) — isolation proven by tests on all four cities. *(2026-10-08 clarification: the tests assert that the feed's location filter returns only opportunities stored for that location — the API test over the seeded locations, the smoke flow over the four cities and the frontend test against a mocked backend; they do not test how a run selects signals for a market)*
 - **[T]** Opportunity Detail (evidence vs inference, traceable source URLs, geo evidence,
   claim warnings, simulated/known-limitation disclosures, status controls).
-- **[T]** HTTP smoke flow proving four-market isolation over the real API.
+- **[T]** HTTP smoke flow proving four-market isolation over the real API. *(2026-10-08 clarification: its isolation step checks that each city's location-filtered feed is non-empty, returns only rows of that location, and that no row appears under two locations; its "all in-market" message does not inspect markets)*
 - **[A]** LLM is mock-first by default; OpenAI/Anthropic adapters behind env, not
   exercised in the demo.
 - **[P]** Creative generation, approvals, analytics, live integrations, billing — ~~stubs routing to "coming in Phase 3"~~ *(2026-10-07 correction — inaccurate when written: at `b5965d35` no route or stub existed for any of these; creative generation appeared only as notices that it "arrives in Phase 3", in the sidebar and on the opportunity detail page, and two Campaign Context descriptions mention Phase 3)*
@@ -231,7 +231,7 @@ Accepted toolchain:
 | OpenAPI/type generation | `npm run gen:types` | no drift |
 | Alembic | migration check | no schema drift |
 | HTTP smoke | `npm run smoke` | **13/13** |
-| Four-market isolation | smoke + RTL | pass |
+| Four-market isolation *(2026-10-08: the location-filter checks described under the HTTP smoke item above)* | smoke + RTL | pass |
 | Latest `main` CI | four jobs | all passing (no annotations) |
 
 Latest verified CI run for the ~~current~~ accepted commit *(at this report)*
