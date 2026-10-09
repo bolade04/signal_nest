@@ -65,7 +65,7 @@ Since Phase 3A.3 this pipeline runs as a **durable background job** (`app/jobs/`
 not synchronously inside the run request. The scout run endpoint atomically flips the
 request to `queued` and enqueues a `scout_request.execute` job; a separate worker
 (`python -m app.jobs.worker`, default local backend) claims it with a SQLite-safe atomic
-compare-and-set, holds a lease with heartbeats, and drives it to a terminal state with
+compare-and-set *(2026-10-08 clarification: when this paragraph was written (`67ed438`, 2026-07-13), every database dialect claimed jobs with this compare-and-set; on `main` SQLite still does, while PostgreSQL has claimed through a separate `SELECT … FOR UPDATE SKIP LOCKED` path since `3fefb36` (2026-07-14). Production settings validation rejects a SQLite `database_url`. See "Durable job queue" in the measured note under "Dual-mode infrastructure".)*, holds a lease with heartbeats, and drives it to a terminal state with
 bounded retries, dead-lettering, cooperative cancellation and expired-lease recovery.
 Delivery is **at-least-once with idempotency controls**, so handlers are safe to re-run.
 See `docs/phase-3a-durable-jobs.md`.
