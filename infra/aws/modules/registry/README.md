@@ -4,7 +4,9 @@
 Owns the staging container registry for SIGNALNEST_STAGING: **two** private Amazon
 ECR repositories — `api` and `worker` — for the immutable, digest-pinned backend
 runtime images, each with a safe untagged-image lifecycle policy. This module defines
-resource bodies but **applies nothing** — no infrastructure exists in AWS.
+resource bodies; ~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22; stale since 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** Both repositories were present with immutable tags (created 2026-07-27). Their image inventory could **not** be read (describe/list images denied to the reading principal). CloudTrail management-event history, continuous from 2026-07-29 to 2026-10-13, holds the CI image-publisher role's layer uploads and two `PutImage` events on 2026-07-29 at 06:18Z and nothing after; the staging publish workflow's run list (GitHub) shows its last run created 2026-07-29T06:14Z on `ff15dbf9`; eight earlier pushes on 2026-07-27 to 2026-07-29 were recorded by a read of 2026-09-27. Those signals fix the **last observed publish**; they do not show which image, if any, a task currently runs. The module is root-composed (`../../main.tf`, since 2026-07-24). Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Owned resources (implemented here)
 - `aws_ecr_repository` × **2** (`for_each` over `{api, worker}`) — private, immutable
@@ -15,8 +17,8 @@ resource bodies but **applies nothing** — no infrastructure exists in AWS.
 **Two `resource` blocks, four resource instances total** (2 repositories + 2 policies).
 There is no repository policy, registry policy, replication, pull-through cache,
 account-wide registry configuration, image resource/lookup, KMS resource, IAM
-resource, random resource, or provisioner. No image is built, tagged, scanned, or
-pushed.
+resource, random resource, or provisioner. ~~No image is built, tagged, scanned, or
+pushed.~~ *(as a description of the module: it builds/pushes nothing — still true; as a live claim: stale since 2026-07-27, images were pushed on 2026-07-27 to 2026-07-29 — see the §1 notice)*
 
 ## 3. Two images, two repositories, three actors
 The runtime model (merged PR #103 §26.5; executable `apps/api/Dockerfile` targets
@@ -94,9 +96,9 @@ is ready, or that a migration may run.**
 ## 10. Status
 Resource bodies authored and validated **offline only** (`tofu fmt`, `tofu init
 -backend=false`, `tofu validate` via an isolated external harness pinning the committed
-`hashicorp/aws 6.55.0`). **No `tofu plan`/`apply`, no AWS API call, no ECR login/token,
+`hashicorp/aws 6.55.0`). ~~**No `tofu plan`/`apply`, no AWS API call, no ECR login/token,
 no image build/tag/push/scan/digest, no state, no root composition, and no provisioning
-have occurred. Nothing exists in AWS.** Per the network/edge/alb/secrets convention,
+have occurred. Nothing exists in AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-22; "no root composition" stale since 2026-07-24; the rest stale since 2026-07-27 — see the §1 notice; current state is not recorded here)* Per the network/edge/alb/secrets convention,
 `versions.tf` declares only the AWS provider source (no version constraint, no
 `provider` block); the root owns the sole provider config/constraint/lockfile.
 
@@ -104,5 +106,5 @@ have occurred. Nothing exists in AWS.** Per the network/edge/alb/secrets convent
 INFRA-4 registry resource-definition tranche. Separately authorized and **not** started
 here: `iam` (pull/publish policies), root composition of this module, INFRA-5 CI/OIDC
 image build+push, per-image scan + fail-closed acceptance, digest resolution, `ecs`
-implementation, live plan/apply (INFRA-9), deployment, and migration execution. INFRA-4
-remains incomplete; INFRA-5 remains unstarted.
+implementation, live plan/apply (INFRA-9), deployment, and migration execution. ~~INFRA-4
+remains incomplete; INFRA-5 remains unstarted.~~ *(stale since 2026-07-24 — `../../README.md` §12; the publish workflow has run, last on 2026-07-29)*

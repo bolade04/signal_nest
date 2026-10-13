@@ -2,8 +2,10 @@
 
 ## 1. Purpose
 Internet-facing Application Load Balancer fronting the private API service with
-HTTPS-only ingress. This module defines resource bodies but **applies nothing** —
-no infrastructure exists in AWS.
+HTTPS-only ingress. This module defines resource bodies; ~~**applies nothing** —
+no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22; stale since 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The internet-facing application load balancer was `active` (created 2026-07-27T18:16Z) with one HTTPS:443 forward listener, the API target group (HTTP 8000, health check `/health`), the ALB security group and the private log bucket (versioning, SSE-S3, public-access block) — so the windowed resources of §9 were present and the closed-window state was not in effect; target health and load-balancer attributes were denied to the reading principal. CloudTrail shows the load-balancing service re-creating the ALB's network interface and service-managed address on 2026-10-05 and 2026-10-13 (service activity, not an operator change). API alias (§2): the consumed hosted zone held 5 record sets (unchanged since 2026-10-02), no record-set change event appeared from 2026-09-30T21:50Z to 2026-10-13, and the API name did not resolve publicly (NXDOMAIN) — consistent with no alias record, as recorded on 2026-10-03 in `docs/project-phase-6-plan.md` §4.6a; the records themselves could not be listed. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Owned resources (implemented here)
 - `aws_security_group` — the ALB security group (public HTTPS 443 ingress only)
@@ -78,16 +80,16 @@ inline rules** so the provider removes AWS's implicit allow-all default egress; 
 public 443 ingress is a standalone rule, and the ALB→API `:8000` egress rule is added
 by the `ecs` module (no unrestricted ALB egress, no mixing of inline/standalone rules).
 Access **and** connection logging are enabled into the module-owned private log
-bucket (the §24.7 pre-live logging gate is resolved in configuration; nothing is
-provisioned). WAF remains deferred; the API Route 53 alias is authored as a windowed
-record (nothing provisioned).
+bucket (the §24.7 pre-live logging gate is resolved in configuration; ~~nothing is
+provisioned~~ *(struck 2026-10-13: the log bucket and load balancer were observed on 2026-10-13 — see the §1 notice; whether access/connection logs are being delivered was not read)*). WAF remains deferred; the API Route 53 alias is authored as a windowed
+record (~~nothing provisioned~~ *(2026-10-13: no record observed — §1 notice; record listing denied)*).
 
 ## 9. Status
 Resource bodies authored and validated offline only (`tofu fmt`, `tofu init
--backend=false`, `tofu validate`). The log-delivery bucket and both logging
+-backend=false`, `tofu validate`). ~~The log-delivery bucket and both logging
 blocks are configuration only. **No `tofu plan`/`apply`, no AWS API call, no
 state, no certificate/WAF resource, no DNS record in AWS, no ECS target
-registration, and no provisioning have occurred. Nothing exists in AWS.**
+registration, and no provisioning have occurred. Nothing exists in AWS.**~~ *(struck 2026-10-13: already inaccurate when this passage was last edited on 2026-10-01 — the load balancer, listener, target group, security group and log bucket had existed since 2026-07-27 (observed 2026-09-27 to 2026-10-02 and again on 2026-10-13); "no DNS record" held as recorded on 2026-10-03 and was consistent with the 2026-10-13 observation; target registration is UNKNOWN (target health denied); current state is not recorded here)*
 
 ## 10. Owning tranche
 INFRA-4 alb resource-definition tranche; access/connection logging added by the

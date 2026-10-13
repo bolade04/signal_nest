@@ -3,8 +3,10 @@
 ## 1. Purpose
 Public **web/SPA** edge for SIGNALNEST_STAGING: the compiled React/Vite SPA is
 served from a **private** S3 origin through a CloudFront distribution over HTTPS,
-with web DNS aliases pointing at CloudFront. This module defines resource bodies
-but **applies nothing** — no infrastructure exists in AWS.
+with web DNS aliases pointing at CloudFront. This module defines resource bodies;
+~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22; stale since the foundation apply from 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The private SPA origin bucket was observed (created 2026-07-27; versioning, SSE-S3, all four public-access-block controls and the noncurrent-version expiry rule exactly as §2 authors them; the 2026-07-28 reference refresh is recorded in `../../operator-closure-contract.json`). The CloudFront distribution and the ACM certificate were **not** readable — listing denied to the reading principal, as in every earlier dated read, so their existence by API has never been observed from this repository's evidence. The consumed hosted zone was read by id (5 record sets, unchanged since 2026-10-02) but its records could not be listed, so the web `A`/`AAAA` aliases are unverified; a public DNS probe of the zone apex returned only name-server records. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 Certificate and hosted-zone **ownership** are architecturally resolved as
 **consume, not create** (`aws-staging-iac-plan.md` §23, resolved 2026-07-22).
@@ -42,7 +44,7 @@ Certificate and hosted-zone **ownership** are architecturally resolved as
 - ECS origins, an API CloudFront behavior, WAF, Lambda@Edge / CloudFront Functions,
   access-log delivery, observability integration, SPA object upload/deployment, and
   CloudFront invalidation.
-- Application/runtime object storage — owned by the still-stub `storage` module.
+- Application/runtime object storage — owned by the ~~still-stub~~ `storage` module *(implemented and root-composed since 2026-07-24 — `../storage/README.md`, `../../main.tf`)*.
 
 ## 5. Inputs
 | Name | Type | Default | Notes |
@@ -90,9 +92,9 @@ the certificate and hosted zone are provisioned/owned outside this module and
 referenced by value at apply time.
 
 ## 10. Status
-Resource bodies authored and validated offline only. **No `tofu plan`/`apply`, no
+Resource bodies authored and validated offline only. ~~**No `tofu plan`/`apply`, no
 AWS API call, no state, no asset upload, no CloudFront invalidation, and no
-provisioning have occurred. Nothing exists in AWS.**
+provisioning have occurred. Nothing exists in AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-22; the bucket clause is stale since 2026-07-27 (observed 2026-10-13); the distribution, certificate and alias records remain **unobserved** by API (reads denied) — not known absent, not known present; whether any SPA asset was uploaded is UNKNOWN (the SPA bucket's objects were not listed); current state is not recorded here)*
 
 ## 11. Owning tranche
 INFRA-4 edge (web/SPA) resource-definition tranche. Remote-state bootstrap, ALB/API

@@ -5,9 +5,11 @@ Owns the **dedicated live database revision-reader** capability: a private ECR
 repository for a minimal reader image, a dedicated CloudWatch log group, an
 egress-only security group, three purpose-built IAM roles, and a task definition
 that runs the reader with no overrideable surface. This module defines resource
-bodies but **applies nothing** — both lifecycle flags
-(`publication_bootstrap_enabled`, `runtime_enabled`) default to `false`, no reader
-image has been published, and no reader task has ever run.
+bodies and, with both lifecycle flags
+(`publication_bootstrap_enabled`, `runtime_enabled`) at their `false` defaults, **applies nothing**; ~~no reader
+image has been published, and no reader task has ever run~~ *(dated 2026-10-13: still consistent with observation — see the notice — but now a dated statement, not a standing one)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The three reader roles (publisher, execution, runner) were present, created 2026-08-15 by the out-of-band role-bootstrap executor for adoption by this module (`../../README.md` §5) and never used; the **execution role carried no inline and no attached policy**, so it did not hold the `DATABASE_URL` grant of §7 on the identity side — whether the secret's resource policy or the secrets CMK's policy names it could not be read (denied). No reader ECR repository and no reader log group were listed (only the api/worker repositories and the three workload log groups), consistent with Stage A and Stage B never having been applied; the reader publish workflow's run list (GitHub) showed no run ever, and no reader task could have run without a task definition (task-definition reads were denied, but the roles' zero usage and the absent repository agree). The reader has therefore never verified the live schema, and — the limit §8 states — it does not establish pgvector's status in any case. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 The module has a **two-stage lifecycle** (Gate 4M). **Stage A — publication
 bootstrap** (`publication_bootstrap_enabled`) creates only the ECR repository, its
@@ -302,6 +304,6 @@ Three offline tftest files, fully mocked provider, all run by the unfiltered
 
 ## 12. Status
 Authored and offline-validated. `tofu fmt`, `tofu validate` and `tofu test` pass.
-**Nothing is provisioned.** Applying Stage A (publication bootstrap), publishing a
+~~**Nothing is provisioned.**~~ *(dated 2026-10-13: nothing of this module was observed as applied by OpenTofu — no reader repository, log group or task definition was listed, and the publish workflow has never run; the three reader IAM roles exist since 2026-08-15 through an out-of-band bootstrap, not through this module — see the §1 notice; current state is not recorded here)* Applying Stage A (publication bootstrap), publishing a
 reader image, applying Stage B (runtime, which needs the pinned digest), and invoking
 the reader are separate later authorizations.

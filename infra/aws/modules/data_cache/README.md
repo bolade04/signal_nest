@@ -1,13 +1,15 @@
-# Module: `data_cache` (implemented — provider-schema-validated, not root-composed)
+# Module: `data_cache` (implemented — provider-schema-validated, ~~not root-composed~~ root-composed since 2026-07-24 *(corrected 2026-10-13)*)
 
 ## 1. Purpose and ownership
 Owns a **private Amazon ElastiCache for Redis** replication group for SIGNALNEST_STAGING
 — the cache, queue-coordination, and notify-channel paths — its **cache subnet group**,
 its **Redis security group** (created rule-free), and a **Redis parameter group**. This
-module is **implemented and provider-schema-validated only**: authored and validated with
-OpenTofu against the locked AWS provider, but **not** wired into the root composition
+module is **implemented and provider-schema-validated**: authored and validated with
+OpenTofu against the locked AWS provider~~, but **not** wired into the root composition
 (`infra/aws/main.tf`), **nothing is provisioned or deployed**, no Redis exists, and **no
-AWS account has been contacted** (see §8).
+AWS account has been contacted** (see §8)~~ *(struck 2026-10-13: accurate when written on 2026-07-23; the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The replication group was `available` (created 2026-07-27; one `cache.t4g.micro` member running engine 7.1.0) with its cache subnet group, parameter group and rule-free security group — so the group existed, i.e. the closed-window state of the trailing **Staging window** paragraph was not in effect at that moment; its two CloudWatch alarms were OK. Whether any workload connects to it is not established (no ECS service was observed). Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Resources declared (no data source)
 | Resource | Purpose |
@@ -87,17 +89,17 @@ external to the repository, EC2 metadata was disabled, no backend was configured
 fetch the exact lockfile-selected provider is not AWS account access. No
 `plan`/`apply`/`refresh`/`destroy`/`import`/`state` ran. The root `.terraform.lock.hcl` was
 **not** modified and no `.terraform`, state, or plan artifact entered the repository.
-**GitHub CI does not independently validate HCL** (its five jobs are application/integration
-checks); HCL correctness rests on this harness, static assertions, and independent review.
+~~**GitHub CI does not independently validate HCL** (its five jobs are application/integration
+checks)~~ *(stale since 2026-07-29 — the sixth job, *Revision reader (unit, IaC contract, in-image)*, runs this module's `window.tftest.hcl` (see the trailing **CI** paragraph) and the root wiring check)*; HCL correctness rests on this harness, static assertions, and independent review.
 
 ## 9. Scope boundaries (this tranche)
-Implemented, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
-**inactive**. No AWS access, no live Redis, no root-composition change, no application
+Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+**inactive**. No AWS access, no live Redis~~ *(struck 2026-10-13: accurate when written on 2026-07-23; composed since 2026-07-24, replication group present since 2026-07-27 — see the §1 notice)*, no root-composition change, no application
 activation (`cache_backend`/`queue_backend` unchanged), no IAM/ECS integration, no ingress
-rule. The root `infra/aws/README.md` inventory refresh (7→8 implemented, 4→5 uncomposed,
+rule *(by this tranche)*. The root `infra/aws/README.md` inventory refresh (7→8 implemented, 4→5 uncomposed,
 5→4 stubs) was **completed by the follow-up truthfulness pass** (PR #112, squash commit
 `5f32d4b6a2ae` on `main` — its subject records the PR number); the root inventory now
-records 8/3/5/4. INFRA-4 remains incomplete; INFRA-5 remains unstarted.
+records 8/3/5/4 *(that inventory is itself historical)*. ~~INFRA-4 remains incomplete; INFRA-5 remains unstarted.~~ *(stale since 2026-07-24 — `../../README.md` §12)*
 
 **Staging window (`enabled`, root `staging_window_active`):** the replication group exists only while `enabled = true` and its contents are not preserved across windows; the subnet group, parameter group and security group persist; endpoint outputs are null while closed. See `docs/operations/staging-window.md`.
 
