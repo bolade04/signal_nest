@@ -141,7 +141,7 @@ validate` does not contact AWS.
 ## 9. Scope boundaries (this tranche)
 Implemented and **root-composed** (wired in root `main.tf` by the later
 root-composition tranche)~~, but **unprovisioned** and **inactive**. No AWS
-access, no live role, no policy attachment to any existing principal~~ *(struck 2026-10-13: accurate when written on 2026-07-23; stale since 2026-07-27 — the roles were observed on 2026-10-13, see the §1 notice; "inactive" in the sense of no running workload still matched that observation)*. Offline
+access, no live role, no policy attachment to any existing principal~~ *(struck 2026-10-13: accurate when last edited on 2026-07-24 (UTC); stale since 2026-07-27 — the roles were observed on 2026-10-13, see the §1 notice; "inactive" in the sense of no running workload still matched that observation)*. Offline
 validation only (`tofu fmt` / `init -backend=false` / `validate` with the
 committed root lockfile, backend disabled, AWS credentials suppressed). ~~GitHub
 CI does not independently validate HCL (its five jobs are

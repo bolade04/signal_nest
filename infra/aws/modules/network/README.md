@@ -4,7 +4,7 @@
 Foundational VPC networking for SIGNALNEST_STAGING: one dedicated VPC with public
 and private subnets across the supplied availability zones and a single
 cost-minimized NAT gateway for controlled outbound egress. This module defines
-resource bodies; ~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-21; stale since the foundation apply from 2026-07-27 — see the notice)*.
+resource bodies; ~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22 (UTC); stale since the foundation apply from 2026-07-27 — see the notice)*.
 
 > **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The VPC, its 10 subnets, 4 route tables, internet gateway, the single NAT gateway (`available`, created 2026-07-27) and its named EIP were observed present; 0 VPC endpoints (consistent with §3); network-interface listing was denied to the reading principal. The NAT gateway being present means the closed-window state of `docs/operations/staging-window.md` was not in effect at that moment. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
@@ -73,7 +73,7 @@ Single VPC in `us-east-1`; a **single** NAT gateway (cost-minimized, contract §
 ## 9. Status
 Resource bodies authored and validated offline only. ~~**No `tofu plan`/`apply`,
 no AWS API call, no state, and no provisioning have occurred. Nothing exists in
-AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-21; stale since 2026-07-27 — the resources listed in the §1 notice were observed on 2026-10-13; current state is not recorded here)*
+AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-22 (UTC); stale since 2026-07-27 — the resources listed in the §1 notice were observed on 2026-10-13; current state is not recorded here)*
 
 ## 10. Owning tranche
 INFRA-4 network resource-definition tranche. Remote-state bootstrap and any

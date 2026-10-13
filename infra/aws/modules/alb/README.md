@@ -89,7 +89,7 @@ Resource bodies authored and validated offline only (`tofu fmt`, `tofu init
 -backend=false`, `tofu validate`). ~~The log-delivery bucket and both logging
 blocks are configuration only. **No `tofu plan`/`apply`, no AWS API call, no
 state, no certificate/WAF resource, no DNS record in AWS, no ECS target
-registration, and no provisioning have occurred. Nothing exists in AWS.**~~ *(struck 2026-10-13: already inaccurate when this passage was last edited on 2026-10-01 — the load balancer, listener, target group, security group and log bucket had existed since 2026-07-27 (observed 2026-09-27 to 2026-10-02 and again on 2026-10-13); "no DNS record" held as recorded on 2026-10-03 and was consistent with the 2026-10-13 observation; target registration is UNKNOWN (target health denied); current state is not recorded here)*
+registration, and no provisioning have occurred. Nothing exists in AWS.**~~ *(struck 2026-10-13: already inaccurate when this passage was last edited on 2026-10-02 (UTC) — the load balancer, listener, target group, security group and log bucket had existed since 2026-07-27 (their creation times; observed on 2026-10-02 and again on 2026-10-13); "no DNS record" held as recorded on 2026-10-03 and was consistent with the 2026-10-13 observation; target registration is UNKNOWN (target health denied); current state is not recorded here)*
 
 ## 10. Owning tranche
 INFRA-4 alb resource-definition tranche; access/connection logging added by the
