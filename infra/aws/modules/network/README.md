@@ -4,7 +4,9 @@
 Foundational VPC networking for SIGNALNEST_STAGING: one dedicated VPC with public
 and private subnets across the supplied availability zones and a single
 cost-minimized NAT gateway for controlled outbound egress. This module defines
-resource bodies but **applies nothing** — no infrastructure exists in AWS.
+resource bodies; ~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22 (UTC); stale since the foundation apply from 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The VPC, its 10 subnets, 4 route tables, internet gateway, the single NAT gateway (`available`, created 2026-07-27) and its named EIP were observed present; 0 VPC endpoints (consistent with §3); network-interface listing was denied to the reading principal. The NAT gateway being present means the closed-window state of `docs/operations/staging-window.md` was not in effect at that moment. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Owned resources (implemented here)
 - `aws_vpc` (DNS support + DNS hostnames enabled)
@@ -18,7 +20,7 @@ resource bodies but **applies nothing** — no infrastructure exists in AWS.
 ## 3. Deferred / explicit non-goals (NOT in this module)
 - **Security groups** — their least-privilege rules (ALB→API 8000, API/worker→RDS,
   →Redis) reference peer resources owned by the `alb`/`ecs`/`data_sql`/`data_cache`
-  modules, which do not exist yet. Deferred to avoid cross-module coupling and
+  modules, ~~which do not exist yet~~ *(stale since 2026-07-22/24, when those modules were implemented and root-composed — `../../main.tf`)*. Deferred to avoid cross-module coupling and
   ownership overlap.
 - **VPC endpoints** (S3 gateway; interface endpoints for ECR/Secrets Manager/
   CloudWatch Logs) — a NAT-cost optimization requiring an endpoint security group
@@ -69,9 +71,9 @@ Single VPC in `us-east-1`; a **single** NAT gateway (cost-minimized, contract §
 `>= 2` AZs are recommended so later ALB/RDS subnet groups can be created.
 
 ## 9. Status
-Resource bodies authored and validated offline only. **No `tofu plan`/`apply`,
+Resource bodies authored and validated offline only. ~~**No `tofu plan`/`apply`,
 no AWS API call, no state, and no provisioning have occurred. Nothing exists in
-AWS.**
+AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-22 (UTC); stale since 2026-07-27 — the resources listed in the §1 notice were observed on 2026-10-13; current state is not recorded here)*
 
 ## 10. Owning tranche
 INFRA-4 network resource-definition tranche. Remote-state bootstrap and any

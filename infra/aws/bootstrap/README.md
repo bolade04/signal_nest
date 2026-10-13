@@ -1,4 +1,4 @@
-# Bootstrap root: OpenTofu remote-state backend (one-time, configuration only)
+# Bootstrap root: OpenTofu remote-state backend (one-time, ~~configuration only~~ *(struck 2026-10-13: accurate when written on 2026-07-24; executed on 2026-07-27 — see §2)*)
 
 ## 1. What this is — and is not
 
@@ -18,15 +18,15 @@ into a bucket that does not exist yet: the backend object must be created by
 something outside the environment root. See §3 of `../README.md` for the
 explicit carve-out.
 
-## 2. Execution status: NOTHING APPLIED
+## 2. Execution status: ~~NOTHING APPLIED~~ executed on 2026-07-27 *(corrected 2026-10-13)*
 
-**Configuration only.** Per §7, "the state backend itself is provisioned once
+~~**Configuration only.**~~ Per §7, "the state backend itself is provisioned once
 under a later authorized step"; the repo status ledger (`../README.md` §12)
 bundles that live bootstrap with the INFRA-9 fresh-authorization gate. In this
 tranche the root was validated **offline only** (`tofu fmt`,
-`tofu init -backend=false`, `tofu validate`, credentials suppressed): **no
+`tofu init -backend=false`, `tofu validate`, credentials suppressed): ~~**no
 `plan`, no `apply`, no AWS API call — no bucket, table, or key exists in
-AWS.** OpenTofu is never auto-applied (`../README.md` §13).
+AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-24; stale since 2026-07-27, when this root was executed — `../README.md` §8 and `../operator-closure-contract.json` (2026-08-17 text) record the executed backend with DynamoDB-only locking, and a read-only observation of 2026-10-13 found the state bucket (created 2026-07-27, versioned, SSE-KMS with the state CMK, public access blocked), the state CMK (Enabled, yearly rotation) and the lock table, whose creation CloudTrail dates to 2026-07-27. The same observation found the lock table reporting **`INACCESSIBLE_ENCRYPTION_CREDENTIALS`** since 2026-10-07T15:00:03Z while the CMK described as Enabled; key policy and grants were unreadable by the reading principal and the **cause is UNKNOWN** — no OpenTofu operation that acquires the lock should be attempted while the table is in that state. The state bucket held one object at the key the main root's `backend.hcl.example` names, last modified 2026-07-28T20:31:16Z (metadata only; contents never read). Current state is not recorded here.)* OpenTofu is never auto-applied (`../README.md` §13).
 
 ## 3. Design notes
 
@@ -50,7 +50,7 @@ AWS.** OpenTofu is never auto-applied (`../README.md` §13).
 - After the live bootstrap, the operator fills the main root's git-ignored
   `backend.hcl` from this root's outputs (template: `../backend.hcl.example`)
   and runs a backend-configured `tofu init` — all under the same later
-  authorization, never before it.
+  authorization, never before it. *(2026-10-13: the backend-configured `init` is inferred to have run — `../README.md` §8 — and the example template's state key matched the one live state object's key; whether the operator-held `backend.hcl` uses that key is an operator comparison this repository cannot make.)*
 
 ## 4. Files
 

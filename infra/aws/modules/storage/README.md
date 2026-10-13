@@ -1,12 +1,14 @@
-# Module: `storage` (implemented — offline-validated, not root-composed)
+# Module: `storage` (implemented — offline-validated, ~~not root-composed~~ root-composed since 2026-07-24 *(corrected 2026-10-13)*)
 
 ## 1. Purpose and ownership
 Owns exactly **one private, durable S3 bucket** for SIGNALNEST_STAGING application
 object storage — uploads and artifacts accessed at runtime via presigned URLs. This
-module is **implemented and offline-validated only**: it has been authored and
-validated with OpenTofu offline, but it is **not** wired into the root composition
+module is **implemented and offline-validated**: it has been authored and
+validated with OpenTofu offline~~, but it is **not** wired into the root composition
 (`infra/aws/main.tf`), nothing is provisioned or deployed, and no AWS account has been
-contacted.
+contacted~~ *(struck 2026-10-13: accurate when written on 2026-07-22; the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The application bucket was observed (created 2026-07-27) with versioning enabled, SSE-S3, all four public-access-block controls and no lifecycle rule — as authored. A listing of its current objects returned **none**; non-current versions and delete markers could not be listed (denied), so "no object stored" is established for current objects only. Whether the application uses the bucket is not established (no ECS service was observed). Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 This is **not** the SPA web-origin bucket (owned by `edge`), the remote-state bucket
 (a later bootstrap concern), or secret storage (`secrets`).
@@ -72,13 +74,13 @@ command or OpenTofu `plan`/`apply`/`state`/`refresh`/`import` ran. The root
 directory, state, or plan artifact entered the repository.
 
 ## 8. Scope boundaries (this tranche)
-- **No AWS account access**; no inspection of credentials, account identity, or region.
-- **No provisioning or deployment**; nothing exists in AWS.
-- **No root composition** — the bucket is not composed from `infra/aws/main.tf`.
+- **No AWS account access**; no inspection of credentials, account identity, or region *(a description of the authoring tranche, 2026-07-22; dated read-only observations since 2026-09-27 are recorded in `../../README.md`)*.
+- ~~**No provisioning or deployment**; nothing exists in AWS.~~ *(struck 2026-10-13: stale since 2026-07-27 — the bucket was observed on 2026-10-13; deployment of a workload that uses it was not observed)*
+- ~~**No root composition** — the bucket is not composed from `infra/aws/main.tf`.~~ *(struck 2026-10-13: stale since 2026-07-24 — composed in `../../main.tf`)*
 - **No application activation** — `storage_backend` is unchanged; S3-backed storage is
   not turned on.
 - **No operational storage claim** — successful offline validation does not mean any
   bucket exists or that the application uses it.
 - **No IAM/ECS integration** — access permissions and application wiring are owned by
   later, separately authorized tranches.
-- **INFRA-4 remains incomplete; INFRA-5 remains unstarted.**
+- ~~**INFRA-4 remains incomplete; INFRA-5 remains unstarted.**~~ *(stale since 2026-07-24 — `../../README.md` §12)*

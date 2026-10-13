@@ -4,7 +4,9 @@
 Owns the staging secret **containers** and their encryption key for SIGNALNEST_STAGING:
 one customer-managed KMS key (+ deterministic alias) and **four EMPTY** AWS Secrets
 Manager secret containers — **by name only, never by value**. This module defines
-resource bodies but **applies nothing** — no infrastructure exists in AWS.
+resource bodies; ~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22; stale since 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The secrets CMK (Enabled, yearly rotation) and the four containers were observed; container metadata showed one current version each, last changed 2026-07-28 — values were not read and are never read from this repository. The CMK's key policy and grants, and the `DATABASE_URL` container's resource policy, were unreadable by the reading principal. The module is root-composed (`../../main.tf`, since 2026-07-24). Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Owned resources (implemented here)
 - `aws_kms_key` — one symmetric customer-managed key (ENCRYPT_DECRYPT, rotation on,
@@ -100,9 +102,9 @@ keeps the account-lockout safety active.
 ## 11. Status
 Resource bodies authored and validated **offline only** (`tofu fmt`, `tofu init
 -backend=false`, `tofu validate` via an isolated external harness pinning the committed
-`hashicorp/aws 6.55.0`). **No `tofu plan`/`apply`, no AWS API call, no state, no secret
+`hashicorp/aws 6.55.0`). ~~**No `tofu plan`/`apply`, no AWS API call, no state, no secret
 version/value, no root composition, and no provisioning have occurred. Nothing exists in
-AWS.** This module is not root-composed or deployed. Per the network/edge/alb convention,
+AWS.** This module is not root-composed or deployed.~~ *(struck 2026-10-13: accurate when written on 2026-07-22; "no root composition" stale since 2026-07-24 (`../../main.tf`); the rest stale since 2026-07-27 — see the §1 notice; whether any workload consumes the values is not established (no ECS service observed on 2026-10-13); current state is not recorded here)* Per the network/edge/alb convention,
 `versions.tf` declares only the AWS provider **source** (no version constraint, no
 `provider` block); the root module owns the sole provider config, version constraint, and
 committed lockfile, all inherited by this child module.
@@ -111,5 +113,5 @@ committed lockfile, all inherited by this child module.
 INFRA-4 secrets resource-definition tranche. Separately authorized and **not** started
 here: `iam` (role/policy) implementation, root composition of this module, secret-value
 population (INFRA-6) + G5 readiness, `ecs` implementation, live plan/apply (INFRA-9),
-and deployment/migration execution. INFRA-4 remains incomplete; INFRA-5 remains
-unstarted.
+and deployment/migration execution. ~~INFRA-4 remains incomplete; INFRA-5 remains
+unstarted.~~ *(stale since 2026-07-24: INFRA-4's repository scope and INFRA-5 workflow authoring completed that day — `../../README.md` §12)*

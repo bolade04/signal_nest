@@ -1,13 +1,15 @@
-# Module: `data_sql` (implemented — provider-schema-validated, not root-composed)
+# Module: `data_sql` (implemented — provider-schema-validated, ~~not root-composed~~ root-composed since 2026-07-24 *(corrected 2026-10-13)*)
 
 ## 1. Purpose and ownership
 Owns a **private Amazon RDS for PostgreSQL** DB instance for SIGNALNEST_STAGING (the
 application's SQL + vector store), its **DB subnet group**, its **RDS security group**
 (created rule-free), and a **TLS-enforcing DB parameter group**. This module is
-**implemented and provider-schema-validated only**: it has been authored and validated
-with OpenTofu against the locked AWS provider schema, but it is **not** wired into the
+**implemented and provider-schema-validated**: it has been authored and validated
+with OpenTofu against the locked AWS provider schema~~, but it is **not** wired into the
 root composition (`infra/aws/main.tf`), **nothing is provisioned or deployed**, no live
-database exists, and **no AWS account has been contacted** (see §7).
+database exists, and **no AWS account has been contacted** (see §7)~~ *(struck 2026-10-13: accurate when written on 2026-07-23 (UTC); the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The instance was present — PostgreSQL 16.4 on `db.t4g.micro`, created 2026-07-27, not publicly accessible, storage encrypted with the AWS-managed RDS key (the §9 default), master password RDS-managed, deletion protection on, no pending modification, its subnet group and rule-free security group present — but reported status **`inaccessible-encryption-credentials-recoverable`**, with a latest restorable time of 2026-10-07T14:24:46Z. In the same observation its three CloudWatch alarms (CPU, freeable memory, free storage) had been in ALARM since 2026-10-07T14:50–14:51Z, and the RDS-managed master-secret rotation (7-day schedule, last success 2026-10-05) had failed hourly from 2026-10-12T13:08Z. The AWS-managed RDS key described as Enabled (its key policy and grants were **not attempted**); the two customer CMKs' key policies and grants, the instance's RDS events and the alarm history were unreadable by the reading principal; 90 days of CloudTrail history held no key disable, deletion, policy change, grant revocation, instance modification, stop or start. Console payment-instrument events of 2026-10-13 are observations that establish neither a billing restriction nor the cause. **The cause is UNKNOWN** to this repository and is an operator matter; no OpenTofu apply is recommended while the lock table (bootstrap README §2) is also inaccessible. pgvector (§6): no API read establishes the extension's state, the committed revision reader issues only the `alembic_version` query, and the instance was not connectable — **UNKNOWN**. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Resources declared (exactly four; no data source)
 | Resource | Purpose |
@@ -129,14 +131,14 @@ disabled, no backend was configured, and **no `aws` command, AWS API, or metadat
 was contacted**. Provider-registry access to fetch the exact lockfile-selected provider
 is not AWS account access. No `plan`/`apply`/`refresh`/`test`/`destroy`/`import`/`state`
 ran. The root `.terraform.lock.hcl` was **not** modified and no `.terraform`, state, or
-plan artifact entered the repository. **GitHub CI does not independently validate HCL**
-(its five jobs are application/integration checks); HCL correctness rests on this harness,
+plan artifact entered the repository. ~~**GitHub CI does not independently validate HCL**
+(its five jobs are application/integration checks)~~ *(stale since 2026-07-29: the sixth CI job, *Revision reader (unit, IaC contract, in-image)*, runs `tofu fmt`/`validate` and the offline `tofu test` suites for the root and the windowed modules — `.github/workflows/ci.yml`, `../../README.md` §7)*; HCL correctness rests on this harness,
 static assertions, and independent review.
 
 ## 13. Scope boundaries (this tranche)
-Implemented, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
-**inactive**. No AWS access, no live database, no root-composition change, no application
+Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+**inactive**. No AWS access, no live database~~ *(struck 2026-10-13: accurate when written on 2026-07-23 (UTC); composed since 2026-07-24, instance present since 2026-07-27 — see the §1 notice)*, no root-composition change, no application
 activation, no IAM/ECS integration, no migration created/executed, no pgvector
-activation. The root `infra/aws/README.md` inventory refresh is a **separate follow-up
-truthfulness pass** after this module merges (repository precedent). INFRA-4 remains
-incomplete; INFRA-5 remains unstarted.
+activation *(by this tranche; whether a migration ran live is recorded in `../../README.md` §5 — one-shot tasks ran on 2026-07-28 per a 2026-09-27 read; pgvector's live state is UNKNOWN)*. The root `infra/aws/README.md` inventory refresh is a **separate follow-up
+truthfulness pass** after this module merges (repository precedent). ~~INFRA-4 remains
+incomplete; INFRA-5 remains unstarted.~~ *(stale since 2026-07-24 — `../../README.md` §12)*

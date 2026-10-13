@@ -4,10 +4,12 @@
 Least-privilege IAM identity plane for the staging compute plane: the **four
 ECS-consumed roles** locked by `docs/operations/aws-staging-iac-plan.md` §26.8 —
 one shared **ECS task execution role** plus three distinct **application task
-roles** (API, worker, migration). Implemented and offline-validated only: **no
-role exists in AWS** and nothing is provisioned. The module **is root-composed**
+roles** (API, worker, migration). Implemented and offline-validated; ~~**no
+role exists in AWS** and nothing is provisioned~~ *(struck 2026-10-13: accurate when written on 2026-07-24; stale since 2026-07-27 — see the notice)*. The module **is root-composed**
 (wired in `infra/aws/main.tf` by the root-composition tranche, PR #120;
 composition is configuration only).
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** All five roles of §2 were present — the execution role (last used 2026-07-28), the API, worker and migration task roles (never used) and the CI image-publisher role (last used 2026-07-29T06:18Z, matching the last observed image pushes) — each with a permissions boundary attached, which CloudTrail dates to 2026-08-13 (an out-of-band boundary bootstrap, not this module's HCL; the boundary is supplied through the root `role_permissions_boundary_arn` input). The roles' policy documents were not re-read on 2026-10-13, so whether the live inline policies equal this module's rendering is not established by that read. The 2026-07-28 reference refresh read them as already existing (`../../operator-closure-contract.json`). Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Implemented AWS scope (eight ECS-role resources + up to two publisher-role resources)
 - `aws_iam_role.execution` — `<name_prefix>-ecs-execution`, trust
@@ -138,12 +140,12 @@ validate` does not contact AWS.
 
 ## 9. Scope boundaries (this tranche)
 Implemented and **root-composed** (wired in root `main.tf` by the later
-root-composition tranche), but **unprovisioned** and **inactive**. No AWS
-access, no live role, no policy attachment to any existing principal. Offline
+root-composition tranche)~~, but **unprovisioned** and **inactive**. No AWS
+access, no live role, no policy attachment to any existing principal~~ *(struck 2026-10-13: accurate when last edited on 2026-07-24 (UTC); stale since 2026-07-27 — the roles were observed on 2026-10-13, see the §1 notice; "inactive" in the sense of no running workload still matched that observation)*. Offline
 validation only (`tofu fmt` / `init -backend=false` / `validate` with the
-committed root lockfile, backend disabled, AWS credentials suppressed). GitHub
+committed root lockfile, backend disabled, AWS credentials suppressed). ~~GitHub
 CI does not independently validate HCL (its five jobs are
-application/integration checks); HCL correctness rests on the offline harness,
+application/integration checks)~~ *(stale since 2026-07-29 — the sixth job, *Revision reader (unit, IaC contract, in-image)*, runs `tofu validate`, the root wiring check and the offline `tofu test` suites; `.github/workflows/ci.yml`)*; HCL correctness rests on the offline harness,
 static validations, and independent review.
 
 ## 10. Owning tranche

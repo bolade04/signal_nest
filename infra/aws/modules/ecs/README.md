@@ -1,12 +1,14 @@
-# Module: `ecs` (implemented — offline-validated only, NOT root-composed)
+# Module: `ecs` (implemented — offline-validated, ~~NOT root-composed~~ root-composed since 2026-07-24 *(corrected 2026-10-13)*)
 
 ## 1. Purpose
 ECS on Fargate compute plane for SIGNALNEST_STAGING: the API service, the worker
 service, and the **one-shot migration task definition** — implemented exactly per
 the locked contract (`docs/operations/aws-staging-iac-plan.md` §26.2–§26.15).
-Implemented and offline-validated only: **no cluster, task, service, rule, or log
+Implemented and offline-validated~~: **no cluster, task, service, rule, or log
 group exists in AWS**; nothing is provisioned, planned live, deployed, or tested
-live, and the module is **not** root-composed.
+live, and the module is **not** root-composed~~ *(struck 2026-10-13: accurate when written on 2026-07-23; the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27/28 — see the notice)*.
+
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The cluster was ACTIVE with 9 tags, **0 active services, 0 running and 0 pending tasks**; the three `/ecs/` log groups were present (30-day retention, 0 stored bytes); the three task security groups were present (their rules were not individually re-read). Task listing and every task-definition read — families, lists, and describe for the api, worker and migration families — were **denied** to the reading principal, and CloudTrail recorded no task-definition registration or deregistration from 2026-09-30T21:50Z to 2026-10-13 (nor between 2026-07-29 and 2026-09-27); seven registrations on 2026-07-28 and one-shot task runs that day are recorded by a read of 2026-09-27. **What task definitions exist, at which revisions and with which image digests, is UNKNOWN**, and no service was deployed as observed; the last observed image publish (2026-07-29) therefore does not say what, if anything, runs. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
 
 ## 2. Implemented AWS scope
 - `aws_ecs_cluster.this` — `<name_prefix>-cluster` (name overridable via the
@@ -141,25 +143,25 @@ the ALB 60s deregistration delay. The one-shot migration container uses the ECS
 default (30s). Fargate's 120s ceiling is validated on every input.
 
 ## 9. Scope boundaries (this tranche)
-Implemented, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
 **inactive**. No AWS access, no live `plan`/`apply`, no image built or pushed, no
-secret value populated, no migration executed, no root-composition change, no
-change to any producer module, and no `observability`/`cost` implementation (they
-remain documentation-only stubs). Offline validation only: `tofu fmt`,
+secret value populated, no migration executed~~ *(struck 2026-10-13: accurate when written on 2026-07-23 as a description of that tranche; as live claims, stale since 2026-07-24 (composition), 2026-07-27 (cluster, log groups, security groups observed 2026-10-13), 2026-07-27 to 2026-07-29 (image pushes) and 2026-07-28 (secret versions; one-shot task runs per a 2026-09-27 read) — `../../README.md` §5/§12)*, no root-composition change, no
+change to any producer module *(by this tranche)*, and ~~no `observability`/`cost` implementation (they
+remain documentation-only stubs)~~ *(stale since 2026-07-24: both are implemented and root-composed — `../observability/README.md`, `../cost/README.md`, `../../main.tf`)*. Offline validation only: `tofu fmt`,
 isolated-copy `tofu init -backend=false -lockfile=readonly` + `tofu validate`
 with the committed root lockfile, AWS credentials suppressed, temporary artifacts
-outside the repository. GitHub CI does not independently validate HCL (its five
-jobs are application/integration checks); HCL correctness rests on the offline
+outside the repository. ~~GitHub CI does not independently validate HCL (its five
+jobs are application/integration checks)~~ *(stale since 2026-07-29 — the sixth job, *Revision reader (unit, IaC contract, in-image)*, runs `tofu validate`, the root wiring check and offline `tofu test` suites; `.github/workflows/ci.yml`)*; HCL correctness rests on the offline
 harness, static validations, and review. **Known pre-live follow-ups remain
 unresolved outside this tranche** (per the phase plan and §25/§26.14):
 access/connection logging before any live plan/apply, rate-limiter
 X-Forwarded-For handling, WAF/path restrictions for `/internal/system/*`,
 storage access-log integration, DNS/ACM/target verification, VPC endpoints, and
-autoscaling. INFRA-4 remains incomplete; INFRA-5 remains unstarted.
+autoscaling. ~~INFRA-4 remains incomplete; INFRA-5 remains unstarted.~~ *(stale since 2026-07-24 — `../../README.md` §12)*
 
 ## 10. Owning tranche
 Implemented by the INFRA-4 `ecs` module resource-definition tranche.
-Root-composition (wiring the six-plus-one uncomposed modules), secret-value
+Root-composition (wiring the six-plus-one ~~uncomposed~~ *(composed 2026-07-24, PR #120)* modules), secret-value
 population (INFRA-6), the build/deploy workflow (INFRA-5), any live
 `plan`/`apply`/run-task (INFRA-9), and observability/cost implementation are
 later, separately authorized tranches.
