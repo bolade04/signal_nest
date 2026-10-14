@@ -66,8 +66,8 @@ No account id, ARN, region, credential, or KMS input is accepted.
 ## 7. Validation performed
 Offline only: `tofu fmt`/`tofu fmt -check`, and `tofu init -backend=false` +
 `tofu validate` run through a temporary, **repository-external** validation harness
-that instantiates this module with syntactically valid example inputs — the module is
-**not** composed from `infra/aws/main.tf`. `TF_DATA_DIR` was external to the
+that instantiates this module with syntactically valid example inputs — ~~the module is
+**not** composed from `infra/aws/main.tf`.~~ *(struck 2026-10-14: accurate when written on 2026-07-22 (UTC); stale since 2026-07-24, when the root composition added `module "storage"` in `b2567484` — see [`infra/aws/main.tf`](../../main.tf); this note records root composition only, not provisioning, deployment, applied commit or operation)* `TF_DATA_DIR` was external to the
 repository, no backend was configured, no AWS credentials were used, and no `aws`
 command or OpenTofu `plan`/`apply`/`state`/`refresh`/`import` ran. The root
 `.terraform.lock.hcl` was **not** modified and **no** child lockfile, `.terraform`
