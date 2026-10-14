@@ -5,7 +5,7 @@ Owns a **private Amazon ElastiCache for Redis** replication group for SIGNALNEST
 — the cache, queue-coordination, and notify-channel paths — its **cache subnet group**,
 its **Redis security group** (created rule-free), and a **Redis parameter group**. This
 module is **implemented and provider-schema-validated**: authored and validated with
-OpenTofu against the locked AWS provider~~, but **not** wired into the root composition
+OpenTofu against the locked AWS provider ~~, but **not** wired into the root composition
 (`infra/aws/main.tf`), **nothing is provisioned or deployed**, no Redis exists, and **no
 AWS account has been contacted** (see §8)~~ *(struck 2026-10-13: accurate when written on 2026-07-23; the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27 — see the notice)*.
 
@@ -93,7 +93,7 @@ fetch the exact lockfile-selected provider is not AWS account access. No
 checks)~~ *(stale since 2026-07-29 — the sixth job, *Revision reader (unit, IaC contract, in-image)*, runs this module's `window.tftest.hcl` (see the trailing **CI** paragraph) and the root wiring check)*; HCL correctness rests on this harness, static assertions, and independent review.
 
 ## 9. Scope boundaries (this tranche)
-Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+Implemented ~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
 **inactive**. No AWS access, no live Redis~~ *(struck 2026-10-13: accurate when written on 2026-07-23; composed since 2026-07-24, replication group present since 2026-07-27 — see the §1 notice)*, no root-composition change, no application
 activation (`cache_backend`/`queue_backend` unchanged), no IAM/ECS integration, no ingress
 rule *(by this tranche)*. The root `infra/aws/README.md` inventory refresh (7→8 implemented, 4→5 uncomposed,

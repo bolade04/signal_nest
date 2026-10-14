@@ -4,7 +4,7 @@
 ECS on Fargate compute plane for SIGNALNEST_STAGING: the API service, the worker
 service, and the **one-shot migration task definition** — implemented exactly per
 the locked contract (`docs/operations/aws-staging-iac-plan.md` §26.2–§26.15).
-Implemented and offline-validated~~: **no cluster, task, service, rule, or log
+Implemented and offline-validated ~~: **no cluster, task, service, rule, or log
 group exists in AWS**; nothing is provisioned, planned live, deployed, or tested
 live, and the module is **not** root-composed~~ *(struck 2026-10-13: accurate when written on 2026-07-23; the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27/28 — see the notice)*.
 
@@ -143,7 +143,7 @@ the ALB 60s deregistration delay. The one-shot migration container uses the ECS
 default (30s). Fargate's 120s ceiling is validated on every input.
 
 ## 9. Scope boundaries (this tranche)
-Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+Implemented ~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
 **inactive**. No AWS access, no live `plan`/`apply`, no image built or pushed, no
 secret value populated, no migration executed~~ *(struck 2026-10-13: accurate when written on 2026-07-23 as a description of that tranche; as live claims, stale since 2026-07-24 (composition), 2026-07-27 (cluster, log groups, security groups observed 2026-10-13), 2026-07-27 to 2026-07-29 (image pushes) and 2026-07-28 (secret versions; one-shot task runs per a 2026-09-27 read) — `../../README.md` §5/§12)*, no root-composition change, no
 change to any producer module *(by this tranche)*, and ~~no `observability`/`cost` implementation (they

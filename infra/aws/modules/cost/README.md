@@ -61,7 +61,7 @@ email-only notification (an SNS-based fan-out would be a later, separately
 authorized change).
 
 ## 9. Scope boundaries (this tranche)
-Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+Implemented ~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
 **inactive**. No AWS access, no live `tofu` operation~~ *(struck 2026-10-13: accurate when written on 2026-07-24; composed later that day (PR #120); the budget was created by an apply on 2026-07-27 per CloudTrail — see the §1 notice)*, no root-composition
 change, no other module touched *(by this tranche)*. Offline validation only: `tofu fmt`,
 external-harness `tofu init -backend=false -lockfile=readonly` +
