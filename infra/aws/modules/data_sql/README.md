@@ -5,7 +5,7 @@ Owns a **private Amazon RDS for PostgreSQL** DB instance for SIGNALNEST_STAGING 
 application's SQL + vector store), its **DB subnet group**, its **RDS security group**
 (created rule-free), and a **TLS-enforcing DB parameter group**. This module is
 **implemented and provider-schema-validated**: it has been authored and validated
-with OpenTofu against the locked AWS provider schema~~, but it is **not** wired into the
+with OpenTofu against the locked AWS provider schema ~~, but it is **not** wired into the
 root composition (`infra/aws/main.tf`), **nothing is provisioned or deployed**, no live
 database exists, and **no AWS account has been contacted** (see §7)~~ *(struck 2026-10-13: accurate when written on 2026-07-23 (UTC); the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27 — see the notice)*.
 
@@ -136,7 +136,7 @@ plan artifact entered the repository. ~~**GitHub CI does not independently valid
 static assertions, and independent review.
 
 ## 13. Scope boundaries (this tranche)
-Implemented~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
+Implemented ~~, but **uncomposed** (not in root `main.tf`), **unprovisioned**, and
 **inactive**. No AWS access, no live database~~ *(struck 2026-10-13: accurate when written on 2026-07-23 (UTC); composed since 2026-07-24, instance present since 2026-07-27 — see the §1 notice)*, no root-composition change, no application
 activation, no IAM/ECS integration, no migration created/executed, no pgvector
 activation *(by this tranche; whether a migration ran live is recorded in `../../README.md` §5 — one-shot tasks ran on 2026-07-28 per a 2026-09-27 read; pgvector's live state is UNKNOWN)*. The root `infra/aws/README.md` inventory refresh is a **separate follow-up

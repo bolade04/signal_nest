@@ -4,7 +4,7 @@
 Owns exactly **one private, durable S3 bucket** for SIGNALNEST_STAGING application
 object storage — uploads and artifacts accessed at runtime via presigned URLs. This
 module is **implemented and offline-validated**: it has been authored and
-validated with OpenTofu offline~~, but it is **not** wired into the root composition
+validated with OpenTofu offline ~~, but it is **not** wired into the root composition
 (`infra/aws/main.tf`), nothing is provisioned or deployed, and no AWS account has been
 contacted~~ *(struck 2026-10-13: accurate when written on 2026-07-22; the composition clause is stale since 2026-07-24 (`../../main.tf`), the rest since 2026-07-27 — see the notice)*.
 
