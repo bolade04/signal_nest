@@ -306,7 +306,7 @@ budget in AWS until an authorized apply.
 - `terraform.tfvars.example` — synthetic example inputs; never real values.
 - `backend.hcl.example` — synthetic partial-backend-config template; the real
   `backend.hcl` is git-ignored and filled from the bootstrap outputs only at
-  the live bootstrap *(corrected 2026-10-09: "later-authorized" was accurate when written on 2026-07-24; the bootstrap ran on 2026-07-27 — see §8)*.
+  the live bootstrap *(corrected 2026-10-09: "later-authorized" was accurate when written on 2026-07-24; the bootstrap ran on 2026-07-27 — see §8)*. *(2026-10-15 operator statement: no operator-held `backend.hcl` exists anywhere — operator-attested, not independently verified across every machine; the comparison of an operator-held file's `key` with this template's was therefore NOT PERFORMED, and equality with the template or with the one live state object key observed on 2026-10-13 is NOT ESTABLISHED; on 2026-10-15 the operator explicitly waived that comparison for the `P6-GOV-1` documentation criterion — a limited waiver, not a completed comparison; the applied commit remains unknown)*
 - `bootstrap/` — the one-time state-backend root (§3 carve-out; own README,
   own committed lockfile, local one-time state; ~~configuration only~~ *(struck 2026-10-09: accurate when written on 2026-07-24)* executed on 2026-07-27 — see §8).
 

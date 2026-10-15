@@ -137,8 +137,8 @@ Implemented and **root-composed** (wired in root `main.tf`)~~, but
 No AWS access and no live `tofu` operation have occurred~~ *(struck 2026-10-13: accurate when written on 2026-07-24; stale since 2026-07-27 — the filters, alarms, dashboard, trail and bucket were observed on 2026-10-13, see the §1 notice)*. Offline validation only:
 `tofu fmt`, external-harness `tofu init -backend=false -lockfile=readonly` +
 `tofu validate` with the committed root lockfile (aws 6.55.0), AWS credentials
-suppressed, artifacts outside the repository. GitHub CI does not independently
-validate HCL. **Future root-composition requirements:** wire the four ecs
+suppressed, artifacts outside the repository. ~~GitHub CI does not independently
+validate HCL.~~ *(struck 2026-10-15: accurate when written on 2026-07-24 (UTC); stale since 2026-07-29, when the Revision reader job of [`.github/workflows/ci.yml`](../../../../.github/workflows/ci.yml) began running `tofu fmt -check`, `tofu init -backend=false` and `tofu test` on the `revision_reader` module (`0ccd39d1`); later commits, 2026-08-11 to 2026-10-02 (UTC), extended that job to the root and the alb, data_cache and network modules and to `init`/`test` on the iam module — never on this module; recorded under `P6-E13`, not a `P6-GOV-1` element; this note records the CI job only, not provisioning, deployment or operation)* **Future root-composition requirements:** wire the four ecs
 outputs into this module's inputs, supply `alarm_thresholds` (and optionally an
 SNS topic ARN), and keep the deterministic cluster/DB/Redis names — all done by
 the merged root composition. ALB-dimension alarms still require new `alb`

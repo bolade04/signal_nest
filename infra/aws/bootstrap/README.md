@@ -50,7 +50,7 @@ AWS.**~~ *(struck 2026-10-13: accurate when written on 2026-07-24; stale since 2
 - After the live bootstrap, the operator fills the main root's git-ignored
   `backend.hcl` from this root's outputs (template: `../backend.hcl.example`)
   and runs a backend-configured `tofu init` — all under the same later
-  authorization, never before it. *(2026-10-13: the backend-configured `init` is inferred to have run — `../README.md` §8 — and the example template's state key matched the one live state object's key; whether the operator-held `backend.hcl` uses that key is an operator comparison this repository cannot make.)*
+  authorization, never before it. *(2026-10-13: the backend-configured `init` is inferred to have run — `../README.md` §8 — and the example template's state key matched the one live state object's key; whether the operator-held `backend.hcl` uses that key is an operator comparison this repository cannot make.)* *(2026-10-15: by operator statement no operator-held `backend.hcl` exists anywhere — operator-attested, not independently verified across every machine; the comparison was NOT PERFORMED and equality NOT ESTABLISHED, and on 2026-10-15 the operator explicitly waived it for the `P6-GOV-1` documentation criterion — a limited waiver, not a completed comparison; a future backend-configured `init` would need a backend configuration that, by that statement, is not currently in the operator's possession)*
 
 ## 4. Files
 
