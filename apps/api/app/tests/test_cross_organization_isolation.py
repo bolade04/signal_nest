@@ -10,6 +10,12 @@ SQLite file with foreign keys enforced; ``get_db`` is the ONLY overridden depend
 authentication (``get_authenticated_session``), workspace tenancy (``get_tenant_context``),
 organization tenancy (``get_organization_context``) and every role checker run for real.
 
+Every probe class runs under both perspectives (organization A acting against B, then B
+against A), so a lost tenant predicate that would hand the first-built organization's row to
+everyone is caught from the second organization's side; singleton reads (business profile,
+brands) assert the caller's own identifiers, and every created row's ``brand_id`` is checked
+against the caller's brand.
+
 The three isolation limbs this module proves, per operation, with identifiers carried in
 the path, the query string and the request body:
 
@@ -71,6 +77,7 @@ from app.core.enums import OpportunityStatus, ScoutRequestStatus
 from app.core.middleware import RateLimitMiddleware
 from app.db.models import Base
 from app.db.session import get_db
+from app.feedback.models import OpportunityFeedback
 from app.jobs.models import Job
 from app.jobs.status import JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -358,6 +365,28 @@ def world(tmp_path_factory) -> Iterator[World]:
         witness.dispose()
 
 
+@dataclass(frozen=True)
+class Pov:
+    """One perspective: ``a`` is the acting tenant (its owner sends every request), ``b`` the
+    foreign one. Every probe class runs under BOTH perspectives (``a-vs-b`` and ``b-vs-a``), so a
+    predicate whose loss would return the first-built organization's row is caught from the
+    second organization's side (Lane B finding F4)."""
+
+    world: World
+    a: Tenant
+    b: Tenant
+
+    def send(self, method: str, path: str, body=None, params=None):
+        return self.world.send(method, API + path, self.a.owner_token, body, params)
+
+
+@pytest.fixture(scope="module", params=["a-vs-b", "b-vs-a"])
+def pov(request, world: World) -> Pov:
+    if request.param == "a-vs-b":
+        return Pov(world, world.a, world.b)
+    return Pov(world, world.b, world.a)
+
+
 @pytest.fixture
 def scheduling_on() -> Iterator[None]:
     settings = get_settings()
@@ -426,7 +455,12 @@ class TestWorld:
             assert world.row(Job, t.job_id)["workspace_id"] == t.ws_id
             assert world.row(OrganizationInvitation, t.invitation_id)["accepted_at"] is None
             for path, model, _ in CONTEXT:
-                assert world.row(model, t.items[path])["workspace_id"] == t.ws_id
+                row = world.row(model, t.items[path])
+                assert (row["workspace_id"], row["brand_id"]) == (t.ws_id, t.brand_id)
+            assert world.row(BusinessLocation, t.location_id)["brand_id"] == t.brand_id
+            assert world.row(ScoutRequest, t.request_id)["brand_id"] == t.brand_id
+            profile = next(r for r in _rows(world, BusinessProfile) if r["workspace_id"] == t.ws_id)
+            assert profile["brand_id"] == t.brand_id
 
     def test_build_positive_outcomes_were_the_routes_success_statuses(self, world: World):
         assert world.build == {
@@ -448,33 +482,38 @@ class TestWorld:
 # 1. Workspace and organization reads/creation
 # --------------------------------------------------------------------------- #
 class TestWorkspaceAndOrganization:
-    def test_get_workspace_own_200_foreign_403(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a))
+    def test_get_workspace_own_200_foreign_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a))
         assert own.status_code == 200 and own.json()["organization_id"] == a.org_id
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b)), HANDLER_NOT_A_MEMBER)
+        _assert_membership_403(pov.send("GET", _ws_path(world, b)), HANDLER_NOT_A_MEMBER)
 
-    def test_list_workspaces_own_only_foreign_org_403(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", f"/organizations/{a.org_id}/workspaces")
-        assert own.status_code == 200 and [w["id"] for w in own.json()] == [a.ws_id]
+    def test_list_workspaces_own_only_foreign_org_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/workspaces")
+        assert own.status_code == 200
+        ids = {w["id"] for w in own.json()}
+        assert a.ws_id in ids and b.ws_id not in ids
+        assert all(world.row(Workspace, i)["organization_id"] == a.org_id for i in ids)
         _assert_membership_403(
-            world.as_a("GET", f"/organizations/{b.org_id}/workspaces"), HANDLER_NOT_A_MEMBER
+            pov.send("GET", f"/organizations/{b.org_id}/workspaces"), HANDLER_NOT_A_MEMBER
         )
 
-    def test_list_organizations_is_the_callers_memberships_only(self, world: World):
-        a, b = world.a, world.b
-        assert [o["id"] for o in world.as_a("GET", "/organizations").json()] == [a.org_id]
+    def test_list_organizations_is_the_callers_memberships_only(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        assert [o["id"] for o in pov.send("GET", "/organizations").json()] == [a.org_id]
         other = world.send("GET", f"{API}/organizations", b.owner_token)
         assert [o["id"] for o in other.json()] == [b.org_id]
+        marketer = world.send("GET", f"{API}/organizations", a.marketer_token)
+        assert [o["id"] for o in marketer.json()] == [a.org_id]
 
-    def test_create_workspace_in_foreign_org_403_and_nothing_created(self, world: World):
-        a, b = world.a, world.b
+    def test_create_workspace_in_foreign_org_403_and_nothing_created(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.count(Workspace, organization_id=b.org_id)
-        r = world.as_a("POST", f"/organizations/{b.org_id}/workspaces", {"name": "Intruder"})
+        r = pov.send("POST", f"/organizations/{b.org_id}/workspaces", {"name": "Intruder"})
         _assert_membership_403(r)
         assert world.count(Workspace, organization_id=b.org_id) == before
-        own = world.as_a("POST", f"/organizations/{a.org_id}/workspaces", {"name": "Second"})
+        own = pov.send("POST", f"/organizations/{a.org_id}/workspaces", {"name": "Second"})
         assert own.status_code == 201 and own.json()["organization_id"] == a.org_id
 
 
@@ -482,13 +521,27 @@ class TestWorkspaceAndOrganization:
 # 2. Invitations and members (organization scope)
 # --------------------------------------------------------------------------- #
 class TestInvitationsAndMembers:
-    def test_invitations_list_and_create_foreign_org_403(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", f"/organizations/{a.org_id}/invitations")
-        assert own.status_code == 200 and a.invitation_id in {i["id"] for i in own.json()}
-        _assert_membership_403(world.as_a("GET", f"/organizations/{b.org_id}/invitations"))
+    def test_invitations_list_and_create_foreign_org_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/invitations")
+        assert own.status_code == 200
+        pending = {
+            r["id"]
+            for r in _rows(world, OrganizationInvitation)
+            if r["organization_id"] == a.org_id
+            and r["accepted_at"] is None
+            and r["revoked_at"] is None
+        }
+        assert {i["id"] for i in own.json()} == pending and a.invitation_id in pending
+        assert b.invitation_id not in pending
+        assert not {i["email"] for i in own.json()} & {
+            r["email"]
+            for r in _rows(world, OrganizationInvitation)
+            if r["organization_id"] == b.org_id
+        }
+        _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/invitations"))
         before = world.count(OrganizationInvitation, organization_id=b.org_id)
-        r = world.as_a(
+        r = pov.send(
             "POST",
             f"/organizations/{b.org_id}/invitations",
             {"email": "intruder@example.com", "role": "viewer"},
@@ -496,74 +549,74 @@ class TestInvitationsAndMembers:
         _assert_membership_403(r)
         assert world.count(OrganizationInvitation, organization_id=b.org_id) == before
 
-    def test_revoke_foreign_invitation_id_404_stays_pending(self, world: World):
-        a, b = world.a, world.b
+    def test_revoke_foreign_invitation_id_404_stays_pending(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.row(OrganizationInvitation, b.invitation_id)
-        r = world.as_a("DELETE", f"/organizations/{a.org_id}/invitations/{b.invitation_id}")
+        r = pov.send("DELETE", f"/organizations/{a.org_id}/invitations/{b.invitation_id}")
         _assert_404(r, "Invitation not found.")
         assert world.row(OrganizationInvitation, b.invitation_id) == before
         _assert_membership_403(
-            world.as_a("DELETE", f"/organizations/{b.org_id}/invitations/{b.invitation_id}")
+            pov.send("DELETE", f"/organizations/{b.org_id}/invitations/{b.invitation_id}")
         )
         assert world.row(OrganizationInvitation, b.invitation_id) == before
         # Positive: the owner revokes a pending invitation of their own organization.
-        mine = world.as_a(
+        mine = pov.send(
             "POST",
             f"/organizations/{a.org_id}/invitations",
-            {"email": "ci3-a-revoke-me@example.com", "role": "viewer"},
+            {"email": f"ci3-{a.key}-revoke-me@example.com", "role": "viewer"},
         )
         assert mine.status_code == 201
-        done = world.as_a("DELETE", f"/organizations/{a.org_id}/invitations/{mine.json()['id']}")
+        done = pov.send("DELETE", f"/organizations/{a.org_id}/invitations/{mine.json()['id']}")
         assert done.status_code == 204
         assert world.row(OrganizationInvitation, mine.json()["id"])["revoked_at"] is not None
 
-    def test_members_list_own_200_foreign_403(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", f"/organizations/{a.org_id}/members")
+    def test_members_list_own_200_foreign_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/members")
         assert own.status_code == 200
         assert {m["user_id"] for m in own.json()} == {a.owner_id, a.marketer_id}
-        _assert_membership_403(world.as_a("GET", f"/organizations/{b.org_id}/members"))
+        _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/members"))
 
-    def test_role_change_and_removal_foreign_user_id_404_unchanged(self, world: World):
-        a, b = world.a, world.b
+    def test_role_change_and_removal_foreign_user_id_404_unchanged(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.membership(b.org_id, b.marketer_id)
-        r = world.as_a(
+        r = pov.send(
             "PUT", f"/organizations/{a.org_id}/members/{b.marketer_id}/role", {"role": "viewer"}
         )
         _assert_404(r, "Member not found.")
-        r = world.as_a("DELETE", f"/organizations/{a.org_id}/members/{b.marketer_id}")
+        r = pov.send("DELETE", f"/organizations/{a.org_id}/members/{b.marketer_id}")
         _assert_404(r, "Member not found.")
         # The same identifiers through B's organization path: refused by membership.
         _assert_membership_403(
-            world.as_a(
+            pov.send(
                 "PUT",
                 f"/organizations/{b.org_id}/members/{b.marketer_id}/role",
                 {"role": "viewer"},
             )
         )
         _assert_membership_403(
-            world.as_a("DELETE", f"/organizations/{b.org_id}/members/{b.marketer_id}")
+            pov.send("DELETE", f"/organizations/{b.org_id}/members/{b.marketer_id}")
         )
         assert world.membership(b.org_id, b.marketer_id) == before
         # Positive: the owner changes and restores their own marketer's role.
-        r = world.as_a(
+        r = pov.send(
             "PUT", f"/organizations/{a.org_id}/members/{a.marketer_id}/role", {"role": "viewer"}
         )
         assert r.status_code == 200 and r.json()["role"] == "viewer"
-        r = world.as_a(
+        r = pov.send(
             "PUT",
             f"/organizations/{a.org_id}/members/{a.marketer_id}/role",
             {"role": "marketer"},
         )
         assert r.status_code == 200 and r.json()["role"] == "marketer"
 
-    def test_remove_member_positive_on_own_organization(self, world: World):
-        a = world.a
+    def test_remove_member_positive_on_own_organization(self, world: World, pov: Pov):
+        a = pov.a
         # Invite + register a throwaway member, then remove them.
-        inv = world.as_a(
+        inv = pov.send(
             "POST",
             f"/organizations/{a.org_id}/invitations",
-            {"email": "ci3-a-removable@example.com", "role": "viewer"},
+            {"email": f"ci3-{a.key}-removable@example.com", "role": "viewer"},
         )
         assert inv.status_code == 201
         _rate_limiter()._hits.clear()
@@ -574,7 +627,7 @@ class TestInvitationsAndMembers:
         assert joined.status_code == 201
         uid = joined.json()["user"]["id"]
         assert world.membership(a.org_id, uid) is not None
-        r = world.as_a("DELETE", f"/organizations/{a.org_id}/members/{uid}")
+        r = pov.send("DELETE", f"/organizations/{a.org_id}/members/{uid}")
         assert r.status_code == 204
         assert world.membership(a.org_id, uid) is None
 
@@ -583,33 +636,40 @@ class TestInvitationsAndMembers:
 # 3. Onboarding, brands, business profile
 # --------------------------------------------------------------------------- #
 class TestBrandsAndProfile:
-    def test_brands_and_profile_reads_own_only_foreign_403(self, world: World):
-        a, b = world.a, world.b
-        brands = world.as_a("GET", _ws_path(world, a, "/brands"))
+    def test_brands_and_profile_reads_own_only_foreign_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        brands = pov.send("GET", _ws_path(world, a, "/brands"))
         assert brands.status_code == 200 and [x["id"] for x in brands.json()] == [a.brand_id]
-        profile = world.as_a("GET", _ws_path(world, a, "/business-profile"))
-        assert profile.status_code == 200 and profile.json()["workspace_id"] == a.ws_id
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/brands")))
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/business-profile")))
+        profile = pov.send("GET", _ws_path(world, a, "/business-profile"))
+        assert profile.status_code == 200
+        assert (profile.json()["workspace_id"], profile.json()["brand_id"]) == (a.ws_id, a.brand_id)
+        assert profile.json()["company_name"].startswith(f"Company {a.key}")
+        assert all(x["id"] == a.brand_id for x in brands.json())
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/brands")))
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/business-profile")))
 
-    def test_profile_update_foreign_403_unchanged_own_200(self, world: World):
-        a, b = world.a, world.b
+    def test_profile_update_foreign_403_unchanged_own_200(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         b_profile_id = next(
             r["id"] for r in _rows(world, BusinessProfile) if r["workspace_id"] == b.ws_id
         )
         before = world.row(BusinessProfile, b_profile_id)
-        r = world.as_a("PUT", _ws_path(world, b, "/business-profile"), {"company_name": "Hijacked"})
+        r = pov.send("PUT", _ws_path(world, b, "/business-profile"), {"company_name": "Hijacked"})
         _assert_membership_403(r)
         assert world.row(BusinessProfile, b_profile_id) == before
-        own = world.as_a(
-            "PUT", _ws_path(world, a, "/business-profile"), {"company_name": "Company a v2"}
+        own = pov.send(
+            "PUT", _ws_path(world, a, "/business-profile"), {"company_name": f"Company {a.key} v2"}
         )
-        assert own.status_code == 200 and own.json()["company_name"] == "Company a v2"
+        assert own.status_code == 200 and own.json()["company_name"] == f"Company {a.key} v2"
+        assert own.json()["workspace_id"] == a.ws_id
+        assert world.row(BusinessProfile, b_profile_id) == before  # the foreign row stays put
+        own_row = next(r for r in _rows(world, BusinessProfile) if r["workspace_id"] == a.ws_id)
+        assert own_row["company_name"] == f"Company {a.key} v2"
 
-    def test_onboarding_foreign_403_creates_no_brand(self, world: World):
-        b = world.b
+    def test_onboarding_foreign_403_creates_no_brand(self, world: World, pov: Pov):
+        b = pov.b
         before = world.count(Brand, workspace_id=b.ws_id)
-        r = world.as_a(
+        r = pov.send(
             "POST",
             _ws_path(world, b, "/onboarding"),
             {"brand_name": "Intruder", "profile": {"company_name": "Intruder Co"}},
@@ -629,33 +689,34 @@ def _rows(world: World, model) -> list[dict]:
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("path,model,body", CONTEXT, ids=[c[0] for c in CONTEXT])
 class TestContextEntities:
-    def test_list_returns_own_rows_only_and_foreign_ws_403(self, world, path, model, body):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, f"/{path}"))
+    def test_list_returns_own_rows_only_and_foreign_ws_403(self, world, pov, path, model, body):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, f"/{path}"))
         assert own.status_code == 200
         ids = {x["id"] for x in own.json()}
         assert a.items[path] in ids and b.items[path] not in ids
         assert all(x["workspace_id"] == a.ws_id for x in own.json())
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, f"/{path}")))
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, f"/{path}")))
 
-    def test_create_in_foreign_ws_403_nothing_written_own_201(self, world, path, model, body):
-        a, b = world.a, world.b
+    def test_create_in_foreign_ws_403_nothing_written_own_201(self, world, pov, path, model, body):
+        a, b = pov.a, pov.b
         before = world.count(model, workspace_id=b.ws_id)
-        _assert_membership_403(world.as_a("POST", _ws_path(world, b, f"/{path}"), body))
+        _assert_membership_403(pov.send("POST", _ws_path(world, b, f"/{path}"), body))
         assert world.count(model, workspace_id=b.ws_id) == before
-        own = world.as_a("POST", _ws_path(world, a, f"/{path}"), body)
+        own = pov.send("POST", _ws_path(world, a, f"/{path}"), body)
         assert own.status_code == 201 and own.json()["workspace_id"] == a.ws_id
+        assert own.json()["brand_id"] == a.brand_id  # resolved from the caller's own workspace
 
-    def test_delete_with_foreign_item_id_404_and_row_survives(self, world, path, model, body):
-        a, b = world.a, world.b
+    def test_delete_with_foreign_item_id_404_and_row_survives(self, world, pov, path, model, body):
+        a, b = pov.a, pov.b
         before = world.row(model, b.items[path])
-        r = world.as_a("DELETE", _ws_path(world, a, f"/{path}/{b.items[path]}"))
+        r = pov.send("DELETE", _ws_path(world, a, f"/{path}/{b.items[path]}"))
         _assert_404(r, "Item not found in this workspace.")
-        _assert_membership_403(world.as_a("DELETE", _ws_path(world, b, f"/{path}/{b.items[path]}")))
+        _assert_membership_403(pov.send("DELETE", _ws_path(world, b, f"/{path}/{b.items[path]}")))
         assert world.row(model, b.items[path]) == before
         # Positive: deleting one of A's own items works.
-        mine = world.as_a("POST", _ws_path(world, a, f"/{path}"), body).json()["id"]
-        assert world.as_a("DELETE", _ws_path(world, a, f"/{path}/{mine}")).status_code == 204
+        mine = pov.send("POST", _ws_path(world, a, f"/{path}"), body).json()["id"]
+        assert pov.send("DELETE", _ws_path(world, a, f"/{path}/{mine}")).status_code == 204
         assert world.row(model, mine) is None
 
 
@@ -663,65 +724,74 @@ class TestContextEntities:
 # 5. Locations, geo-coverage, geocode
 # --------------------------------------------------------------------------- #
 class TestLocations:
-    def test_list_and_create(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, "/locations"))
-        assert own.status_code == 200 and [x["id"] for x in own.json()] == [a.location_id]
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/locations")))
+    def test_list_and_create(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/locations"))
+        assert own.status_code == 200
+        ids = {x["id"] for x in own.json()}
+        assert a.location_id in ids and b.location_id not in ids
+        assert all(x["workspace_id"] == a.ws_id for x in own.json())
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/locations")))
         before = world.count(BusinessLocation, workspace_id=b.ws_id)
         _assert_membership_403(
-            world.as_a("POST", _ws_path(world, b, "/locations"), {"name": "Intruder"})
+            pov.send("POST", _ws_path(world, b, "/locations"), {"name": "Intruder"})
         )
         assert world.count(BusinessLocation, workspace_id=b.ws_id) == before
+        created = pov.send("POST", _ws_path(world, a, "/locations"), {"name": f"Branch {a.key}"})
+        assert created.status_code == 201
+        assert (created.json()["workspace_id"], created.json()["brand_id"]) == (a.ws_id, a.brand_id)
 
-    def test_update_with_foreign_location_id_404_unchanged(self, world: World):
-        a, b = world.a, world.b
+    def test_update_with_foreign_location_id_404_unchanged(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.row(BusinessLocation, b.location_id)
-        r = world.as_a(
-            "PUT", _ws_path(world, a, f"/locations/{b.location_id}"), {"name": "Hijacked"}
-        )
+        r = pov.send("PUT", _ws_path(world, a, f"/locations/{b.location_id}"), {"name": "Hijacked"})
         _assert_404(r, "Location not found in this workspace.")
         _assert_membership_403(
-            world.as_a(
-                "PUT", _ws_path(world, b, f"/locations/{b.location_id}"), {"name": "Hijacked"}
-            )
+            pov.send("PUT", _ws_path(world, b, f"/locations/{b.location_id}"), {"name": "Hijacked"})
         )
         assert world.row(BusinessLocation, b.location_id) == before
-        own = world.as_a(
-            "PUT", _ws_path(world, a, f"/locations/{a.location_id}"), {"name": "HQ a v2"}
+        own = pov.send(
+            "PUT", _ws_path(world, a, f"/locations/{a.location_id}"), {"name": f"HQ {a.key} v2"}
         )
-        assert own.status_code == 200 and own.json()["name"] == "HQ a v2"
+        assert own.status_code == 200 and own.json()["name"] == f"HQ {a.key} v2"
 
-    def test_geo_coverage_with_foreign_location_id_404_unchanged(self, world: World):
-        a, b = world.a, world.b
+    def test_geo_coverage_with_foreign_location_id_404_unchanged(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         rule_id = next(
             r["id"] for r in _rows(world, GeoCoverageRule) if r["location_id"] == b.location_id
         )
         before = world.row(GeoCoverageRule, rule_id)
         _assert_404(
-            world.as_a("GET", _ws_path(world, a, f"/locations/{b.location_id}/geo-coverage")),
+            pov.send("GET", _ws_path(world, a, f"/locations/{b.location_id}/geo-coverage")),
             "No Scout Reach configured for this location yet.",
         )
-        r = world.as_a(
+        r = pov.send(
             "PUT",
             _ws_path(world, a, f"/locations/{b.location_id}/geo-coverage"),
             {"coverage_type": "radius", "radius_miles": 1},
         )
         _assert_404(r, "Location not found in this workspace.")
         _assert_membership_403(
-            world.as_a("GET", _ws_path(world, b, f"/locations/{b.location_id}/geo-coverage"))
+            pov.send("GET", _ws_path(world, b, f"/locations/{b.location_id}/geo-coverage"))
+        )
+        _assert_membership_403(
+            pov.send(
+                "PUT",
+                _ws_path(world, b, f"/locations/{b.location_id}/geo-coverage"),
+                {"coverage_type": "radius", "radius_miles": 1},
+            )
         )
         assert world.row(GeoCoverageRule, rule_id) == before
         assert world.count(GeoCoverageRule, workspace_id=a.ws_id, location_id=b.location_id) == 0
-        own = world.as_a("GET", _ws_path(world, a, f"/locations/{a.location_id}/geo-coverage"))
+        own = pov.send("GET", _ws_path(world, a, f"/locations/{a.location_id}/geo-coverage"))
         assert own.status_code == 200 and own.json()["radius_miles"] == 25
 
-    def test_geocode_workspace_id_in_query(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": a.ws_id})
+    def test_geocode_workspace_id_in_query(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": a.ws_id})
         assert own.status_code == 200, own.text
         _assert_membership_403(
-            world.as_a("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": b.ws_id})
+            pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": b.ws_id})
         )
 
 
@@ -729,92 +799,102 @@ class TestLocations:
 # 6. Scout requests: list filters, body identifiers, lifecycle, runs
 # --------------------------------------------------------------------------- #
 class TestScoutRequests:
-    def test_list_own_only_and_foreign_location_filter_is_empty(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, "/scout-requests"))
+    def test_list_own_only_and_foreign_location_filter_is_empty(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/scout-requests"))
         assert own.status_code == 200
         assert {x["id"] for x in own.json()} == {a.request_id, a.life_request_id}
-        filtered = world.as_a(
+        filtered = pov.send(
             "GET", _ws_path(world, a, "/scout-requests"), params={"location_id": b.location_id}
         )
         assert filtered.status_code == 200 and filtered.json() == []
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/scout-requests")))
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/scout-requests")))
 
-    def test_create_with_foreign_location_in_body_404_nothing_created(self, world: World):
-        a, b = world.a, world.b
+    def test_create_with_foreign_location_in_body_404_nothing_created(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before_a = world.count(ScoutRequest, workspace_id=a.ws_id)
         before_b = world.count(ScoutRequest, workspace_id=b.ws_id)
-        r = world.as_a(
+        r = pov.send(
             "POST",
             _ws_path(world, a, "/scout-requests"),
             {"name": "Borrowed location", "location_id": b.location_id},
         )
         _assert_404(r, "Location not found in this workspace.")
+        _assert_membership_403(
+            pov.send("POST", _ws_path(world, b, "/scout-requests"), {"name": "Intruder"})
+        )
         assert world.count(ScoutRequest, workspace_id=a.ws_id) == before_a
         assert world.count(ScoutRequest, workspace_id=b.ws_id) == before_b
 
-    def test_get_and_update_with_foreign_request_id_404_unchanged(self, world: World):
-        a, b = world.a, world.b
+    def test_get_and_update_with_foreign_request_id_404_unchanged(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.row(ScoutRequest, b.request_id)
         _assert_404(
-            world.as_a("GET", _ws_path(world, a, f"/scout-requests/{b.request_id}")),
+            pov.send("GET", _ws_path(world, a, f"/scout-requests/{b.request_id}")),
             "Scout request not found in this workspace.",
         )
-        r = world.as_a(
+        r = pov.send(
             "PUT", _ws_path(world, a, f"/scout-requests/{b.request_id}"), {"name": "Hijacked"}
         )
         _assert_404(r, "Scout request not found in this workspace.")
         _assert_membership_403(
-            world.as_a("GET", _ws_path(world, b, f"/scout-requests/{b.request_id}"))
+            pov.send("GET", _ws_path(world, b, f"/scout-requests/{b.request_id}"))
+        )
+        _assert_membership_403(
+            pov.send(
+                "PUT", _ws_path(world, b, f"/scout-requests/{b.request_id}"), {"name": "Hijacked"}
+            )
         )
         assert world.row(ScoutRequest, b.request_id) == before
-        own = world.as_a("GET", _ws_path(world, a, f"/scout-requests/{a.request_id}"))
+        own = pov.send("GET", _ws_path(world, a, f"/scout-requests/{a.request_id}"))
         assert own.status_code == 200 and own.json()["organization_id"] == a.org_id
-        upd = world.as_a(
+        upd = pov.send(
             "PUT", _ws_path(world, a, f"/scout-requests/{a.request_id}"), {"notes": "mine"}
         )
         assert upd.status_code == 200 and upd.json()["notes"] == "mine"
 
     @pytest.mark.parametrize("verb", ["pause", "resume", "run"])
-    def test_lifecycle_with_foreign_request_id_404_unchanged(self, world: World, verb: str):
-        a, b = world.a, world.b
+    def test_lifecycle_with_foreign_request_id_404_unchanged(
+        self, world: World, pov: Pov, verb: str
+    ):
+        a, b = pov.a, pov.b
         before = world.row(ScoutRequest, b.request_id)
         jobs_before = world.count(Job, workspace_id=b.ws_id)
-        r = world.as_a("POST", _ws_path(world, a, f"/scout-requests/{b.request_id}/{verb}"))
+        r = pov.send("POST", _ws_path(world, a, f"/scout-requests/{b.request_id}/{verb}"))
         _assert_404(r, "Scout request not found in this workspace.")
         _assert_membership_403(
-            world.as_a("POST", _ws_path(world, b, f"/scout-requests/{b.request_id}/{verb}"))
+            pov.send("POST", _ws_path(world, b, f"/scout-requests/{b.request_id}/{verb}"))
         )
         assert world.row(ScoutRequest, b.request_id) == before
         assert world.count(Job, workspace_id=b.ws_id) == jobs_before
 
-    def test_lifecycle_positive_on_own_request(self, world: World):
-        a = world.a
+    def test_lifecycle_positive_on_own_request(self, world: World, pov: Pov):
+        a = pov.a
         base = _ws_path(world, a, f"/scout-requests/{a.life_request_id}")
-        paused = world.as_a("POST", base + "/pause")
+        paused = pov.send("POST", base + "/pause")
         assert paused.status_code == 200
         assert paused.json()["status"] == ScoutRequestStatus.PAUSED.value
-        resumed = world.as_a("POST", base + "/resume")
+        resumed = pov.send("POST", base + "/resume")
         assert resumed.status_code == 200
         assert resumed.json()["status"] == ScoutRequestStatus.DRAFT.value
         jobs_before = world.count(Job, workspace_id=a.ws_id)
-        ran = world.as_a("POST", base + "/run")
+        ran = pov.send("POST", base + "/run")
         assert ran.status_code == 200, ran.text
         assert ran.json()["status"] == ScoutRequestStatus.QUEUED.value
         assert world.count(Job, workspace_id=a.ws_id) == jobs_before + 1
         job = world.row(Job, ran.json()["stats"]["job_id"])
         assert (job["organization_id"], job["workspace_id"]) == (a.org_id, a.ws_id)
 
-    def test_runs_history_with_foreign_request_id_404(self, world: World):
-        a, b = world.a, world.b
+    def test_runs_history_with_foreign_request_id_404(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         _assert_404(
-            world.as_a("GET", _ws_path(world, a, f"/scout-requests/{b.request_id}/runs")),
+            pov.send("GET", _ws_path(world, a, f"/scout-requests/{b.request_id}/runs")),
             "Scout request not found in this workspace.",
         )
         _assert_membership_403(
-            world.as_a("GET", _ws_path(world, b, f"/scout-requests/{b.request_id}/runs"))
+            pov.send("GET", _ws_path(world, b, f"/scout-requests/{b.request_id}/runs"))
         )
-        own = world.as_a("GET", _ws_path(world, a, f"/scout-requests/{a.request_id}/runs"))
+        own = pov.send("GET", _ws_path(world, a, f"/scout-requests/{a.request_id}/runs"))
         assert own.status_code == 200 and own.json()["items"] == []
 
 
@@ -822,22 +902,22 @@ class TestScoutRequests:
 # 7. Scout schedules (reads open while dark; mutations probed with the feature ON)
 # --------------------------------------------------------------------------- #
 class TestScoutSchedules:
-    def test_get_schedule_with_foreign_request_id_404(self, world: World):
-        a, b = world.a, world.b
+    def test_get_schedule_with_foreign_request_id_404(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         _assert_404(
-            world.as_a("GET", _ws_path(world, a, f"/scout-requests/{b.request_id}/schedule")),
+            pov.send("GET", _ws_path(world, a, f"/scout-requests/{b.request_id}/schedule")),
             "Scout request not found in this workspace.",
         )
         _assert_membership_403(
-            world.as_a("GET", _ws_path(world, b, f"/scout-requests/{b.request_id}/schedule"))
+            pov.send("GET", _ws_path(world, b, f"/scout-requests/{b.request_id}/schedule"))
         )
-        own = world.as_a("GET", _ws_path(world, a, f"/scout-requests/{a.request_id}/schedule"))
+        own = pov.send("GET", _ws_path(world, a, f"/scout-requests/{a.request_id}/schedule"))
         assert own.status_code == 200 and own.json()["scout_request_id"] == a.request_id
 
     def test_mutations_with_foreign_request_id_404_and_schedule_unchanged(
-        self, world: World, scheduling_on
+        self, world: World, pov: Pov, scheduling_on
     ):
-        a, b = world.a, world.b
+        a, b = pov.a, pov.b
         sched_id = next(
             r["id"] for r in _rows(world, ScoutSchedule) if r["scout_request_id"] == b.request_id
         )
@@ -849,22 +929,26 @@ class TestScoutSchedules:
             ("POST", base + "/resume", None),
             ("DELETE", base, None),
         ):
-            _assert_404(
-                world.as_a(method, path, body), "Scout request not found in this workspace."
-            )
+            _assert_404(pov.send(method, path, body), "Scout request not found in this workspace.")
         foreign = _ws_path(world, b, f"/scout-requests/{b.request_id}/schedule")
-        _assert_membership_403(world.as_a("DELETE", foreign))
+        for method, path, body in (
+            ("POST", foreign, {"interval": "daily"}),
+            ("POST", foreign + "/pause", None),
+            ("POST", foreign + "/resume", None),
+            ("DELETE", foreign, None),
+        ):
+            _assert_membership_403(pov.send(method, path, body))
         assert world.row(ScoutSchedule, sched_id) == before
         assert world.count(ScoutSchedule, workspace_id=b.ws_id) == 1
 
-    def test_mutations_positive_on_own_request(self, world: World, scheduling_on):
-        a = world.a
+    def test_mutations_positive_on_own_request(self, world: World, pov: Pov, scheduling_on):
+        a = pov.a
         base = _ws_path(world, a, f"/scout-requests/{a.life_request_id}/schedule")
-        created = world.as_a("POST", base, {"interval": "daily"})
+        created = pov.send("POST", base, {"interval": "daily"})
         assert created.status_code == 201, created.text
-        assert world.as_a("POST", base + "/pause").status_code == 200
-        assert world.as_a("POST", base + "/resume").status_code == 200
-        assert world.as_a("DELETE", base).status_code == 204
+        assert pov.send("POST", base + "/pause").status_code == 200
+        assert pov.send("POST", base + "/resume").status_code == 200
+        assert pov.send("DELETE", base).status_code == 204
         assert world.count(ScoutSchedule, scout_request_id=a.life_request_id) == 0
 
 
@@ -872,74 +956,79 @@ class TestScoutSchedules:
 # 8. Opportunities (+ intelligence, feedback, feedback-capability)
 # --------------------------------------------------------------------------- #
 class TestOpportunities:
-    def test_list_own_only_and_foreign_query_filters_empty(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, "/opportunities"))
+    def test_list_own_only_and_foreign_query_filters_empty(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/opportunities"))
         assert own.status_code == 200 and [x["id"] for x in own.json()] == [a.opportunity_id]
         for params in (
             {"location_id": b.location_id},
             {"scout_request_id": b.request_id},
             {"campaign_id": b.items["campaigns"]},
         ):
-            r = world.as_a("GET", _ws_path(world, a, "/opportunities"), params=params)
+            r = pov.send("GET", _ws_path(world, a, "/opportunities"), params=params)
             assert r.status_code == 200 and r.json() == [], params
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/opportunities")))
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/opportunities")))
 
-    def test_detail_and_intelligence_with_foreign_opportunity_id_404(self, world: World):
-        a, b = world.a, world.b
+    def test_detail_and_intelligence_with_foreign_opportunity_id_404(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         for suffix in ("", "/intelligence"):
             _assert_404(
-                world.as_a("GET", _ws_path(world, a, f"/opportunities/{b.opportunity_id}{suffix}")),
+                pov.send("GET", _ws_path(world, a, f"/opportunities/{b.opportunity_id}{suffix}")),
                 "Opportunity not found in this workspace.",
             )
             _assert_membership_403(
-                world.as_a("GET", _ws_path(world, b, f"/opportunities/{b.opportunity_id}{suffix}"))
+                pov.send("GET", _ws_path(world, b, f"/opportunities/{b.opportunity_id}{suffix}"))
             )
-        own = world.as_a("GET", _ws_path(world, a, f"/opportunities/{a.opportunity_id}"))
+        own = pov.send("GET", _ws_path(world, a, f"/opportunities/{a.opportunity_id}"))
         assert own.status_code == 200 and own.json()["id"] == a.opportunity_id
-        intel = world.as_a(
+        intel = pov.send(
             "GET", _ws_path(world, a, f"/opportunities/{a.opportunity_id}/intelligence")
         )
         assert intel.status_code == 200 and intel.json()["opportunity_id"] == a.opportunity_id
 
-    def test_status_update_with_foreign_opportunity_id_404_unchanged(self, world: World):
-        a, b = world.a, world.b
+    def test_status_update_with_foreign_opportunity_id_404_unchanged(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.row(Opportunity, b.opportunity_id)
-        target = OpportunityStatus.SAVED.value
-        assert before["status"] != target
-        r = world.as_a(
+        own_before = world.row(Opportunity, a.opportunity_id)["status"]
+        target = next(
+            st.value for st in OpportunityStatus if st.value not in (before["status"], own_before)
+        )
+        r = pov.send(
             "PUT",
             _ws_path(world, a, f"/opportunities/{b.opportunity_id}/status"),
             {"status": target},
         )
         _assert_404(r, "Opportunity not found in this workspace.")
         _assert_membership_403(
-            world.as_a(
+            pov.send(
                 "PUT",
                 _ws_path(world, b, f"/opportunities/{b.opportunity_id}/status"),
                 {"status": target},
             )
         )
         assert world.row(Opportunity, b.opportunity_id) == before
-        own = world.as_a(
+        own = pov.send(
             "PUT",
             _ws_path(world, a, f"/opportunities/{a.opportunity_id}/status"),
             {"status": target},
         )
         assert own.status_code == 200 and own.json()["status"] == target
 
-    def test_feedback_capability_and_feedback_routes(self, world: World, feedback_on):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, "/feedback-capability"))
+    def test_feedback_capability_and_feedback_routes(self, world: World, pov: Pov, feedback_on):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/feedback-capability"))
         assert own.status_code == 200 and own.json() == {"enabled": True}
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/feedback-capability")))
-        # Foreign opportunity id under A's own workspace: scoped 404 on both operations.
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/feedback-capability")))
+        # Foreign opportunity id under the caller's own workspace: scoped 404 on both operations;
+        # nothing is written for either organization's opportunity.
+        feedback_before = world.count(OpportunityFeedback)
+        opp_before = world.row(Opportunity, b.opportunity_id)
         _assert_404(
-            world.as_a("GET", _ws_path(world, a, f"/opportunities/{b.opportunity_id}/feedback")),
+            pov.send("GET", _ws_path(world, a, f"/opportunities/{b.opportunity_id}/feedback")),
             "Opportunity not found in this workspace.",
         )
         _assert_404(
-            world.as_a(
+            pov.send(
                 "POST",
                 _ws_path(world, a, f"/opportunities/{b.opportunity_id}/feedback"),
                 {"intelligence_record_id": "x" * 32, "is_useful": True},
@@ -949,57 +1038,60 @@ class TestOpportunities:
         probe_body = {"intelligence_record_id": "x" * 32, "is_useful": True}
         for method, body in (("GET", None), ("POST", probe_body)):
             foreign = _ws_path(world, b, f"/opportunities/{b.opportunity_id}/feedback")
-            _assert_membership_403(world.as_a(method, foreign, body))
-        own_history = world.as_a(
+            _assert_membership_403(pov.send(method, foreign, body))
+        own_history = pov.send(
             "GET", _ws_path(world, a, f"/opportunities/{a.opportunity_id}/feedback")
         )
         assert own_history.status_code == 200 and own_history.json()["items"] == []
+        assert world.count(OpportunityFeedback) == feedback_before
+        assert world.row(Opportunity, b.opportunity_id) == opp_before
 
 
 # --------------------------------------------------------------------------- #
 # 9. Jobs
 # --------------------------------------------------------------------------- #
 class TestJobs:
-    def test_list_own_only_and_foreign_query_filters_empty(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, "/jobs"))
+    def test_list_own_only_and_foreign_query_filters_empty(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/jobs"))
         assert own.status_code == 200
         ids = {x["id"] for x in own.json()["items"]}
         assert a.job_id in ids and b.job_id not in ids
         for params in ({"location_id": b.location_id}, {"scout_request_id": b.request_id}):
-            r = world.as_a("GET", _ws_path(world, a, "/jobs"), params=params)
+            r = pov.send("GET", _ws_path(world, a, "/jobs"), params=params)
             assert r.status_code == 200 and r.json()["items"] == [], params
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/jobs")))
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/jobs")))
 
-    def test_get_events_cancel_with_foreign_job_id_404_unchanged(self, world: World):
-        a, b = world.a, world.b
+    def test_get_events_cancel_with_foreign_job_id_404_unchanged(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
         before = world.row(Job, b.job_id)
-        assert before["status"] == JobStatus.PENDING.value
         for method, suffix in (("GET", ""), ("GET", "/events"), ("POST", "/cancel")):
             _assert_404(
-                world.as_a(method, _ws_path(world, a, f"/jobs/{b.job_id}{suffix}")),
+                pov.send(method, _ws_path(world, a, f"/jobs/{b.job_id}{suffix}")),
                 "Job not found in this workspace.",
             )
             _assert_membership_403(
-                world.as_a(method, _ws_path(world, b, f"/jobs/{b.job_id}{suffix}"))
+                pov.send(method, _ws_path(world, b, f"/jobs/{b.job_id}{suffix}"))
             )
         assert world.row(Job, b.job_id) == before
-        own = world.as_a("GET", _ws_path(world, a, f"/jobs/{a.job_id}"))
+        own = pov.send("GET", _ws_path(world, a, f"/jobs/{a.job_id}"))
         assert own.status_code == 200 and own.json()["id"] == a.job_id
-        events = world.as_a("GET", _ws_path(world, a, f"/jobs/{a.job_id}/events"))
+        events = pov.send("GET", _ws_path(world, a, f"/jobs/{a.job_id}/events"))
         assert events.status_code == 200
-        cancelled = world.as_a("POST", _ws_path(world, a, f"/jobs/{a.job_id}/cancel"))
+        assert world.row(Job, a.job_id)["status"] == JobStatus.PENDING.value
+        cancelled = pov.send("POST", _ws_path(world, a, f"/jobs/{a.job_id}/cancel"))
         assert cancelled.status_code == 200
         assert world.row(Job, a.job_id)["status"] == JobStatus.CANCELLED.value
+        assert world.row(Job, b.job_id) == before
 
 
 # --------------------------------------------------------------------------- #
 # 10. Audit logs (the full two-organization matrix lives in test_audit_logs_role_matrix)
 # --------------------------------------------------------------------------- #
 class TestAuditLogs:
-    def test_own_200_own_organization_rows_only_foreign_403(self, world: World):
-        a, b = world.a, world.b
-        own = world.as_a("GET", _ws_path(world, a, "/audit-logs"))
+    def test_own_200_own_organization_rows_only_foreign_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/audit-logs"))
         assert own.status_code == 200 and own.json()
         # Every returned row is an organization-A row (witness), none was written by B's actors.
         returned = {r["id"] for r in own.json()}
@@ -1007,7 +1099,7 @@ class TestAuditLogs:
         b_rows = {r["id"] for r in _rows(world, AuditLog) if r["organization_id"] == b.org_id}
         assert returned <= a_rows and not (returned & b_rows) and b_rows
         assert not {r["actor_user_id"] for r in own.json()} & {b.owner_id, b.marketer_id}
-        _assert_membership_403(world.as_a("GET", _ws_path(world, b, "/audit-logs")))
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/audit-logs")))
 
 
 # --------------------------------------------------------------------------- #
