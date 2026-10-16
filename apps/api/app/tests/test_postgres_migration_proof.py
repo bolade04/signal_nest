@@ -18,10 +18,13 @@ dropped by :func:`pg_database`), never against a shared one:
      (``87198ab57b59``, ``auth_sessions``) is run against a database that already holds
      a relation with its index's name, so ``CREATE TABLE`` succeeds and ``CREATE
      INDEX`` fails inside the same revision. This proves that PostgreSQL's
-     transactional DDL together with ``transaction_per_migration`` leaves **no partial
-     object** of the failed revision and keeps ``alembic_version`` at the previous
-     revision, and that the supported recovery (remove the cause, re-run the same
-     upgrade) reaches head. The revision file is not edited.
+     transactional DDL (the revision's statements run inside one transaction, which
+     rolls back as a whole) leaves **no partial object** of the failed revision and
+     keeps ``alembic_version`` at the previous revision, and that the supported
+     recovery (remove the cause, re-run the same upgrade) reaches head. The revision
+     file is not edited. (``transaction_per_migration`` bounds each revision's
+     transaction; for a single failing revision the atomicity shown here is the
+     database's, as the adversarial review's toggle of that setting confirmed.)
   2. *a controlled failure fixture* — a disposable copy of the script tree gains one
      synthetic revision on top of head whose body creates a table and then raises.
      This proves the same atomicity for a crash **inside a migration body** that is
@@ -184,6 +187,12 @@ def _relations(url: str) -> set[str]:
 MAPPED_TABLES = frozenset(Base.metadata.tables)
 
 
+def _logged(out: str, key: str, value: str) -> bool:
+    """A structured log field in either emitted form: console ``key=value`` (development)
+    or JSON ``"key": "value"`` (every other environment, including CI's ``test``)."""
+    return f"{key}={value}" in out or f'"{key}": "{value}"' in out
+
+
 # --------------------------------------------------------------------------- #
 # M1 — the full chain: empty -> head, drift check, downgrade base, re-upgrade
 # --------------------------------------------------------------------------- #
@@ -253,8 +262,9 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
     )
     out = bare.stdout + bare.stderr
     assert bare.returncode == 0, out
-    assert "migrate.upgrade_verify.done" in out and "outcome=success" in out
-    assert f"db_revision={HEAD}" in out and f"code_head={HEAD}" in out
+    assert "migrate.upgrade_verify.done" in out
+    assert _logged(out, "outcome", "success")
+    assert _logged(out, "db_revision", HEAD) and _logged(out, "code_head", HEAD)
     assert _version(pg_url) == [HEAD]
     assert pg_url not in out and "signalnest@" not in out  # the DSN never reaches the logs
 
@@ -267,7 +277,7 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
     )
     out = check.stdout + check.stderr
     assert check.returncode == 0, out
-    assert "migrate.check" in out and "outcome=compatible" in out
+    assert "migrate.check" in out and _logged(out, "outcome", "compatible")
 
     # Re-running the actor on an already-migrated database is a no-op success.
     again = subprocess.run(

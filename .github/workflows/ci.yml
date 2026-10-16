@@ -185,15 +185,17 @@ jobs:
         # of its own (created and dropped per test; never the shared one). With
         # TEST_POSTGRES_URL unset they FAIL here (CI=true), never skip; an unreachable
         # database fails them; and the summary is inspected so a skipped test can never
-        # pass this step silently.
+        # pass this step silently. The modules are named by dotted module path (--pyargs)
+        # on purpose: the governance coherence check resolves every path-shaped token in
+        # this workflow against the repository root, and "app/tests/x.py" is not one.
         working-directory: apps/api
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://signalnest:signalnest@localhost:5432/signalnest_test
           CI: "true"
         run: |
-          .venv/bin/python -m pytest \
-            app/tests/test_postgres_migration_proof.py \
-            app/tests/test_postgres_job_store_concurrency.py \
+          .venv/bin/python -m pytest --pyargs \
+            app.tests.test_postgres_migration_proof \
+            app.tests.test_postgres_job_store_concurrency \
             -q -rsxX -p no:cacheprovider 2>&1 | tee ../../ci-logs/backend-postgres-proofs.log
           echo "== no PostgreSQL proof may be skipped or xfailed =="
           if grep -Eiq "skipped|xfail|xpass" ../../ci-logs/backend-postgres-proofs.log; then
@@ -289,26 +291,27 @@ jobs:
         working-directory: apps/api
         env:
           DATABASE_URL: postgresql+psycopg://signalnest:signalnest@localhost:5432/signalnest_migrate
+        # Literal interpreter words (never a $PY variable): the executable-trust inventory
+        # must resolve every command position of this step without a dynamic-site declaration.
         run: |
-          PY=.venv/bin/python
           echo "== upgrade empty PostgreSQL database -> head =="
-          $PY -m alembic upgrade head
-          $PY -m alembic current 2>/dev/null | tee ../../ci-logs/pg-revision-after-upgrade.txt
+          .venv/bin/python -m alembic upgrade head
+          .venv/bin/python -m alembic current 2>/dev/null | tee ../../ci-logs/pg-revision-after-upgrade.txt
           grep -q "(head)" ../../ci-logs/pg-revision-after-upgrade.txt
           echo "== schema-drift check on PostgreSQL (expect: no new upgrade operations) =="
-          $PY -m alembic check
+          .venv/bin/python -m alembic check
           echo "== downgrade to base (real, under the target-bound guard) =="
-          $PY -m alembic -x confirm=$($PY -m app.db.migrate downgrade-confirmation base) downgrade base
-          $PY -m alembic current 2>/dev/null | tee ../../ci-logs/pg-revision-after-downgrade.txt
+          .venv/bin/python -m alembic -x confirm=$(.venv/bin/python -m app.db.migrate downgrade-confirmation base) downgrade base
+          .venv/bin/python -m alembic current 2>/dev/null | tee ../../ci-logs/pg-revision-after-downgrade.txt
           if grep -q "(head)" ../../ci-logs/pg-revision-after-downgrade.txt; then
             echo "downgrade to base did not move the PostgreSQL revision" >&2
             exit 1
           fi
           echo "== upgrade back to head =="
-          $PY -m alembic upgrade head
-          $PY -m alembic current 2>/dev/null | tee ../../ci-logs/pg-revision-after-reupgrade.txt
+          .venv/bin/python -m alembic upgrade head
+          .venv/bin/python -m alembic current 2>/dev/null | tee ../../ci-logs/pg-revision-after-reupgrade.txt
           grep -q "(head)" ../../ci-logs/pg-revision-after-reupgrade.txt
-          $PY -m alembic check
+          .venv/bin/python -m alembic check
 
       - name: OpenAPI regeneration + contract-drift check
         run: |
