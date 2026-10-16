@@ -101,6 +101,35 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
   worker/lease/payload/idempotency fields, and operator-only `/internal/system/jobs` is `401`
   anonymous / `403` for a non-operator / secret-free diagnostics for an operator.
 
+### PostgreSQL proofs
+
+Production runs on PostgreSQL; the suite above runs on SQLite. Two modules prove the
+PostgreSQL-only paths on a **real** PostgreSQL, each test in a database of its own
+(created and dropped by `app.tests._auth2_support.pg_database`), on schemas produced
+by the real Alembic chain (never `metadata.create_all`):
+
+| Module | What it proves (plan rows `P6-CI-4` / `P6-CI-5`, §14) |
+| --- | --- |
+| `test_postgres_migration_proof.py` | the full chain empty → head (every revision), `alembic check`, a guarded step down and the downgrade to **base** under the target-bound confirmation (the token that authorised one step is refused for the next; the round trip re-arms the original token — the guard's documented residual, shown by recomputation only), the re-upgrade, the migration actor (`python -m app.db.migrate`, `check`), an **interrupted migration** in two forms — a tracked revision failing partway (an induced catalog conflict: no partial object, `alembic_version` unmoved, recovery by removing the cause and re-running) and a controlled failure fixture in a disposable copy of the script tree (a crash inside a revision body is atomic; the repaired retry applies once) — and the seed guard's refusal of PostgreSQL (seed idempotency is SQLite-only by design) |
+| `test_postgres_job_store_concurrency.py` | the production `DurableJobStore` methods through independent connections and genuinely overlapping transactions: claim exclusivity under barrier-synchronised claimers (every job claimed exactly once) and progress past a row another transaction holds locked (`FOR UPDATE SKIP LOCKED`); concurrent lease recovery with one effect and one `lease_recovered` event per job, and a loop skipping a locked expired row; retryable recovery → `pending` versus exhausted attempts → `dead_lettered`; stale-owner fencing after recovery/reclaim on independent connections — including a reclaim by the **same** `worker_id`, which only the rotated lease token can fence — and a race of stale heartbeats against the owner's; unexpired, future-scheduled and terminal jobs untouched. Every connection carries `statement_timeout`/`lock_timeout`, every thread join is bounded, so a regression that blocks on a lock fails fast instead of hanging |
+
+Gate: `TEST_POSTGRES_URL`. Unset, these tests **fail** in CI (`CI=true`) and skip only on a
+developer machine; the CI step also fails if the summary reports any skipped test, so
+the proof can never pass silently. An unreachable database fails them. Locally:
+
+```bash
+# a disposable PostgreSQL 16 (Homebrew: brew install postgresql@16), for example
+initdb -D /tmp/sn-pg16 -U signalnest --auth=trust && pg_ctl -D /tmp/sn-pg16 -o "-p 54329 -k /tmp" start
+createdb -h 127.0.0.1 -p 54329 -U signalnest signalnest_test
+cd apps/api && TEST_POSTGRES_URL=postgresql+psycopg://signalnest@127.0.0.1:54329/signalnest_test \
+  .venv/bin/python -m pytest app/tests/test_postgres_migration_proof.py app/tests/test_postgres_job_store_concurrency.py -q
+```
+
+The older `TEST_POSTGRES_URL`-gated tests elsewhere in the suite (`skipif` when unset)
+are unchanged and still run in CI, where the variable is set; the two modules above are
+the ones executed as a required, non-skippable step. Neither module touches the shared
+`signalnest_test` database.
+
 ## Frontend (`apps/web`)
 
 Component/integration tests render the real `App` with a small in-memory MSW backend
@@ -161,8 +190,8 @@ conditional on failure only.
 | Check name | What it runs |
 | --- | --- |
 | **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build` |
-| **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest` |
-| **Migrations and API contract** | empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`, then `npm run gen:types` + `git diff --exit-code` (contract drift) |
+| **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest`; then the **PostgreSQL proofs** (`test_postgres_migration_proof.py`, `test_postgres_job_store_concurrency.py`) run again on their own against the job's disposable PostgreSQL 16 service as a required result — they fail if the database is unavailable and the step fails if any of them is skipped |
+| **Migrations and API contract** | SQLite: empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`; **PostgreSQL 16** (disposable service): empty-DB `alembic upgrade head`, `alembic check`, `downgrade base` under the confirmation guard, `upgrade head`, with the revision read back after each phase (no seed — `app.db.seed` refuses PostgreSQL by design); then `npm run gen:types` + `git diff --exit-code` (contract drift) |
 | **Integration smoke** | after the three gates pass: migrate + seed, start the API, wait on `/health`, run the HTTP isolation smoke, always stop the server |
 
 **Environment.** CI runs entirely in the default zero-dependency **local** mode:
@@ -171,10 +200,14 @@ SQLite (`DATABASE_URL=sqlite:///./signalnest.db`), in-process queue
 vector index (`VECTOR_BACKEND=bruteforce`), local-file storage
 (`STORAGE_BACKEND=local`), the fixture connectors, and the deterministic mock LLM
 (`LLM_PROVIDER=mock`, `LLM_MOCK_SEED=signalnest-ci`), with `ENVIRONMENT=test`. These
-are the actual `Settings` field names (`apps/api/app/core/config.py`). **Docker,
-PostgreSQL, Redis and paid OpenAI/Anthropic API keys are not required and no secrets
-are used.** Runtimes: Node 20 (repo engines) and Python 3.12. On failure, each job
-uploads its logs (`ci-logs/`, `api-smoke.log`) as artifacts.
+are the actual `Settings` field names (`apps/api/app/core/config.py`). The
+application under test runs on SQLite throughout; the **Backend quality** and
+**Migrations and API contract** jobs additionally provision a **disposable PostgreSQL 16
+service** (`postgres:16`, a throwaway user/password, dropped with the runner) for the
+PostgreSQL proofs described under [PostgreSQL proofs](#postgresql-proofs). **Docker,
+Redis and paid OpenAI/Anthropic API keys are not required and no secrets are used.**
+Runtimes: Node 20 (repo engines) and Python 3.12. On failure, each job uploads its
+logs (`ci-logs/`, `api-smoke.log`) as artifacts.
 
 **Recommended required status checks for `main`:** Frontend quality, Backend quality,
 Migrations and API contract, Integration smoke.
