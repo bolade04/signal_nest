@@ -187,7 +187,8 @@ jobs:
         # database fails them; and the summary is inspected so a skipped test can never
         # pass this step silently. The modules are named by dotted module path (--pyargs)
         # on purpose: the governance coherence check resolves every path-shaped token in
-        # this workflow against the repository root, and "app/tests/x.py" is not one.
+        # this workflow against the repository root, where a working-directory-relative
+        # file path would not resolve.
         working-directory: apps/api
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://signalnest:signalnest@localhost:5432/signalnest_test
