@@ -165,7 +165,7 @@ does: a real **Chromium** (the build pinned by `@playwright/test` in the lockfil
 the **production bundle** (`npm run build` output, CSP meta included), served by
 `vite preview` with the same `/api` + `/health` proxy as development, against a real local
 API and the real durable worker sharing one disposable SQLite database that
-`scripts/ci-e2e.sh` migrates from empty in a temporary directory. Nothing is seeded and
+`scripts/e2e-browser.sh` migrates from empty in a temporary directory. Nothing is seeded and
 nothing is mocked in the browser: a synthetic customer registers through the UI and creates
 every resource through the UI.
 
@@ -189,7 +189,7 @@ every resource through the UI.
   location outside the four fixture markets completes with zero signals. This proves the
   product's own flow on deterministic inputs — not live ingestion, real LLM behaviour,
   real mail, deployment or production readiness.
-- **Fail-closed:** `retries: 0`, one worker, `forbidOnly` always; `scripts/ci-e2e.sh`
+- **Fail-closed:** `retries: 0`, one worker, `forbidOnly` always; `scripts/e2e-browser.sh`
   refuses a non-mock LLM provider or a live connector, fails when the bundle or venv is
   missing, the API never becomes ready or the worker is not running, and
   `apps/web/scripts/assert-e2e-report.mjs` refuses the JSON report unless it is a report
@@ -237,7 +237,7 @@ conditional on failure only.
 
 | Check name | What it runs |
 | --- | --- |
-| **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build`, then the browser customer flow against that build: API venv install, `npm run e2e:install --workspace apps/web` (Chromium), `scripts/ci-e2e.sh` (P6-CI-2) |
+| **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build`, then the browser customer flow against that build: API venv install, `npm run e2e:install --workspace apps/web` (Chromium), `scripts/e2e-browser.sh` (P6-CI-2) |
 | **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest`; then the **PostgreSQL proofs** (`test_postgres_migration_proof.py`, `test_postgres_job_store_concurrency.py`) run again on their own against the job's disposable PostgreSQL 16 service as a required result — they fail if the database is unavailable and the step fails if any of them is skipped |
 | **Migrations and API contract** | SQLite: empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`; **PostgreSQL 16** (disposable service): empty-DB `alembic upgrade head`, `alembic check`, `downgrade base` under the confirmation guard, `upgrade head`, with the revision read back after each phase (no seed — `app.db.seed` refuses PostgreSQL by design); then `npm run gen:types` + `git diff --exit-code` (contract drift) |
 | **Integration smoke** | after the three gates pass: migrate + seed, start the API, wait on `/health`, run the HTTP isolation smoke, always stop the server |

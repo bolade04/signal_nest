@@ -112,11 +112,11 @@ jobs:
         run: npm run e2e:install --workspace apps/web 2>&1 | tee ci-logs/frontend-e2e-install.log
 
       - name: Browser customer flow against the built bundle (P6-CI-2)
-        # ci-e2e.sh migrates a disposable database, starts the API and the worker,
+        # e2e-browser.sh migrates a disposable database, starts the API and the worker,
         # waits on /health with a bounded loop, runs the Playwright suite against the
         # production bundle served by vite preview, gates on the JSON report (at least
         # one test, executed once, none skipped) and always stops every process.
-        run: bash scripts/ci-e2e.sh 2>&1 | tee ci-logs/frontend-e2e.log
+        run: bash scripts/e2e-browser.sh 2>&1 | tee ci-logs/frontend-e2e.log
 
       - name: Upload frontend diagnostics
         # ci-logs/ now also carries the browser proof's API and worker logs and the

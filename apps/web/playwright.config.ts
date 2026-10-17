@@ -8,7 +8,7 @@ import { defineConfig, devices } from '@playwright/test';
  * so the SPA talks same-origin to a real local API exactly as it does behind the edge
  * with an empty `VITE_API_BASE_URL`. Nothing is mocked in the browser: no MSW, no
  * route interception. The API, the durable worker and the disposable migrated
- * database are started by `scripts/ci-e2e.sh`, which is the only supported entry
+ * database are started by `scripts/e2e-browser.sh`, which is the only supported entry
  * point (it also gates on the JSON report written below).
  *
  * Coverage boundary: ONE browser — the Playwright-pinned Chromium build — at one
