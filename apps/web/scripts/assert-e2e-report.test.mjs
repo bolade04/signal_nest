@@ -5,18 +5,19 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { reportProblems } from './assert-e2e-report.mjs';
+import flow from '../e2e/flow.json' with { type: 'json' };
 
 const SCRIPT = fileURLToPath(new URL('./assert-e2e-report.mjs', import.meta.url));
 
 /** A Playwright JSON report with one chromium test, in the shape the reporter writes. */
-function report({ status = 'expected', results = [{ status: 'passed', retry: 0 }], project = 'chromium', stats, errors = [] } = {}) {
+function report({ status = 'expected', results = [{ status: 'passed', retry: 0, steps: flow.steps.map((title) => ({ title })) }], project = 'chromium', stats, errors = [], title = flow.title } = {}) {
   return {
     config: {},
     suites: [
       {
         title: 'customer-flow.spec.ts',
         file: 'customer-flow.spec.ts',
-        specs: [{ title: 'the customer flow', ok: status === 'expected', tests: [{ projectName: project, status, results }] }],
+        specs: [{ title, ok: status === 'expected', tests: [{ projectName: project, status, results }] }],
         suites: [],
       },
     ],
@@ -57,6 +58,20 @@ describe('assert-e2e-report', () => {
     expect(reportProblems(empty).join('\n')).toMatch(/no test was collected/);
   });
 
+  it('refuses a report of a test that is not the customer flow', () => {
+    const problems = reportProblems(report({ title: 'trivial focused sibling' }));
+    expect(problems.join('\n')).toMatch(/appears 0 time/);
+    expect(problems.join('\n')).toMatch(/unexpected test "trivial focused sibling"/);
+  });
+
+  it('refuses a flow test whose steps did not all run (an emptied body)', () => {
+    const empty = reportProblems(report({ results: [{ status: 'passed', retry: 0, steps: [] }] }));
+    expect(empty.filter((p) => p.includes('did not run'))).toHaveLength(flow.steps.length);
+    const partial = reportProblems(report({ results: [{ status: 'passed', retry: 0, steps: flow.steps.slice(0, 5).map((title) => ({ title })) }] }));
+    expect(partial.join('\n')).toMatch(/did not run \(steps recorded: 5\)/);
+    expect(partial.filter((p) => p.includes('did not run'))).toHaveLength(3);
+  });
+
   it('refuses a test that ran under a project other than chromium', () => {
     expect(reportProblems(report({ project: 'firefox' })).join('\n')).toMatch(/not chromium/);
   });
@@ -71,7 +86,7 @@ describe('assert-e2e-report', () => {
     const good = join(dir, 'good.json');
     writeFileSync(good, JSON.stringify(report()));
     const bad = join(dir, 'bad.json');
-    writeFileSync(bad, JSON.stringify(report({ status: 'skipped', results: [{ status: 'skipped' }] })));
+    writeFileSync(bad, JSON.stringify(report({ status: 'skipped', results: [{ status: 'skipped', steps: [] }] })));
     expect(run(good).code).toBe(0);
     const refused = run(bad);
     expect(refused.code).toBe(1);

@@ -1,4 +1,5 @@
 import { expect, test, type APIResponse, type Locator, type Page } from '@playwright/test';
+import flow from './flow.json' with { type: 'json' };
 
 /**
  * The minimum customer flow the Phase 6 plan requires a browser harness to cover
@@ -133,7 +134,11 @@ async function addTag(input: Locator, value: string): Promise<void> {
   await input.press('Enter');
 }
 
-test('a new customer signs up, onboards, creates a location and a scout, runs it, sees the opportunity it produced, and signs out', async ({ page }) => {
+// The title and the step titles come from flow.json, which the report gate also reads: a
+// report that passes the gate is a report of THIS flow with every step executed.
+const STEP = flow.steps as [string, string, string, string, string, string, string, string];
+
+test(flow.title, async ({ page }) => {
   let token = '';
   let organizationId = '';
   let workspaceId = '';
@@ -141,7 +146,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
   let scoutId = '';
   let opportunities: Opportunity[] = [];
 
-  await test.step('1. sign-up establishes the customer session and context', async () => {
+  await test.step(STEP[0], async () => {
     await page.goto('/register');
     await page.getByLabel(/^Full name/).fill(customer.name);
     await page.getByLabel(/^Organization name/).fill(customer.organization);
@@ -172,7 +177,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     await expect(page.getByText('No workspace available')).toBeVisible();
   });
 
-  await test.step('1a. the customer creates the workspace the product asks for (Settings → Workspaces → New)', async () => {
+  await test.step(STEP[1], async () => {
     await page.goto('/settings');
     const workspacesCard = page.getByText('Workspaces', { exact: true }).locator('..');
     await workspacesCard.getByRole('button', { name: 'New' }).click();
@@ -187,7 +192,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     expect(workspaces[0]!.onboarding_completed).toBe(false);
   });
 
-  await test.step('2. onboarding persists the submitted configuration', async () => {
+  await test.step(STEP[2], async () => {
     await page.goto('/onboarding');
     await expect(page.getByRole('heading', { name: 'Guided onboarding' })).toBeVisible();
     const next = page.getByRole('button', { name: 'Save & continue' });
@@ -230,7 +235,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     await expect(page.getByText('Finish setting up (1/4)')).toBeVisible();
   });
 
-  await test.step('3. the customer creates a location', async () => {
+  await test.step(STEP[3], async () => {
     await page.goto('/locations');
     await page.getByRole('button', { name: 'Add location' }).first().click();
     const dialog = page.getByRole('dialog', { name: 'Add location' });
@@ -247,7 +252,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     locationId = locations[0]!.id;
   });
 
-  await test.step('4. the customer creates a scout for that location', async () => {
+  await test.step(STEP[4], async () => {
     await page.goto('/scout-requests');
     await page.getByRole('button', { name: 'New scout request' }).first().click();
     const dialog = page.getByRole('dialog', { name: 'New scout request' });
@@ -269,7 +274,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     expect(before).toEqual([]);
   });
 
-  await test.step('5. running that scout executes it and produces opportunities', async () => {
+  await test.step(STEP[5], async () => {
     await page.getByRole('link', { name: scoutName }).click();
     await expect(page).toHaveURL(new RegExp(`/scout-requests/${scoutId}$`), { timeout: NAV_TIMEOUT_MS });
     const header = page.getByRole('heading', { level: 1, name: scoutName }).locator('..');
@@ -318,7 +323,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     }
   });
 
-  await test.step('6. the customer sees the opportunity this run produced', async () => {
+  await test.step(STEP[6], async () => {
     const first = opportunities[0]!;
     // The card under the scout links to the opportunity detail.
     await page.getByRole('link', { name: first.title, exact: true }).click();
@@ -337,7 +342,7 @@ test('a new customer signs up, onboards, creates a location and a scout, runs it
     await expect(page.getByText(/^Finish setting up/)).toHaveCount(0);
   });
 
-  await test.step('7. sign-out ends the session and protected routes expose nothing', async () => {
+  await test.step(STEP[7], async () => {
     // The product re-issues the access token on session re-reads (same session, new
     // token), so the token stored now may differ from the registration token: both
     // belong to one session, and both must be refused once that session is revoked.

@@ -1,0 +1,14 @@
+{
+  "_purpose": "The customer flow's title and ordered step titles — the ONE source read by both the spec (apps/web/e2e/customer-flow.spec.ts) and the report gate (apps/web/scripts/assert-e2e-report.mjs), so the gate can refuse a report whose test is not this flow or whose steps did not all run.",
+  "title": "a new customer signs up, onboards, creates a location and a scout, runs it, sees the opportunity it produced, and signs out",
+  "steps": [
+    "1. sign-up establishes the customer session and context",
+    "1a. the customer creates the workspace the product asks for (Settings → Workspaces → New)",
+    "2. onboarding persists the submitted configuration",
+    "3. the customer creates a location",
+    "4. the customer creates a scout for that location",
+    "5. running that scout executes it and produces opportunities",
+    "6. the customer sees the opportunity this run produced",
+    "7. sign-out ends the session and protected routes expose nothing"
+  ]
+}

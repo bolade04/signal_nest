@@ -189,15 +189,20 @@ every resource through the UI.
   location outside the four fixture markets completes with zero signals. This proves the
   product's own flow on deterministic inputs — not live ingestion, real LLM behaviour,
   real mail, deployment or production readiness.
-- **Fail-closed:** `retries: 0`, one worker, `forbidOnly` in CI; `scripts/ci-e2e.sh`
+- **Fail-closed:** `retries: 0`, one worker, `forbidOnly` always; `scripts/ci-e2e.sh`
   refuses a non-mock LLM provider or a live connector, fails when the bundle or venv is
   missing, the API never becomes ready or the worker is not running, and
-  `apps/web/scripts/assert-e2e-report.mjs` refuses the JSON report unless at least one
-  test was collected and every test executed exactly once and passed (no skip, no retry,
-  no empty run; `assert-e2e-report.test.mjs` covers each refusal).
+  `apps/web/scripts/assert-e2e-report.mjs` refuses the JSON report unless it is a report
+  of this flow — the test titled as in `apps/web/e2e/flow.json`, the one source the spec
+  and the gate share, with every step listed there executed — run exactly once and passed
+  (no skip, no retry, no empty or substituted test; `assert-e2e-report.test.mjs` covers
+  each refusal).
 - **Diagnostics:** on failure Playwright keeps the trace and a screenshot under
   `ci-logs/e2e-results/`, next to the API and worker logs, which the job's failure-only
-  artifact upload carries (7-day retention). Every process is stopped on every exit path.
+  artifact upload carries (7-day retention). A trace records the browser's requests, so it
+  carries the synthetic customer's bearer tokens — tokens of a database that no longer
+  exists, signed with the test secret; never a real credential. Every process is stopped
+  on every exit path.
 - **Coverage boundary:** Chromium only, one desktop viewport, this one flow. Other routes
   are not browser-tested here.
 

@@ -6,16 +6,20 @@
  * skipped, when nothing was collected, or when a test passed only on a retry. A
  * required CI step that stopped at that exit code would report "green" for a proof
  * that never ran. This reads the JSON report the harness writes and refuses anything
- * but: at least one test collected, every test executed exactly once (no retry) and
- * passed, zero skipped, zero flaky, zero unexpected, zero reporter errors, and every
- * test under the chromium project. A missing or unreadable report is a failure too:
- * "no report" means the browser test did not execute.
+ * but: the customer flow itself (the test titled as in e2e/flow.json, with every step
+ * listed there executed — an emptied or substituted test is refused), executed exactly
+ * once (no retry) and passed, zero skipped, zero flaky, zero unexpected, zero reporter
+ * errors, and every test under the chromium project. A missing or unreadable report is
+ * a failure too: "no report" means the browser test did not execute.
  *
  * Node builtins only — this must not add a dependency.
  */
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const EXPECTED_PROJECT = 'chromium';
+/** The flow the report must be a report OF: one source, shared with the spec. */
+const FLOW = JSON.parse(readFileSync(fileURLToPath(new URL('../e2e/flow.json', import.meta.url)), 'utf8'));
 
 /** Every spec in the tree, with its file, flattened; nested describe suites included. */
 function collectSpecs(suites, out = []) {
@@ -26,8 +30,8 @@ function collectSpecs(suites, out = []) {
   return out;
 }
 
-/** Pure: the list of problems with a parsed report (empty = acceptable). Exported for the unit test. */
-export function reportProblems(report) {
+/** Pure: the list of problems with a parsed report (empty = acceptable). Exported for the unit test; `flow` defaults to e2e/flow.json. */
+export function reportProblems(report, flow = FLOW) {
   const problems = [];
   const stats = report?.stats;
   if (!stats || typeof stats !== 'object') {
@@ -39,6 +43,18 @@ export function reportProblems(report) {
     (spec.tests ?? []).map((t) => ({ title: spec.title, project: t.projectName, status: t.status, results: t.results ?? [] })),
   );
   if (tests.length === 0) problems.push('no test was collected — the browser proof did not execute');
+  // The report must be a report of the flow: exactly that test, with every step run.
+  const flowTests = tests.filter((t) => t.title === flow.title);
+  if (flowTests.length !== 1) problems.push(`the flow test ${JSON.stringify(flow.title)} appears ${flowTests.length} time(s) — the report is not a report of the customer flow`);
+  for (const t of tests) {
+    if (t.title !== flow.title) problems.push(`unexpected test ${JSON.stringify(t.title)} — only the customer flow is accepted`);
+  }
+  for (const t of flowTests) {
+    const ran = (t.results[0]?.steps ?? []).map((s) => s.title);
+    for (const step of flow.steps) {
+      if (!ran.includes(step)) problems.push(`step ${JSON.stringify(step)} did not run (steps recorded: ${ran.length})`);
+    }
+  }
   for (const t of tests) {
     const label = `${t.project ?? '?'} › ${t.title}`;
     if (t.project !== EXPECTED_PROJECT) problems.push(`${label}: ran under project ${JSON.stringify(t.project)}, not ${EXPECTED_PROJECT}`);
@@ -60,7 +76,8 @@ export function summarize(report) {
   const tests = collectSpecs(report.suites).flatMap((s) => s.tests ?? []);
   const projects = [...new Set(tests.map((t) => t.projectName))];
   const s = report.stats ?? {};
-  return `${tests.length} test(s) collected; expected ${s.expected}, unexpected ${s.unexpected}, skipped ${s.skipped}, flaky ${s.flaky}; project(s): ${projects.join(', ') || 'none'}`;
+  const steps = tests[0]?.results?.[0]?.steps?.length ?? 0;
+  return `${tests.length} test(s) collected (${steps} step(s) recorded); expected ${s.expected}, unexpected ${s.unexpected}, skipped ${s.skipped}, flaky ${s.flaky}; project(s): ${projects.join(', ') || 'none'}`;
 }
 
 function main(argv) {
