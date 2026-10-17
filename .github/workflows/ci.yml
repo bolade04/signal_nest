@@ -87,7 +87,40 @@ jobs:
       - name: Production build
         run: npm run build 2>&1 | tee ci-logs/frontend-build.log
 
+      # --- Browser customer flow (P6-CI-2) -------------------------------------------
+      # The bundle built above is EXECUTED here, in a real Chromium, against a real
+      # local API and the durable worker on a disposable migrated SQLite database.
+      # The backend install mirrors the Integration smoke job (hash-locked
+      # requirements, editable install); the browser build is the one pinned by the
+      # Playwright version in the lockfile. Modes are the job's deterministic defaults
+      # (fixture connectors, mock LLM); the harness refuses any live provider.
+      - name: Set up Python (browser proof backend)
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/requirements-dev.txt
+
+      - name: Create fresh API virtualenv and install (browser proof backend)
+        run: |
+          python -m venv apps/api/.venv
+          apps/api/.venv/bin/pip install --upgrade pip
+          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt
+          apps/api/.venv/bin/pip install --no-deps -e apps/api
+
+      - name: Install the Playwright-pinned Chromium build
+        run: npm run e2e:install --workspace apps/web 2>&1 | tee ci-logs/frontend-e2e-install.log
+
+      - name: Browser customer flow against the built bundle (P6-CI-2)
+        # e2e-browser.sh migrates a disposable database, starts the API and the worker,
+        # waits on /health with a bounded loop, runs the Playwright suite against the
+        # production bundle served by vite preview, gates on the JSON report (at least
+        # one test, executed once, none skipped) and always stops every process.
+        run: bash scripts/e2e-browser.sh 2>&1 | tee ci-logs/frontend-e2e.log
+
       - name: Upload frontend diagnostics
+        # ci-logs/ now also carries the browser proof's API and worker logs and the
+        # Playwright report, traces and screenshots retained on failure.
         if: failure()
         uses: actions/upload-artifact@v7
         with:

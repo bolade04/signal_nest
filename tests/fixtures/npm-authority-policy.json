@@ -1,6 +1,6 @@
 {
  "_authority": "AUTHORED. Every npm installation family the graded workflows or the documented development environments actually use carries an explicit authority model. An unknown layout fails closed.",
- "_call_site_derivation": "DERIVED with the repository's own command-position grammar over every workflow run block and every tracked shell script \u2014 11 npm positions: 8 graded ci.yml steps across two jobs, plus 3 developer shell scripts. Gate 4N-I28AS directed that the previously reported figure of ten NOT be assumed; it was not.",
+ "_call_site_derivation": "DERIVED with the repository's own command-position grammar over every workflow run block and every tracked shell script \u2014 11 npm positions: 8 graded ci.yml steps across two jobs, plus 3 developer shell scripts. P6-CI-2 (2026-10-17) adds 2: a ninth graded ci.yml step in the same frontend-quality job and the graded browser-proof script scripts/e2e-browser.sh — 13 positions. Gate 4N-I28AS directed that the previously reported figure of ten NOT be assumed; it was not.",
  "_classification": "CI_RELEASE_ASSURANCE_CONTRACT",
  "_families_are_measured_not_speculative": "Only families this host or the graded workflows actually use are implemented. Volta, asdf, fnm, n and Corepack are absent here and unused by ci.yml; speculative support for them would be untested code claiming to authorize installations nobody has. They fail closed as UNKNOWN with an actionable message.",
  "_lifecycle_boundary": "No call site is classified LIFECYCLE_EXECUTION_PROHIBITED, because none of them passes --ignore-scripts and a prohibition that is declared but not enforced is worse than an honest classification. The claim this gate makes is npm/Node BINARY identity, explicitly not package-script trust.",
@@ -45,6 +45,12 @@
    "why": "as above"
   },
   {
+   "argv": "npm run e2e:install --workspace apps/web",
+   "id": "ci.yml#frontend-quality#e2e-install",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "P6-CI-2: installs the Playwright-pinned Chromium build through the web workspace's e2e:install script (playwright install --with-deps chromium). As above: npm's identity is established here; the browser download and its package scripts are not vouched for by this gate."
+  },
+  {
    "argv": "npm ci",
    "id": "ci.yml#migration-and-contract#npm-ci",
    "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
@@ -67,6 +73,12 @@
    "id": "scripts/dev.sh#npm",
    "lifecycle": "LIFECYCLE_EXECUTION_NON_LOAD_BEARING",
    "why": "as above"
+  },
+  {
+   "argv": "npm run e2e --workspace apps/web",
+   "id": "scripts/e2e-browser.sh#npm",
+   "lifecycle": "LIFECYCLE_EXECUTION_REQUIRED",
+   "why": "P6-CI-2: the browser proof harness (invoked by the graded Frontend quality step) runs the Playwright suite through the web workspace's e2e script (playwright test). As above: npm's identity is established here, not the test runner's package scripts."
   },
   {
    "argv": "npm",

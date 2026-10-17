@@ -127,3 +127,7 @@ infra/aws/cloudfront-expected.json
 .claude/settings.local.json
 # P6-PLAT-4: tool venv created by the CI lock-reproducibility step when run locally
 .locktools/
+
+# Browser/E2E harness output (Playwright report, traces, screenshots) and CI diagnostics
+apps/web/e2e-results/
+ci-logs/

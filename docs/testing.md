@@ -158,6 +158,54 @@ independent cities.
   vector, storage, llm), while a **non-operator** customer never triggers that internal
   endpoint and never sees the operator-only section.
 
+### Browser / E2E (`apps/web/e2e`, P6-CI-2)
+
+The jsdom tests above never execute the built bundle. `apps/web/e2e/customer-flow.spec.ts`
+does: a real **Chromium** (the build pinned by `@playwright/test` in the lockfile) drives
+the **production bundle** (`npm run build` output, CSP meta included), served by
+`vite preview` with the same `/api` + `/health` proxy as development, against a real local
+API and the real durable worker sharing one disposable SQLite database that
+`scripts/e2e-browser.sh` migrates from empty in a temporary directory. Nothing is seeded and
+nothing is mocked in the browser: a synthetic customer registers through the UI and creates
+every resource through the UI.
+
+- **The flow** (the §14 minimum of the Phase-6 plan): sign-up → create the workspace the
+  product asks for (Settings → Workspaces → New; registration creates an organization and
+  no workspace) → onboarding → create location → create scout → run → see opportunity →
+  sign out.
+- **What it asserts, beyond the screens:** the stored session is the registered account's
+  (one OWNER membership of the typed organization); onboarding is persisted on the server
+  and counted on the overview; the created location and scout are the ones used (ids read
+  back as the customer); the run is a durable job a worker **claimed** and **succeeded**
+  for that scout and that location, every opportunity in the workspace carries that scout
+  and location, the count shown equals the run's and the job's; the opportunity opened is
+  one of them (market line, Simulated callout, Context link back to the scout); sign-out
+  reaches `/sign-in`, clears the stored token, the session's tokens are refused with 401
+  afterwards (`POST /auth/logout`), and protected routes bounce without rendering the
+  customer's data.
+- **Fixture boundary:** fixture connectors (the only source today) and the mock LLM. The
+  location is placed in Dallas, TX because the pipeline derives the market from the
+  location's city and state and the fixture library carries signals for that market; a
+  location outside the four fixture markets completes with zero signals. This proves the
+  product's own flow on deterministic inputs — not live ingestion, real LLM behaviour,
+  real mail, deployment or production readiness.
+- **Fail-closed:** `retries: 0`, one worker, `forbidOnly` always; `scripts/e2e-browser.sh`
+  refuses a non-mock LLM provider or a live connector, fails when the bundle or venv is
+  missing, the API never becomes ready or the worker is not running, and
+  `apps/web/scripts/assert-e2e-report.mjs` refuses the JSON report unless it is a report
+  of this flow — the test titled as in `apps/web/e2e/flow.json`, the one source the spec
+  and the gate share, with every step listed there executed — run exactly once and passed
+  (no skip, no retry, no empty or substituted test; `assert-e2e-report.test.mjs` covers
+  each refusal).
+- **Diagnostics:** on failure Playwright keeps the trace and a screenshot under
+  `ci-logs/e2e-results/`, next to the API and worker logs, which the job's failure-only
+  artifact upload carries (7-day retention). A trace records the browser's requests, so it
+  carries the synthetic customer's bearer tokens — tokens of a database that no longer
+  exists, signed with the test secret; never a real credential. Every process is stopped
+  on every exit path.
+- **Coverage boundary:** Chromium only, one desktop viewport, this one flow. Other routes
+  are not browser-tested here.
+
 ## Also verified
 
 - `npm run type-check` — strict `tsc -b --noEmit`, clean.
@@ -189,7 +237,7 @@ conditional on failure only.
 
 | Check name | What it runs |
 | --- | --- |
-| **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build` |
+| **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build`, then the browser customer flow against that build: API venv install, `npm run e2e:install --workspace apps/web` (Chromium), `scripts/e2e-browser.sh` (P6-CI-2) |
 | **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest`; then the **PostgreSQL proofs** (`test_postgres_migration_proof.py`, `test_postgres_job_store_concurrency.py`) run again on their own against the job's disposable PostgreSQL 16 service as a required result — they fail if the database is unavailable and the step fails if any of them is skipped |
 | **Migrations and API contract** | SQLite: empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`; **PostgreSQL 16** (disposable service): empty-DB `alembic upgrade head`, `alembic check`, `downgrade base` under the confirmation guard, `upgrade head`, with the revision read back after each phase (no seed — `app.db.seed` refuses PostgreSQL by design); then `npm run gen:types` + `git diff --exit-code` (contract drift) |
 | **Integration smoke** | after the three gates pass: migrate + seed, start the API, wait on `/health`, run the HTTP isolation smoke, always stop the server |
@@ -223,6 +271,8 @@ npm run lint
 npm run type-check
 npm test
 npm run build
+npm run e2e:install --workspace apps/web   # once: the Playwright-pinned Chromium build
+npm run e2e                                 # browser customer flow against the built bundle (needs apps/api/.venv)
 
 # Backend quality
 cd apps/api && .venv/bin/python -m ruff check . && cd ../..
