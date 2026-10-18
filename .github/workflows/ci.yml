@@ -655,7 +655,7 @@ jobs:
         if: always()
         run: >-
           python3 security/gate.py sbom security-reports/sbom-image-api.cdx.json --name sbom-image-api
-          --kind image --artifact signalnest-api:ci --min-components 100 --commit ${{ github.sha }}
+          --kind image --artifact signalnest-api:ci --min-components 100 --commit "${{ github.sha }}"
           --image-id-from security-reports/trivy-image-api-vuln.json
           --identity-out security-reports/sbom-image-api.identity.json
 
@@ -663,7 +663,7 @@ jobs:
         if: always()
         run: >-
           python3 security/gate.py sbom security-reports/sbom-image-worker.cdx.json --name sbom-image-worker
-          --kind image --artifact signalnest-worker:ci --min-components 100 --commit ${{ github.sha }}
+          --kind image --artifact signalnest-worker:ci --min-components 100 --commit "${{ github.sha }}"
           --image-id-from security-reports/trivy-image-worker-vuln.json
           --identity-out security-reports/sbom-image-worker.identity.json
 
@@ -671,7 +671,7 @@ jobs:
         if: always()
         run: >-
           python3 security/gate.py sbom security-reports/sbom-locks.cdx.json --name sbom-locks
-          --kind filesystem --artifact . --min-components 500 --commit ${{ github.sha }}
+          --kind filesystem --artifact . --min-components 500 --commit "${{ github.sha }}"
           --identity-out security-reports/sbom-locks.identity.json
 
       - name: Gate — IaC misconfigurations
@@ -755,7 +755,7 @@ jobs:
         if: always()
         run: >-
           python3 security/gate.py sbom security-reports/control-sbom.cdx.json --name control-sbom
-          --kind filesystem --artifact security/controls/vuln --min-components 2 --commit ${{ github.sha }}
+          --kind filesystem --artifact security/controls/vuln --min-components 2 --commit "${{ github.sha }}"
 
       - name: Every required security analysis ran and was gated (completeness)
         if: always()
@@ -1703,7 +1703,7 @@ jobs:
         if: always()
         run: >-
           python3 security/gate.py sbom security-reports/sbom-image-reader.cdx.json --name sbom-image-reader
-          --kind image --artifact signalnest-revision-reader:ci --min-components 10 --commit ${{ github.sha }}
+          --kind image --artifact signalnest-revision-reader:ci --min-components 10 --commit "${{ github.sha }}"
           --image-id-from security-reports/trivy-image-reader-vuln.json
           --identity-out security-reports/sbom-image-reader.identity.json
 
