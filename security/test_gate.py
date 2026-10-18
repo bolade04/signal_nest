@@ -251,6 +251,31 @@ class GateCase(unittest.TestCase):
         code, result, _ = self.run_gate("sbom", self.write("b.json", sbom(kind="filesystem", artifact=".", components=2)), "--name", "b", "--kind", "filesystem", "--artifact", ".", "--min-components", "100", "--commit", "c")
         self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
 
+    def test_sbom_padded_with_file_entries_is_incomplete(self):
+        # review finding M1: 501 entries of type "file" carry no package data
+        doc = sbom(kind="filesystem", artifact=".", components=0)
+        doc["components"] = [{"type": "file", "name": f"f{i}"} for i in range(501)]
+        code, result, text = self.run_gate("sbom", self.write("b.json", doc), "--name", "b", "--kind", "filesystem", "--artifact", ".", "--min-components", "500", "--commit", "c")
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("0 package components", text)
+
+    def test_sbom_image_padded_with_file_entries_is_incomplete(self):
+        doc = sbom(components=0)
+        doc["components"] += [{"type": "file", "name": f"f{i}"} for i in range(150)]
+        code, result, _ = self.run_gate("sbom", self.write("b.json", doc), "--name", "b", "--kind", "image", "--artifact", "signalnest-api:ci", "--min-components", "100", "--commit", "c")
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+
+    def test_sbom_counts_only_package_components_toward_the_floor(self):
+        doc = sbom(kind="filesystem", artifact=".", components=3)
+        doc["components"] += [{"type": "file", "name": "x"}]
+        code, result, text = self.run_gate("sbom", self.write("b.json", doc), "--name", "b", "--kind", "filesystem", "--artifact", ".", "--min-components", "3", "--commit", "c")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("4 of which 3 package components", text)
+
+    def test_sbom_conflicting_duplicate_image_id_is_incomplete(self):
+        # review finding N2
+        doc = sbom(); doc["metadata"]["component"]["properties"].append({"name": gate.IMAGE_ID_PROPERTY, "value": "sha256:" + "ef" * 32})
+        code, result, _ = self.run_gate("sbom", self.write("b.json", doc), "--name", "b", "--kind", "image", "--artifact", "signalnest-api:ci", "--min-components", "1", "--commit", "c")
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+
     def test_sbom_empty_placeholder_is_refused(self):
         code, result, _ = self.run_gate("sbom", self.write("b.json", {"bomFormat": "CycloneDX", "specVersion": "1.7", "components": []}), "--name", "b", "--kind", "filesystem", "--artifact", ".", "--min-components", "1", "--commit", "c")
         self.assertEqual((code, result), (2, gate.RESULT_REPORT))
@@ -298,6 +323,13 @@ class GateCase(unittest.TestCase):
         self.assertEqual((code, result), (0, gate.RESULT_PASS))
         manifest = (self.reports / "MANIFEST.txt").read_text()
         self.assertIn("a.summary.txt", manifest); self.assertIn("ctl.summary.txt", manifest); self.assertNotIn("MANIFEST.txt", manifest)
+
+    def test_complete_rejects_a_summary_with_two_result_lines(self):
+        # review finding N1: a trailing fabricated RESULT line must not override the real one
+        self.run_gate("vuln", self.write("r.json", image_report([vuln("CVE-1", "libc6", "1", "2", "CRITICAL")])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        path = self.reports / "a.summary.txt"; path.write_text(path.read_text() + gate.RESULT_PASS + "\n")
+        code, result, _ = self.run_gate("complete", "--name", "done", "--expect-pass", "a")
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
 
     def test_complete_rejects_a_control_that_passed_cleanly(self):
         self.run_gate("vuln", self.write("r.json", image_report()), "--name", "ctl", "--kind", "image", "--artifact", "signalnest-api:ci")

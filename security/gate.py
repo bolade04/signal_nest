@@ -99,11 +99,23 @@ def _require(cond: bool, message: str, error=IncompleteError) -> None:
         raise error(message)
 
 
+PACKAGE_COMPONENT_TYPES = {"library", "application", "framework"}
+
+
+IDENTITY_PROPERTIES = {IMAGE_ID_PROPERTY, "aquasecurity:trivy:RepoDigest"}
+
+
 def _props(component: dict) -> dict:
+    """Properties of a component, first occurrence wins — except for the IDENTITY properties the
+    gate relies on, where a second occurrence with a different value is refused rather than
+    resolved (review finding N2). Trivy legitimately repeats other names (one DiffID per layer)."""
     out: dict = {}
     for prop in component.get("properties") or []:
         if isinstance(prop, dict) and "name" in prop:
-            out.setdefault(prop["name"], prop.get("value"))
+            name, value = prop["name"], prop.get("value")
+            if name in IDENTITY_PROPERTIES and name in out and out[name] != value:
+                raise IncompleteError(f"sbom identity property {name!r} appears with conflicting values {out[name]!r} and {value!r}")
+            out.setdefault(name, value)
     return out
 
 
@@ -283,8 +295,10 @@ def evaluate_sbom(bom: object, policy: dict, *, kind: str, artifact: str, min_co
     _require(component.get("name") == artifact,
              f"sbom describes {component.get('name')!r}, expected {artifact!r} — not the artifact this job built")
     components = bom["components"]
-    _require(len(components) >= min_components,
-             f"sbom lists {len(components)} components, expected at least {min_components} — an empty or truncated inventory is not an SBOM")
+    packages = [c for c in components if isinstance(c, dict) and c.get("type") in PACKAGE_COMPONENT_TYPES]
+    _require(len(packages) >= min_components,
+             f"sbom lists {len(packages)} package components (library/application/framework) among {len(components)} entries, "
+             f"expected at least {min_components} — an inventory without package data is not an SBOM (review finding M1)")
     props = _props(component)
     image_id = props.get(IMAGE_ID_PROPERTY)
     if kind == "image":
@@ -302,12 +316,12 @@ def evaluate_sbom(bom: object, policy: dict, *, kind: str, artifact: str, min_co
     identity = {
         "commit": commit, "kind": kind, "artifact": artifact, "image_id": image_id,
         "bom_path": str(bom_path), "bom_sha256": _sha256(bom_path), "bom_serial": serial,
-        "bom_spec_version": str(bom.get("specVersion")), "components": len(components),
+        "bom_spec_version": str(bom.get("specVersion")), "components": len(components), "package_components": len(packages),
         "components_by_type": kinds, "generator": tool_names, "recorded_at": _utc_now(),
     }
     lines.append(f"sbom: CycloneDX {bom.get('specVersion')} serial {serial}; generator {tool_names}")
     lines.append(f"describes: {component.get('type')} {component.get('name')} image_id={image_id}; commit {commit}")
-    lines.append(f"components: {len(components)} (floor {min_components}) by type {kinds}; sha256 {identity['bom_sha256']}")
+    lines.append(f"components: {len(components)} of which {len(packages)} package components (floor {min_components}) by type {kinds}; sha256 {identity['bom_sha256']}")
     return lines, identity
 
 
@@ -319,8 +333,9 @@ def check_complete(reports_dir: pathlib.Path, expect_pass: list[str], expect_con
         path = reports_dir / f"{name}.summary.txt"
         _require(path.is_file(), f"required analysis {name!r} left no summary — it did not run", ReportError)
         text = path.read_text(encoding="utf-8")
-        last = [l for l in text.splitlines() if l.startswith("RESULT:")]
-        _require(bool(last) and last[-1] == wanted, f"required analysis {name!r} did not end in {wanted!r} (found {last[-1] if last else 'no RESULT line'!r})")
+        results = [l for l in text.splitlines() if l.startswith("RESULT:")]
+        _require(len(results) == 1, f"required analysis {name!r} carries {len(results)} RESULT lines, expected exactly one (review finding N1)")
+        _require(results[0] == wanted, f"required analysis {name!r} did not end in {wanted!r} (found {results[0]!r})")
         lines.append(f"  ok {name}: {wanted}")
     manifest = reports_dir / "MANIFEST.txt"
     entries = []
