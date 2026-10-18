@@ -703,12 +703,13 @@ jobs:
           output: security-reports/control-vuln.json
           exit-code: '0'
           list-all-pkgs: true
+          trivy-config: security/controls/trivy-control.yaml
 
       - name: Negative control — the lock gate must fail on it
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/control-vuln.json --name control-vuln
-          --kind filesystem --artifact security/controls/vuln --expect-target requirements.txt --expect-fail
+          --kind filesystem --artifact security/controls/vuln --expect-target pinned-vulnerable.txt --expect-fail
 
       - name: Negative control — Trivy scans an inert module with an open security-group rule
         if: always()
@@ -750,6 +751,7 @@ jobs:
           format: cyclonedx
           output: security-reports/control-sbom.cdx.json
           exit-code: '0'
+          trivy-config: security/controls/trivy-control.yaml
 
       - name: Negative control — the SBOM gate must list the inert component
         if: always()
