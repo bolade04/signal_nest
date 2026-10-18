@@ -131,6 +131,23 @@ class GateCase(unittest.TestCase):
         code, result, _ = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
         self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
 
+    def test_fs_repository_artifact_type_is_accepted(self):
+        # Trivy labels a git-repository root "repository" (the CI checkout) — CI run 2
+        doc = fs_report(); doc["ArtifactType"] = "repository"
+        code, result, _ = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "filesystem", "--artifact", ".", "--expect-target", "package-lock.json")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS))
+
+    def test_image_report_labelled_repository_is_still_incomplete(self):
+        doc = image_report(); doc["ArtifactType"] = "repository"
+        code, result, _ = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+
+    def test_sbom_identity_records_head_and_checkout_commits(self):
+        ident = self.dir / "id.json"
+        code, _, text = self.run_gate("sbom", self.write("b.json", sbom(kind="filesystem", artifact=".", components=3)), "--name", "b", "--kind", "filesystem", "--artifact", ".", "--min-components", "3", "--commit", "headsha", "--checkout", "mergesha", "--identity-out", str(ident))
+        self.assertEqual(code, 0); rec = json.loads(ident.read_text())
+        self.assertEqual((rec["commit"], rec["checkout_commit"]), ("headsha", "mergesha")); self.assertIn("built from checkout mergesha", text)
+
     def test_filesystem_report_passed_as_image_is_incomplete(self):
         code, result, _ = self.run_gate("vuln", self.write("r.json", fs_report()), "--name", "a", "--kind", "image", "--artifact", ".")
         self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))

@@ -44,7 +44,9 @@ RESULT_REPORT = "RESULT: FAIL (report missing or malformed)"
 RESULT_CONTROL_OK = "RESULT: NEGATIVE CONTROL DETECTED (policy violation raised as intended)"
 RESULT_CONTROL_BAD = "RESULT: NEGATIVE CONTROL FAILED"
 
-ARTIFACT_TYPES = {"image": "container_image", "filesystem": "filesystem"}
+# Trivy reports a plain directory as "filesystem" and a directory that is a git repository root
+# (the CI checkout) as "repository"; both are filesystem scans of the checked-out tree.
+ARTIFACT_TYPES = {"image": ("container_image",), "filesystem": ("filesystem", "repository")}
 SBOM_COMPONENT_TYPES = {"image": "container", "filesystem": "application"}
 IMAGE_ID_PROPERTY = "aquasecurity:trivy:ImageID"
 
@@ -133,8 +135,8 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
     _require(isinstance(report, dict), "trivy vulnerability report: top level is not an object", ReportError)
     _require(report.get("SchemaVersion") == 2, f"trivy vulnerability report: SchemaVersion is {report.get('SchemaVersion')!r}, expected 2", ReportError)
     _require(isinstance(report.get("Results"), list), "trivy vulnerability report: 'Results' missing or not a list", ReportError)
-    _require(report.get("ArtifactType") == ARTIFACT_TYPES[kind],
-             f"artifact type is {report.get('ArtifactType')!r}, expected {ARTIFACT_TYPES[kind]!r} for kind {kind}")
+    _require(report.get("ArtifactType") in ARTIFACT_TYPES[kind],
+             f"artifact type is {report.get('ArtifactType')!r}, expected one of {ARTIFACT_TYPES[kind]} for kind {kind}")
     _require(report.get("ArtifactName") == artifact,
              f"artifact name is {report.get('ArtifactName')!r}, expected {artifact!r} — the report describes something else")
     results = report["Results"]
@@ -278,7 +280,8 @@ def evaluate_sast(report: object, policy: dict, *, expect_prefixes: list[str],
 
 # --------------------------------------------------------------------------- SBOM
 def evaluate_sbom(bom: object, policy: dict, *, kind: str, artifact: str, min_components: int,
-                  commit: str, bom_path: pathlib.Path, vuln_report: object | None) -> tuple[list[str], dict]:
+                  commit: str, bom_path: pathlib.Path, vuln_report: object | None,
+                  checkout: str | None = None) -> tuple[list[str], dict]:
     sp = policy["sbom"]
     lines: list[str] = []
     _require(isinstance(bom, dict), "sbom: top level is not an object", ReportError)
@@ -314,13 +317,14 @@ def evaluate_sbom(bom: object, policy: dict, *, kind: str, artifact: str, min_co
     tools = ((bom.get("metadata") or {}).get("tools") or {})
     tool_names = [f"{t.get('name')} {t.get('version')}" for t in (tools.get("components") or []) if isinstance(t, dict)]
     identity = {
-        "commit": commit, "kind": kind, "artifact": artifact, "image_id": image_id,
+        "commit": commit, "checkout_commit": checkout or commit, "kind": kind, "artifact": artifact, "image_id": image_id,
         "bom_path": str(bom_path), "bom_sha256": _sha256(bom_path), "bom_serial": serial,
         "bom_spec_version": str(bom.get("specVersion")), "components": len(components), "package_components": len(packages),
         "components_by_type": kinds, "generator": tool_names, "recorded_at": _utc_now(),
     }
     lines.append(f"sbom: CycloneDX {bom.get('specVersion')} serial {serial}; generator {tool_names}")
-    lines.append(f"describes: {component.get('type')} {component.get('name')} image_id={image_id}; commit {commit}")
+    lines.append(f"describes: {component.get('type')} {component.get('name')} image_id={image_id}; commit {commit}"
+                 + (f" (built from checkout {checkout})" if checkout and checkout != commit else ""))
     lines.append(f"components: {len(components)} of which {len(packages)} package components (floor {min_components}) by type {kinds}; sha256 {identity['bom_sha256']}")
     return lines, identity
 
@@ -387,7 +391,7 @@ def run(args: argparse.Namespace) -> int:
                 vuln_report = load_json(pathlib.Path(args.image_id_from), "trivy vulnerability report") if args.image_id_from else None
                 lines, identity = evaluate_sbom(bom, policy, kind=args.kind, artifact=args.artifact,
                                                 min_components=args.min_components, commit=args.commit,
-                                                bom_path=report_path, vuln_report=vuln_report)
+                                                bom_path=report_path, vuln_report=vuln_report, checkout=args.checkout)
                 if args.identity_out:
                     out = pathlib.Path(args.identity_out)
                     out.parent.mkdir(parents=True, exist_ok=True)
@@ -452,7 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--kind", choices=sorted(SBOM_COMPONENT_TYPES), required=True)
     b.add_argument("--artifact", required=True, help="expected metadata.component.name")
     b.add_argument("--min-components", type=int, required=True)
-    b.add_argument("--commit", required=True, help="the commit the artifact was built from")
+    b.add_argument("--commit", required=True, help="the reviewed commit (the PR head on a pull_request event)")
+    b.add_argument("--checkout", help="the commit actually checked out when it differs (the pull_request merge ref)")
     b.add_argument("--image-id-from", help="image: the vulnerability report whose ImageID the SBOM must match")
     b.add_argument("--identity-out", help="write the identity record (commit, image id, digests) here")
 
