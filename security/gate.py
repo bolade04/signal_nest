@@ -20,6 +20,19 @@ the reports directory and exits with a code that keeps the three failure classes
 Nothing here invokes a scanner, reads the network, or imports anything outside the
 standard library. The policy values are PROPOSED (see security/policy.json); this module
 enforces whatever that file says and adopts nothing on its own.
+
+IaC exceptions (P6-CI-6, operator order 2026-10-18). `misconfig --exceptions FILE` applies the
+tracked, reviewed security/misconfig-exceptions.json. An exception never hides a finding: an
+excepted finding is printed as EXCEPTED, and the exception holds only while the finding's
+check, file and ENCLOSING RESOURCE BLOCK (resolved in the checked-out source, because Trivy
+reports module addresses only) match an entry, the matched instance count equals the entry's
+`expected_instances`, every condition holds against LITERAL values in the source (an
+expression cannot be confirmed and fails closed), and today is before `expires`. An expired,
+stale (matches nothing), miscounted or condition-failing entry is itself a policy violation,
+as is any construct that would let configuration escape a textual reading (an override file
+or a .tofu file beside the matched block; for tree-scoped conditions, a .tofu file, a
+non-local module source, a provisioner or a generic-provisioning resource anywhere in the
+scope). See security/README.md.
 """
 from __future__ import annotations
 
@@ -28,7 +41,9 @@ import datetime as _dt
 import hashlib
 import json
 import pathlib
+import re
 import sys
+from dataclasses import dataclass, field
 
 EXIT_OK = 0
 EXIT_REPORT = 2
@@ -205,8 +220,655 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
     return lines, violations
 
 
+# --------------------------------------------------------------------------- HCL reader (exceptions only)
+class HclError(Exception):
+    """The configuration could not be read with the certainty an exception condition needs."""
+
+
+_OPERATORS = ("==", "!=", "<=", ">=", "&&", "||", "=>", "...")
+_SINGLE_PUNCT = set("{}[]()=,:?!.+-*/%<>")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_NUMBER_RE = re.compile(r"\d+(\.\d+)?([eE][+-]?\d+)?")
+_HEREDOC_RE = re.compile(r"<<(-?)([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\n")
+_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
+
+
+def _skip_template(text: str, j: int, line: int) -> tuple[int, int]:
+    """`j` is just after `${` or `%{`; return the index after the matching `}` (nested strings honoured)."""
+    depth = 1
+    while j < len(text):
+        c = text[j]
+        if c == '"':
+            _, _, j, line = _lex_string(text, j, line)
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j + 1, line
+        elif c == "\n":
+            line += 1
+        j += 1
+    raise HclError(f"line {line}: unterminated template interpolation")
+
+
+def _lex_string(text: str, i: int, line: int) -> tuple[str, bool, int, int]:
+    """`text[i]` is a double quote. Returns (decoded value, contains a template, index after, line)."""
+    j, out, template = i + 1, [], False
+    while j < len(text):
+        c = text[j]
+        if c == '"':
+            return "".join(out), template, j + 1, line
+        if c == "\n":
+            raise HclError(f"line {line}: newline inside a quoted string")
+        if c == "\\":
+            esc = text[j + 1:j + 2]
+            if esc in _ESCAPES:
+                out.append(_ESCAPES[esc]); j += 2; continue
+            width = {"u": 4, "U": 8}.get(esc)
+            if width and re.fullmatch(r"[0-9A-Fa-f]{%d}" % width, text[j + 2:j + 2 + width] or ""):
+                out.append(chr(int(text[j + 2:j + 2 + width], 16))); j += 2 + width; continue
+            raise HclError(f"line {line}: unsupported string escape \\{esc}")
+        if text.startswith("$${", j) or text.startswith("%%{", j):
+            out.append(text[j + 1:j + 3]); j += 3; continue
+        if text.startswith("${", j) or text.startswith("%{", j):
+            template = True
+            j, line = _skip_template(text, j + 2, line)
+            out.append("\x00")
+            continue
+        out.append(c); j += 1
+    raise HclError(f"line {line}: unterminated quoted string")
+
+
+def hcl_tokens(text: str) -> list[tuple[str, object, int]]:
+    """Tokens of HCL native syntax: NL, IDENT, NUM, STR ((value, is_template)), HEREDOC, PUNCT, EOF."""
+    toks: list[tuple[str, object, int]] = []
+    i, line = 0, 1
+    while i < len(text):
+        c = text[i]
+        if c == "\n":
+            toks.append(("NL", None, line)); line += 1; i += 1; continue
+        if c in " \t\r\ufeff":
+            i += 1; continue
+        if c == "#" or text.startswith("//", i):
+            k = text.find("\n", i); i = len(text) if k < 0 else k; continue
+        if text.startswith("/*", i):
+            k = text.find("*/", i + 2)
+            if k < 0:
+                raise HclError(f"line {line}: unterminated block comment")
+            line += text.count("\n", i, k); i = k + 2; continue
+        if c == '"':
+            start_line = line
+            value, template, i, line = _lex_string(text, i, line)
+            toks.append(("STR", (value, template), start_line)); continue
+        m = _HEREDOC_RE.match(text, i)
+        if m:
+            marker, pos = m.group(2), m.end()
+            while True:
+                k = text.find("\n", pos)
+                body_line = text[pos:len(text) if k < 0 else k]
+                if body_line.strip() == marker:
+                    end = len(text) if k < 0 else k
+                    break
+                if k < 0:
+                    raise HclError(f"line {line}: unterminated heredoc {marker}")
+                pos = k + 1
+            toks.append(("HEREDOC", text[m.end():pos], line)); line += text.count("\n", i, end); i = end; continue
+        if c.isdigit():
+            m = _NUMBER_RE.match(text, i); toks.append(("NUM", m.group(0), line)); i = m.end(); continue
+        m = _IDENT_RE.match(text, i)
+        if m:
+            toks.append(("IDENT", m.group(0), line)); i = m.end(); continue
+        op = next((o for o in _OPERATORS if text.startswith(o, i)), None)
+        if op:
+            toks.append(("PUNCT", op, line)); i += len(op); continue
+        if c in _SINGLE_PUNCT:
+            toks.append(("PUNCT", c, line)); i += 1; continue
+        raise HclError(f"line {line}: unexpected character {c!r}")
+    toks.append(("EOF", None, line))
+    return toks
+
+
+@dataclass
+class HclAttr:
+    name: str
+    tokens: list
+    line: int
+
+
+@dataclass
+class HclBlock:
+    type: str
+    labels: list
+    body: list = field(default_factory=list)
+    start: int = 0
+    end: int = 0
+
+
+def _parse_body(toks: list, pos: int, nested: bool) -> tuple[list, int]:
+    items: list = []
+    while True:
+        kind, value, line = toks[pos]
+        if kind == "NL":
+            pos += 1; continue
+        if nested and kind == "PUNCT" and value == "}":
+            return items, pos
+        if not nested and kind == "EOF":
+            return items, pos
+        if kind != "IDENT":
+            raise HclError(f"line {line}: expected an attribute or a block, found {value!r}")
+        pos += 1
+        if toks[pos][0] == "PUNCT" and toks[pos][1] == "=":
+            pos += 1; start, depth = pos, 0
+            while True:
+                k, v, ln = toks[pos]
+                if k == "EOF":
+                    if depth == 0:
+                        break
+                    raise HclError(f"line {ln}: unterminated expression for {value!r}")
+                if k == "PUNCT" and v in ("(", "[", "{"):
+                    depth += 1
+                elif k == "PUNCT" and v in (")", "]", "}"):
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif k == "NL" and depth == 0:
+                    break
+                pos += 1
+            items.append(HclAttr(value, toks[start:pos], line))
+            continue
+        labels = []
+        while toks[pos][0] in ("STR", "IDENT"):
+            k, v, ln = toks[pos]
+            if k == "STR" and v[1]:
+                raise HclError(f"line {ln}: a block label cannot be a template")
+            labels.append(v[0] if k == "STR" else v); pos += 1
+        if not (toks[pos][0] == "PUNCT" and toks[pos][1] == "{"):
+            raise HclError(f"line {toks[pos][2]}: expected '{{' to open block {value!r}")
+        body, pos = _parse_body(toks, pos + 1, nested=True)
+        items.append(HclBlock(value, labels, body, line, toks[pos][2]))
+        pos += 1
+    # unreachable
+
+
+def parse_hcl(text: str) -> list:
+    body, _ = _parse_body(hcl_tokens(text), 0, nested=False)
+    return body
+
+
+NON_LITERAL = object()
+
+
+def hcl_literal(tokens: list) -> object:
+    """The value of an attribute expression that is ONE literal token, else NON_LITERAL."""
+    toks = [t for t in tokens if t[0] != "NL"]
+    if len(toks) != 1:
+        return NON_LITERAL
+    kind, value, _ = toks[0]
+    if kind == "STR" and not value[1]:
+        return value[0]
+    if kind == "NUM":
+        return int(value) if value.isdigit() else float(value)
+    if kind == "IDENT" and value in ("true", "false"):
+        return value == "true"
+    if kind == "IDENT" and value == "null":
+        return None
+    return NON_LITERAL
+
+
+def json_literal(value: object) -> object:
+    """Terraform JSON syntax: every string is a template, so one carrying ${ or %{ is an expression."""
+    if isinstance(value, str):
+        return NON_LITERAL if ("${" in value or "%{" in value) else value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return NON_LITERAL
+
+
+# --------------------------------------------------------------------------- the configuration tree
+CONFIG_SUFFIXES = (".tf.json", ".tofu.json", ".tf", ".tofu")
+OPAQUE_RESOURCE_TYPES = frozenset({
+    "aws_cloudformation_stack", "aws_cloudformation_stack_set", "aws_cloudformation_stack_instances",
+    "aws_cloudformation_stack_set_instance", "aws_cloudcontrolapi_resource", "aws_servicecatalog_provisioned_product",
+})
+OPAQUE_RESOURCE_PREFIXES = ("awscc_",)
+OPAQUE_DATA_TYPES = frozenset({"external"})
+LOCAL_MODULE_SOURCE = re.compile(r"^\.\.?/")
+
+
+@dataclass
+class Declared:
+    """One `resource`/`data`/`module` declaration in one configuration file."""
+    kind: str            # resource | data | module
+    type: str            # resource/data type, or "" for a module
+    name: str
+    file: str            # path relative to the source root
+    start: int           # first line (0 for JSON syntax, where lines are not tracked)
+    end: int
+    hcl: HclBlock | None
+    json_body: object = None
+
+
+def _config_suffix(path: pathlib.Path) -> str | None:
+    return next((sfx for sfx in CONFIG_SUFFIXES if path.name.endswith(sfx)), None)
+
+
+def _declarations_hcl(rel: str, items: list) -> list[Declared]:
+    out = []
+    for it in items:
+        if isinstance(it, HclBlock) and it.type in ("resource", "data") and len(it.labels) == 2:
+            out.append(Declared(it.type, it.labels[0], it.labels[1], rel, it.start, it.end, it))
+        elif isinstance(it, HclBlock) and it.type == "module" and len(it.labels) == 1:
+            out.append(Declared("module", "", it.labels[0], rel, it.start, it.end, it))
+    return out
+
+
+def _json_items(value: object) -> list:
+    return value if isinstance(value, list) else [value]
+
+
+def _declarations_json(rel: str, doc: object) -> list[Declared]:
+    if not isinstance(doc, dict):
+        raise HclError(f"{rel}: top level of a JSON configuration file must be an object")
+    out = []
+    for kind in ("resource", "data"):
+        for part in _json_items(doc.get(kind) or {}):
+            if not isinstance(part, dict):
+                raise HclError(f"{rel}: malformed {kind} section")
+            for rtype, named in part.items():
+                for group in _json_items(named):
+                    if not isinstance(group, dict):
+                        raise HclError(f"{rel}: malformed {kind} {rtype}")
+                    for name, body in group.items():
+                        for b in _json_items(body):
+                            out.append(Declared(kind, rtype, name, rel, 0, 0, None, b))
+    for part in _json_items(doc.get("module") or {}):
+        if not isinstance(part, dict):
+            raise HclError(f"{rel}: malformed module section")
+        for name, body in part.items():
+            for b in _json_items(body):
+                out.append(Declared("module", "", name, rel, 0, 0, None, b))
+    return out
+
+
+def read_config_file(root: pathlib.Path, rel: str) -> list[Declared]:
+    path = root / rel
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise HclError(f"{rel}: unreadable ({exc.__class__.__name__})") from exc
+    if rel.endswith(".json"):
+        try:
+            return _declarations_json(rel, json.loads(text))
+        except json.JSONDecodeError as exc:
+            raise HclError(f"{rel}: not valid JSON ({exc})") from exc
+    try:
+        return _declarations_hcl(rel, parse_hcl(text))
+    except HclError as exc:
+        raise HclError(f"{rel}: {exc}") from exc
+
+
+def config_files(root: pathlib.Path, scope: str, recursive: bool = True) -> list[str]:
+    base = root / scope
+    if not base.is_dir():
+        raise HclError(f"configuration scope {scope!r} is not a directory under the source root")
+    # No directory is skipped, .terraform included: a configuration file committed there and referenced as
+    # a local module would be loaded by OpenTofu, so the reading must see it too (provider caches hold no
+    # configuration files, so nothing else is read from them).
+    return [str(p.relative_to(root)) for p in sorted(base.rglob("*") if recursive else base.iterdir())
+            if p.is_file() and _config_suffix(p)]
+
+
+# --------------------------------------------------------------------------- exception conditions
+def _lookup_hcl(block: HclBlock, path: str) -> tuple[str, object]:
+    """('ok', [literal values at path]) or ('nonliteral', reason). Every nested block named by a path
+    segment is followed; a `dynamic` block or an attribute where a block is expected fails closed."""
+    segs = path.split(".")
+    bodies = [block.body]
+    for seg in segs[:-1]:
+        nxt = []
+        for body in bodies:
+            for it in body:
+                if isinstance(it, HclBlock) and it.type == "dynamic" and it.labels[:1] == [seg]:
+                    return "nonliteral", f"'{seg}' is generated by a dynamic block (line {it.start})"
+                if isinstance(it, HclAttr) and it.name == seg:
+                    return "nonliteral", f"'{seg}' is set by an expression (line {it.line})"
+                if isinstance(it, HclBlock) and it.type == seg:
+                    nxt.append(it.body)
+        bodies = nxt
+    leaf, values = segs[-1], []
+    for body in bodies:
+        for it in body:
+            if isinstance(it, HclBlock) and it.type == "dynamic" and it.labels[:1] == [leaf]:
+                return "nonliteral", f"'{leaf}' is generated by a dynamic block (line {it.start})"
+            if isinstance(it, HclBlock) and it.type == leaf:
+                return "nonliteral", f"'{leaf}' is a block, not a literal attribute (line {it.start})"
+            if isinstance(it, HclAttr) and it.name == leaf:
+                v = hcl_literal(it.tokens)
+                if v is NON_LITERAL:
+                    return "nonliteral", f"'{path}' is an expression, not a literal (line {it.line})"
+                values.append(v)
+    return "ok", values
+
+
+def _lookup_json(body: object, path: str) -> tuple[str, object]:
+    segs = path.split(".")
+    nodes = [body]
+    for seg in segs[:-1]:
+        nxt = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                return "nonliteral", f"'{seg}' parent is not an object"
+            if "dynamic" in node:
+                return "nonliteral", "a dynamic block is present"
+            if seg in node:
+                for item in _json_items(node[seg]):
+                    if not isinstance(item, dict):
+                        return "nonliteral", f"'{seg}' is not a block"
+                    nxt.append(item)
+        nodes = nxt
+    values = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            return "nonliteral", "attribute parent is not an object"
+        if "dynamic" in node:
+            return "nonliteral", "a dynamic block is present"
+        if segs[-1] in node:
+            v = json_literal(node[segs[-1]])
+            if v is NON_LITERAL:
+                return "nonliteral", f"'{path}' is an expression, not a literal"
+            values.append(v)
+    return "ok", values
+
+
+def _lookup(decl: Declared, path: str) -> tuple[str, object]:
+    return _lookup_hcl(decl.hcl, path) if decl.hcl is not None else _lookup_json(decl.json_body, path)
+
+
+def _same_literal(a: object, b: object) -> bool:
+    return type(a) is type(b) and a == b
+
+
+def check_condition(decl: Declared, cond: dict) -> str | None:
+    """None when the condition holds, else the violation text (fails closed on any expression)."""
+    path = cond["attribute"]
+    status, got = _lookup(decl, path)
+    where = f"{decl.type}.{decl.name} ({decl.file}{':' + str(decl.start) if decl.start else ''})"
+    if status != "ok":
+        return f"EXCEPTION_CONDITION_NONLITERAL {where}: {got} — a condition is confirmed only on literal values, so it fails closed"
+    if cond.get("absent"):
+        present = [v for v in got if v is not None]
+        return None if not present else f"EXCEPTION_CONDITION_FAILED {where}: '{path}' must be absent, found {present!r}"
+    want = cond["equals"]
+    if not got:
+        return f"EXCEPTION_CONDITION_FAILED {where}: '{path}' is not set; the condition requires the literal {want!r}"
+    bad = [v for v in got if not _same_literal(v, want)]
+    return None if not bad else f"EXCEPTION_CONDITION_FAILED {where}: '{path}' is {bad!r}; the condition requires the literal {want!r}"
+
+
+def tree_integrity(decls: list[Declared], files: list[str]) -> list[str]:
+    """Constructs a textual reading of the tree cannot see through. Any one fails tree-scoped conditions."""
+    problems = []
+    for rel in files:
+        if rel.endswith((".tofu", ".tofu.json")):
+            problems.append(f"EXCEPTION_TREE_OPAQUE {rel}: an OpenTofu-only file (it replaces the .tf file of the same name); refused rather than reasoned about")
+    for d in decls:
+        where = f"{d.file}{':' + str(d.start) if d.start else ''}"
+        if d.kind == "module":
+            status, got = _lookup(d, "source")
+            sources = got if status == "ok" else []
+            if status != "ok" or len(sources) != 1 or not isinstance(sources[0], str) or not LOCAL_MODULE_SOURCE.match(sources[0]):
+                problems.append(f"EXCEPTION_TREE_OPAQUE module.{d.name} ({where}): source {sources!r} is not a local path, so the blocks it declares cannot be read here")
+        elif d.kind == "resource" and (d.type in OPAQUE_RESOURCE_TYPES or d.type.startswith(OPAQUE_RESOURCE_PREFIXES)):
+            problems.append(f"EXCEPTION_TREE_OPAQUE {d.type}.{d.name} ({where}): a generic provisioning resource can create blocks no textual reading sees")
+        elif d.kind == "data" and d.type in OPAQUE_DATA_TYPES:
+            problems.append(f"EXCEPTION_TREE_OPAQUE data.{d.type}.{d.name} ({where}): runs an external program")
+        if d.kind == "resource":
+            has_prov = (any(isinstance(it, HclBlock) and it.type == "provisioner" for it in d.hcl.body) if d.hcl is not None
+                        else isinstance(d.json_body, dict) and "provisioner" in d.json_body)
+            if has_prov:
+                problems.append(f"EXCEPTION_TREE_OPAQUE {d.type}.{d.name} ({where}): a provisioner can create resources no textual reading sees")
+    return problems
+
+
+def _is_override(rel: str) -> bool:
+    name = pathlib.PurePosixPath(rel).name
+    stem = name[:-len(".json")] if name.endswith(".json") else name
+    stem = stem[:-len(".tf")] if stem.endswith(".tf") else stem[:-len(".tofu")] if stem.endswith(".tofu") else stem
+    return stem == "override" or stem.endswith("_override")
+
+
+# --------------------------------------------------------------------------- exceptions file
+EXCEPTION_SCHEMA_VERSION = 1
+EXCEPTION_CLASSES = ("intended_design", "waf_deferral", "verified_limitation")
+EXCEPTION_KEYS = {"id", "class", "check", "target", "resource", "expected_instances", "resource_conditions",
+                  "tree_conditions", "expires", "no_expiry_reason", "review", "authority", "statement"}
+_PATH_RE = re.compile(r"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$")
+_RESOURCE_RE = re.compile(r"^([a-z0-9_]+)\.([A-Za-z0-9_-]+)$")
+_CHECK_RE = re.compile(r"^[A-Z]+-[0-9]{4}$")
+_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_ADDRESS_RE = re.compile(r"^([a-z0-9_]+)\.([A-Za-z0-9_-]+)(\[.*\])?$")
+
+
+def _plain_relpath(value: object) -> bool:
+    return (isinstance(value, str) and value and not value.startswith("/") and "\\" not in value
+            and all(part not in ("", ".", "..") for part in value.split("/")))
+
+
+def load_exceptions(path: pathlib.Path) -> dict:
+    """Schema-checked exceptions document. Anything unexpected is refused (a typo must not widen or narrow)."""
+    doc = load_json(path, "misconfiguration exceptions")
+    def bad(msg: str) -> ReportError:
+        return ReportError(f"misconfiguration exceptions: {msg}")
+    if not isinstance(doc, dict):
+        raise bad("top level must be an object")
+    unknown = {k for k in doc if not k.startswith("_")} - {"schema_version", "tree_scope", "exceptions"}
+    if unknown:
+        raise bad(f"unknown top-level keys {sorted(unknown)}")
+    if doc.get("schema_version") != EXCEPTION_SCHEMA_VERSION or isinstance(doc.get("schema_version"), bool):
+        raise bad(f"schema_version must be {EXCEPTION_SCHEMA_VERSION}")
+    scope = doc.get("tree_scope")
+    if not _plain_relpath(scope):
+        raise bad("tree_scope must be a plain relative directory path")
+    entries = doc.get("exceptions")
+    if not isinstance(entries, list) or not entries:
+        raise bad("'exceptions' must be a non-empty list")
+    ids, keys = set(), set()
+    for n, e in enumerate(entries):
+        where = f"entry {n}"
+        if not isinstance(e, dict):
+            raise bad(f"{where} is not an object")
+        extra, missing = set(e) - EXCEPTION_KEYS, (EXCEPTION_KEYS - {"no_expiry_reason"}) - set(e)
+        if extra or missing:
+            raise bad(f"{where}: unknown keys {sorted(extra)}, missing keys {sorted(missing)}")
+        for k in ("id", "check", "target", "resource", "review", "authority", "statement"):
+            if not isinstance(e[k], str) or not e[k].strip():
+                raise bad(f"{where}: '{k}' must be a non-empty string")
+        where = f"entry {e['id']!r}"
+        if e["id"] in ids:
+            raise bad(f"{where}: duplicate id")
+        ids.add(e["id"])
+        if e["class"] not in EXCEPTION_CLASSES:
+            raise bad(f"{where}: class must be one of {EXCEPTION_CLASSES}")
+        if not _CHECK_RE.match(e["check"]):
+            raise bad(f"{where}: check {e['check']!r} is not a check id such as AWS-0104")
+        if not _plain_relpath(e["target"]) or not e["target"].endswith(".tf") or not e["target"].startswith(scope.rstrip("/") + "/"):
+            raise bad(f"{where}: target must be a .tf file path inside tree_scope {scope!r} (JSON and .tofu files cannot be keyed)")
+        if not _RESOURCE_RE.match(e["resource"]):
+            raise bad(f"{where}: resource must be <type>.<name>")
+        if not isinstance(e["expected_instances"], int) or isinstance(e["expected_instances"], bool) or e["expected_instances"] < 1:
+            raise bad(f"{where}: expected_instances must be a positive integer")
+        key = (e["check"], e["target"], e["resource"])
+        if key in keys:
+            raise bad(f"{where}: a second entry for the same check, target and resource")
+        keys.add(key)
+        if e["expires"] is None:
+            if e["class"] != "verified_limitation" or not isinstance(e.get("no_expiry_reason"), str) or not e["no_expiry_reason"].strip():
+                raise bad(f"{where}: only a verified_limitation entry may omit an expiry, and it must state no_expiry_reason")
+        else:
+            if "no_expiry_reason" in e:
+                raise bad(f"{where}: no_expiry_reason is only for an entry without an expiry")
+            if not isinstance(e["expires"], str) or not _DATE_RE.match(e["expires"]):
+                raise bad(f"{where}: expires must be YYYY-MM-DD or null")
+            try:
+                _dt.date.fromisoformat(e["expires"])
+            except ValueError as exc:
+                raise bad(f"{where}: expires is not a calendar date") from exc
+        if not isinstance(e["resource_conditions"], list) or not isinstance(e["tree_conditions"], list):
+            raise bad(f"{where}: resource_conditions and tree_conditions must be lists")
+        for c in e["resource_conditions"]:
+            if not isinstance(c, dict) or not _PATH_RE.match(str(c.get("attribute", ""))):
+                raise bad(f"{where}: a resource condition needs an 'attribute' path")
+            if set(c) == {"attribute", "absent"} and c["absent"] is True:
+                continue
+            if set(c) != {"attribute", "equals"} or not isinstance(c["equals"], (str, int, bool)):
+                raise bad(f"{where}: a resource condition is exactly {{attribute, equals: <literal>}} or {{attribute, absent: true}}")
+        for c in e["tree_conditions"]:
+            if not isinstance(c, dict) or set(c) != {"resource_types", "attribute", "equals", "min_blocks"}:
+                raise bad(f"{where}: a tree condition is exactly {{resource_types, attribute, equals, min_blocks}}")
+            if not isinstance(c["resource_types"], list) or not c["resource_types"] or not all(isinstance(t, str) and re.match(r"^[a-z0-9_]+$", t) for t in c["resource_types"]):
+                raise bad(f"{where}: tree condition resource_types must be a non-empty list of resource types")
+            if not _PATH_RE.match(str(c["attribute"])) or not isinstance(c["equals"], (str, int, bool)):
+                raise bad(f"{where}: tree condition needs an attribute path and a literal")
+            if not isinstance(c["min_blocks"], int) or isinstance(c["min_blocks"], bool) or c["min_blocks"] < 1:
+                raise bad(f"{where}: tree condition min_blocks must be a positive integer")
+    return doc
+
+
 # --------------------------------------------------------------------------- misconfigurations
-def evaluate_misconfig(report: object, policy: dict, *, expect_types: list[str]) -> tuple[list[str], list[str]]:
+@dataclass
+class _Candidate:
+    desc: str
+    entry: dict
+    resource: str
+
+
+def _finding_desc(m: dict, target: str) -> str:
+    start = (m.get("CauseMetadata") or {}).get("StartLine")
+    return f"{m.get('ID')} [{m.get('Severity', 'UNKNOWN')}] {target}:{start} {m.get('Title')}"
+
+
+def _resolve_enclosing(root: pathlib.Path, target: str, m: dict, prefix: str, parsed: dict) -> tuple[str | None, str | None]:
+    """(resource type.name, None) or (None, violation). Raises IncompleteError if the report does not
+    describe the checked-out source (a cause line that differs from the file)."""
+    cm = m.get("CauseMetadata") or {}
+    start = cm.get("StartLine")
+    if not isinstance(start, int) or start < 1:
+        return None, f"EXCEPTION_UNRESOLVED {_finding_desc(m, target)}: no start line to resolve"
+    path = root / target
+    if not path.is_file():
+        raise IncompleteError(f"the report names {target}, which is not in the source root {root} — the report does not describe this checkout")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for cl in (cm.get("Code") or {}).get("Lines") or []:
+        num, truncated = cl.get("Number"), cl.get("Truncated")
+        if isinstance(num, int) and num >= 1 and not truncated:
+            here = lines[num - 1].rstrip() if num <= len(lines) else None
+            if here != str(cl.get("Content", "")).rstrip():
+                raise IncompleteError(f"{target}:{num} differs from the report's code line — the report does not describe this checkout")
+    if target not in parsed:
+        parsed[target] = read_config_file(root, target)
+    hits = [d for d in parsed[target] if d.kind == "resource" and d.start <= start <= d.end]
+    if len(hits) != 1:
+        return None, f"EXCEPTION_UNRESOLVED {_finding_desc(m, target)}: line {start} is not inside exactly one resource block ({len(hits)})"
+    resolved = f"{hits[0].type}.{hits[0].name}"
+    for occ in cm.get("Occurrences") or []:
+        fn = str(occ.get("Filename", ""))
+        fn = fn[len(prefix):] if prefix and fn.startswith(prefix) else fn
+        mm = _ADDRESS_RE.match(str(occ.get("Resource", "")))
+        if fn == target and mm and not str(occ.get("Resource")).startswith("module."):
+            if f"{mm.group(1)}.{mm.group(2)}" != resolved:
+                return None, f"EXCEPTION_RESOURCE_MISMATCH {_finding_desc(m, target)}: the report names {occ.get('Resource')}, the source block at line {start} is {resolved}"
+    return resolved, None
+
+
+def apply_exceptions(gating: list[tuple[dict, str]], doc: dict, root: pathlib.Path, prefix: str,
+                     today: _dt.date) -> tuple[list[str], list[str], list[str]]:
+    """Returns (summary lines, excepted descriptions, violations) for the gating findings."""
+    entries = doc["exceptions"]
+    by_key: dict = {}
+    for e in entries:
+        by_key.setdefault((e["check"], e["target"]), []).append(e)
+    parsed: dict = {}
+    violations: list[str] = []
+    matched: dict = {e["id"]: [] for e in entries}
+    for m, target in gating:
+        cands = by_key.get((m.get("ID"), target))
+        if not cands:
+            violations.append(_finding_desc(m, target)); continue
+        try:
+            resolved, problem = _resolve_enclosing(root, target, m, prefix, parsed)
+        except HclError as exc:
+            raise IncompleteError(f"exception resolution could not read the source: {exc}") from exc
+        if problem:
+            violations += [problem, _finding_desc(m, target)]; continue
+        entry = next((e for e in cands if e["resource"] == resolved), None)
+        if entry is None:
+            violations.append(_finding_desc(m, target) + f" ({resolved}; no exception entry for this resource)"); continue
+        matched[entry["id"]].append(_Candidate(_finding_desc(m, target) + f" ({resolved})", entry, resolved))
+    lines = [f"exceptions: {len(entries)} entries; tree scope {doc['tree_scope']}; evaluated on {today.isoformat()} (UTC)"]
+    excepted: list[str] = []
+    tree_cache: dict = {}
+    for e in entries:
+        got = matched[e["id"]]
+        head = f"  exception {e['id']} [{e['class']}] {e['check']} {e['resource']} in {e['target']}"
+        failures: list[str] = []
+        if not got:
+            violations.append(f"EXCEPTION_STALE {e['id']}: matches no gating finding — remove it or correct it")
+            lines.append(f"{head}: matched 0/{e['expected_instances']} -> STALE (fails)"); continue
+        if len(got) != e["expected_instances"]:
+            failures.append(f"EXCEPTION_COUNT_MISMATCH {e['id']}: {len(got)} finding(s) match, expected_instances is {e['expected_instances']}")
+        if e["expires"] is not None and today >= _dt.date.fromisoformat(e["expires"]):
+            failures.append(f"EXCEPTION_EXPIRED {e['id']}: expired on {e['expires']} (an exception holds only before its expiry date)")
+        try:
+            failures += _entry_conditions(e, root, doc["tree_scope"], tree_cache)
+        except HclError as exc:
+            raise IncompleteError(f"exception {e['id']}: the conditions could not be evaluated: {exc}") from exc
+        expiry = "no expiry (" + e["no_expiry_reason"] + ")" if e["expires"] is None else f"expires {e['expires']} ({(_dt.date.fromisoformat(e['expires']) - today).days} days)"
+        n_cond = len(e["resource_conditions"]) + len(e["tree_conditions"])
+        if failures:
+            violations += failures + [c.desc + f" — exception {e['id']} NOT applied" for c in got]
+            lines.append(f"{head}: matched {len(got)}/{e['expected_instances']}; {expiry} -> NOT APPLIED ({len(failures)} failure(s))")
+        else:
+            excepted += [f"{c.desc} by {e['id']}; {expiry}" for c in got]
+            lines.append(f"{head}: matched {len(got)}/{e['expected_instances']}; {n_cond}/{n_cond} conditions hold; {expiry} -> APPLIED")
+    return lines, excepted, violations
+
+
+def _entry_conditions(e: dict, root: pathlib.Path, scope: str, cache: dict) -> list[str]:
+    failures: list[str] = []
+    rtype, rname = _RESOURCE_RE.match(e["resource"]).groups()
+    if e["resource_conditions"]:
+        module_dir = str(pathlib.PurePosixPath(e["target"]).parent)
+        files = config_files(root, module_dir, recursive=False)
+        for rel in files:
+            if rel.endswith((".tofu", ".tofu.json")) or _is_override(rel):
+                failures.append(f"EXCEPTION_MODULE_OVERRIDE {e['id']}: {rel} can replace or override the matched block's attributes invisibly, so its conditions cannot be confirmed")
+        decls = [d for rel in files for d in read_config_file(root, rel) if d.kind == "resource" and d.type == rtype and d.name == rname]
+        if len(decls) != 1:
+            failures.append(f"EXCEPTION_MODULE_OVERRIDE {e['id']}: {e['resource']} is declared {len(decls)} times in {module_dir}; exactly one declaration can be confirmed")
+        elif decls[0].file != e["target"]:
+            failures.append(f"EXCEPTION_RESOURCE_MISMATCH {e['id']}: {e['resource']} is declared in {decls[0].file}, not {e['target']}")
+        else:
+            failures += [f for f in (check_condition(decls[0], c) for c in e["resource_conditions"]) if f]
+    if e["tree_conditions"]:
+        if scope not in cache:
+            files = config_files(root, scope)
+            decls = [d for rel in files for d in read_config_file(root, rel)]
+            cache[scope] = (files, decls, tree_integrity(decls, files))
+        files, decls, opaque = cache[scope]
+        failures += [f"{p} (exception {e['id']})" for p in opaque]
+        for c in e["tree_conditions"]:
+            blocks = [d for d in decls if d.kind == "resource" and d.type in c["resource_types"]]
+            failures += [f for f in (check_condition(d, {"attribute": c["attribute"], "equals": c["equals"]}) for d in blocks) if f]
+            if len(blocks) < c["min_blocks"]:
+                failures.append(f"EXCEPTION_CONDITION_FAILED {e['id']}: {len(blocks)} {'/'.join(c['resource_types'])} block(s) under {scope}, at least {c['min_blocks']} required")
+    return failures
+
+
+def evaluate_misconfig(report: object, policy: dict, *, expect_types: list[str], exceptions: dict | None = None,
+                       source_root: pathlib.Path | None = None, report_prefix: str = "",
+                       today: _dt.date | None = None) -> tuple[list[str], list[str]]:
     mp = policy["misconfigurations"]
     fail_sev = set(mp["fail_severities"])
     lines: list[str] = []
@@ -214,6 +876,11 @@ def evaluate_misconfig(report: object, policy: dict, *, expect_types: list[str])
     _require(report.get("SchemaVersion") == 2, "trivy misconfiguration report: SchemaVersion is not 2", ReportError)
     _require(isinstance(report.get("Results"), list), "trivy misconfiguration report: 'Results' missing or not a list", ReportError)
     results = report["Results"]
+    if report_prefix:
+        # Negative controls only (the CLI refuses a prefix without --expect-fail): one scan covers several
+        # mutated copies of the tree; keep this copy's results and express their targets as the gate expects.
+        results = [dict(r, Target=str(r.get("Target"))[len(report_prefix):]) for r in results
+                   if str(r.get("Target", "")).startswith(report_prefix)]
     _require(len(results) >= 1, "misconfiguration report has no results at all — nothing was analysed")
     seen_types = {r.get("Type") for r in results}
     for t in expect_types:
@@ -224,18 +891,28 @@ def evaluate_misconfig(report: object, policy: dict, *, expect_types: list[str])
         checks += int(s.get("Successes") or 0) + int(s.get("Failures") or 0)
     _require(checks >= 1, "misconfiguration report records zero evaluated checks")
     lines.append(f"population: {len(results)} configuration targets, types {sorted(t for t in seen_types if t)}, {checks} checks evaluated")
-    violations: list[str] = []
+    gating: list[tuple[dict, str]] = []
     lower: list[str] = []
     for r in results:
+        target = str(r.get("Target"))
         for m in r.get("Misconfigurations") or []:
             if m.get("Status", "FAIL") != "FAIL":
                 continue
-            sev = m.get("Severity", "UNKNOWN")
-            start = (m.get("CauseMetadata") or {}).get("StartLine")
-            desc = f"{m.get('ID')} [{sev}] {r.get('Target')}:{start} {m.get('Title')}"
-            (violations if sev in fail_sev else lower).append(desc)
-    lines.append(f"failed checks: {len(violations)} at gating severity {sorted(fail_sev)}, {len(lower)} at lower severity")
+            if m.get("Severity", "UNKNOWN") in fail_sev:
+                gating.append((m, target))
+            else:
+                lower.append(_finding_desc(m, target))
+    excepted: list[str] = []
+    if exceptions is None:
+        violations = [_finding_desc(m, t) for m, t in gating]
+    else:
+        exc_lines, excepted, violations = apply_exceptions(gating, exceptions, source_root or pathlib.Path("."),
+                                                           report_prefix, today or _dt.datetime.now(_dt.timezone.utc).date())
+        lines += exc_lines
+    lines.append(f"failed checks: {len(gating)} at gating severity {sorted(fail_sev)}: {len(violations)} violation line(s), "
+                 f"{len(excepted)} excepted; {len(lower)} at lower severity")
     lines += [f"  VIOLATION {d}" for d in violations]
+    lines += [f"  EXCEPTED  {d}" for d in excepted]
     lines += [f"  lower     {d}" for d in lower]
     return lines, violations
 
@@ -366,6 +1043,16 @@ def run(args: argparse.Namespace) -> int:
     header = [f"SECURITY GATE {args.name} ({args.command}) at {_utc_now()}", f"policy: {args.policy} sha256 {_sha256(pathlib.Path(args.policy))}"]
     lines: list[str] = []
     outcome: tuple[str, int]
+    violations_seen: list[str] = []
+    baseline = getattr(args, "control_baseline", False)
+    if (args.expect_violation and not args.expect_fail) or (getattr(args, "report_prefix", None) and not (args.expect_fail or baseline)) \
+            or (baseline and (args.expect_fail or not getattr(args, "report_prefix", None))):
+        # Control-only options. Refusing them elsewhere means the real gate can never be pointed at a
+        # subset of a report: --report-prefix needs --expect-fail (a negative control) or
+        # --control-baseline (the unmutated copy of a negative-control set, which must PASS).
+        sys.stderr.write("--report-prefix requires --expect-fail or --control-baseline; --expect-violation requires --expect-fail; "
+                         "--control-baseline requires --report-prefix and excludes --expect-fail\n")
+        return EXIT_USAGE
     try:
         if args.command == "complete":
             lines = check_complete(reports_dir, args.expect_pass or [], args.expect_control or [])
@@ -381,7 +1068,15 @@ def run(args: argparse.Namespace) -> int:
                                                   min_lang_packages=args.min_lang_packages)
             elif args.command == "misconfig":
                 report = load_json(report_path, "trivy misconfiguration report")
-                lines, violations = evaluate_misconfig(report, policy, expect_types=args.expect_type or [])
+                exceptions = None
+                if args.exceptions:
+                    exc_path = pathlib.Path(args.exceptions)
+                    header.append(f"exceptions: {exc_path}" + (f" sha256 {_sha256(exc_path)}" if exc_path.is_file() else " (missing)")
+                                  + f"; source root {args.source_root}" + (f"; report prefix {args.report_prefix!r} (negative control)" if args.report_prefix else ""))
+                    exceptions = load_exceptions(exc_path)
+                lines, violations = evaluate_misconfig(report, policy, expect_types=args.expect_type or [],
+                                                       exceptions=exceptions, source_root=pathlib.Path(args.source_root),
+                                                       report_prefix=args.report_prefix or "")
             elif args.command == "sast":
                 report = load_json(report_path, "semgrep report")
                 lines, violations = evaluate_sast(report, policy, expect_prefixes=args.expect_prefix or [],
@@ -404,6 +1099,7 @@ def run(args: argparse.Namespace) -> int:
             outcome = (RESULT_PASS, EXIT_OK)
     except PolicyViolation as exc:
         lines.append(f"policy: {exc}")
+        violations_seen = exc.violations
         outcome = (RESULT_POLICY, EXIT_POLICY)
     except IncompleteError as exc:
         lines.append(f"incomplete: {exc}")
@@ -416,10 +1112,18 @@ def run(args: argparse.Namespace) -> int:
     if args.expect_fail:
         # A negative control: the ONLY acceptable outcome is a policy violation. A clean result,
         # a malformed report or an incomplete analysis all mean the control did not prove what
-        # it exists to prove, and that is a failure of the control.
-        if code == EXIT_POLICY:
-            lines.append(f"negative control: the underlying verdict was {result!r}")
+        # it exists to prove, and that is a failure of the control. With --expect-violation the
+        # violation must also be the INTENDED one (a token in a violation line), so an unrelated
+        # violation cannot make the control pass.
+        wanted = args.expect_violation
+        found = [v for v in violations_seen if wanted in v] if wanted else None
+        if code == EXIT_POLICY and (wanted is None or found):
+            lines.append(f"negative control: the underlying verdict was {result!r}"
+                         + (f"; the intended violation {wanted!r} is present ({len(found)} line(s))" if wanted else ""))
             result, code = RESULT_CONTROL_OK, EXIT_OK
+        elif code == EXIT_POLICY:
+            lines.append(f"negative control: the underlying verdict was {result!r}, but no violation line carries {wanted!r}")
+            result, code = RESULT_CONTROL_BAD, EXIT_CONTROL
         else:
             lines.append(f"negative control: the underlying verdict was {result!r}, not a policy violation")
             result, code = RESULT_CONTROL_BAD, EXIT_CONTROL
@@ -438,6 +1142,7 @@ def build_parser() -> argparse.ArgumentParser:
         if report:
             sp.add_argument("report")
         sp.add_argument("--expect-fail", action="store_true", help="negative control: succeed only on a policy violation")
+        sp.add_argument("--expect-violation", help="negative control: the policy violation must include a line carrying this token")
 
     v = sub.add_parser("vuln"); common(v)
     v.add_argument("--kind", choices=sorted(ARTIFACT_TYPES), required=True)
@@ -447,6 +1152,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     m = sub.add_parser("misconfig"); common(m)
     m.add_argument("--expect-type", action="append", help="a configuration type that must appear (dockerfile, terraform)")
+    m.add_argument("--exceptions", help="the tracked misconfiguration exceptions file (security/misconfig-exceptions.json)")
+    m.add_argument("--source-root", default=".", help="the directory the report's targets are relative to (the scanned checkout)")
+    m.add_argument("--report-prefix", help="controls only (requires --expect-fail or --control-baseline): keep results whose target starts with this prefix and strip it")
+    m.add_argument("--control-baseline", action="store_true", help="the unmutated copy of a negative-control set: with --report-prefix, must PASS like the real gate")
 
     s = sub.add_parser("sast"); common(s)
     s.add_argument("--expect-prefix", action="append", help="a path prefix that must have scanned files")

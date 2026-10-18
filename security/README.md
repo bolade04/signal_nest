@@ -63,10 +63,14 @@ what the repository's sources settle and what they do not:
   `REPORTED` and do not gate (exit criterion 12 names runtime dependencies). Gating
   development scope too is an open operator choice.
 - **IaC**: CRITICAL/HIGH misconfigurations fail. No source sets an IaC threshold; this is by
-  analogy with the vulnerability threshold. No ignore file is tracked, so findings the
+  analogy with the vulnerability threshold. ~~No ignore file is tracked, so findings the
   infrastructure accepts by documented decision (for example the public ALB, or the WAF
   deferral recorded as `P6-INF-11`) currently FAIL this gate until an operator adopts a
-  per-check exception file with written justifications, or remediates.
+  per-check exception file with written justifications, or remediates.~~ *(2026-10-18, operator order: the
+  reviewed exceptions file `security/misconfig-exceptions.json` is adopted for the six class
+  A/B/C findings and the four class D findings are remediated — see "IaC exceptions" below.
+  No Trivy ignore file is used, the threshold is unchanged, and an excepted finding is still
+  listed.)*
 - **SAST**: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
 - **SBOM identity**: each identity record names the reviewed commit (`commit`: the pull
@@ -140,9 +144,11 @@ relaxed to hide that.
   compatible digest refresh exists today. Moving to Debian 13/Python 3.13 or a non-distroless
   base would change the frozen reader contracts (Python minor, ENTRYPOINT, containment) and
   is not done. The 43 fixable and 20 unfixed findings remain; the reader gate stays red.
+  *(Superseded 2026-10-18, operator order: candidate A adopted — see "Adoption tranche" below.)*
 - **IaC — unchanged (decision pending).** The 10 gating findings remain. A per-finding
   disposition matrix with proposed, unadopted exception wording is in the evidence record;
-  no infrastructure file changed and no ignore file exists.
+  no infrastructure file changed and no ignore file exists. *(Superseded 2026-10-18, operator order: see
+  "Adoption tranche" below.)*
 - **Ruleset fetcher — repaired.** The registry served `p/javascript` as JSON in one run and
   YAML in the next. `fetch_semgrep_rules.py` now parses either form structurally (JSON with
   the standard library, YAML with the hash-locked `ruamel.yaml` safe loader), checks every
@@ -157,6 +163,85 @@ relaxed to hide that.
   six-hour job limit. Its twelve tests (`fetcher_selftest.py`) run in the fetch step under
   the hash-locked venv.
 
+## Adoption tranche (2026-10-18, operator order; thresholds and filters unchanged)
+
+- **Reader image — candidate A adopted.** The reader moves to
+  `gcr.io/distroless/python3-debian13` (Python 3.13.5) with a `python:3.13-slim` builder;
+  the Python minor, distribution, interpreter path (`/usr/bin/python3.13`, also in the
+  reader publish workflow's band) and both base digests change, and every reader control is
+  kept (`apps/revision-reader/`). Measured on the proposal's local build with the same Trivy
+  database: 43 violating / 20 excluded → 0 violating / 26 excluded. The gate passes only
+  because of the fix-availability filter: the image is **not** vulnerability-free (26 HIGH
+  findings with no published fix stay `EXCLUDED` and listed). It now ships 17 executables
+  instead of 4 (Debian 13 `libc-bin`; no shell), and a `PYTHONPATH`/`PYTHONHOME` override
+  still stops the interpreter before the reader runs (exit 1, as before). Neither is changed
+  here, and no executable allow-list is added.
+- **IaC class D — remediated** in the IaC (customer-managed keys for the SPA bucket, the
+  audit trail and bucket, and the application bucket, which reuses the secrets key because
+  the live role boundary admits no other; see the module READMEs under `infra/aws/modules/`).
+  Nothing is applied.
+- **IaC classes A, B and C — excepted** by `security/misconfig-exceptions.json` (below).
+
+## IaC exceptions (`security/misconfig-exceptions.json`)
+
+Four entries cover the six findings: `A1` (AWS-0104, the three TCP 443 IPv4 task egress
+rules), `A2` (AWS-0053, the public HTTPS-only ALB), `B1` (AWS-0011, no WAF on the SPA
+distribution — the `P6-INF-11` deferral) and `C1` (AWS-0132, the ALB log bucket, which ELB
+log delivery requires to be SSE-S3). Each entry's statement, review trigger and expiry are
+the sealed disposition packet's wording, adopted verbatim. An exception lets this gate pass
+**for that finding only**; it closes, satisfies or reduces no Phase 6 row (`P6-INF-11` and
+`P6-INF-1` stay open) and may not be cited for production.
+
+How `gate.py misconfig --exceptions` decides, for every finding at gating severity:
+
+1. The finding's file and start line are resolved to the **enclosing resource block** in the
+   checked-out source (Trivy reports only a module address). The report's code lines must
+   equal the file's lines, or the analysis is incomplete (exit 4); a resource address in the
+   report's occurrences must agree with the resolved block.
+2. The finding is `EXCEPTED` only if an entry names the same check, file and resource **and**
+   the number of matched findings equals `expected_instances` **and** every condition holds
+   **and** today (UTC) is before `expires`. Excepted findings are printed, never dropped.
+3. Conditions read **literal** values only. A variable, reference, function call, template,
+   heredoc or `dynamic` block cannot be confirmed and fails closed. Resource conditions read
+   the one declaration of the block; an override file (`override.tf`, `*_override.tf`) or a
+   `.tofu` file in the same module directory, or a second declaration, fails closed, because
+   Trivy reports such a change at the original block. `A2`'s tree-scoped condition reads
+   **every** `aws_lb_listener` and `aws_alb_listener` in every `.tf`/`.tf.json`/`.tofu` file
+   under `infra/aws` (root and modules), requires at least one, and requires each to declare
+   the literal `protocol = "HTTPS"`. It also fails closed on anything a textual reading cannot
+   see through anywhere in that tree: a `.tofu` file, a module whose source is not a local
+   path, a provisioner, a generic provisioning resource (CloudFormation, Cloud Control,
+   `awscc_*`) or `data "external"`.
+4. An expired entry, an entry that matches nothing (stale), a count mismatch or a failed
+   condition is itself a policy violation, and the findings it would have covered are listed
+   as violations.
+
+The exceptions file is schema-checked: unknown or missing keys, a duplicate entry, a target
+outside `infra/aws` or not a `.tf` file, a missing expiry on anything but a verified
+limitation (`C1` alone has none, with its reason), or a malformed condition is `FAIL (report
+missing or malformed)` (exit 2).
+
+**Negative controls.** The existing inert IaC control must still be a violation with the
+exceptions loaded (it names its check, `AWS-0107`). `iac_exception_controls.py` builds 16
+mutated copies of the real tree plus an unmutated baseline; one real Trivy scan covers them
+all, and the real gate must report each mutation's own violation token (`--expect-fail
+--expect-violation`) while the baseline passes (`--control-baseline`). The mutations: a
+widened, IPv6, overridden or `.tofu`-shadowed egress rule, a fourth workload, an expired and
+a stale entry, an HTTP listener in the alb module, in a new module file, in the root module
+(attached through `module.alb.alb_arn`) and under the alias type, a variable protocol, a
+non-local module source, a `.tofu` listener, a provisioner and a non-SSE-S3 log bucket.
+Several of these are caught **only** by the gate: in the local run of Trivy 0.76.0 on
+2026-10-18, Trivy raised nothing for the root-module and alias-type listeners, the variable
+protocol, the provisioner or the remote module.
+`--report-prefix` (one copy of a multi-copy scan) and `--expect-violation` are refused
+without `--expect-fail` or `--control-baseline`, so the real gate cannot be pointed at part
+of a report. `test_gate_exceptions.py` and `test_iac_exception_controls.py` pin the logic
+and the case list (against the completeness step of `ci.yml`).
+
+**Residuals, disclosed.** The mechanism reads text. It cannot see a listener that another
+Terraform state creates and attaches by looking the ALB up, and its opaque-construct list is
+a denylist. `C1` has no expiry: the annual review is a written trigger, not a mechanical one.
+
 ## Failure behaviour (proved by `security/test_gate.py` and the CI negative controls)
 
 - A scanner crash fails its own step; the gate then reports `FAIL (report missing or
@@ -166,7 +251,8 @@ relaxed to hide that.
   conflicting identity values, a gate summary with other than exactly one `RESULT` line, or
   a Semgrep run with recorded errors is `FAIL (scanner execution incomplete)` (exit 4).
 - A finding at gating severity is `FAIL (policy violation)` (exit 3) — distinct from the two
-  above in the summary and in the exit code.
+  above in the summary and in the exit code. With the IaC exceptions file, so is an expired,
+  stale, miscounted or condition-failing entry (`EXCEPTION_*` lines in the summary).
 - Negative controls (`security/controls/`) run the real scanners over inert fixtures and pass
   only when the gate raises a policy violation (`--expect-fail`); a clean result, a crash or
   an incomplete analysis fails the control (exit 6).
@@ -186,6 +272,11 @@ python3 -m venv .security-venv && .security-venv/bin/python -m pip install --req
 .security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules
 .security-venv/bin/semgrep scan --metrics=off --no-rewrite-rule-ids --timeout 60 --timeout-threshold 0 --exclude security/controls --config .security-venv/semgrep-rules --json --output security-reports/semgrep.json apps scripts security
 python3 security/gate.py sast security-reports/semgrep.json --name sast --expect-prefix apps/api/app
+trivy config --skip-dirs security/controls --format json -o security-reports/trivy-config.json .
+python3 security/gate.py misconfig security-reports/trivy-config.json --name iac --expect-type terraform --exceptions security/misconfig-exceptions.json --source-root .
+python3 security/iac_exception_controls.py build security-reports/iac-exception-controls
+trivy config --format json -o security-reports/control-iac-exceptions.json security-reports/iac-exception-controls
+python3 security/iac_exception_controls.py check security-reports/control-iac-exceptions.json security-reports/iac-exception-controls
 ```
 
 `security/requirements-semgrep.txt` is regenerated like the API locks

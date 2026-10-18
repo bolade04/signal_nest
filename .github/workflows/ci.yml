@@ -692,11 +692,16 @@ jobs:
           --kind filesystem --artifact . --min-components 500 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
           --identity-out security-reports/sbom-locks.identity.json
 
+      # The reviewed exceptions file (adopted by operator order of 2026-10-18) excepts exactly the
+      # six class A/B/C findings it names, each by check, file, enclosing resource block, instance
+      # count, literal conditions and expiry; an excepted finding is still listed, and an expired,
+      # stale, miscounted or condition-failing entry fails this step (security/README.md).
       - name: Gate — IaC misconfigurations
         if: always()
         run: >-
           python3 security/gate.py misconfig security-reports/trivy-config.json --name iac
           --expect-type dockerfile --expect-type terraform
+          --exceptions security/misconfig-exceptions.json --source-root .
 
       - name: Gate — SAST
         if: always()
@@ -740,11 +745,42 @@ jobs:
           output: security-reports/control-iac.json
           exit-code: '0'
 
+      # With the exceptions file loaded, the inert finding must STILL be a violation: no entry may
+      # except it (the entries are also stale against this fixture, so the control names the check).
       - name: Negative control — the IaC gate must fail on it
         if: always()
         run: >-
           python3 security/gate.py misconfig security-reports/control-iac.json --name control-iac
-          --expect-type terraform --expect-fail
+          --expect-type terraform --exceptions security/misconfig-exceptions.json
+          --source-root security/controls/iac --expect-fail --expect-violation AWS-0107
+
+      # IaC exception controls: each case is a copy of the checked-out tree with ONE mutation that
+      # must defeat an exception (a widened, IPv6, overridden or shadowed egress rule; a fourth
+      # workload; an expired or stale entry; an HTTP listener in the alb module, a new module file,
+      # the root module or under the alias type; a non-literal protocol; a non-local module source;
+      # a .tofu file; a provisioner; a non-SSE-S3 log bucket), plus an unmutated baseline that must
+      # PASS. One real Trivy scan covers every case; the real gate then runs once per case and must
+      # report the case's own violation token (security/iac_exception_controls.py).
+      - name: Negative control — build the IaC exception mutation cases
+        if: always()
+        run: python3 security/iac_exception_controls.py build security-reports/iac-exception-controls
+
+      - name: Negative control — Trivy scans every IaC exception mutation case
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: config
+          scan-ref: security-reports/iac-exception-controls
+          format: json
+          output: security-reports/control-iac-exceptions.json
+          exit-code: '0'
+
+      - name: Negative control — every IaC exception mutation must fail the gate, the baseline must pass
+        if: always()
+        run: >-
+          python3 security/iac_exception_controls.py check
+          security-reports/control-iac-exceptions.json security-reports/iac-exception-controls
 
       - name: Negative control — Semgrep scans inert Python and TypeScript samples
         if: always()
@@ -785,6 +821,17 @@ jobs:
           --expect-pass sbom-image-api --expect-pass sbom-image-worker --expect-pass sbom-locks
           --expect-pass iac --expect-pass sast --expect-pass control-sbom
           --expect-control control-vuln --expect-control control-iac --expect-control control-sast
+          --expect-pass control-iac-exc-baseline
+          --expect-control control-iac-exc-egress-port-range --expect-control control-iac-exc-egress-ipv6
+          --expect-control control-iac-exc-egress-fourth-workload
+          --expect-control control-iac-exc-egress-override-file --expect-control control-iac-exc-egress-tofu-shadow
+          --expect-control control-iac-exc-entry-expired --expect-control control-iac-exc-entry-stale
+          --expect-control control-iac-exc-listener-http-module-file
+          --expect-control control-iac-exc-listener-http-new-module-file
+          --expect-control control-iac-exc-listener-http-root-module
+          --expect-control control-iac-exc-listener-alias-type --expect-control control-iac-exc-listener-nonliteral
+          --expect-control control-iac-exc-tree-nonlocal-module --expect-control control-iac-exc-tree-tofu-file
+          --expect-control control-iac-exc-tree-provisioner --expect-control control-iac-exc-alb-log-bucket-not-aes256
 
       - name: Upload security reports, SBOMs and gate summaries
         if: always()

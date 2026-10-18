@@ -1,0 +1,122 @@
+{
+ "_classification": "MISCONFIGURATION_EXCEPTIONS",
+ "_status": "ADOPTED by the operator order of 2026-10-18T21:37:57Z (P6-CI-6 IaC option (a): narrowly keyed exceptions for the six class A/B/C findings; the four class D customer-managed-key findings are remediated in the IaC, not excepted). Each entry's statement, review trigger, expiry and conditions are the PROPOSED wording of the sealed disposition packet (P6-CI6-blocker-proposals-01, raw/iac/IAC-DISPOSITION-PACKET.md, final review round 4), adopted verbatim, with the implementation additions listed in _implementation_notes.",
+ "_closes_nothing": "An exception lets the merge-path IaC gate pass for that finding only. It closes, satisfies or reduces no Phase 6 plan row: P6-INF-11 (WAF), P6-INF-1 (production environment) and every other row stay exactly as tracked, and no entry may be cited for a production environment.",
+ "_mechanism": "security/gate.py misconfig --exceptions security/misconfig-exceptions.json --source-root <checkout>. A finding is EXCEPTED (and still printed) only while its check, its target file and its enclosing resource block resolved in the checked-out source match an entry, the matched instance count equals expected_instances, every condition holds against LITERAL values (an expression fails closed), and today (UTC) is before expires. An expired, stale, miscounted or condition-failing entry is a policy violation. security/README.md describes the mechanism and its negative controls.",
+ "_implementation_notes": [
+  "A2's tree-scoped condition also covers aws_alb_listener (the AWS provider's alias of aws_lb_listener) and requires at least one listener block (min_blocks 1), so an empty or alias-typed tree cannot satisfy it vacuously.",
+  "Tree-scoped conditions fail closed on any construct a textual reading cannot see through anywhere in tree_scope: a .tofu or .tofu.json file, a module whose source is not a local path (the residual recorded by review round 4 of the packet), a provisioner, a generic provisioning resource (CloudFormation, Cloud Control, awscc_*) and data.external.",
+  "Resource-scoped conditions fail closed when the target's module directory holds an override file or a .tofu file, or declares the resource more than once: Trivy reports such a change at the original block, which the condition would otherwise read.",
+  "A1 also pins cidr_ipv4 to the literal 0.0.0.0/0 and requires prefix_list_id and referenced_security_group_id to be absent, so the exception covers exactly the reviewed rule shape."
+ ],
+ "schema_version": 1,
+ "tree_scope": "infra/aws",
+ "exceptions": [
+  {
+   "id": "A1-task-https-egress",
+   "class": "intended_design",
+   "check": "AWS-0104",
+   "target": "infra/aws/modules/ecs/main.tf",
+   "resource": "aws_vpc_security_group_egress_rule.task_https",
+   "expected_instances": 3,
+   "resource_conditions": [
+    {
+     "attribute": "ip_protocol",
+     "equals": "tcp"
+    },
+    {
+     "attribute": "from_port",
+     "equals": 443
+    },
+    {
+     "attribute": "to_port",
+     "equals": 443
+    },
+    {
+     "attribute": "cidr_ipv4",
+     "equals": "0.0.0.0/0"
+    },
+    {
+     "attribute": "cidr_ipv6",
+     "absent": true
+    },
+    {
+     "attribute": "prefix_list_id",
+     "absent": true
+    },
+    {
+     "attribute": "referenced_security_group_id",
+     "absent": true
+    }
+   ],
+   "tree_conditions": [],
+   "expires": "2027-01-31",
+   "review": "When VPC endpoints or egress filtering are authorized. The exception also ends at the first production-environment authoring (P6-INF-1) if that comes before the expiry date.",
+   "authority": "aws-staging-iac-plan section 26.4 (TCP 443 IPv4 NAT baseline); disposition packet A1; operator order 2026-10-18 (IaC option (a))",
+   "statement": "TCP 443 IPv4 egress via NAT is the documented staging baseline (aws-staging-iac-plan §26.4) serving AWS service endpoints and approved LLM providers; endpoint-only egress cannot serve the LLM path without an egress-filtering layer."
+  },
+  {
+   "id": "A2-public-https-alb",
+   "class": "intended_design",
+   "check": "AWS-0053",
+   "target": "infra/aws/modules/alb/main.tf",
+   "resource": "aws_lb.this",
+   "expected_instances": 1,
+   "resource_conditions": [
+    {
+     "attribute": "load_balancer_type",
+     "equals": "application"
+    }
+   ],
+   "tree_conditions": [
+    {
+     "resource_types": [
+      "aws_lb_listener",
+      "aws_alb_listener"
+     ],
+     "attribute": "protocol",
+     "equals": "HTTPS",
+     "min_blocks": 1
+    }
+   ],
+   "expires": "2027-01-31",
+   "review": "Decide on an internal ALB behind a CloudFront VPC origin with the production edge (P6-INF-1 / P6-INF-11). The exception also ends at production authoring if that comes before the expiry date.",
+   "authority": "disposition packet A2; operator order 2026-10-18 (IaC option (a))",
+   "statement": "Internet-facing HTTPS-only ALB is the intended API edge for windowed staging."
+  },
+  {
+   "id": "B1-cloudfront-waf-deferred",
+   "class": "waf_deferral",
+   "check": "AWS-0011",
+   "target": "infra/aws/modules/edge/main.tf",
+   "resource": "aws_cloudfront_distribution.spa",
+   "expected_instances": 1,
+   "resource_conditions": [],
+   "tree_conditions": [],
+   "expires": "2027-01-31",
+   "review": "The exception ends at the closure of P6-INF-11, or on the expiry date, whichever comes first.",
+   "authority": "P6-INF-11 (OPEN; WAF deferred by locked decision; required for production); disposition packet B1; operator order 2026-10-18 (IaC option (a))",
+   "statement": "WAF deferred by the locked decision tracked as P6-INF-11; this exception does not satisfy, close or reduce P6-INF-11 and must not be cited for a production environment."
+  },
+  {
+   "id": "C1-alb-log-bucket-sse-s3",
+   "class": "verified_limitation",
+   "check": "AWS-0132",
+   "target": "infra/aws/modules/alb/main.tf",
+   "resource": "aws_s3_bucket_server_side_encryption_configuration.alb_logs",
+   "expected_instances": 1,
+   "resource_conditions": [
+    {
+     "attribute": "rule.apply_server_side_encryption_by_default.sse_algorithm",
+     "equals": "AES256"
+    }
+   ],
+   "tree_conditions": [],
+   "expires": null,
+   "no_expiry_reason": "none while the AWS limitation holds: ELB access-log delivery supports SSE-S3 only",
+   "review": "Review annually, and immediately if the AWS documentation changes.",
+   "authority": "AWS Elastic Load Balancing documentation (access logs: SSE-S3 is the only supported server-side encryption); disposition packet C1; operator order 2026-10-18 (IaC option (a))",
+   "statement": "ELB access-log delivery supports SSE-S3 only (AWS ELB documentation); a CMK would break log delivery."
+  }
+ ]
+}
