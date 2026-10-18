@@ -13,6 +13,10 @@ runs. What this script does promise:
   a mapping whose `rules` is a non-empty list of mappings, each carrying a non-empty string
   `id`; the rule count is the number of those entries. HTML, error bodies, empty, malformed
   or structurally invalid documents are refused;
+* YAML anchors and aliases are refused before anything is constructed: the loader resolves
+  an alias as a shared reference, so a document of a few hundred bytes can stand for an
+  exponentially large one that these checks never see but `semgrep --validate` expands and
+  hangs on. The registry's rulesets carry none (all five checked on 2026-10-18);
 * the existing floors still apply: at least MIN_BYTES bytes and MIN_RULES rules per ruleset;
 * the RAW downloaded bytes are written unchanged, always under a `.yml` name: Semgrep's
   config-directory loader reads only `.yml`/`.yaml` files and silently skips `.json` ones
@@ -25,8 +29,9 @@ runs. What this script does promise:
   where `semgrep --config <out>` would read it, and a pre-existing or stale `<out>` is refused
   rather than reused.
 
-The workflow then runs `semgrep --validate` on the directory before any scan. Exit 0 only
-when every ruleset was fetched and passed the checks; exit 1 otherwise (nothing at `<out>`).
+The workflow then runs `semgrep --validate` on the directory before any scan, inside a step
+with its own timeout. Exit 0 only when every ruleset was fetched and passed the checks; exit 1
+otherwise (nothing at `<out>`).
 """
 from __future__ import annotations
 
@@ -65,9 +70,14 @@ def _load_yaml(text: str) -> object:
     try:
         from ruamel.yaml import YAML  # hash-locked via security/requirements-semgrep.txt
         from ruamel.yaml.error import YAMLError
+        from ruamel.yaml.events import AliasEvent
     except ImportError as exc:  # never fall back to a regex count
         raise RulesetError("no safe YAML parser available (ruamel.yaml missing)") from exc
     try:
+        # the event stream shows every anchor and alias without building anything
+        for event in YAML(typ="safe", pure=True).parse(text):
+            if isinstance(event, AliasEvent) or getattr(event, "anchor", None) is not None:
+                raise RulesetError(f"YAML anchor or alias at line {event.start_mark.line + 1} refused")
         return YAML(typ="safe", pure=True).load(text)
     except YAMLError as exc:
         raise RulesetError(f"malformed YAML ({exc.__class__.__name__})") from exc

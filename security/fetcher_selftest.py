@@ -35,6 +35,16 @@ def as_yaml(rules=RULES) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
+def alias_bomb(depth=15, fan=10) -> bytes:
+    """Four valid rules; the first one's metadata nests `depth` levels of `fan` aliases
+    (10**15 nominal leaves in about a kilobyte). Only the anchor check refuses it."""
+    lines = as_yaml().decode().splitlines()
+    nest = ["  metadata:", "    a0: &a0 inert"]
+    nest += [f"    a{d}: &a{d} [" + ", ".join([f"*a{d - 1}"] * fan) + "]" for d in range(1, depth + 1)]
+    lines[7:7] = nest  # after "rules:" and the first rule's six lines
+    return ("\n".join(lines) + "\n").encode()
+
+
 class ParseRulesetCase(unittest.TestCase):
     def test_equivalent_json_and_yaml_count_the_same_rules(self):
         self.assertEqual(fsr.parse_ruleset(as_json()), (4, "json"))
@@ -43,6 +53,24 @@ class ParseRulesetCase(unittest.TestCase):
     def test_yaml_with_leading_comment_and_indentation_is_parsed_structurally(self):
         doc = b"# registry header\n" + as_yaml()
         self.assertEqual(fsr.parse_ruleset(doc), (4, "yaml"))
+
+    def test_yaml_anchors_and_aliases_are_refused(self):
+        refused = {
+            "alias bomb": alias_bomb(),
+            "merge key": b"base: &b {severity: INFO}\n" + as_yaml().replace(b"  severity: INFO\n", b"  <<: *b\n"),
+            "anchor without alias": as_yaml().replace(b"- id: ", b"- &r\n  id: ", 1),
+        }
+        for label, doc in refused.items():
+            with self.subTest(label), self.assertRaisesRegex(fsr.RulesetError, "anchor or alias"):
+                fsr.parse_ruleset(doc)
+
+    def test_literal_ampersand_and_asterisk_in_scalars_are_accepted(self):
+        doc = as_yaml() + (b"- id: inert.fixture.literal\n"
+                           b"  message: \"*not an alias* & not an anchor\"\n"
+                           b"  severity: INFO\n  languages:\n  - python\n"
+                           b"  pattern-regex: 'never_called_fixture(a&b|*c)'\n"
+                           b"  pattern: never_called_fixture(a && b)\n")
+        self.assertEqual(fsr.parse_ruleset(doc), (5, "yaml"))
 
     def test_refused_documents(self):
         bad = {
@@ -125,6 +153,11 @@ class MainCase(unittest.TestCase):
 
     def test_http_error_body_mid_run_leaves_no_rules(self):
         resp = self.responses(**{"p/javascript": (b"<html>503</html>", "text/html")})
+        self.assertEqual(self.run_main(resp), 1)
+        self.assert_nothing_left()
+
+    def test_alias_bomb_mid_run_leaves_no_rules(self):
+        resp = self.responses(**{"p/typescript": (alias_bomb(), "text/yaml")})
         self.assertEqual(self.run_main(resp), 1)
         self.assert_nothing_left()
 

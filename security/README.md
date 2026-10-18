@@ -148,8 +148,14 @@ relaxed to hide that.
   the standard library, YAML with the hash-locked `ruamel.yaml` safe loader), checks every
   rule entry, writes the raw bytes unchanged under `.yml` (Semgrep's directory loader skips
   `.json` files while `--validate` still exits 0), records the detected format, and stages
-  the population so an incomplete set is never left for the scan or the SAST control. Its
-  nine tests (`fetcher_selftest.py`) run in the fetch step under the hash-locked venv.
+  the population so an incomplete set is never left for the scan or the SAST control.
+  YAML anchors and aliases are refused before anything is constructed: a follow-up review
+  showed that a document of under 2 KB of nested aliases passed the structural checks and
+  kept `semgrep --validate` at full CPU past a 30-second limit (the registry's five rulesets
+  carry none). The fetch step also has a 10-minute timeout (it takes about 10 seconds), so a
+  ruleset that still stalls validation fails the step instead of holding the runner for the
+  six-hour job limit. Its twelve tests (`fetcher_selftest.py`) run in the fetch step under
+  the hash-locked venv.
 
 ## Failure behaviour (proved by `security/test_gate.py` and the CI negative controls)
 
