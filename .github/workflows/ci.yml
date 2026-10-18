@@ -526,8 +526,13 @@ jobs:
       # each still fails the job on its own. Negative controls scan security/controls/ with
       # the same tools and rules and MUST be detected. Coverage, exclusions and the proposed
       # policy are documented in security/README.md.
-      - name: Security gate self-tests (inert synthetic reports)
-        run: python3 -m unittest discover -s security -p "test_*.py"
+      - name: Security gate self-tests (inert synthetic reports); create the reports directory
+        # The scanners below write into security-reports/ and refuse to run when it is absent
+        # (CI run 1 of this change: "failed to create output file ... no such file or
+        # directory"), so it is created here, before the first scanner, by a step of its own.
+        run: |
+          python3 -m unittest discover -s security -p "test_*.py"
+          mkdir -p security-reports
 
       - name: Trivy — dependency vulnerabilities in the committed locks
         uses: aquasecurity/trivy-action@v0.36.0
@@ -609,6 +614,13 @@ jobs:
           output: security-reports/trivy-config.json
           exit-code: '0'
           skip-dirs: security/controls
+
+      - name: Set up Python (security tooling)
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: security/requirements-semgrep.txt
 
       - name: Create the security tooling virtualenv (Semgrep, hash-locked)
         run: |
@@ -1673,6 +1685,9 @@ jobs:
       # Same shape as the Container build and security job: Trivy writes the report and the
       # SBOM for the image built above, security/gate.py binds both to that image (same
       # ImageID) and evaluates them against security/policy.json. See security/README.md.
+      - name: Create the security reports directory
+        run: mkdir -p security-reports
+
       - name: Trivy — reader image vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
         with:
