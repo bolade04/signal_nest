@@ -70,8 +70,11 @@ what the repository's sources settle and what they do not:
 - **SAST**: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
 - **SBOM**: CycloneDX 1.5–1.7 JSON with a `urn:uuid` serial, the expected described
-  component, a non-empty population above a per-artifact floor and, for images, the same
-  `ImageID` as the vulnerability report of the same job.
+  component, a non-empty **package-component** population (`library`/`application`/
+  `framework` entries only; the total entry count is reported separately, so padding with
+  `file` entries cannot satisfy the floor) above a per-artifact floor, exactly one
+  `ImageID`/`RepoDigest` identity value and, for images, the same `ImageID` as the
+  vulnerability report of the same job.
 
 ## Baseline on `main` at the time of wiring (measured, not adjudicated)
 
@@ -100,8 +103,9 @@ relaxed to hide that.
 - A scanner crash fails its own step; the gate then reports `FAIL (report missing or
   malformed)` (exit 2). An empty, truncated or non-JSON report is refused the same way.
 - A report that describes a different artifact, lacks an image id, has an empty package
-  population, an SBOM whose `ImageID` differs from the vulnerability report's, or a Semgrep
-  run with recorded errors is `FAIL (scanner execution incomplete)` (exit 4).
+  population, an SBOM whose `ImageID` differs from the vulnerability report's or carries
+  conflicting identity values, a gate summary with other than exactly one `RESULT` line, or
+  a Semgrep run with recorded errors is `FAIL (scanner execution incomplete)` (exit 4).
 - A finding at gating severity is `FAIL (policy violation)` (exit 3) — distinct from the two
   above in the summary and in the exit code.
 - Negative controls (`security/controls/`) run the real scanners over inert fixtures and pass
