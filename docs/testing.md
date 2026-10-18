@@ -260,6 +260,17 @@ logs (`ci-logs/`, `api-smoke.log`) as artifacts.
 **Recommended required status checks for `main`:** Frontend quality, Backend quality,
 Migrations and API contract, Integration smoke.
 
+### Merge-path security scanning and SBOMs (P6-CI-6)
+
+The `Container build and security` and `Revision reader` contexts also run Trivy (locked
+dependencies, the three built images, IaC misconfiguration, CycloneDX SBOMs) and Semgrep
+(Python and TypeScript SAST), each evaluated by `security/gate.py` against the PROPOSED
+thresholds in `security/policy.json`. Reports, SBOMs, identity records and gate summaries
+are uploaded as the `security-reports-*` artifacts (30 days). Coverage, declared exclusions,
+the baseline findings on `main` and the failure behaviour are documented in
+`security/README.md`; the gate's own tests run with
+`python3 -m unittest discover -s security -p "test_*.py"`.
+
 ### Running each CI gate locally
 
 ```bash

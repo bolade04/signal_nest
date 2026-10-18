@@ -1,0 +1,124 @@
+# Merge-path security scanning and SBOMs (P6-CI-6)
+
+This directory wires CVE, dependency, SAST and IaC analysis plus SBOM generation into the
+two existing **required** CI contexts that build artifacts — `Container build and security`
+and `Revision reader (unit, IaC contract, in-image)` — so that every pull request to `main`
+and every push to `main` is analysed before merge. The six required context names and the
+repository ruleset are unchanged. No optional job, no manual workflow and no external
+analysis service is involved; the publish workflows (`staging-publish.yml`,
+`reader-publish.yml`) and their Trivy steps are untouched.
+
+## What runs, where, over what
+
+| Category | Tool | Job | Population analysed | Report |
+|---|---|---|---|---|
+| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `security/requirements-semgrep.txt` | `trivy-locks-vuln.json` |
+| Vulnerabilities, built images | Trivy 0.76.0 | Container build and security; Revision reader | OS packages and installed Python packages of `signalnest-api:ci`, `signalnest-worker:ci`, `signalnest-revision-reader:ci` as built in that run | `trivy-image-*-vuln.json` |
+| SAST | Semgrep 1.181.0 (hash-locked install, `security/requirements-semgrep.txt`) with registry rulesets `p/python`, `p/typescript`, `p/javascript`, `p/react`, `p/security-audit` | Container build and security | `apps/`, `scripts/`, `security/` minus `.semgrepignore` (tests, e2e, generated and vendored paths) and `security/controls` | `semgrep.json`, `semgrep-rules-provenance.json` |
+| IaC / configuration | Trivy 0.76.0 misconfiguration checks | Container build and security | `infra/aws` OpenTofu root and modules, `infra/aws/bootstrap`, both Dockerfiles (13 targets, 246 checks at the baseline) | `trivy-config.json` |
+| SBOM | Trivy 0.76.0, CycloneDX 1.7 JSON | both jobs | the three images and the repository locks | `sbom-*.cdx.json` + `sbom-*.identity.json` |
+
+Every report is produced with `exit-code: 0` and then evaluated by `security/gate.py`, which
+fails the job itself. Each gate writes `security-reports/<name>.summary.txt`; a final
+`complete` step refuses to pass unless every expected summary exists with the expected
+verdict, and digests every file into `security-reports/MANIFEST.txt`. The whole directory is
+uploaded as a workflow artifact (`security-reports-container-build`,
+`security-reports-revision-reader`) with 30-day retention, on success and on failure.
+
+### What is NOT covered (declared exclusions)
+
+- The revision reader's `pyproject.toml` has no lock; its dependency set is analysed only as
+  installed inside the built reader image (OS packages and `psycopg`), not from a manifest.
+- GitHub Actions workflow files, `infra/docker-compose.yml` and `.github/dependabot.yml`
+  are not configuration classes Trivy's checks evaluate; they are not IaC-scanned.
+- Semgrep runs the community registry rulesets. Their TypeScript/React content is largely
+  framework-specific (Express, Next, Node crypto, JWT libraries); the rules that apply to a
+  Vite/React single-page application are few. The scan still parses every `.ts`/`.tsx`
+  file (the gate requires `apps/web/src` and `.tsx` in the scanned population) but SAST
+  depth for the frontend is rule-limited, and that limitation is not closed here.
+- Test directories, e2e fixtures and the negative-control fixtures are excluded from SAST
+  (`.semgrepignore`, `--exclude security/controls`); the control fixtures are excluded from
+  the real Trivy scans with `skip-dirs`.
+- No secret scanning is added here (`scripts/leak_scan.py` and the image security check are
+  the existing controls).
+- Nothing is signed or attested; the SBOMs are files bound to the commit and image id by
+  the identity records, not provenance attestations.
+
+## Policy — PROPOSED, enforced, not adopted
+
+`security/policy.json` holds the thresholds the gates enforce. Its `_authority` block cites
+what the repository's sources settle and what they do not:
+
+- **Vulnerabilities**: CRITICAL/HIGH fail, and only when a fixed version exists — this is
+  the publish-time Trivy policy (`docs/operations/staging-publish-workflow.md` §5/§9: an
+  INFRA-5-set threshold "pending an explicit repository-wide severity decision",
+  `ignore-unfixed: true` "subject to review") carried onto the merge path. Every finding the
+  fix-availability filter excludes is printed as `EXCLUDED` in the summary; nothing is
+  hidden. Runtime-scope lock findings and image findings gate; development-scope lock
+  findings (npm `dev`, `requirements-dev.txt`, `requirements-gate.txt`, the Semgrep lock) are
+  `REPORTED` and do not gate (exit criterion 12 names runtime dependencies). Gating
+  development scope too is an open operator choice.
+- **IaC**: CRITICAL/HIGH misconfigurations fail. No source sets an IaC threshold; this is by
+  analogy with the vulnerability threshold. No ignore file is tracked, so findings the
+  infrastructure accepts by documented decision (for example the public ALB, or the WAF
+  deferral recorded as `P6-INF-11`) currently FAIL this gate until an operator adopts a
+  per-check exception file with written justifications, or remediates.
+- **SAST**: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
+  scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
+- **SBOM**: CycloneDX 1.5–1.7 JSON with a `urn:uuid` serial, the expected described
+  component, a non-empty population above a per-artifact floor and, for images, the same
+  `ImageID` as the vulnerability report of the same job.
+
+## Baseline on `main` at the time of wiring (measured, not adjudicated)
+
+Measured locally on `main` `bd1e577b` with the same tool versions (images excluded: no
+Docker on the measuring host; the first CI run of this branch is the image baseline):
+
+- Locks: 5 npm advisories — 2 HIGH (`source-map-js` 1.2.1, fixed in 1.2.2; `braces` 3.0.3,
+  no fix), 3 MEDIUM (`react-router` ×2, `postcss-selector-parser`); all development scope
+  except `react-router` (runtime, MEDIUM). Python locks: 0. Gate verdict: PASS (HIGH
+  development findings reported; the unfixed one excluded).
+- IaC: 27 failed checks — 3 CRITICAL (`AWS-0104` unrestricted egress, `modules/ecs`),
+  7 HIGH (`AWS-0053` public ALB, `AWS-0011` no WAF, `AWS-0015`/`AWS-0132` customer-managed
+  keys ×5), 5 MEDIUM, 12 LOW. Gate verdict: **FAIL (policy violation)** — these are existing
+  recorded infrastructure findings, not something this wiring introduces or resolves.
+- SAST: 1 ERROR (`use-defused-xml`, `apps/api/app/connectors/rss.py:25`, confidence LOW),
+  3 WARNING (SHA-1 in `app/infra/vector.py`, `exec()` in two governance scripts). Gate
+  verdict: **FAIL (policy violation)** — an existing product finding.
+
+So with the proposed policy the `Container build and security` context is red on `main`
+until an operator either adopts exceptions (with written justification), changes the
+proposed thresholds, or the findings are remediated in their own tranches. The gate is not
+relaxed to hide that.
+
+## Failure behaviour (proved by `security/test_gate.py` and the CI negative controls)
+
+- A scanner crash fails its own step; the gate then reports `FAIL (report missing or
+  malformed)` (exit 2). An empty, truncated or non-JSON report is refused the same way.
+- A report that describes a different artifact, lacks an image id, has an empty package
+  population, an SBOM whose `ImageID` differs from the vulnerability report's, or a Semgrep
+  run with recorded errors is `FAIL (scanner execution incomplete)` (exit 4).
+- A finding at gating severity is `FAIL (policy violation)` (exit 3) — distinct from the two
+  above in the summary and in the exit code.
+- Negative controls (`security/controls/`) run the real scanners over inert fixtures and pass
+  only when the gate raises a policy violation (`--expect-fail`); a clean result, a crash or
+  an incomplete analysis fails the control (exit 6).
+- The completeness step fails if any expected summary is missing or does not carry the
+  expected verdict, so an analysis that silently did not run cannot pass. The workflow has
+  no path filters and the gate steps carry no conditions other than `if: always()`.
+
+## Running locally
+
+```
+python3 -m unittest discover -s security -p "test_*.py"
+trivy fs --scanners vuln --list-all-pkgs --config security/trivy.yaml --skip-dirs security/controls --format json -o security-reports/trivy-locks-vuln.json .
+python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln --kind filesystem --artifact . --expect-target package-lock.json
+python3 -m venv .security-venv && .security-venv/bin/python -m pip install --require-hashes -r security/requirements-semgrep.txt
+.security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules
+.security-venv/bin/semgrep scan --metrics=off --no-rewrite-rule-ids --timeout 60 --timeout-threshold 0 --exclude security/controls --config .security-venv/semgrep-rules --json --output security-reports/semgrep.json apps scripts security
+python3 security/gate.py sast security-reports/semgrep.json --name sast --expect-prefix apps/api/app
+```
+
+`security/requirements-semgrep.txt` is regenerated like the API locks
+(`pip-compile --generate-hashes --no-strip-extras security/requirements-semgrep.in`, pip
+25.1.1 / pip-tools 7.5.2); a manual edit breaks the hashes.

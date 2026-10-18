@@ -1,0 +1,26 @@
+# Paths the merge-path SAST scan (security gate, P6-CI-6) does not analyse. Explicit so the
+# scanned population is repository-defined rather than Semgrep's built-in default list.
+# Generated / vendored / environment
+node_modules/
+dist/
+build/
+.venv/
+venv/
+.security-venv/
+.locktools/
+.reader-venv/
+.cache/
+ci-logs/
+security-reports/
+apps/web/e2e-results/
+# Test code and fixtures (test suites contain deliberate attack corpora and insecure samples)
+tests/
+apps/api/app/tests/
+apps/revision-reader/tests/
+apps/web/e2e/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.test.mjs
+# security/controls/ is excluded on the scan command line (--exclude), not here, so the
+# control step can scan it with the same rules and the same ignore file.

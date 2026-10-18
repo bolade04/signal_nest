@@ -1,0 +1,47 @@
+{
+  "_classification": "PROPOSED_MERGE_PATH_SECURITY_POLICY",
+  "_status": "PROPOSED. Nothing in this file is an adopted repository policy. The values are the engineering defaults the P6-CI-6 wiring enforces until an operator decision adopts, changes or waives them; security/gate.py enforces exactly what is written here and adopts nothing on its own.",
+  "_authority": {
+    "vulnerability_threshold": "docs/operations/staging-publish-workflow.md section 5 and section 9: the publish-time Trivy scan fails on CRITICAL/HIGH with ignore-unfixed, 'an INFRA-5-set policy pending an explicit repository-wide severity decision' and 'subject to review'. Carried here as the gating severities plus fail_requires_fix_available; every finding the fix-availability filter excludes is listed as EXCLUDED in the gate summary, never hidden.",
+    "runtime_scope": "docs/project-phase-6-plan.md exit criterion 12 names runtime dependencies. Runtime-scope lock findings gate; development-scope lock findings are reported in every summary but do not gate (PROPOSED; the alternative of gating development scope too is an operator choice).",
+    "misconfiguration_threshold": "No source settles an IaC severity threshold. PROPOSED by analogy with the vulnerability threshold: CRITICAL/HIGH fail. No ignore file is tracked; a documented, per-check exception file would be an operator decision.",
+    "sast_threshold": "No source settles a SAST threshold. PROPOSED: Semgrep ERROR-severity findings fail; WARNING and INFO are reported. Any scanner error (rule timeout, parse failure) is an incomplete analysis and fails closed.",
+    "sbom": "docs/operations/staging-publish-workflow.md section 9 records that no plan required an SBOM. PROPOSED: CycloneDX 1.5 to 1.7 JSON, validated for format, serial number, described component, non-empty component population and, for images, the same image id as the vulnerability report."
+  },
+  "vulnerabilities": {
+    "fail_severities": [
+      "CRITICAL",
+      "HIGH"
+    ],
+    "fail_requires_fix_available": true,
+    "scope_actions": {
+      "image": "fail",
+      "runtime": "fail",
+      "development": "report"
+    },
+    "development_targets": [
+      "apps/api/requirements-dev.txt",
+      "scripts/requirements-gate.txt",
+      "security/requirements-semgrep.txt"
+    ]
+  },
+  "misconfigurations": {
+    "fail_severities": [
+      "CRITICAL",
+      "HIGH"
+    ]
+  },
+  "sast": {
+    "fail_severities": [
+      "ERROR"
+    ],
+    "scanner_errors": "fail"
+  },
+  "sbom": {
+    "spec_versions": [
+      "1.5",
+      "1.6",
+      "1.7"
+    ]
+  }
+}

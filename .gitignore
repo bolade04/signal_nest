@@ -131,3 +131,8 @@ infra/aws/cloudfront-expected.json
 # Browser/E2E harness output (Playwright report, traces, screenshots) and CI diagnostics
 apps/web/e2e-results/
 ci-logs/
+
+# P6-CI-6 merge-path security scanning: tool venv, fetched rules, reports and the Trivy cache
+.security-venv/
+security-reports/
+.cache/trivy/
