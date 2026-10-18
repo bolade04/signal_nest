@@ -4,11 +4,11 @@ version = "1.0.0"
 description = "Dedicated live database revision reader. Reads alembic_version and prints one line."
 # The reader source is stdlib + psycopg only and runs on either minor; this floor exists
 # so the test suite can run on the repository's 3.12 toolchain. The minor that SHIPS is
-# pinned in the Dockerfile, not here: gcr.io/distroless/python3-debian12 provides Python
-# 3.11, psycopg[binary] resolves to an ABI-specific wheel, and building against a
+# pinned in the Dockerfile, not here: gcr.io/distroless/python3-debian13 provides Python
+# 3.13, psycopg[binary] resolves to an ABI-specific wheel, and building against a
 # different minor yields an image whose only dependency cannot import.
 # tests/test_dockerfile.py asserts builder minor == entrypoint minor == PYTHONPATH minor.
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.14"
 
 # EXACT pins, not floors. The application uses floors because it is an application; this is
 # a security artifact where build reproducibility and stable vulnerability-scan results

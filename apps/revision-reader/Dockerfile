@@ -22,12 +22,14 @@
 # base image were ever swapped.
 
 # --- builder: resolve and install the reader into an isolated prefix -----------------
-# PYTHON MINOR IS LOAD-BEARING. gcr.io/distroless/python3-debian12 ships Python 3.11, so
-# this builder MUST be 3.11: psycopg[binary] resolves to a cp311/cp312-specific ABI wheel
-# and a minor mismatch produces an image that cannot import its only dependency.
+# PYTHON MINOR IS LOAD-BEARING. gcr.io/distroless/python3-debian13 ships Python 3.13, so
+# this builder MUST be 3.13: psycopg[binary] resolves to a cp313-specific ABI wheel and a
+# minor mismatch produces an image that cannot import its only dependency. (Until the
+# P6-CI-6 reader-base proposal this was python3-debian12 / Python 3.11, whose pinned build
+# carried 43 fixable HIGH OS findings with no newer in-family image upstream.)
 # Both bases are DIGEST-PINNED (not just tag-pinned) so a registry retag cannot change the
 # bytes; tests/test_dockerfile.py asserts the digest pin and the minor agreement.
-FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93 AS builder
+FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -81,7 +83,7 @@ RUN python -m pip install --prefix=/install .
 # --- final: distroless, no shell, no package manager, no build tooling ---------------
 # Debian-based distroless is required: psycopg[binary]'s manylinux wheel bundles libpq
 # and is glibc-linked, so an Alpine/musl base would not work.
-FROM gcr.io/distroless/python3-debian12@sha256:2fdb05402a2cf21cf78fdb3ba4c5db167241e9e498140f5bf689d7efb773731f AS reader
+FROM gcr.io/distroless/python3-debian13@sha256:dcb4e83bc06eccbee7b626d8cc1c6177f5c3a549235e70ac6e7f8cc98f4264a1 AS reader
 
 # Provenance, stamped by the publication workflow from the trusted checkout.
 ARG GIT_REVISION=unknown
@@ -96,7 +98,7 @@ COPY --from=builder /install /usr/local
 # final image are exactly the bytes the build verified (not a second COPY from context).
 COPY --from=builder /src/assets/rds-global-bundle.pem /etc/ssl/rds/rds-global-bundle.pem
 
-ENV PYTHONPATH=/usr/local/lib/python3.11/site-packages \
+ENV PYTHONPATH=/usr/local/lib/python3.13/site-packages \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -114,6 +116,6 @@ USER 10001:10001
 #   2. CPython stops parsing interpreter options at `-m <module>`: everything after it is
 #      passed to the module as sys.argv. An override command of `["-c", "..."]` therefore
 #      arrives as argv to be rejected, NOT as an interpreter flag that would run code.
-ENTRYPOINT ["/usr/bin/python3.11", "-m", "revision_reader.reader"]
+ENTRYPOINT ["/usr/bin/python3.13", "-m", "revision_reader.reader"]
 # Empty: any RunTask `command` override therefore lands in argv and is rejected.
 CMD []

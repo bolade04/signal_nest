@@ -1585,12 +1585,12 @@ jobs:
           image="signalnest-revision-reader:ci"
 
           echo "== (1) the image runs and psycopg imports (catches a builder/base ABI mismatch) =="
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
             -c "import psycopg; print('psycopg import ok')"
 
           echo "== (2) the image CANNOT migrate: Alembic and the application are absent =="
           for mod in alembic sqlalchemy app app.db.migrate pydantic boto3 fastapi; do
-            if docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "import ${mod}" 2>/dev/null; then
+            if docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "import ${mod}" 2>/dev/null; then
               echo "::error::FORBIDDEN MODULE PRESENT: ${mod} imports inside the reader image." >&2
               exit 1
             fi
@@ -1606,7 +1606,7 @@ jobs:
 
           echo "== (4) fixed exec-form entrypoint, empty CMD, non-root uid =="
           entry="$(docker inspect --format '{{ json .Config.Entrypoint }}' "$image")"
-          test "$entry" = '["/usr/bin/python3.11","-m","revision_reader.reader"]'
+          test "$entry" = '["/usr/bin/python3.13","-m","revision_reader.reader"]'
           cmd="$(docker inspect --format '{{ json .Config.Cmd }}' "$image")"
           case "$cmd" in 'null'|'[]') : ;; *) echo "::error::CMD is ${cmd}, expected empty." >&2; exit 1 ;; esac
           test "$(docker inspect --format '{{ .Config.User }}' "$image")" = "10001:10001"
@@ -1666,7 +1666,7 @@ jobs:
           expect 52 -e DATABASE_URL="postgresql://signalnest_app:p%40ss@${BAKED_HOST}:5432/signalnest?sslmode=require"
 
           echo "== (7) baked pins and the CA bundle are present and non-empty =="
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "
           import os
           from revision_reader import _pinned
           assert _pinned.EXPECTED_DB_HOST == '${BAKED_HOST}', _pinned.EXPECTED_DB_HOST
@@ -1675,14 +1675,14 @@ jobs:
           print('pins + CA present ok')"
 
           echo "== (8) the baked CA bundle is byte-identical to the reviewed, pinned asset =="
-          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "
           import hashlib, pathlib
           print(hashlib.sha256(pathlib.Path('/etc/ssl/rds/rds-global-bundle.pem').read_bytes()).hexdigest())")"
           want="e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
           test "$got" = "$want" || { echo "::error::baked CA sha256 ${got} != ${want}" >&2; exit 1; }
 
           echo "== (9) exact interpreter patch version (logged, not asserted — drift visible) =="
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
             -c "import sys; print('reader interpreter:', sys.version)"
 
           echo "revision-reader in-image verification: PASS"
