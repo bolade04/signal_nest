@@ -243,6 +243,94 @@ def test_rss_connector_rejects_doctype_feed_as_unsafe() -> None:
     assert result.failures[0].kind is FailureKind.UNSAFE_CONTENT
 
 
+def _rss_feed(*items: str, encoding: str = "utf-8", declaration: str = "") -> bytes:
+    body = "<rss><channel><title>Dallas Local News</title>" + "".join(items) + "</channel></rss>"
+    return (f'<?xml version="1.0" encoding="{encoding}"?>' + declaration + body).encode(encoding)
+
+
+def _item(title: str, link: str = "https://example.test/a", desc: str = "d") -> str:
+    return (
+        f"<item><title>{title}</title><link>{link}</link>"
+        f"<description>{desc}</description></item>"
+    )
+
+
+def test_rss_connector_valid_feed_parses_normalizes_and_attributes() -> None:
+    feed = _rss_feed(_item("Dallas opens a plaza", "https://example.test/plaza", "downtown"))
+    conn = RssNewsConnector(feed_provider=lambda _m: feed, now=_fixed_now)
+    result = conn.collect(FetchScope(market="Dallas, TX", keywords=[], max_items=10))
+    assert result.failures == []
+    assert len(result.signals) == 1
+    sig = result.signals[0]
+    assert sig.content == "Dallas opens a plaza downtown"
+    assert sig.source_url == "https://example.test/plaza"
+    assert sig.attribution["connector"] == "rss_news"
+    assert sig.attribution["source_title"] == "Dallas Local News"
+    assert ("text_mention", "Dallas, TX") in sig.geo_evidence
+
+
+def test_rss_connector_rejects_entity_declaration_past_the_byte_screen() -> None:
+    # The byte screen reads the first 4 KiB for <!ENTITY; a DOCTYPE placed after a long
+    # comment is still a DTD and must be refused by the hardened parser, not expanded.
+    padding = "<!-- " + "x" * 5000 + " -->"
+    unsafe = (
+        '<?xml version="1.0"?>' + padding
+        + '<!DOCTYPE rss [<!ENTITY lol "lol">]><rss><channel><title>&lol;</title></channel></rss>'
+    ).encode()
+    assert b"<!doctype" not in unsafe[:4096].lower()
+    conn = RssNewsConnector(feed_provider=lambda _m: unsafe, now=_fixed_now)
+    result = conn.collect(FetchScope(market="Dallas, TX", keywords=[], max_items=10))
+    assert result.signals == []
+    assert [f.kind for f in result.failures] == [FailureKind.UNSAFE_CONTENT]
+
+
+def test_rss_connector_rejects_utf16_encoded_doctype() -> None:
+    # In UTF-16 the bytes "<!DOCTYPE" never appear contiguously, so the byte screen cannot
+    # see the declaration; defusedxml refuses it structurally after decoding.
+    unsafe = _rss_feed(
+        _item("t"), encoding="utf-16", declaration='<!DOCTYPE rss [<!ENTITY e "x">]>'
+    )
+    assert b"<!doctype" not in unsafe.lower()
+    conn = RssNewsConnector(feed_provider=lambda _m: unsafe, now=_fixed_now)
+    result = conn.collect(FetchScope(market="Dallas, TX", keywords=[], max_items=10))
+    assert result.signals == []
+    assert [f.kind for f in result.failures] == [FailureKind.UNSAFE_CONTENT]
+
+
+def test_rss_connector_rejects_external_entity_without_resolving_it(tmp_path) -> None:
+    # An external entity pointing at a local file must be refused before any read; the
+    # file's content must never reach a signal.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("never-read")
+    unsafe = (
+        '<?xml version="1.0"?><!DOCTYPE rss [<!ENTITY xxe SYSTEM "file://'
+        + str(secret)
+        + '">]><rss><channel><title>&xxe;</title></channel></rss>'
+    ).encode()
+    conn = RssNewsConnector(feed_provider=lambda _m: unsafe, now=_fixed_now)
+    result = conn.collect(FetchScope(market="Dallas, TX", keywords=[], max_items=10))
+    assert result.signals == []
+    assert [f.kind for f in result.failures] == [FailureKind.UNSAFE_CONTENT]
+    assert all("never-read" not in str(f) for f in result.failures)
+
+
+def test_rss_connector_utf16_valid_feed_still_parses() -> None:
+    feed = _rss_feed(_item("Dallas market day"), encoding="utf-16")
+    conn = RssNewsConnector(feed_provider=lambda _m: feed, now=_fixed_now)
+    result = conn.collect(FetchScope(market="Dallas, TX", keywords=[], max_items=10))
+    assert result.failures == []
+    assert [s.content for s in result.signals] == ["Dallas market day d"]
+
+
+def test_rss_connector_rejects_oversized_feed_before_parsing() -> None:
+    from app.connectors.rss import MAX_FEED_BYTES
+
+    huge = b"<rss><channel>" + b"<!--" + b"x" * MAX_FEED_BYTES + b"-->" + b"</channel></rss>"
+    conn = RssNewsConnector(feed_provider=lambda _m: huge, now=_fixed_now)
+    result = conn.collect(FetchScope(market="Dallas, TX", keywords=[], max_items=10))
+    assert [f.kind for f in result.failures] == [FailureKind.UNSAFE_CONTENT]
+
+
 def test_rss_connector_classifies_malformed_xml() -> None:
     conn = RssNewsConnector(feed_provider=lambda _m: b"<rss><broken", now=_fixed_now)
     result = conn.collect(FetchScope(market="Dallas, TX"))

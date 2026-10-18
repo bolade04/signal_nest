@@ -13,8 +13,12 @@ it on is gated on product-owner approval and connector legal sign-off (Phase 3
 entry criteria). The parse/normalize path is identical either way, so enabling
 live egress later needs no change here.
 
-Safety: the parser rejects any feed declaring a DOCTYPE or entity (defusing
-billion-laughs / XXE) and caps the input size before parsing.
+Safety: the parser caps the input size before parsing, screens the raw bytes for a
+DOCTYPE/entity declaration, and then parses with ``defusedxml`` — which refuses DTDs,
+entity declarations and external references structurally, whatever the document's
+encoding — so an encoded or oddly placed declaration that the byte screen cannot see is
+still rejected with the same structured ``UNSAFE_CONTENT`` failure (defence in depth,
+P6-CI-6 SAST finding ``use-defused-xml``).
 """
 
 from __future__ import annotations
@@ -22,7 +26,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from xml.etree import ElementTree as ET
+
+from defusedxml import (
+    DTDForbidden,
+    EntitiesForbidden,
+    ExternalReferenceForbidden,
+)
+from defusedxml import ElementTree as DET
 
 from app.connectors.base import (
     ConnectorResult,
@@ -113,8 +123,16 @@ class RssNewsConnector(SourceConnector):
     def _parse(self, data: bytes) -> list[dict]:
         _assert_safe_xml(data)
         try:
-            root = ET.fromstring(data)  # noqa: S314 - DOCTYPE/entity rejected above
-        except ET.ParseError as exc:
+            root = DET.fromstring(
+                data, forbid_dtd=True, forbid_entities=True, forbid_external=True
+            )
+        except (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden) as exc:
+            # The byte screen above misses declarations the parser still sees (another
+            # encoding, a declaration past the screened head); defusedxml refuses them.
+            raise ConnectorFetchError(
+                FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
+            ) from exc
+        except DET.ParseError as exc:
             raise ConnectorFetchError(FailureKind.PARSE_ERROR, "malformed feed XML") from exc
 
         channel = root.find("channel")
