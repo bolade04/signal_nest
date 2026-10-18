@@ -69,6 +69,10 @@ what the repository's sources settle and what they do not:
   per-check exception file with written justifications, or remediates.
 - **SAST**: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
+- **SBOM identity**: each identity record names the reviewed commit (`commit`: the pull
+  request head, or the pushed commit on `main`) and the commit actually checked out
+  (`checkout_commit`: on a pull_request event GitHub builds the ephemeral merge ref), the
+  image id, the SBOM's serial and sha256 and both component counts.
 - **SBOM**: CycloneDX 1.5–1.7 JSON with a `urn:uuid` serial, the expected described
   component, a non-empty **package-component** population (`library`/`application`/
   `framework` entries only; the total entry count is reported separately, so padding with
@@ -78,8 +82,8 @@ what the repository's sources settle and what they do not:
 
 ## Baseline on `main` at the time of wiring (measured, not adjudicated)
 
-Measured locally on `main` `bd1e577b` with the same tool versions (images excluded: no
-Docker on the measuring host; the first CI run of this branch is the image baseline):
+Measured locally on `main` `bd1e577b` with the same tool versions (images: no Docker on the
+measuring host, so the image baseline is the first complete CI run of this branch, below):
 
 - Locks: 5 npm advisories — 2 HIGH (`source-map-js` 1.2.1, fixed in 1.2.2; `braces` 3.0.3,
   no fix), 3 MEDIUM (`react-router` ×2, `postcss-selector-parser`); all development scope
@@ -92,6 +96,15 @@ Docker on the measuring host; the first CI run of this branch is the image basel
 - SAST: 1 ERROR (`use-defused-xml`, `apps/api/app/connectors/rss.py:25`, confidence LOW),
   3 WARNING (SHA-1 in `app/infra/vector.py`, `exec()` in two governance scripts). Gate
   verdict: **FAIL (policy violation)** — an existing product finding.
+
+- Images (CI run 39110119516 of this branch, Trivy DB of 2026-10-18; the Dockerfiles are
+  unchanged from `main`): `signalnest-api:ci` and `signalnest-worker:ci` each carry 87 OS
+  packages (Debian 13.7) and 66 Python packages; 44 HIGH OS findings with no fix are
+  `EXCLUDED` and listed; 4 HIGH with a fix violate — `urllib3` 2.7.0, `msgpack` 1.1.2 and
+  `setuptools` 70.3.0, all vendored inside pip 26.2.1, which the Dockerfile's
+  `pip install --upgrade pip` installs into the runtime venv (the application's own
+  `urllib3` is the locked 2.8.0). Gate verdict: **FAIL (policy violation)** — a Dockerfile
+  finding (ship the venv without pip, or pin pip), not a lock finding.
 
 So with the proposed policy the `Container build and security` context is red on `main`
 until an operator either adopts exceptions (with written justification), changes the
