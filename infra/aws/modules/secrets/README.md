@@ -34,6 +34,7 @@ no secret value, and no AWS access key. Downstream, one-way only:
   least-privilege identity policies.
 - **`secrets -> ecs`** — `ecs` consumes `secret_arns` for task-definition `secrets`
   `valueFrom` injection.
+- **`secrets -> storage`** — *(added 2026-10-18, P6-CI-6, operator decision of that date)* `storage` consumes `kms_key_arn` as the application bucket's SSE-KMS key: the live role permissions boundary lets the bounded task roles use this key and no other. The key itself is unchanged here.
 
 No `secrets -> iam -> secrets`, `secrets -> ecs -> secrets`, or `data -> secrets -> data`
 cycle is possible because this module consumes nothing downstream.
@@ -54,7 +55,7 @@ per-resource `Name` tag.
 | --- | --- | --- |
 | `secret_arns` | map: logical key → Secrets Manager container ARN | `iam`, `ecs` |
 | `secret_names` | map: logical key → container name (`<name_prefix>/<KEY>`) | `iam`, `ecs` |
-| `kms_key_arn` | ARN of the secrets CMK | `iam` (`kms:Decrypt` scoping) |
+| `kms_key_arn` | ARN of the secrets CMK | `iam` (`kms:Decrypt` scoping; *(2026-10-18, P6-CI-6)* the task roles' S3-scoped KMS grant), `storage` *(2026-10-18, P6-CI-6: the bucket's SSE-KMS key)* |
 | `kms_key_id` | key id of the secrets CMK | reference |
 | `kms_alias_name` | `alias/<name_prefix>/secrets` | reference |
 

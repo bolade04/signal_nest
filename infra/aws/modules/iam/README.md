@@ -68,6 +68,7 @@ The S3 policy mirrors the executable client exactly
 `delete_object`/`head_bucket`/presigned `get_object`): `s3:ListBucket` on the
 bucket ARN plus `s3:GetObject`/`s3:PutObject`/`s3:DeleteObject` on
 `<bucket_arn>/*`. No `s3:*`, no ACL/policy mutation, no cross-bucket access.
+*(Added 2026-10-18, P6-CI-6:)* the bucket is SSE-KMS with the secrets CMK, so the same policy carries `AppBucketKmsViaS3Only`: `kms:GenerateDataKey` + `kms:Decrypt` on exactly `kms_key_arn`, conditioned on **both** `kms:ViaService = s3.<region>.amazonaws.com` and `kms:EncryptionContext:aws:s3:arn = <bucket_arn>` (S3's context with a Bucket Key). AWS documents `GenerateDataKey` for `PutObject` and `Decrypt` for `GetObject`; the presigned GET runs with the role's credentials. The roles cannot call KMS directly or through Secrets Manager. `app_bucket_kms_scope.tftest.hcl` pins the rendering.
 
 ## 3. Out of scope
 *[Updated 2026-07-24, INFRA-9 execution-path tranche: the CI image-publisher
@@ -121,7 +122,7 @@ containers never receive execution-role credentials. **Execution role:** ECR
 retrieval, prefix-scoped log delivery, retrieval of only the referenced secret
 ARNs, `kms:Decrypt` only on the secrets CMK via Secrets Manager. **Application
 task roles:** only the AWS API calls the code actually makes — S3 for API and
-worker (proven use), and `ses:SendEmail` for the **API only** (the mail seam is
+worker (proven use; *(2026-10-18, P6-CI-6)* plus the S3-scoped `kms:GenerateDataKey`/`kms:Decrypt` on the secrets CMK that SSE-KMS requires), and `ses:SendEmail` for the **API only** (the mail seam is
 reached solely from the auth routes in the API process; the worker never imports
 it), scoped to one identity ARN and one From address — **no** RDS/Redis IAM
 permission, **no** ECR/Logs-driver/secret-injection permission; migration task

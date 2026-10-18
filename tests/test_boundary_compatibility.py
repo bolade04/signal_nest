@@ -54,10 +54,15 @@ INTENDED = {
     ],
     "api-task": [("s3:ListBucket", APP_BUCKET), ("s3:GetObject", f"{APP_BUCKET}/x"),
                  ("s3:PutObject", f"{APP_BUCKET}/x"), ("s3:DeleteObject", f"{APP_BUCKET}/x"),
+                 # P6-CI-6 D4: the application bucket is SSE-KMS with the secrets CMK, so the
+                 # task roles need these two on that key (via S3 only — the condition is in
+                 # the identity policy; the boundary must simply not deny them)
+                 ("kms:GenerateDataKey", gb.SECRETS_CMK), ("kms:Decrypt", gb.SECRETS_CMK),
                  # 6B-4C: the SES send grant on the API task role (one identity ARN)
                  ("ses:SendEmail", f"arn:aws:ses:{R}:{A}:identity/mail.staging.example.com")],
     "worker-task": [("s3:ListBucket", APP_BUCKET), ("s3:GetObject", f"{APP_BUCKET}/x"),
-                    ("s3:PutObject", f"{APP_BUCKET}/x"), ("s3:DeleteObject", f"{APP_BUCKET}/x")],
+                    ("s3:PutObject", f"{APP_BUCKET}/x"), ("s3:DeleteObject", f"{APP_BUCKET}/x"),
+                    ("kms:GenerateDataKey", gb.SECRETS_CMK), ("kms:Decrypt", gb.SECRETS_CMK)],
     "migration-task": [],  # inline policy is deliberately empty
     "ci-publisher": [
         ("ecr:GetAuthorizationToken", "*"),
@@ -140,6 +145,18 @@ def test_boundary_explicitly_denies_the_capabilities_it_exists_to_remove(action,
     iam_eval.require_explicit_deny(BOUNDARY, action, resource, {})
 
 
+def test_a_dedicated_application_data_key_would_be_denied_to_the_task_roles():
+    """WHY the application bucket reuses the secrets CMK (P6-CI-6 D4, operator decision
+    2026-10-18): the boundary fences KMS data-key use to that one key, so a NEW key for the
+    bucket would be explicitly denied to the bounded api/worker task roles and every S3 read
+    and write would fail at runtime. This is the positive instance of that constraint; if the
+    boundary is ever amended to admit a data key, this test must change with it."""
+    other_key = f"arn:aws:kms:{R}:{A}:key/22222222-2222-2222-2222-222222222222"
+    for action in ("kms:GenerateDataKey", "kms:Decrypt"):
+        iam_eval.require_explicit_deny(BOUNDARY, action, other_key, {}, sid="DenyKmsUseOutsideSecretsCmk")
+        assert iam_eval.decide(BOUNDARY, action, gb.SECRETS_CMK, {}).decision is Decision.EXPLICIT_ALLOW
+
+
 def test_execution_roles_keep_secrets_and_kms_within_the_approved_scope():
     """Fences, not blanket denies — the deny excludes the approved prefix and CMK."""
     assert iam_eval.decide(BOUNDARY, "secretsmanager:GetSecretValue", SECRET, {}).decision is Decision.EXPLICIT_ALLOW
@@ -175,7 +192,7 @@ def test_intended_table_still_matches_the_repository():
     assert "RunExactReaderRevisionOnly" in reader
     iam_src = (REPO_ROOT / "infra/aws/modules/iam/main.tf").read_text(encoding="utf-8")
     for sid in ("EcrPullApplicationImages", "SecretsReadReferencedContainers",
-                "AppBucketObjects", "EcrPushToTwoRepos"):
+                "AppBucketObjects", "AppBucketKmsViaS3Only", "EcrPushToTwoRepos"):
         assert sid in iam_src, f"{sid} missing — the intended-permission table is stale"
     declared = len(re.findall(r'^resource "aws_iam_role" ', iam_src + reader, re.MULTILINE))
     assert declared == 8, f"expected 8 roles, found {declared}"

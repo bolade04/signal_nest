@@ -1,10 +1,10 @@
 # variables.tf — typed inputs for the staging application-storage module
 #
-# Semantic, root-provided configuration only. This module has ZERO upstream module
-# dependencies: it consumes no other module output, no role/registry/account id, no
-# KMS ARN, and no credential. Access permissions are owned downstream by the future
-# `iam` module (producer -> consumer: storage -> iam), never by this module. All
-# validation is STATIC (regex/range) — none queries AWS.
+# Semantic, root-provided configuration plus ONE producer output since P6-CI-6: the
+# secrets CMK ARN (`kms_key_arn`, from `secrets`). It consumes no role/registry/account
+# id and no credential. Access permissions are owned downstream by the `iam` module
+# (producer -> consumer: storage -> iam), never by this module. All validation is
+# STATIC (regex/range) — none queries AWS.
 
 variable "bucket_name" {
   description = "Explicit, globally-unique lowercase S3 bucket name for the staging application object store. Supplied by the caller so a later, separately authorized root-composition tranche can set an environment-specific name. Contains no account id, credential, region, endpoint, or ARN."
@@ -41,4 +41,14 @@ variable "tags" {
   description = "Additional caller-provided resource tags merged onto the bucket. Defaults to an empty map. The authoritative common tag set is applied separately by the root provider default_tags; this input only supplements it and does not replace it."
   type        = map(string)
   default     = {}
+}
+
+variable "kms_key_arn" {
+  description = "ARN of the secrets customer-managed KMS key (the secrets module's `kms_key_arn` output). The bucket's default encryption is SSE-KMS with this key (P6-CI-6): the live role permissions boundary permits the task roles KMS use on this key only. Required; no default."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:[^:]+:kms:[^:]+:[0-9]{12}:key/[0-9a-f-]+$", var.kms_key_arn))
+    error_message = "kms_key_arn must be a KMS key ARN (arn:<partition>:kms:<region>:<account>:key/<key-id>), not an alias."
+  }
 }

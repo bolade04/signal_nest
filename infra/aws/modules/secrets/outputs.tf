@@ -18,7 +18,7 @@ output "secret_names" {
 }
 
 output "kms_key_arn" {
-  description = "ARN of the customer-managed KMS key that encrypts the four secret containers (consumed by iam for kms:Decrypt scoping)."
+  description = "ARN of the customer-managed KMS key that encrypts the four secret containers and, since P6-CI-6, the application bucket (consumed by iam for KMS scoping and by storage as the bucket's SSE-KMS key)."
   value       = aws_kms_key.secrets.arn
 }
 

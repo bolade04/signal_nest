@@ -88,8 +88,11 @@ resource "terraform_data" "boundary_mode_precondition" {
 # - API/worker task roles: only the S3 calls the application code actually makes
 #   (apps/api/app/infra/storage.py: put_object/get_object/head_object/
 #   delete_object/head_bucket/presigned get_object), scoped to the single
-#   application bucket. No RDS/Redis IAM permission (socket access is a
-#   network/credential matter), no ECR/Logs-driver/secret-injection permission.
+#   application bucket, plus — since P6-CI-6 made the bucket SSE-KMS with the
+#   secrets CMK — kms:GenerateDataKey/kms:Decrypt on that key ONLY via S3 and ONLY
+#   for this bucket's encryption context. No RDS/Redis IAM permission (socket
+#   access is a network/credential matter), no ECR/Logs-driver/secret-injection
+#   permission, and no direct KMS use.
 # - Migration task role: EMPTY (no attached policy) — migration code calls no
 #   AWS API; DB access is network+credential, and its secrets are injected by
 #   the execution role.
@@ -252,6 +255,17 @@ resource "aws_iam_role" "migration_task" {
 # head_bucket -> s3:ListBucket on the bucket; put_object/get_object/head_object/
 # delete_object and presigned get_object -> object-level Get/Put/Delete on
 # bucket/*. No s3:* wildcard, no cross-bucket access, no ACL/policy mutation.
+#
+# KMS (P6-CI-6, operator decision 2026-10-18): the bucket's default encryption is
+# SSE-KMS with the secrets CMK (the only key the live role boundary lets these roles
+# use). AWS documents that PutObject needs kms:GenerateDataKey and GetObject (including
+# a presigned GET, which runs with this role's credentials) needs kms:Decrypt; nothing
+# else is granted. Both conditions are required together: kms:ViaService confines use
+# to S3 in this region, and the encryption-context key confines it to THIS bucket —
+# with the S3 Bucket Key on (storage module), S3's encryption context is the bucket
+# ARN. The role therefore cannot call KMS directly, cannot use the key through Secrets
+# Manager (whose requests carry neither value), and cannot decrypt any other bucket's
+# objects with it.
 resource "aws_iam_role_policy" "app_s3" {
   for_each = local.s3_workload_roles
 
@@ -276,6 +290,21 @@ resource "aws_iam_role_policy" "app_s3" {
           "s3:DeleteObject",
         ]
         Resource = "${var.bucket_arn}/*"
+      },
+      {
+        Sid    = "AppBucketKmsViaS3Only"
+        Effect = "Allow"
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+        ]
+        Resource = var.kms_key_arn
+        Condition = {
+          StringEquals = {
+            "kms:ViaService"                   = "s3.${data.aws_region.current.region}.amazonaws.com"
+            "kms:EncryptionContext:aws:s3:arn" = var.bucket_arn
+          }
+        }
       },
     ]
   })

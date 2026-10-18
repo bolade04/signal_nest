@@ -18,6 +18,10 @@
 #   network -> data_sql, data_cache, ecs (private subnets / vpc)
 #   edge     : independent (root vars only; no network edge)
 #   secrets -> iam (secret_arns, kms_key_arn) ; secrets -> ecs (secret_arns)
+#   secrets -> storage (kms_key_arn)   [P6-CI-6, operator decision 2026-10-18: the
+#                    application bucket is SSE-KMS with the secrets CMK, the only key
+#                    the live role boundary lets the task roles use; NOT in the
+#                    original §26.12 graph]
 #   registry -> iam (repository_arns) ; registry -> ecs (repository_urls)
 #   storage -> iam (bucket_arn)   [one-way; storage never consumes iam]
 #   data_sql -> ecs (rds_security_group_id) ; data_cache -> ecs (redis_security_group_id)
@@ -148,7 +152,8 @@ module "alb" {
 }
 
 # Four EMPTY Secrets Manager containers + one customer-managed KMS key/alias.
-# No secret value exists or is populated here (§26.6; population is INFRA-6).
+# No secret value exists or is populated here (§26.6; population is INFRA-6). The key
+# also encrypts the application bucket since P6-CI-6 (module.storage below).
 module "secrets" {
   source = "./modules/secrets"
 
@@ -164,11 +169,13 @@ module "registry" {
 }
 
 # One private application S3 bucket. The caller-supplied globally unique name
-# arrives via a git-ignored *.tfvars; no real bucket name is committed.
+# arrives via a git-ignored *.tfvars; no real bucket name is committed. Encrypted with
+# the secrets CMK (P6-CI-6; see the secrets -> storage note in the graph above).
 module "storage" {
   source = "./modules/storage"
 
   bucket_name = var.app_bucket_name
+  kms_key_arn = module.secrets.kms_key_arn
 }
 
 # Private RDS PostgreSQL (rule-free SG; ecs owns the 5432 rules, §26.3). The

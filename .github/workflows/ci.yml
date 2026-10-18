@@ -1031,7 +1031,9 @@ jobs:
       # whole for distinct subnet ids), `-backend=false` so the committed S3 backend is NEVER
       # initialised, no AWS call. The root cache infra/aws is already an EXPECTED_CACHE_ROOTS
       # member (and a root_wiring_check mirror source, verified against the committed lockfile).
-      # Expected runs: 7. Placed before toolchain_post so the cache it creates is classified.
+      # The same step also runs cmk_remediation.tftest.hcl (P6-CI-6): module-targeted runs that
+      # render the edge, observability and storage modules' customer-managed-key wiring.
+      # Expected runs: 11 (7 + 4). Placed before toolchain_post so the cache it creates is classified.
       - name: Root input-boundary and alias-wiring contract tests (offline, fully mocked provider)
         id: root_boundary_tests
         if: always()

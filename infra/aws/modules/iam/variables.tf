@@ -36,7 +36,7 @@ variable "secret_arns" {
 }
 
 variable "kms_key_arn" {
-  description = "ARN of the customer-managed KMS key that encrypts the four secret containers, from the secrets module `kms_key_arn` output. Scopes the execution role's kms:Decrypt to exactly this key (via Secrets Manager only)."
+  description = "ARN of the customer-managed KMS key that encrypts the four secret containers and (since P6-CI-6) the application bucket, from the secrets module `kms_key_arn` output. Scopes the execution role's kms:Decrypt to exactly this key (via Secrets Manager only) and the api/worker task roles' kms:GenerateDataKey/kms:Decrypt to exactly this key (via S3, for the application bucket only)."
   type        = string
 
   validation {

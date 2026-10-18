@@ -16,6 +16,15 @@
 # hostname and its Route 53 record, WAF, Lambda@Edge/CloudFront Functions, access
 # logs, and any SPA object upload or CloudFront invalidation.
 #
+# Encryption at rest (P6-CI-6, operator order 2026-10-18, IaC finding AWS-0132): the
+# SPA origin bucket uses SSE-KMS with a customer-managed key OWNED HERE (aws_kms_key.spa).
+# Its key policy keeps the account's IAM delegation (the AWS default-policy statement)
+# and grants kms:Decrypt to the CloudFront service principal ONLY for this module's
+# distribution (AWS:SourceArn), the statement CloudFront OAC needs to read SSE-KMS
+# objects. No encrypt/data-key grant is given to CloudFront: the distribution allows
+# GET/HEAD/OPTIONS only. A future SPA deployer (P6-INF-2) needs kms:GenerateDataKey on
+# this key through its own IAM policy.
+#
 # Tagging: the authoritative eight-tag common set is applied automatically to every
 # taggable resource by the root provider's `default_tags` (providers.tf). This
 # module only adds the conventional per-resource `Name` tag.
@@ -51,16 +60,73 @@ resource "aws_s3_bucket_public_access_block" "spa" {
   restrict_public_buckets = true
 }
 
-# Server-side encryption at rest (SSE-S3/AES256; no committed KMS key reference).
+# Server-side encryption at rest: SSE-KMS with the module's SPA key (below). It was
+# SSE-S3/AES256 until P6-CI-6 (IaC finding AWS-0132). The S3 Bucket Key stays on, so
+# S3 asks KMS for a bucket-level data key instead of one per object.
 resource "aws_s3_bucket_server_side_encryption_configuration" "spa" {
   bucket = aws_s3_bucket.spa.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.spa.arn
     }
     bucket_key_enabled = true
   }
+}
+
+# --- Customer-managed key for the SPA origin bucket (P6-CI-6) ----------------------
+# Symmetric, rotation on, single-region, the maximum recoverable deletion window. The
+# account root statement is the AWS default key policy's own (it delegates access to
+# this account's IAM and keeps the key manageable); the second statement is the one
+# AWS documents for CloudFront OAC with SSE-KMS, narrowed to kms:Decrypt. No account
+# id or ARN literal is committed: both come from data sources at plan time.
+data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
+
+resource "aws_kms_key" "spa" {
+  description                        = "SignalNest ${var.name_prefix} SPA origin CMK - encrypts the private SPA origin bucket; decrypt granted only to this module's CloudFront distribution."
+  key_usage                          = "ENCRYPT_DECRYPT"
+  customer_master_key_spec           = "SYMMETRIC_DEFAULT"
+  enable_key_rotation                = true
+  multi_region                       = false
+  is_enabled                         = true
+  deletion_window_in_days            = 30
+  bypass_policy_lockout_safety_check = false
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableIamPoliciesInThisAccount"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "AllowCloudFrontOacDecryptForThisDistributionOnly"
+        Effect    = "Allow"
+        Principal = { Service = "cloudfront.amazonaws.com" }
+        Action    = "kms:Decrypt"
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.spa.arn
+          }
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name = "${var.name_prefix}-spa-cmk"
+  }
+}
+
+resource "aws_kms_alias" "spa" {
+  name          = "alias/${var.name_prefix}/spa"
+  target_key_id = aws_kms_key.spa.key_id
 }
 
 resource "aws_s3_bucket_versioning" "spa" {
