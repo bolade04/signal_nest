@@ -119,6 +119,7 @@ relaxed to hide that.
 
 ```
 python3 -m unittest discover -s security -p "test_*.py"
+mkdir -p security-reports
 trivy fs --scanners vuln --list-all-pkgs --config security/trivy.yaml --skip-dirs security/controls --format json -o security-reports/trivy-locks-vuln.json .
 python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln --kind filesystem --artifact . --expect-target package-lock.json
 python3 -m venv .security-venv && .security-venv/bin/python -m pip install --require-hashes -r security/requirements-semgrep.txt
