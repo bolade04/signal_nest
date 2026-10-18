@@ -315,6 +315,36 @@ class ExceptionCase(unittest.TestCase):
             _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
             self.assertTrue(any(v.startswith("EXCEPTION_TREE_OPAQUE") for v in violations))
 
+    def test_a_symlink_followed_by_dotdot_cannot_escape_the_scope(self):
+        # Review FREEZE-2, permissions lane R2-1: resolve() follows "link" first and lands inside; OpenTofu cleans
+        # "./link/../../modules" lexically and loads infra/modules, outside the scope. Both syntaxes; symlinks refused outright.
+        for rel, text in (("infra/root.tf", 'module "x" {\n  source = "./link/../../modules"\n}\n'),
+                          ("infra/root.tf.json", json.dumps({"module": {"x": {"source": "./link/../../modules"}}}))):
+            with tempfile.TemporaryDirectory() as d:
+                self.root = pathlib.Path(d)
+                # The reviewer's geometry: link -> sub/alb (two levels), so PHYSICALLY ./link/../../modules is infra/modules
+                # (inside, and it exists), while LEXICALLY it is modules/ (outside) — what OpenTofu loads.
+                tree(self.root, {"infra/alb/main.tf": ALB, "infra/sub/alb/x.tf": "locals {\n  a = 1\n}\n",
+                                 "infra/modules/placeholder.tf": "locals {\n  a = 1\n}\n",
+                                 "modules/listener.tf": 'resource "aws_lb_listener" "http" {\n  protocol = "HTTP"\n}\n', rel: text})
+                (self.root / "infra/link").symlink_to("sub/alb", target_is_directory=True)
+                self.assertTrue((self.root / "infra/link/../../modules").resolve() == (self.root / "infra/modules").resolve())
+                _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
+                opaque = [v for v in violations if v.startswith("EXCEPTION_TREE_OPAQUE")]
+                self.assertTrue(any("a symlink in infra" in v for v in opaque), rel)
+                self.assertTrue(any("module.x" in v and "resolves to modules" in v for v in opaque), rel)
+
+    def test_any_symlink_in_the_scope_fails_closed_even_one_pointing_inside(self):
+        (self.root / "infra/alias-to-alb").symlink_to("alb", target_is_directory=True)
+        _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
+        self.assertTrue(any(v.startswith("EXCEPTION_TREE_OPAQUE") and "a symlink in infra" in v for v in violations))
+
+    def test_a_symlinked_file_beside_the_matched_block_fails_closed(self):
+        tree(self.root, {"shared/locals.tf": "locals {\n  shared = 1\n}\n"})
+        (self.root / "infra/m/locals.tf").symlink_to("../../shared/locals.tf")
+        _, violations = self.evaluate(self.egress_findings(), exceptions(entry()))
+        self.assertTrue(any(v.startswith("EXCEPTION_MODULE_OVERRIDE") for v in violations))
+
     def test_a_local_module_source_is_accepted(self):
         tree(self.root, {"infra/root.tf": 'module "alb" {\n  source = "./alb"\n}\n'})
         self.assertEqual(self.evaluate([self.alb_finding()], exceptions(self.a2()))[1], [])

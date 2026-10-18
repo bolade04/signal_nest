@@ -271,8 +271,9 @@ resource "aws_iam_role" "migration_task" {
 # documents kms:EncryptionContext:<key> for both; NEVER "fix" that report by dropping the
 # context condition — that widens the grant to every SSE-KMS bucket under the secrets key.
 # Registering the key needs a review record (the table is review-pinned). Removing this
-# statement (or reverting the bucket to SSE-S3) leaves objects already written under the key
-# unreadable to the application until they are re-encrypted in place.
+# statement leaves objects already written under the key unreadable to the application
+# until they are re-encrypted in place (reverting the bucket default alone changes only
+# new objects).
 resource "aws_iam_role_policy" "app_s3" {
   for_each = local.s3_workload_roles
 

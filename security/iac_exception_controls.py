@@ -98,7 +98,8 @@ def _expired_entry(doc: dict) -> dict:
 
 
 # name -> (what it proves, expected violation token or None for the baseline, edits, exceptions transform)
-# An edit is ("replace", file, old, new) | ("append", file, text) | ("create", file, text) | ("copy_mutated", src, dst, old, new).
+# An edit is ("replace", file, old, new) | ("append", file, text) | ("create", file, text) | ("copy_mutated", src, dst, old, new)
+# | ("symlink", link, target) — target is written verbatim as the link's relative target.
 CASES: dict = {
     "baseline": ("the unmutated copy passes (copying is not what fails the cases)", None, [], None),
     "egress-port-range": ("A1 condition: a widened port range on the excepted egress rule", "EXCEPTION_CONDITION_FAILED",
@@ -130,6 +131,10 @@ CASES: dict = {
     "tree-escaping-local-module": ("A2 tree integrity: a LOCAL module source that escapes the scope (../) declaring an HTTP listener on module.alb.alb_arn (review FREEZE-1, adversarial BLOCKER-1)", "EXCEPTION_TREE_OPAQUE",
                                    [("create", "infra/outside-scope-probe/main.tf", 'variable "alb_arn" {\n  type = string\n}\n' + ROOT_HTTP_LISTENER.replace("module.alb.alb_arn", "var.alb_arn")),
                                     ("append", ROOT_MAIN, '\nmodule "outside_scope_probe" {\n  source  = "../outside-scope-probe"\n  alb_arn = module.alb.alb_arn\n}\n')], None),
+    "tree-symlink-dotdot-escape": ("A2 tree integrity: a symlink followed by .. (\"./link/../../modules\") — Path.resolve() follows the link first, OpenTofu cleans the path lexically and loads a directory outside the scope (review FREEZE-2, permissions lane R2-1)", "EXCEPTION_TREE_OPAQUE",
+                                   [("symlink", "infra/aws/link", "modules/alb"),
+                                    ("create", "infra/modules/main.tf", 'variable "alb_arn" {\n  type = string\n}\n' + ROOT_HTTP_LISTENER.replace("module.alb.alb_arn", "var.alb_arn")),
+                                    ("append", ROOT_MAIN, '\nmodule "listener_extra" {\n  source  = "./link/../../modules"\n  alb_arn = module.alb.alb_arn\n}\n')], None),
     "tree-tofu-file": ("A2 tree integrity: an HTTP listener in a .tofu file", "EXCEPTION_TREE_OPAQUE",
                        [("create", "infra/aws/modules/alb/listener_http.tofu", HTTP_LISTENER)], None),
     "tree-provisioner": ("A2 tree integrity: a provisioner, which could create a listener out of band", "EXCEPTION_TREE_OPAQUE",
@@ -179,6 +184,10 @@ def build(cases_root: pathlib.Path, repo: pathlib.Path = REPO) -> list[str]:
                 if path.exists():
                     raise ControlError(f"{name}: {rel} already exists; a created file must be new")
                 path.parent.mkdir(parents=True, exist_ok=True); path.write_text(edit[2], encoding="utf-8")
+            elif kind == "symlink":
+                if path.exists() or path.is_symlink():
+                    raise ControlError(f"{name}: {rel} already exists")
+                path.parent.mkdir(parents=True, exist_ok=True); path.symlink_to(edit[2])
             elif kind == "copy_mutated":
                 dst = case / edit[2]
                 if dst.exists():

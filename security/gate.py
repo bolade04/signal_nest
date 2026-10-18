@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import pathlib
+import posixpath
 import re
 import sys
 from dataclasses import dataclass, field
@@ -612,6 +613,7 @@ def tree_integrity(decls: list[Declared], files: list[str], root: pathlib.Path, 
     """Constructs a textual reading of the tree cannot see through. Any one fails tree-scoped conditions."""
     problems = []
     base = (root / scope).resolve()
+    problems += symlinks_in(root, scope)
     for rel in files:
         if rel.endswith((".tofu", ".tofu.json")):
             problems.append(f"EXCEPTION_TREE_OPAQUE {rel}: an OpenTofu-only file (it replaces the .tf file of the same name); refused rather than reasoned about")
@@ -623,10 +625,14 @@ def tree_integrity(decls: list[Declared], files: list[str], root: pathlib.Path, 
             if status != "ok" or len(sources) != 1 or not isinstance(sources[0], str) or not LOCAL_MODULE_SOURCE.match(sources[0]):
                 problems.append(f"EXCEPTION_TREE_OPAQUE module.{d.name} ({where}): source {sources!r} is not a local path, so the blocks it declares cannot be read here")
             else:
-                # A local path is read only if it RESOLVES inside the scope (review FREEZE-1, adversarial BLOCKER-1:
-                # "../outside" — or a symlink — loads configuration from a directory this reading never walks).
-                target = (root / pathlib.PurePosixPath(d.file).parent / sources[0]).resolve()
-                if not (target == base or base in target.parents) or not target.is_dir():
+                # A local path is read only if it lies inside the scope BOTH as OpenTofu computes it (a lexical clean of
+                # the joined path, Go path.Clean — review FREEZE-2, permissions lane R2-1: "./link/../../x" is cleaned
+                # lexically, while Path.resolve() would follow "link" before applying "..") AND physically (review FREEZE-1,
+                # adversarial BLOCKER-1: "../outside"). Symlinks anywhere in the scope are refused separately above.
+                lexical = posixpath.normpath(posixpath.join(posixpath.dirname(d.file), sources[0]))
+                target = (root / lexical).resolve()
+                if not (lexical == scope or lexical.startswith(scope.rstrip("/") + "/")) \
+                        or not (target == base or base in target.parents) or not target.is_dir():
                     shown = os.path.relpath(target, root.resolve())
                     problems.append(f"EXCEPTION_TREE_OPAQUE module.{d.name} ({where}): local source {sources[0]!r} resolves to {shown} "
                                     f"(relative to the source root), which is not a directory inside {scope}, so the blocks it declares are not read here")
@@ -640,6 +646,22 @@ def tree_integrity(decls: list[Declared], files: list[str], root: pathlib.Path, 
             if has_prov:
                 problems.append(f"EXCEPTION_TREE_OPAQUE {d.type}.{d.name} ({where}): a provisioner can create resources no textual reading sees")
     return problems
+
+
+def symlinks_in(root: pathlib.Path, scope: str) -> list[str]:
+    """Every symlink at or under the scope, refused: a symlink makes the path OpenTofu cleans lexically and the path a
+    reader follows physically disagree (review FREEZE-2, permissions lane R2-1). The tree holds none today."""
+    found = []
+    top = root / scope
+    if top.is_symlink():
+        found.append(scope)
+    for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
+        for name in sorted(dirnames + filenames):
+            p = pathlib.Path(dirpath) / name
+            if p.is_symlink():
+                found.append(str(p.relative_to(root)))
+    return [f"EXCEPTION_TREE_OPAQUE {rel}: a symlink in {scope} (the path OpenTofu cleans lexically and the path a reader "
+            "follows can differ); refused rather than reasoned about" for rel in found]
 
 
 def _is_override(rel: str) -> bool:
@@ -852,8 +874,10 @@ def _entry_conditions(e: dict, root: pathlib.Path, scope: str, cache: dict) -> l
         module_dir = str(pathlib.PurePosixPath(e["target"]).parent)
         files = config_files(root, module_dir, recursive=False)
         for rel in files:
-            if rel.endswith((".tofu", ".tofu.json")) or _is_override(rel):
+            if rel.endswith((".tofu", ".tofu.json")) or _is_override(rel) or (root / rel).is_symlink():
                 failures.append(f"EXCEPTION_MODULE_OVERRIDE {e['id']}: {rel} can replace or override the matched block's attributes invisibly, so its conditions cannot be confirmed")
+        if (root / module_dir).is_symlink():
+            failures.append(f"EXCEPTION_MODULE_OVERRIDE {e['id']}: the module directory {module_dir} is a symlink")
         decls = [d for rel in files for d in read_config_file(root, rel) if d.kind == "resource" and d.type == rtype and d.name == rname]
         if len(decls) != 1:
             failures.append(f"EXCEPTION_MODULE_OVERRIDE {e['id']}: {e['resource']} is declared {len(decls)} times in {module_dir}; exactly one declaration can be confirmed")

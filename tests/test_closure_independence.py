@@ -227,24 +227,62 @@ def test_every_declared_kms_key_is_the_covered_secrets_cmk_or_a_recorded_pending
         "record (staging-window.md, infra/aws/README.md) before changing this set")
 
 
-def test_the_pending_keys_are_still_unreadable_to_every_reviewed_principal():
+def _reviewed_principal_policies() -> dict:
     import expiry_authorization as ea
-    new_key = f"arn:aws:kms:{gen.REGION}:{gen.ACCOUNT}:key/22222222-2222-2222-2222-222222222222"
-    policies = {
+    return {
         "permanent W0": gen.permanent_w0_policy(),
         "temporary operator": gen.bootstrap_temp_policy(ea.ACTIVE_EXPIRY_UTC),
         "window principal": gen.window_transition_effective_policy(ea.ACTIVE_EXPIRY_UTC, "api.staging.example.com"),
     }
-    ctx = {"aws:RequestedRegion": gen.REGION, "aws:CurrentTime": "2026-07-31T12:00:00Z"}
-    # positive instance: the probe can see a read grant where one exists
-    assert iam_eval.decide(policies["permanent W0"], "kms:DescribeKey", gen.ARN["cmk_secrets"], ctx).decision \
-        is iam_eval.Decision.EXPLICIT_ALLOW
+
+
+def test_the_pending_keys_are_still_unreadable_to_every_reviewed_principal():
+    import expiry_authorization as ea
+    new_key = f"arn:aws:kms:{gen.REGION}:{gen.ACCOUNT}:key/22222222-2222-2222-2222-222222222222"
+    policies = _reviewed_principal_policies()
+    # Review FREEZE-2, permissions lane R2-3: the probe carries the tag and request keys a tag-conditioned grant would test,
+    # and a time inside every principal's validity, so a CONDITIONED grant for the new keys is seen as an allow too.
+    tags = {"aws:ResourceTag/Name": f"{gen.PREFIX}-spa-cmk", "aws:RequestTag/Name": f"{gen.PREFIX}-spa-cmk", "aws:TagKeys": ["Name"]}
+    ctx = {"aws:RequestedRegion": gen.REGION, "aws:CurrentTime": ea.ACTIVE_ISSUANCE_UTC, **tags}
     for who, policy in policies.items():
-        for action in ("kms:DescribeKey", "kms:GetKeyPolicy", "kms:CreateKey"):
-            got = iam_eval.decide(policy, action, new_key, ctx).decision
-            assert got is not iam_eval.Decision.EXPLICIT_ALLOW, (
-                f"{who} now allows {action} on a new key: the P6-CI-6 apply closure is no longer pending — "
-                "update docs/operations/staging-window.md, infra/aws/README.md and this test")
+        # positive instance, per principal: the probe sees the read grant each one holds on the secrets key
+        assert iam_eval.decide(policy, "kms:DescribeKey", gen.ARN["cmk_secrets"], ctx).decision \
+            is iam_eval.Decision.EXPLICIT_ALLOW, f"{who}: the probe cannot see an existing grant, so its silence proves nothing"
+        for action in ("kms:DescribeKey", "kms:GetKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags",
+                       "kms:CreateKey", "kms:CreateAlias", "kms:TagResource", "kms:EnableKeyRotation"):
+            for resource in (new_key, "*"):
+                got = iam_eval.decide(policy, action, resource, ctx).decision
+                assert got is not iam_eval.Decision.EXPLICIT_ALLOW, (
+                    f"{who} now allows {action} on {resource}: the P6-CI-6 apply closure is no longer pending — "
+                    "update docs/operations/staging-window.md, infra/aws/README.md and this test")
+
+
+def test_every_kms_allow_of_every_reviewed_principal_names_only_the_two_existing_keys():
+    """Structural form of the tripwire (review FREEZE-2, permissions lane R2-3), independent of any condition: an Allow
+    carrying a KMS action other than kms:ListAliases names only the state or secrets key, and no Allow carries a
+    key-creation action, however it is conditioned or wildcarded."""
+    import fnmatch
+    allowed = {gen.ARN["cmk_state"], gen.ARN["cmk_secrets"]}
+    creating = ("kms:CreateKey", "kms:CreateAlias", "kms:TagResource", "kms:EnableKeyRotation", "kms:PutKeyPolicy")
+    def as_list(v):
+        return v if isinstance(v, list) else [v]
+    seen = 0
+    for who, policy in _reviewed_principal_policies().items():
+        for st in policy["Statement"]:
+            if st.get("Effect") != "Allow":
+                continue
+            assert "NotAction" not in st and "NotResource" not in st, f"{who} {st.get('Sid')}: an Allow with NotAction/NotResource"
+            actions = [str(a) for a in as_list(st.get("Action"))]
+            kms = [a for a in actions if a == "*" or a.lower().startswith("kms:")]
+            if not kms:
+                continue
+            seen += 1
+            for a in kms:
+                assert not any(fnmatch.fnmatchcase(c.lower(), a.lower()) for c in creating), f"{who} {st.get('Sid')}: {a} covers key creation"
+            if [a for a in kms if a != "kms:ListAliases"]:
+                assert set(as_list(st.get("Resource"))) <= allowed, (
+                    f"{who} {st.get('Sid')}: a KMS grant on {st.get('Resource')} — the P6-CI-6 apply closure is no longer pending")
+    assert seen >= 6, f"only {seen} KMS-bearing Allow statements were examined; the structure under test changed"
 
 
 def test_the_pending_state_is_recorded_where_an_operator_reads_it():
@@ -257,6 +295,8 @@ def test_the_pending_state_is_recorded_where_an_operator_reads_it():
 def test_the_audit_bucket_default_moves_to_the_audit_key_only_after_the_trail():
     """Review FREEZE-1, permissions lane F2: ordered so a failed UpdateTrail leaves SSE-S3 in place."""
     text = (REPO_ROOT / "infra" / "aws" / "modules" / "observability" / "main.tf").read_text(encoding="utf-8")
+    import re
     block = text[text.index('resource "aws_s3_bucket_server_side_encryption_configuration" "audit"'):]
     block = block[:block.index("\n}\n") + 2]
-    assert "depends_on = [aws_cloudtrail.audit]" in block
+    # anchored on a non-comment line (review FREEZE-2, permissions lane R2-4: a commented-out line passed a substring test)
+    assert re.search(r"(?m)^\s*depends_on\s*=\s*\[\s*aws_cloudtrail\.audit\s*\]\s*$", block)
