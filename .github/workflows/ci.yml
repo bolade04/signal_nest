@@ -757,7 +757,8 @@ jobs:
       # IaC exception controls: each case is a copy of the checked-out tree with ONE mutation that
       # must defeat an exception (a widened, IPv6, overridden or shadowed egress rule; a fourth
       # workload; an expired or stale entry; an HTTP listener in the alb module, a new module file,
-      # the root module or under the alias type; a non-literal protocol; a non-local module source;
+      # the root module or under the alias type; a non-literal protocol; a non-local module source,
+      # or a local one that resolves outside infra/aws;
       # a .tofu file; a provisioner; a non-SSE-S3 log bucket), plus an unmutated baseline that must
       # PASS. One real Trivy scan covers every case; the real gate then runs once per case and must
       # report the case's own violation token (security/iac_exception_controls.py).
@@ -830,7 +831,8 @@ jobs:
           --expect-control control-iac-exc-listener-http-new-module-file
           --expect-control control-iac-exc-listener-http-root-module
           --expect-control control-iac-exc-listener-alias-type --expect-control control-iac-exc-listener-nonliteral
-          --expect-control control-iac-exc-tree-nonlocal-module --expect-control control-iac-exc-tree-tofu-file
+          --expect-control control-iac-exc-tree-nonlocal-module --expect-control control-iac-exc-tree-escaping-local-module
+          --expect-control control-iac-exc-tree-tofu-file
           --expect-control control-iac-exc-tree-provisioner --expect-control control-iac-exc-alb-log-bucket-not-aes256
 
       - name: Upload security reports, SBOMs and gate summaries

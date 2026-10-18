@@ -23,7 +23,9 @@
 # distribution (AWS:SourceArn), the statement CloudFront OAC needs to read SSE-KMS
 # objects. No encrypt/data-key grant is given to CloudFront: the distribution allows
 # GET/HEAD/OPTIONS only. A future SPA deployer (P6-INF-2) needs kms:GenerateDataKey on
-# this key through its own IAM policy.
+# this key through its own IAM policy. Monitoring note: the distribution maps an origin 403
+# to /index.html with status 200, so a KMS denial would surface as the SPA shell, not an
+# error.
 #
 # Tagging: the authoritative eight-tag common set is applied automatically to every
 # taggable resource by the root provider's `default_tags` (providers.tf). This

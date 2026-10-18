@@ -265,7 +265,14 @@ resource "aws_iam_role" "migration_task" {
 # with the S3 Bucket Key on (storage module), S3's encryption context is the bucket
 # ARN. The role therefore cannot call KMS directly, cannot use the key through Secrets
 # Manager (whose requests carry neither value), and cannot decrypt any other bucket's
-# objects with it.
+# objects with it. KNOWN DETECTOR GAP (review FREEZE-1, permissions lane F3): the repo's
+# dead-grant table scripts/iam_eval.py ACTION_CONDITION_KEYS lists only kms:ViaService for
+# these two actions, so its validate_policy calls this statement "can never match". AWS
+# documents kms:EncryptionContext:<key> for both; NEVER "fix" that report by dropping the
+# context condition — that widens the grant to every SSE-KMS bucket under the secrets key.
+# Registering the key needs a review record (the table is review-pinned). Removing this
+# statement (or reverting the bucket to SSE-S3) leaves objects already written under the key
+# unreadable to the application until they are re-encrypted in place.
 resource "aws_iam_role_policy" "app_s3" {
   for_each = local.s3_workload_roles
 

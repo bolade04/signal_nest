@@ -290,6 +290,13 @@ resource "aws_s3_bucket_public_access_block" "audit" {
 # is deliberately OFF: AWS documents that a trail delivering into a bucket WITH a Bucket
 # Key also needs kms:Decrypt in the key policy to be created or updated, and a single-
 # region management-events trail makes few KMS requests, so the narrower grant wins.
+# ORDERED AFTER THE TRAIL (review FREEZE-1, permissions lane F2): the bucket default moves
+# to the audit key only once the trail itself encrypts with it. If UpdateTrail fails, the
+# bucket default stays SSE-S3 and delivery keeps working; the reverse order could leave a
+# keyless trail writing into a bucket whose default is a key that admits CloudTrail only
+# with its own encryption context. Roll back in the reverse order. The audit key must
+# outlive every retained log object: once logs are written under it, scheduling its
+# deletion makes the audit history unreadable after the deletion window.
 resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
   bucket = aws_s3_bucket.audit.id
 
@@ -300,6 +307,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
     }
     bucket_key_enabled = false
   }
+
+  depends_on = [aws_cloudtrail.audit]
 }
 
 resource "aws_s3_bucket_versioning" "audit" {

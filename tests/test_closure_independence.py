@@ -204,3 +204,59 @@ def test_verifier_exits_nonzero_on_divergence(monkeypatch, mappings):
     result = verify_closure.verify()
     assert not result["clean"]
     assert any(f.startswith("C1") for f in result["findings"])
+
+
+# --- P6-CI-6 (2026-10-18): KMS keys beyond the secrets CMK are PENDING apply closures ---------
+# verify_closure checks closure per resource TYPE and probes KMS with the secrets CMK, so its
+# "clean" cannot see a second or third aws_kms_key. The two keys P6-CI-6 adds (the SPA and audit
+# keys) can be neither created nor read by any reviewed principal until a separately authorized
+# apply and a read-grant re-pin (review FREEZE-1, permissions lane F1; recorded in
+# docs/operations/staging-window.md and infra/aws/README.md). These tests pin that state in
+# BOTH directions: another key fails the first test until its closure is decided, and a read
+# grant for the pending keys fails the second until the record is updated with it.
+
+def _declared_w0_kms_keys(graph) -> set:
+    return {(r["unit"], r["name"]) for r in graph["resources"]
+            if r["type"] == "aws_kms_key" and r["unit"] not in verify_closure.W0_UNITS_EXCLUDED}
+
+
+def test_every_declared_kms_key_is_the_covered_secrets_cmk_or_a_recorded_pending_key(graph):
+    pending = {("edge", "spa"), ("observability", "audit")}
+    assert _declared_w0_kms_keys(graph) == {("secrets", "secrets")} | pending, (
+        "an aws_kms_key was added or removed: decide its apply/read closure and update the pending "
+        "record (staging-window.md, infra/aws/README.md) before changing this set")
+
+
+def test_the_pending_keys_are_still_unreadable_to_every_reviewed_principal():
+    import expiry_authorization as ea
+    new_key = f"arn:aws:kms:{gen.REGION}:{gen.ACCOUNT}:key/22222222-2222-2222-2222-222222222222"
+    policies = {
+        "permanent W0": gen.permanent_w0_policy(),
+        "temporary operator": gen.bootstrap_temp_policy(ea.ACTIVE_EXPIRY_UTC),
+        "window principal": gen.window_transition_effective_policy(ea.ACTIVE_EXPIRY_UTC, "api.staging.example.com"),
+    }
+    ctx = {"aws:RequestedRegion": gen.REGION, "aws:CurrentTime": "2026-07-31T12:00:00Z"}
+    # positive instance: the probe can see a read grant where one exists
+    assert iam_eval.decide(policies["permanent W0"], "kms:DescribeKey", gen.ARN["cmk_secrets"], ctx).decision \
+        is iam_eval.Decision.EXPLICIT_ALLOW
+    for who, policy in policies.items():
+        for action in ("kms:DescribeKey", "kms:GetKeyPolicy", "kms:CreateKey"):
+            got = iam_eval.decide(policy, action, new_key, ctx).decision
+            assert got is not iam_eval.Decision.EXPLICIT_ALLOW, (
+                f"{who} now allows {action} on a new key: the P6-CI-6 apply closure is no longer pending — "
+                "update docs/operations/staging-window.md, infra/aws/README.md and this test")
+
+
+def test_the_pending_state_is_recorded_where_an_operator_reads_it():
+    runbook = (REPO_ROOT / "docs" / "operations" / "staging-window.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "infra" / "aws" / "README.md").read_text(encoding="utf-8")
+    assert "Merge and apply constraint — P6-CI-6 customer-managed keys" in runbook
+    assert "pending apply closures" in readme
+
+
+def test_the_audit_bucket_default_moves_to_the_audit_key_only_after_the_trail():
+    """Review FREEZE-1, permissions lane F2: ordered so a failed UpdateTrail leaves SSE-S3 in place."""
+    text = (REPO_ROOT / "infra" / "aws" / "modules" / "observability" / "main.tf").read_text(encoding="utf-8")
+    block = text[text.index('resource "aws_s3_bucket_server_side_encryption_configuration" "audit"'):]
+    block = block[:block.index("\n}\n") + 2]
+    assert "depends_on = [aws_cloudtrail.audit]" in block

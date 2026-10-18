@@ -296,6 +296,25 @@ class ExceptionCase(unittest.TestCase):
                 _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
                 self.assertTrue(any(v.startswith("EXCEPTION_TREE_OPAQUE") for v in violations), rel)
 
+    def test_a_local_module_source_that_escapes_the_scope_fails_closed(self):
+        # Review FREEZE-1, adversarial BLOCKER-1: "../" (or a symlink) loads blocks this reading never walks.
+        tree(self.root, {"outside/listener.tf": 'resource "aws_lb_listener" "http" {\n  protocol = "HTTP"\n}\n',
+                         "infra/root.tf": 'module "escape" {\n  source = "../outside"\n}\n'})
+        _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
+        self.assertTrue(any(v.startswith("EXCEPTION_TREE_OPAQUE") and "resolves to" in v for v in violations))
+        with tempfile.TemporaryDirectory() as d:
+            self.root = pathlib.Path(d)
+            tree(self.root, {"infra/alb/main.tf": ALB, "elsewhere/listener.tf": 'resource "aws_lb_listener" "http" {\n  protocol = "HTTP"\n}\n',
+                             "infra/root.tf": 'module "linked" {\n  source = "./linked"\n}\n'})
+            (self.root / "infra/linked").symlink_to(self.root / "elsewhere", target_is_directory=True)
+            _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
+            self.assertTrue(any(v.startswith("EXCEPTION_TREE_OPAQUE") and "resolves to" in v for v in violations))
+        with tempfile.TemporaryDirectory() as d:
+            self.root = pathlib.Path(d)
+            tree(self.root, {"infra/alb/main.tf": ALB, "infra/root.tf": 'module "missing" {\n  source = "./does-not-exist"\n}\n'})
+            _, violations = self.evaluate([self.alb_finding()], exceptions(self.a2()))
+            self.assertTrue(any(v.startswith("EXCEPTION_TREE_OPAQUE") for v in violations))
+
     def test_a_local_module_source_is_accepted(self):
         tree(self.root, {"infra/root.tf": 'module "alb" {\n  source = "./alb"\n}\n'})
         self.assertEqual(self.evaluate([self.alb_finding()], exceptions(self.a2()))[1], [])

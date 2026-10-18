@@ -40,6 +40,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -607,9 +608,10 @@ def check_condition(decl: Declared, cond: dict) -> str | None:
     return None if not bad else f"EXCEPTION_CONDITION_FAILED {where}: '{path}' is {bad!r}; the condition requires the literal {want!r}"
 
 
-def tree_integrity(decls: list[Declared], files: list[str]) -> list[str]:
+def tree_integrity(decls: list[Declared], files: list[str], root: pathlib.Path, scope: str) -> list[str]:
     """Constructs a textual reading of the tree cannot see through. Any one fails tree-scoped conditions."""
     problems = []
+    base = (root / scope).resolve()
     for rel in files:
         if rel.endswith((".tofu", ".tofu.json")):
             problems.append(f"EXCEPTION_TREE_OPAQUE {rel}: an OpenTofu-only file (it replaces the .tf file of the same name); refused rather than reasoned about")
@@ -620,6 +622,14 @@ def tree_integrity(decls: list[Declared], files: list[str]) -> list[str]:
             sources = got if status == "ok" else []
             if status != "ok" or len(sources) != 1 or not isinstance(sources[0], str) or not LOCAL_MODULE_SOURCE.match(sources[0]):
                 problems.append(f"EXCEPTION_TREE_OPAQUE module.{d.name} ({where}): source {sources!r} is not a local path, so the blocks it declares cannot be read here")
+            else:
+                # A local path is read only if it RESOLVES inside the scope (review FREEZE-1, adversarial BLOCKER-1:
+                # "../outside" — or a symlink — loads configuration from a directory this reading never walks).
+                target = (root / pathlib.PurePosixPath(d.file).parent / sources[0]).resolve()
+                if not (target == base or base in target.parents) or not target.is_dir():
+                    shown = os.path.relpath(target, root.resolve())
+                    problems.append(f"EXCEPTION_TREE_OPAQUE module.{d.name} ({where}): local source {sources[0]!r} resolves to {shown} "
+                                    f"(relative to the source root), which is not a directory inside {scope}, so the blocks it declares are not read here")
         elif d.kind == "resource" and (d.type in OPAQUE_RESOURCE_TYPES or d.type.startswith(OPAQUE_RESOURCE_PREFIXES)):
             problems.append(f"EXCEPTION_TREE_OPAQUE {d.type}.{d.name} ({where}): a generic provisioning resource can create blocks no textual reading sees")
         elif d.kind == "data" and d.type in OPAQUE_DATA_TYPES:
@@ -855,7 +865,7 @@ def _entry_conditions(e: dict, root: pathlib.Path, scope: str, cache: dict) -> l
         if scope not in cache:
             files = config_files(root, scope)
             decls = [d for rel in files for d in read_config_file(root, rel)]
-            cache[scope] = (files, decls, tree_integrity(decls, files))
+            cache[scope] = (files, decls, tree_integrity(decls, files, root, scope))
         files, decls, opaque = cache[scope]
         failures += [f"{p} (exception {e['id']})" for p in opaque]
         for c in e["tree_conditions"]:

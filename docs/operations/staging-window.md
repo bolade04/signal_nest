@@ -7,6 +7,15 @@ a start, a record change or a deployment.** Governing numbers: the operator's li
 attested September 2026 bill for the always-on foundation is **USD 91–95/month** (sealed attestation and its supplement, 2026-09-30); the
 **provisional planning target is 4 eight-hour windows per month** — a planning assumption, not a guarantee of budget compliance.
 
+> **Merge and apply constraint — P6-CI-6 customer-managed keys (added 2026-10-18; a repository change on PR #230, not applied).** The change adds two KMS keys with aliases (SPA, audit), moves three buckets to SSE-KMS (SPA, audit, application), sets the CloudTrail trail's key and adds an S3-scoped KMS statement to the api and worker task-role policies. The root takes no targeted apply (§9), so after a merge every window OPEN or CLOSE plan would carry those changes; the abort criteria (§12: "any planned change to … KMS, buckets, roles") reject such a plan, and the window principal is denied those writes. Therefore:
+> 1. **Do not merge it while a window is open** — its CLOSE would then be blocked, and the NAT gateway, load balancer and Redis would keep billing.
+> 2. **After a merge, no window may OPEN or CLOSE** until a separately authorized apply of the key change has completed and been read back.
+> 3. That apply needs actions no reviewed principal holds today (review FREEZE-1, evaluation of the generated W0, temporary-operator and window policies): `kms:CreateKey`, `kms:TagResource`, `kms:EnableKeyRotation` and `kms:CreateAlias` are not granted; `kms:PutKeyPolicy` (needed with the key-policy lockout check on), `cloudtrail:UpdateTrail` and `kms:ScheduleKeyDeletion` (rollback) are explicitly denied and in the must-not set; `s3:PutEncryptionConfiguration` is denied to W0 and the window principal; `iam:PutRolePolicy` on the worker task role is denied to W0 and the window principal.
+> 4. After the keys exist, the W0, temporary-operator and window KMS read grants — which name only the state and secrets keys — must be re-pinned to the two new key ARNs (known only after creation), or every later plan fails at refresh.
+> 5. Apply it only while the window is closed. The application bucket's encryption change and the task-role policy update cannot be ordered against each other (a dependency would be a cycle); if they land apart, application writes fail closed until both have converged.
+>
+> The CI closure verification is type-level (its KMS probe is the secrets key) and does not see items 3–4; `tests/test_closure_independence.py` pins the two keys as pending. Objects written under a key stay encrypted under it: re-encrypt in place before removing a grant or reverting a bucket, and never schedule the audit key's deletion while audit logs are retained.
+
 ## 1. The input
 
 `staging_window_active` (root, `bool`, **required, no default**). `true` = an authorized window is OPEN; `false` = CLOSED. Every execution of the

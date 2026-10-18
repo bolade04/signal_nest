@@ -210,7 +210,7 @@ How `gate.py misconfig --exceptions` decides, for every finding at gating severi
    under `infra/aws` (root and modules), requires at least one, and requires each to declare
    the literal `protocol = "HTTPS"`. It also fails closed on anything a textual reading cannot
    see through anywhere in that tree: a `.tofu` file, a module whose source is not a local
-   path, a provisioner, a generic provisioning resource (CloudFormation, Cloud Control,
+   path or is a local path (`../`, a symlink) that resolves outside `infra/aws`, a provisioner, a generic provisioning resource (CloudFormation, Cloud Control,
    `awscc_*`) or `data "external"`.
 4. An expired entry, an entry that matches nothing (stale), a count mismatch or a failed
    condition is itself a policy violation, and the findings it would have covered are listed
@@ -222,14 +222,15 @@ limitation (`C1` alone has none, with its reason), or a malformed condition is `
 missing or malformed)` (exit 2).
 
 **Negative controls.** The existing inert IaC control must still be a violation with the
-exceptions loaded (it names its check, `AWS-0107`). `iac_exception_controls.py` builds 16
+exceptions loaded (it names its check, `AWS-0107`). `iac_exception_controls.py` builds 17
 mutated copies of the real tree plus an unmutated baseline; one real Trivy scan covers them
 all, and the real gate must report each mutation's own violation token (`--expect-fail
 --expect-violation`) while the baseline passes (`--control-baseline`). The mutations: a
 widened, IPv6, overridden or `.tofu`-shadowed egress rule, a fourth workload, an expired and
 a stale entry, an HTTP listener in the alb module, in a new module file, in the root module
 (attached through `module.alb.alb_arn`) and under the alias type, a variable protocol, a
-non-local module source, a `.tofu` listener, a provisioner and a non-SSE-S3 log bucket.
+non-local module source, a local module source that escapes `infra/aws` (`../`), a `.tofu`
+listener, a provisioner and a non-SSE-S3 log bucket.
 Several of these are caught **only** by the gate: in the local run of Trivy 0.76.0 on
 2026-10-18, Trivy raised nothing for the root-module and alias-type listeners, the variable
 protocol, the provisioner or the remote module.
