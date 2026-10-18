@@ -106,10 +106,50 @@ measuring host, so the image baseline is the first complete CI run of this branc
   `urllib3` is the locked 2.8.0). Gate verdict: **FAIL (policy violation)** — a Dockerfile
   finding (ship the venv without pip, or pin pip), not a lock finding.
 
-So with the proposed policy the `Container build and security` context is red on `main`
+- Reader image (CI run 39110876776, the first run that reached the reader gate): `signalnest-revision-reader:ci` on its digest-pinned
+  `gcr.io/distroless/python3-debian12` base (Debian 12.13, Python 3.11.2) carries 43 HIGH OS
+  findings with a fixed Debian version available (libexpat1, krb5, libpython3.11, libssl3)
+  and 20 without (2 CRITICAL: libsqlite3-0 affected, zlib1g will-not-fix). Gate verdict:
+  **FAIL (policy violation)**.
+
+So with the proposed policy the `Container build and security` context was red on `main`
 until an operator either adopts exceptions (with written justification), changes the
 proposed thresholds, or the findings are remediated in their own tranches. The gate is not
 relaxed to hide that.
+
+## Remediation tranche (2026-10-18; policy, thresholds, filters, gates and controls unchanged)
+
+- **SAST — fixed.** `apps/api/app/connectors/rss.py` parses with `defusedxml`
+  (`forbid_dtd`, `forbid_entities`, `forbid_external`) behind the unchanged 2 MiB bound and
+  DOCTYPE/entity byte screen; refusals map to the existing `UNSAFE_CONTENT` failure and
+  `ParseError` to `PARSE_ERROR`; the stdlib `xml.etree` import is gone. Six regression tests
+  (valid feed, a DOCTYPE past the 4 KiB entity screen, a UTF-16 DOCTYPE the byte screen
+  cannot see, an external entity that is never resolved, a valid UTF-16 feed, an oversized
+  feed). `defusedxml==0.7.1` joins both pip-tools locks; no other pin moved. With the same
+  saved rulesets as the baseline CI run, the finding goes from 1 ERROR to 0 because the import
+  is gone, not because a rule changed. The four SAST WARNINGs remain reported.
+- **API and worker images — fixed.** The builder uninstalls pip from the venv after the last
+  install, so pip 26.2.1 and its 18 vendored packages (including `urllib3` 2.7.0, `msgpack`
+  1.1.2 and `setuptools` 70.3.0) no longer ship: Python packages per image 66 → 48, Python
+  HIGH findings 4 → 0, image gates PASS (CI run 39120145845). The 44 unfixed Debian 13.7 HIGH
+  findings are still `EXCLUDED` and listed, and the base image's own pip 25.0.1 under
+  `/usr/local` is still present (no HIGH reported for it). Imports, migration actor,
+  schema gate, bare migration command, non-root and no-secrets checks all still pass.
+- **Reader image — NOT fixed (blocker).** Upstream `python3-debian12:latest` resolves to the
+  pinned digest itself (same image id) and the in-family tags carry the same packages, so no
+  compatible digest refresh exists today. Moving to Debian 13/Python 3.13 or a non-distroless
+  base would change the frozen reader contracts (Python minor, ENTRYPOINT, containment) and
+  is not done. The 43 fixable and 20 unfixed findings remain; the reader gate stays red.
+- **IaC — unchanged (decision pending).** The 10 gating findings remain. A per-finding
+  disposition matrix with proposed, unadopted exception wording is in the evidence record;
+  no infrastructure file changed and no ignore file exists.
+- **Ruleset fetcher — repaired.** The registry served `p/javascript` as JSON in one run and
+  YAML in the next. `fetch_semgrep_rules.py` now parses either form structurally (JSON with
+  the standard library, YAML with the hash-locked `ruamel.yaml` safe loader), checks every
+  rule entry, writes the raw bytes unchanged under `.yml` (Semgrep's directory loader skips
+  `.json` files while `--validate` still exits 0), records the detected format, and stages
+  the population so an incomplete set is never left for the scan or the SAST control. Its
+  nine tests (`fetcher_selftest.py`) run in the fetch step under the hash-locked venv.
 
 ## Failure behaviour (proved by `security/test_gate.py` and the CI negative controls)
 
@@ -136,6 +176,7 @@ mkdir -p security-reports
 trivy fs --scanners vuln --list-all-pkgs --config security/trivy.yaml --skip-dirs security/controls --format json -o security-reports/trivy-locks-vuln.json .
 python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln --kind filesystem --artifact . --expect-target package-lock.json
 python3 -m venv .security-venv && .security-venv/bin/python -m pip install --require-hashes -r security/requirements-semgrep.txt
+.security-venv/bin/python -m unittest discover -s security -p "fetcher_selftest.py"
 .security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules
 .security-venv/bin/semgrep scan --metrics=off --no-rewrite-rule-ids --timeout 60 --timeout-threshold 0 --exclude security/controls --config .security-venv/semgrep-rules --json --output security-reports/semgrep.json apps scripts security
 python3 security/gate.py sast security-reports/semgrep.json --name sast --expect-prefix apps/api/app

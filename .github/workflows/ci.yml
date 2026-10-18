@@ -629,7 +629,11 @@ jobs:
           .security-venv/bin/semgrep --version
 
       - name: Fetch and validate the Semgrep rulesets (provenance recorded)
+        # The fetcher's own tests run first, under this hash-locked venv (it carries the
+        # safe YAML parser); the registry serves rulesets as YAML or JSON, and a partial
+        # population is never left behind for the steps below.
         run: |
+          .security-venv/bin/python -m unittest discover -s security -p "fetcher_selftest.py"
           .security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules security-reports/semgrep-rules-provenance.json
           .security-venv/bin/semgrep --validate --metrics=off --config .security-venv/semgrep-rules
 
