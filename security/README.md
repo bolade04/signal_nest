@@ -84,14 +84,20 @@ uploaded as a workflow artifact (`security-reports-container-build`,
   only):**
   - **Severity source.** The gate result is decided by the `Severity` that the pinned Trivy
     (0.76.0) selects by its documented default selection: the selected data source's vendor
-    severity, else a severity derived from the CVSS score, else NVD. No source override (such
+    severity, else a severity derived from the CVSS score, else NVD, else other vendors' ratings
+    in trivy-db's documented order of preference, and only then `UNKNOWN`. No source override (such
     as `--vuln-severity-source`) is used; the pinned configurations, the reviewed trivy-action
     inputs and the gate's `TRIVY_*` refusal keep it that way. The reports keep `SeveritySource`,
     the alternate vendor ratings (`VendorSeverity`) and the CVSS data.
   - **The guarantee, stated precisely:** Trivy-selected CRITICAL findings fail across the
     covered populations, with or without a fix. A finding that NVD or another vendor rates
     higher than Trivy's selection is evaluated at Trivy's selection. That does not establish the
-    finding's harmlessness or remediation; the cases above stay disclosed.
+    finding's harmlessness or remediation; the cases above stay disclosed. Measured in the CI
+    reports of `52d0aa6e`, three CVEs are rated CRITICAL by some vendor above Trivy's selection:
+    the two above and `CVE-2025-69720` in `libncursesw6`/`libtinfo6` of all three images (two
+    vendors CRITICAL, Trivy HIGH, no fix: `EXCLUDED`). In all, 166 report rows carry some vendor
+    rating above Trivy's selection; the complete list is kept in the review-request evidence
+    record.
   - **UNKNOWN.** A valid `UNKNOWN` severity means unscored. The finding stays reported for
     triage (the summary lists it with the reported severities, tagged `[UNKNOWN]`); it is not
     LOW, resolved or proof of safety. A missing or unrecognized severity, a malformed report, an

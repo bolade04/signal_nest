@@ -321,6 +321,12 @@ class GateCase(unittest.TestCase):
         self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     U-T vite 1 -> no fix [UNKNOWN]", text)
         code, result, text = self._fs(fs_report(dev_vulns=[dict(unknown, Severity="CRITICAL")]))
         self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION U-T", text)
+        # ... in an image too (the disclosed instance CVE-2026-82560 is an image finding): reported, then unconditional once CRITICAL
+        img_unknown = vuln("U-I", "perl-base", "1", "", "UNKNOWN")
+        code, result, text = self.run_gate("vuln", self.write("r.json", image_report([img_unknown])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     U-I perl-base 1 -> no fix [UNKNOWN] scope=image", text)
+        code, result, text = self.run_gate("vuln", self.write("r.json", image_report([dict(img_unknown, Severity="CRITICAL")])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION U-I", text)
 
     def test_missing_or_invalid_severity_is_malformed_never_read_as_unknown(self):
         for sev in (None, "", "Unknown", "unknown", "UNSCORED", 0, "LOW "):

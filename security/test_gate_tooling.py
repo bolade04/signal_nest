@@ -136,6 +136,13 @@ class ToolingCase(unittest.TestCase):
         code, result, text = self.gate(rep, inventory(self.env))
         self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION C-N", text)
 
+    def test_a_valid_unknown_in_tooling_is_reported_and_a_later_critical_fails(self):
+        # Operator decision 2 (2026-10-19): a valid UNKNOWN stays reported for triage in an installed tooling scan too.
+        code, result, text = self.gate(report(".reader-venv", vulns=[vuln("U-W", "pytest", "", "UNKNOWN")]), inventory(self.env))
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     U-W pytest x -> no fix [UNKNOWN] scope=development", text)
+        code, result, text = self.gate(report(".reader-venv", vulns=[vuln("U-W", "pytest", "", "CRITICAL")]), inventory(self.env))
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION U-W", text)
+
     def test_high_in_tooling_is_reported_or_listed_not_gating(self):
         code, result, text = self.gate(report(".reader-venv", vulns=[vuln("H-T", "pytest", "9.0.3", "HIGH"), vuln("H-U", "pip", "", "HIGH")]), inventory(self.env))
         self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("REPORTED  H-T", text); self.assertIn("EXCLUDED  H-U", text)
