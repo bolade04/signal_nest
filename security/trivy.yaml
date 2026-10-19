@@ -1,0 +1,13 @@
+# Trivy configuration for the merge-path FILESYSTEM scan only (P6-CI-6). The workflow passes
+# this file explicitly (`trivy-config:`), so the image scans in ci.yml and the publish
+# workflows are untouched by it.
+scan:
+  # pip-tools locks are named requirements-runtime.txt / requirements-dev.txt; Trivy only
+  # recognises requirements.txt by name, so bind the pip analyser to the locks explicitly.
+  file-patterns:
+    - "pip:requirements-.*\\.txt"
+  # Report development dependencies too (npm). The gate keeps them distinguishable and the
+  # policy decides whether they gate.
+  include-dev-deps: true
+pkg:
+  include-dev-deps: true

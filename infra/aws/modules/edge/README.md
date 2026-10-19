@@ -6,7 +6,7 @@ served from a **private** S3 origin through a CloudFront distribution over HTTPS
 with web DNS aliases pointing at CloudFront. This module defines resource bodies;
 ~~**applies nothing** — no infrastructure exists in AWS~~ *(struck 2026-10-13: accurate when written on 2026-07-22; stale since the foundation apply from 2026-07-27 — see the notice)*.
 
-> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The private SPA origin bucket was observed (created 2026-07-27; versioning, SSE-S3, all four public-access-block controls and the noncurrent-version expiry rule exactly as §2 authors them; the 2026-07-28 reference refresh is recorded in `../../operator-closure-contract.json`). The CloudFront distribution and the ACM certificate were **not** readable — listing denied to the reading principal, as in every earlier dated read, so their existence by API has never been observed from this repository's evidence. The consumed hosted zone was read by id (5 record sets, unchanged since 2026-10-02) but its records could not be listed, so the web `A`/`AAAA` aliases are unverified; a public DNS probe of the zone apex returned only name-server records. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation.
+> **Live-state notice (2026-10-13 read-only observation; `P6-GOV-1`).** The private SPA origin bucket was observed (created 2026-07-27; versioning, SSE-S3, all four public-access-block controls and the noncurrent-version expiry rule exactly as §2 authors them; the 2026-07-28 reference refresh is recorded in `../../operator-closure-contract.json`). The CloudFront distribution and the ACM certificate were **not** readable — listing denied to the reading principal, as in every earlier dated read, so their existence by API has never been observed from this repository's evidence. The consumed hosted zone was read by id (5 record sets, unchanged since 2026-10-02) but its records could not be listed, so the web `A`/`AAAA` aliases are unverified; a public DNS probe of the zone apex returned only name-server records. Each fact here is a snapshot of 2026-10-13; current state is not recorded here. Root composition (`main.tf`) is configuration only and establishes neither provisioning nor deployment; the dated observations above are what establish existence, and nothing here establishes successful operation. *(Added 2026-10-18, P6-CI-6: §2 now authors SSE-KMS with a module-owned key; "as §2 authors them" above refers to the configuration authored when the observation was made (SSE-S3). The configuration change is not applied; nothing here establishes the live bucket's current encryption.)*
 
 Certificate and hosted-zone **ownership** are architecturally resolved as
 **consume, not create** (`aws-staging-iac-plan.md` §23, resolved 2026-07-22).
@@ -14,7 +14,8 @@ Certificate and hosted-zone **ownership** are architecturally resolved as
 ## 2. Owned resources (implemented here)
 - `aws_s3_bucket` — private SPA origin bucket
 - `aws_s3_bucket_public_access_block` — blocks all public access
-- `aws_s3_bucket_server_side_encryption_configuration` — SSE (SSE-S3/AES256)
+- `aws_s3_bucket_server_side_encryption_configuration` — SSE ~~(SSE-S3/AES256)~~ *(2026-10-18, P6-CI-6: SSE-KMS with the module's SPA key below, S3 Bucket Key on; IaC finding AWS-0132)*
+- `aws_kms_key` + `aws_kms_alias` (`alias/<name_prefix>/spa`) — *(added 2026-10-18, P6-CI-6)* the SPA origin's customer-managed key: symmetric, rotation on, single-region, 30-day deletion window, lockout safety check on. Its policy is the AWS default account-root statement (IAM delegation) plus `kms:Decrypt` for `cloudfront.amazonaws.com` bound by `AWS:SourceArn` to **this** distribution — the statement CloudFront OAC needs to read SSE-KMS objects, narrowed to decrypt because the distribution only serves `GET`/`HEAD`/`OPTIONS`.
 - `aws_s3_bucket_versioning` — versioning enabled
 - `aws_s3_bucket_lifecycle_configuration` — expire noncurrent versions
 - `aws_s3_bucket_ownership_controls` — bucket-owner-enforced (ACLs disabled)
@@ -83,7 +84,7 @@ material is exposed (the consumed certificate ARN is an input, not re-exported).
 TLS-only public ingress (HTTPS; HTTP redirected). The SPA origin bucket is private
 with all public access blocked and ACLs disabled; only the specific CloudFront
 distribution (matched by its ARN in the bucket policy `AWS:SourceArn` condition)
-may read objects. The SPA build receives no backend secret. No domain, hosted-zone
+may read objects. *(Added 2026-10-18, P6-CI-6:)* objects are encrypted at rest with the module's own customer-managed key, which only that distribution (by `AWS:SourceArn`) may use, and only to decrypt; a future SPA deployer (`P6-INF-2`) will need `kms:GenerateDataKey` on the key through its own IAM policy. The SPA build receives no backend secret. No domain, hosted-zone
 id, or certificate ARN is committed; all are variable-driven at apply time.
 
 ## 9. Staging-only assumptions

@@ -514,6 +514,336 @@ jobs:
             echo "bare-command + revision-tools in-image verification: PASS"
           '
 
+      # --- Merge-path security scanning and SBOMs (P6-CI-6) -----------------------------
+      # Every scanner below writes a machine-readable report into security-reports/ and is
+      # asked NOT to exit on findings; security/gate.py then (1) validates that the report is
+      # the scanner's document shape, (2) proves it describes THIS job's artifact over a
+      # non-empty population, (3) evaluates the findings against security/policy.json, whose
+      # thresholds are PROPOSED until adopted by an operator decision, and (4) exits with a
+      # distinct code: 3 policy violation, 4 analysis incomplete, 2 report missing/malformed.
+      # A scanner crash fails its own step; the gate after it then reports a missing report.
+      # Gate steps run `if: always()` so one failing gate does not hide the others' verdicts;
+      # each still fails the job on its own. Negative controls scan security/controls/ with
+      # the same tools and rules and MUST be detected. Coverage, exclusions and the proposed
+      # policy are documented in security/README.md.
+      - name: Security gate self-tests (inert synthetic reports); create the reports directory
+        # The scanners below write into security-reports/ and refuse to run when it is absent
+        # (CI run 1 of this change: "failed to create output file ... no such file or
+        # directory"), so it is created here, before the first scanner, by a step of its own.
+        run: |
+          python3 -m unittest discover -s security -p "test_*.py"
+          mkdir -p security-reports
+
+      - name: Trivy — dependency vulnerabilities in the committed locks
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-locks-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          skip-dirs: security/controls
+          trivy-config: security/trivy.yaml
+
+      - name: Trivy — API image vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: image
+          image-ref: signalnest-api:ci
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-image-api-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+
+      - name: Trivy — worker image vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: image
+          image-ref: signalnest-worker:ci
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-image-worker-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+
+      - name: Trivy — API image SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: image
+          image-ref: signalnest-api:ci
+          format: cyclonedx
+          output: security-reports/sbom-image-api.cdx.json
+          exit-code: '0'
+
+      - name: Trivy — worker image SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: image
+          image-ref: signalnest-worker:ci
+          format: cyclonedx
+          output: security-reports/sbom-image-worker.cdx.json
+          exit-code: '0'
+
+      - name: Trivy — repository dependency SBOM (CycloneDX, committed locks)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: security-reports/sbom-locks.cdx.json
+          exit-code: '0'
+          skip-dirs: security/controls
+          trivy-config: security/trivy.yaml
+
+      - name: Trivy — infrastructure and container configuration (IaC misconfiguration)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: config
+          scan-ref: .
+          format: json
+          output: security-reports/trivy-config.json
+          exit-code: '0'
+          skip-dirs: security/controls
+
+      - name: Set up Python (security tooling)
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: security/requirements-semgrep.txt
+
+      - name: Create the security tooling virtualenv (Semgrep, hash-locked)
+        run: |
+          python3 -m venv .security-venv
+          .security-venv/bin/python -m pip install --quiet --require-hashes -r security/requirements-semgrep.txt
+          .security-venv/bin/semgrep --version
+
+      - name: Fetch and validate the Semgrep rulesets (provenance recorded)
+        # The fetcher's own tests run first, under this hash-locked venv (it carries the
+        # safe YAML parser); the registry serves rulesets as YAML or JSON, and a partial
+        # population is never left behind for the steps below. The timeout bounds a ruleset
+        # that would otherwise hold the runner until the six-hour job limit.
+        timeout-minutes: 10
+        run: |
+          .security-venv/bin/python -m unittest discover -s security -p "fetcher_selftest.py"
+          .security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules security-reports/semgrep-rules-provenance.json
+          .security-venv/bin/semgrep --validate --metrics=off --config .security-venv/semgrep-rules
+
+      - name: Semgrep — static application security analysis (Python, TypeScript)
+        run: >-
+          .security-venv/bin/semgrep scan --metrics=off --no-rewrite-rule-ids
+          --timeout 60 --timeout-threshold 0 --exclude security/controls
+          --config .security-venv/semgrep-rules --json --output security-reports/semgrep.json
+          apps scripts security
+
+      - name: Gate — lock vulnerabilities (runtime scope gates, development scope reported)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln
+          --kind filesystem --artifact .
+          --expect-target package-lock.json
+          --expect-target apps/api/requirements-runtime.txt
+          --expect-target apps/api/requirements-dev.txt
+          --expect-target scripts/requirements-gate.txt
+          --expect-target security/requirements-semgrep.txt
+
+      - name: Gate — API image vulnerabilities (OS packages and the locked Python set)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-image-api-vuln.json --name image-api-vuln
+          --kind image --artifact signalnest-api:ci --min-lang-packages 40
+
+      - name: Gate — worker image vulnerabilities (OS packages and the locked Python set)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-image-worker-vuln.json --name image-worker-vuln
+          --kind image --artifact signalnest-worker:ci --min-lang-packages 40
+
+      - name: Gate — API image SBOM identity and population
+        if: always()
+        run: >-
+          python3 security/gate.py sbom security-reports/sbom-image-api.cdx.json --name sbom-image-api
+          --kind image --artifact signalnest-api:ci --min-components 100 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
+          --image-id-from security-reports/trivy-image-api-vuln.json
+          --identity-out security-reports/sbom-image-api.identity.json
+
+      - name: Gate — worker image SBOM identity and population
+        if: always()
+        run: >-
+          python3 security/gate.py sbom security-reports/sbom-image-worker.cdx.json --name sbom-image-worker
+          --kind image --artifact signalnest-worker:ci --min-components 100 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
+          --image-id-from security-reports/trivy-image-worker-vuln.json
+          --identity-out security-reports/sbom-image-worker.identity.json
+
+      - name: Gate — repository SBOM population
+        if: always()
+        run: >-
+          python3 security/gate.py sbom security-reports/sbom-locks.cdx.json --name sbom-locks
+          --kind filesystem --artifact . --min-components 500 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
+          --identity-out security-reports/sbom-locks.identity.json
+
+      # The reviewed exceptions file (adopted by operator order of 2026-10-18) excepts exactly the
+      # six class A/B/C findings it names, each by check, file, enclosing resource block, instance
+      # count, literal conditions and expiry; an excepted finding is still listed, and an expired,
+      # stale, miscounted or condition-failing entry fails this step (security/README.md).
+      - name: Gate — IaC misconfigurations
+        if: always()
+        run: >-
+          python3 security/gate.py misconfig security-reports/trivy-config.json --name iac
+          --expect-type dockerfile --expect-type terraform
+          --exceptions security/misconfig-exceptions.json --source-root .
+
+      - name: Gate — SAST
+        if: always()
+        run: >-
+          python3 security/gate.py sast security-reports/semgrep.json --name sast
+          --expect-prefix apps/api/app --expect-prefix apps/web/src
+          --expect-prefix apps/revision-reader/revision_reader --expect-prefix scripts
+          --expect-prefix security --expect-extension .py --expect-extension .tsx
+
+      # Negative controls: each required analysis category must still DETECT an intended,
+      # inert finding; the gate is run with --expect-fail and passes ONLY on a policy
+      # violation, so a clean result, a crash or an empty report fails the control.
+      - name: Negative control — Trivy scans an inert lock carrying a known CRITICAL
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: fs
+          scan-ref: security/controls/vuln
+          scanners: vuln
+          format: json
+          output: security-reports/control-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/controls/trivy-control.yaml
+
+      - name: Negative control — the lock gate must fail on it
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/control-vuln.json --name control-vuln
+          --kind filesystem --artifact security/controls/vuln --expect-target pinned-vulnerable.txt --expect-fail
+
+      - name: Negative control — Trivy scans an inert module with an open security-group rule
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: config
+          scan-ref: security/controls/iac
+          format: json
+          output: security-reports/control-iac.json
+          exit-code: '0'
+
+      # With the exceptions file loaded, the inert finding must STILL be a violation: no entry may
+      # except it (the entries are also stale against this fixture, so the control names the check).
+      - name: Negative control — the IaC gate must fail on it
+        if: always()
+        run: >-
+          python3 security/gate.py misconfig security-reports/control-iac.json --name control-iac
+          --expect-type terraform --exceptions security/misconfig-exceptions.json
+          --source-root security/controls/iac --expect-fail --expect-violation AWS-0107
+
+      # IaC exception controls: each case is a copy of the checked-out tree with ONE mutation that
+      # must defeat an exception (a widened, IPv6, overridden or shadowed egress rule; a fourth
+      # workload; an expired or stale entry; an HTTP listener in the alb module, a new module file,
+      # the root module or under the alias type; a non-literal protocol; a non-local module source,
+      # or a local one that resolves outside infra/aws, directly or through a symlink;
+      # a .tofu file; a provisioner; a non-SSE-S3 log bucket), plus an unmutated baseline that must
+      # PASS. One real Trivy scan covers every case; the real gate then runs once per case and must
+      # report the case's own violation token (security/iac_exception_controls.py).
+      - name: Negative control — build the IaC exception mutation cases
+        if: always()
+        run: python3 security/iac_exception_controls.py build security-reports/iac-exception-controls
+
+      - name: Negative control — Trivy scans every IaC exception mutation case
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: config
+          scan-ref: security-reports/iac-exception-controls
+          format: json
+          output: security-reports/control-iac-exceptions.json
+          exit-code: '0'
+
+      - name: Negative control — every IaC exception mutation must fail the gate, the baseline must pass
+        if: always()
+        run: >-
+          python3 security/iac_exception_controls.py check
+          security-reports/control-iac-exceptions.json security-reports/iac-exception-controls
+
+      - name: Negative control — Semgrep scans inert Python and TypeScript samples
+        if: always()
+        run: >-
+          .security-venv/bin/semgrep scan --metrics=off --no-rewrite-rule-ids
+          --timeout 60 --timeout-threshold 0 --config .security-venv/semgrep-rules
+          --json --output security-reports/control-sast.json security/controls/sast
+
+      - name: Negative control — the SAST gate must fail on them
+        if: always()
+        run: >-
+          python3 security/gate.py sast security-reports/control-sast.json --name control-sast
+          --expect-prefix security/controls/sast --expect-extension .py --expect-extension .ts --expect-fail
+
+      - name: Negative control — SBOM of the inert lock
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: fs
+          scan-ref: security/controls/vuln
+          format: cyclonedx
+          output: security-reports/control-sbom.cdx.json
+          exit-code: '0'
+          trivy-config: security/controls/trivy-control.yaml
+
+      - name: Negative control — the SBOM gate must list the inert component
+        if: always()
+        run: >-
+          python3 security/gate.py sbom security-reports/control-sbom.cdx.json --name control-sbom
+          --kind filesystem --artifact security/controls/vuln --min-components 2 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
+
+      - name: Every required security analysis ran and was gated (completeness)
+        if: always()
+        run: >-
+          python3 security/gate.py complete --name complete
+          --expect-pass locks-vuln --expect-pass image-api-vuln --expect-pass image-worker-vuln
+          --expect-pass sbom-image-api --expect-pass sbom-image-worker --expect-pass sbom-locks
+          --expect-pass iac --expect-pass sast --expect-pass control-sbom
+          --expect-control control-vuln --expect-control control-iac --expect-control control-sast
+          --expect-pass control-iac-exc-baseline
+          --expect-control control-iac-exc-egress-port-range --expect-control control-iac-exc-egress-ipv6
+          --expect-control control-iac-exc-egress-fourth-workload
+          --expect-control control-iac-exc-egress-override-file --expect-control control-iac-exc-egress-tofu-shadow
+          --expect-control control-iac-exc-entry-expired --expect-control control-iac-exc-entry-stale
+          --expect-control control-iac-exc-listener-http-module-file
+          --expect-control control-iac-exc-listener-http-new-module-file
+          --expect-control control-iac-exc-listener-http-root-module
+          --expect-control control-iac-exc-listener-alias-type --expect-control control-iac-exc-listener-nonliteral
+          --expect-control control-iac-exc-tree-nonlocal-module --expect-control control-iac-exc-tree-escaping-local-module
+          --expect-control control-iac-exc-tree-symlink-dotdot-escape --expect-control control-iac-exc-tree-tofu-file
+          --expect-control control-iac-exc-tree-provisioner --expect-control control-iac-exc-alb-log-bucket-not-aes256
+
+      - name: Upload security reports, SBOMs and gate summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-reports-container-build
+          path: security-reports/
+          retention-days: 30
+          if-no-files-found: warn
+
   integration-smoke:
     name: Integration smoke
     runs-on: ubuntu-latest
@@ -750,7 +1080,9 @@ jobs:
       # whole for distinct subnet ids), `-backend=false` so the committed S3 backend is NEVER
       # initialised, no AWS call. The root cache infra/aws is already an EXPECTED_CACHE_ROOTS
       # member (and a root_wiring_check mirror source, verified against the committed lockfile).
-      # Expected runs: 7. Placed before toolchain_post so the cache it creates is classified.
+      # The same step also runs cmk_remediation.tftest.hcl (P6-CI-6): module-targeted runs that
+      # render the edge, observability and storage modules' customer-managed-key wiring.
+      # Expected runs: 11 (7 + 4). Placed before toolchain_post so the cache it creates is classified.
       - name: Root input-boundary and alias-wiring contract tests (offline, fully mocked provider)
         id: root_boundary_tests
         if: always()
@@ -1304,12 +1636,12 @@ jobs:
           image="signalnest-revision-reader:ci"
 
           echo "== (1) the image runs and psycopg imports (catches a builder/base ABI mismatch) =="
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
             -c "import psycopg; print('psycopg import ok')"
 
           echo "== (2) the image CANNOT migrate: Alembic and the application are absent =="
           for mod in alembic sqlalchemy app app.db.migrate pydantic boto3 fastapi; do
-            if docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "import ${mod}" 2>/dev/null; then
+            if docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "import ${mod}" 2>/dev/null; then
               echo "::error::FORBIDDEN MODULE PRESENT: ${mod} imports inside the reader image." >&2
               exit 1
             fi
@@ -1325,7 +1657,7 @@ jobs:
 
           echo "== (4) fixed exec-form entrypoint, empty CMD, non-root uid =="
           entry="$(docker inspect --format '{{ json .Config.Entrypoint }}' "$image")"
-          test "$entry" = '["/usr/bin/python3.11","-m","revision_reader.reader"]'
+          test "$entry" = '["/usr/bin/python3.13","-m","revision_reader.reader"]'
           cmd="$(docker inspect --format '{{ json .Config.Cmd }}' "$image")"
           case "$cmd" in 'null'|'[]') : ;; *) echo "::error::CMD is ${cmd}, expected empty." >&2; exit 1 ;; esac
           test "$(docker inspect --format '{{ .Config.User }}' "$image")" = "10001:10001"
@@ -1385,7 +1717,7 @@ jobs:
           expect 52 -e DATABASE_URL="postgresql://signalnest_app:p%40ss@${BAKED_HOST}:5432/signalnest?sslmode=require"
 
           echo "== (7) baked pins and the CA bundle are present and non-empty =="
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "
           import os
           from revision_reader import _pinned
           assert _pinned.EXPECTED_DB_HOST == '${BAKED_HOST}', _pinned.EXPECTED_DB_HOST
@@ -1394,14 +1726,72 @@ jobs:
           print('pins + CA present ok')"
 
           echo "== (8) the baked CA bundle is byte-identical to the reviewed, pinned asset =="
-          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "
           import hashlib, pathlib
           print(hashlib.sha256(pathlib.Path('/etc/ssl/rds/rds-global-bundle.pem').read_bytes()).hexdigest())")"
           want="e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
           test "$got" = "$want" || { echo "::error::baked CA sha256 ${got} != ${want}" >&2; exit 1; }
 
           echo "== (9) exact interpreter patch version (logged, not asserted — drift visible) =="
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
             -c "import sys; print('reader interpreter:', sys.version)"
 
           echo "revision-reader in-image verification: PASS"
+
+      # --- Merge-path security scanning of the reader image (P6-CI-6) --------------------
+      # Same shape as the Container build and security job: Trivy writes the report and the
+      # SBOM for the image built above, security/gate.py binds both to that image (same
+      # ImageID) and evaluates them against security/policy.json. See security/README.md.
+      - name: Create the security reports directory
+        run: mkdir -p security-reports
+
+      - name: Trivy — reader image vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: image
+          image-ref: signalnest-revision-reader:ci
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-image-reader-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+
+      - name: Trivy — reader image SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: image
+          image-ref: signalnest-revision-reader:ci
+          format: cyclonedx
+          output: security-reports/sbom-image-reader.cdx.json
+          exit-code: '0'
+
+      - name: Gate — reader image vulnerabilities (OS packages and the pinned psycopg)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-image-reader-vuln.json --name image-reader-vuln
+          --kind image --artifact signalnest-revision-reader:ci --min-lang-packages 1
+
+      - name: Gate — reader image SBOM identity and population
+        if: always()
+        run: >-
+          python3 security/gate.py sbom security-reports/sbom-image-reader.cdx.json --name sbom-image-reader
+          --kind image --artifact signalnest-revision-reader:ci --min-components 10 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
+          --image-id-from security-reports/trivy-image-reader-vuln.json
+          --identity-out security-reports/sbom-image-reader.identity.json
+
+      - name: Every required reader security analysis ran and was gated (completeness)
+        if: always()
+        run: >-
+          python3 security/gate.py complete --name complete
+          --expect-pass image-reader-vuln --expect-pass sbom-image-reader
+
+      - name: Upload reader security report, SBOM and gate summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-reports-revision-reader
+          path: security-reports/
+          retention-days: 30
+          if-no-files-found: warn

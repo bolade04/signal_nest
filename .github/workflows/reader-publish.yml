@@ -280,7 +280,7 @@ jobs:
         # this step weakens the runtime control it is verifying.
         run: |
           image="signalnest-revision-reader:${{ github.sha }}"
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
             -c "import psycopg; print('psycopg import ok')"
 
       - name: The image CANNOT migrate — Alembic and the application are absent
@@ -290,7 +290,7 @@ jobs:
         run: |
           image="signalnest-revision-reader:${{ github.sha }}"
           for mod in alembic sqlalchemy app app.db.migrate pydantic boto3 fastapi; do
-            if docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+            if docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
                  -c "import ${mod}" 2>/dev/null; then
               echo "::error::FORBIDDEN MODULE PRESENT: '${mod}' imports inside the reader image. The image can no longer be described as incapable of migrating." >&2
               exit 1
@@ -318,7 +318,7 @@ jobs:
           entry="$(docker inspect --format '{{ json .Config.Entrypoint }}' "$image")"
           cmd="$(docker inspect --format '{{ json .Config.Cmd }}' "$image")"
           user="$(docker inspect --format '{{ .Config.User }}' "$image")"
-          expected='["/usr/bin/python3.11","-m","revision_reader.reader"]'
+          expected='["/usr/bin/python3.13","-m","revision_reader.reader"]'
           if [ "$entry" != "$expected" ]; then
             echo "::error::Entrypoint is ${entry}, expected ${expected}. The override-prevention control depends on this exact value." >&2
             exit 1
@@ -418,7 +418,7 @@ jobs:
           BAKED_HOST: ${{ vars.AWS_STAGING_READER_EXPECTED_DB_HOST }}
         run: |
           image="signalnest-revision-reader:${{ github.sha }}"
-          docker run --rm --network none -e BAKED_HOST --entrypoint /usr/bin/python3.11 "$image" -c "
+          docker run --rm --network none -e BAKED_HOST --entrypoint /usr/bin/python3.13 "$image" -c "
           import os
           from revision_reader import _pinned
           assert _pinned.EXPECTED_DB_HOST == os.environ['BAKED_HOST'], 'baked host does not match the build arg'
@@ -429,7 +429,7 @@ jobs:
       - name: The baked CA bundle is byte-identical to the reviewed, pinned asset
         run: |
           image="signalnest-revision-reader:${{ github.sha }}"
-          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" -c "
+          got="$(docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" -c "
           import hashlib, pathlib
           print(hashlib.sha256(pathlib.Path('/etc/ssl/rds/rds-global-bundle.pem').read_bytes()).hexdigest())")"
           want="e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
@@ -439,7 +439,7 @@ jobs:
       - name: Log the exact interpreter patch version (drift visible, not asserted)
         run: |
           image="signalnest-revision-reader:${{ github.sha }}"
-          docker run --rm --network none --entrypoint /usr/bin/python3.11 "$image" \
+          docker run --rm --network none --entrypoint /usr/bin/python3.13 "$image" \
             -c "import sys; print('reader interpreter:', sys.version)"
 
       - name: Verify the OCI revision label matches the trusted checkout

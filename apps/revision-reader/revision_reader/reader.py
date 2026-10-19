@@ -312,7 +312,7 @@ def _console_main() -> None:  # pragma: no cover - console-script shim
 
 
 # THE IMAGE ENTRYPOINT DEPENDS ON THIS GUARD. The container runs
-# `/usr/bin/python3.11 -m revision_reader.reader`; without it the module would import, do
+# `/usr/bin/python3.13 -m revision_reader.reader`; without it the module would import, do
 # nothing, and exit 0 — a reader that always "succeeds" while reading nothing, which is the
 # worst possible failure mode for a verification instrument.
 if __name__ == "__main__":  # pragma: no cover - exercised by the in-image CI band

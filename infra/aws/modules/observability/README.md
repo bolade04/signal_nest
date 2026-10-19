@@ -53,10 +53,10 @@ deterministic name prefix, never by these resources — §26.8).
 - **CloudTrail audit trail** (`aws_cloudtrail.audit`, `<name_prefix>-audit`):
   single-region, management events only (control-plane + IAM/secret access,
   §14), `include_global_service_events`, **log-file validation enabled**,
-  default SSE (a customer-managed KMS design remains separately authorized),
+  ~~default SSE (a customer-managed KMS design remains separately authorized)~~ *(2026-10-18, P6-CI-6: log and digest files are SSE-KMS-encrypted with the module's audit key, `kms_key_id`; IaC finding AWS-0015)*,
   no data events, no organization trail, no CloudWatch Logs delivery.
 - **Dedicated private audit bucket** (+ ownership controls, all-four
-  public-access block, SSE-S3, versioning, policy): `bucket_prefix
+  public-access block, ~~SSE-S3~~ *(2026-10-18, P6-CI-6: SSE-KMS with the audit key, S3 Bucket Key off; IaC finding AWS-0132)*, versioning, policy): `bucket_prefix
   "<name_prefix>-audit-"` (edge-module precedent — no global name committed),
   `BucketOwnerEnforced`, TLS-only deny, and CloudTrail-service-only
   `GetBucketAcl`/`PutObject` statements scoped by `aws:SourceArn` to this exact
@@ -118,7 +118,7 @@ destination resource is created or assumed.
 ## 6. Security and cost considerations
 Secret values are never logged, filtered on, or attached as evidence (G5); the
 error filter matches only the `severity` field. The audit bucket is private,
-TLS-only, service-principal-scoped, versioned, and SSE-S3-encrypted; CloudTrail
+TLS-only, service-principal-scoped, versioned, and ~~SSE-S3-encrypted~~ *(2026-10-18, P6-CI-6: SSE-KMS-encrypted with the module's customer-managed audit key, `aws_kms_key.audit` + `alias/<name_prefix>/audit` — symmetric, rotation on, single-region, 30-day deletion window; its policy is the AWS default account-root statement plus the two CloudTrail statements AWS documents, `kms:GenerateDataKey*` (with CloudTrail's encryption context) and `kms:DescribeKey`, each bound by `aws:SourceArn` to this trail; the S3 Bucket Key is off because with it AWS also requires `kms:Decrypt` for CloudTrail; reading delivered log files needs `kms:Decrypt` on the key through the reader's own IAM policy; one key adds about USD 1/month)*; CloudTrail
 log-file validation provides tamper evidence. Costs are bounded: one
 single-region management-events trail (first copy of management events is
 free), 15 alarms, 6 filters, one dashboard (~$3/month), and minimal S3 audit

@@ -1,0 +1,6 @@
+# Trivy configuration for the negative-control lock ONLY. The control file is deliberately
+# NOT named like a dependency manifest, so GitHub's dependency graph never indexes it and no
+# Dependabot alert is raised for a fixture; this binds Trivy's pip analyser to it by name.
+scan:
+  file-patterns:
+    - "pip:pinned-vulnerable\\.txt"

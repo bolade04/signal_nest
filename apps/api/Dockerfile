@@ -71,6 +71,15 @@ RUN python -m pip install --upgrade pip \
 # the lock (the build backend fetch noted above is the one remaining unpinned install).
 RUN mkdir -p app && touch app/__init__.py \
     && python -m pip install --no-deps .
+# The venv is copied forward wholesale, and ``pip install --upgrade pip`` above put the
+# latest pip INTO it — together with pip's vendored copies of urllib3, msgpack and
+# pkg_resources/setuptools, which the merge-path image scan reports at their vendored
+# (older, vulnerable) versions although the application's own locked urllib3 is current.
+# Nothing at runtime installs packages, so pip is removed from the venv after the last
+# install; the locked application dependencies and the project metadata stay as installed.
+RUN python -m pip uninstall --yes pip \
+    && test ! -e "$VENV_PATH/lib/python3.12/site-packages/pip" \
+    && test ! -d "$VENV_PATH/lib/python3.12/site-packages/pip/_vendor"
 
 # ---------------------------------------------------------------------------
 # runtime — the shared runtime stage (venv + application source, non-root).

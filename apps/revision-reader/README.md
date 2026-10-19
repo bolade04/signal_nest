@@ -37,7 +37,7 @@ fixed exec-form `ENTRYPOINT` and the task definition sets neither `entryPoint`
 nor `command`, so an override `command` arrives as **argv** to a program whose
 first action is to reject all argv. Prevention, not detection.
 
-The entrypoint is `["/usr/bin/python3.11", "-m", "revision_reader.reader"]`.
+The entrypoint is `["/usr/bin/python3.13", "-m", "revision_reader.reader"]`.
 The `-m` form is deliberate: CPython stops parsing interpreter options at
 `-m <module>`, so an override of `["-c", "..."]` arrives as argv to be rejected
 rather than as a flag that would execute arbitrary code.

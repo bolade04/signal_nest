@@ -145,11 +145,11 @@ def test_builder_entrypoint_and_pythonpath_minors_agree(code):
 
 
 def test_runtime_minor_matches_the_distroless_base(code):
-    """gcr.io/distroless/python3-debian12 ships Python 3.11 at /usr/bin/python3.11.
-    Bumping the base to a debian13 (or any other) tag changes that, so the base tag and
-    the interpreter minor are pinned together here deliberately."""
-    assert "gcr.io/distroless/python3-debian12" in code
-    assert _minors(code)["entrypoint"] == "3.11"
+    """gcr.io/distroless/python3-debian13 ships Python 3.13 at /usr/bin/python3.13.
+    Moving the base to another tag changes that, so the base tag and the interpreter minor
+    are pinned together here deliberately (debian12 / 3.11 until the P6-CI-6 proposal)."""
+    assert "gcr.io/distroless/python3-debian13" in code
+    assert _minors(code)["entrypoint"] == "3.13"
 
 
 # --- what must not be in the image ---------------------------------------------------
@@ -190,8 +190,8 @@ def test_final_stage_is_distroless_not_the_builder(directives):
 
 
 def test_both_base_images_are_digest_pinned(directives):
-    """A floating tag (python:3.11-slim) lets a registry retag change the bytes silently,
-    including the exact 3.11.x patch on whose urlsplit behaviour the DSN parser depends.
+    """A floating tag (python:3.13-slim) lets a registry retag change the bytes silently,
+    including the exact 3.13.x patch on whose urlsplit behaviour the DSN parser depends.
     Both bases must be @sha256:-pinned."""
     froms = [a for i, a in directives if i == "FROM"]
     assert len(froms) == 2, froms
@@ -201,8 +201,8 @@ def test_both_base_images_are_digest_pinned(directives):
 
 def test_final_base_digest_is_the_reviewed_distroless(code):
     assert (
-        "gcr.io/distroless/python3-debian12@sha256:"
-        "2fdb05402a2cf21cf78fdb3ba4c5db167241e9e498140f5bf689d7efb773731f"
+        "gcr.io/distroless/python3-debian13@sha256:"
+        "dcb4e83bc06eccbee7b626d8cc1c6177f5c3a549235e70ac6e7f8cc98f4264a1"
     ) in code
 
 

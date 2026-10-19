@@ -9,8 +9,9 @@
 #
 # Dependency boundary (§26.1/§26.12): ZERO upstream module dependencies. Downstream
 # only, one-way: `secrets -> iam` (iam consumes the secret + KMS ARNs to build
-# identity policies) and `secrets -> ecs` (ecs consumes the secret ARNs for
-# task-definition `secrets` valueFrom injection). This module consumes no role ARN,
+# identity policies), `secrets -> ecs` (ecs consumes the secret ARNs for
+# task-definition `secrets` valueFrom injection) and, since P6-CI-6, `secrets ->
+# storage` (storage consumes the KMS ARN as the application bucket's SSE-KMS key). This module consumes no role ARN,
 # endpoint, or ECS/IAM output, so it creates no iam->secrets->iam or ecs->secrets->ecs
 # cycle.
 #
@@ -30,6 +31,11 @@ locals {
 }
 
 # --- Customer-managed KMS key for the four application secret containers -----------
+# SINCE P6-CI-6 (operator decision 2026-10-18) the same key is also the default
+# encryption key of the application bucket (module.storage, SSE-KMS): the live role
+# boundary lets the bounded task roles use this key and no other. The api/worker task
+# roles reach it only through S3 for that bucket (iam module, AppBucketKmsViaS3Only);
+# the key itself, its description and its (default) policy are unchanged here.
 # Symmetric ENCRYPT_DECRYPT, rotation on, single-region, enabled, recoverable delete.
 # No `policy` is declared: AWS applies its DEFAULT key policy, which grants the key's
 # OWN account root full administrative access and thereby delegates access control to

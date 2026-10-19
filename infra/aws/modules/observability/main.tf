@@ -31,10 +31,16 @@
 # CLOUDTRAIL (§6 assigns CloudTrail to observability; §14 audit): one
 # single-region management-events trail with log-file validation, delivered to a
 # DEDICATED private audit bucket owned here (bucket_prefix per the edge-module
-# precedent — no global bucket name committed; SSE-S3, versioning, all four
+# precedent — no global bucket name committed; versioning, all four
 # public-access blocks, BucketOwnerEnforced, TLS-only + CloudTrail-service-only
 # bucket policy). This is an AUDIT bucket, not an application bucket (`storage`
-# owns application buckets). Alarm/OK actions use the optional caller-supplied
+# owns application buckets). Encryption (P6-CI-6, operator order 2026-10-18, IaC
+# findings AWS-0015 and AWS-0132; was SSE-S3 with no trail key): the trail's log and
+# digest files and the bucket default use SSE-KMS with the customer-managed audit key
+# OWNED HERE (aws_kms_key.audit), whose policy grants CloudTrail only the two
+# statements AWS documents (GenerateDataKey* and DescribeKey), both bound to THIS
+# trail by aws:SourceArn. Reading delivered log files needs kms:Decrypt on the key
+# through the reader's own IAM policy (the key keeps the account's IAM delegation). Alarm/OK actions use the optional caller-supplied
 # `sns_topic_arn` only — no SNS topic, dashboard, composite alarm, or anomaly
 # detector is created (none is documented). Nothing here is provisioned,
 # deployed, or live; offline-validated HCL only.
@@ -280,14 +286,29 @@ resource "aws_s3_bucket_public_access_block" "audit" {
   restrict_public_buckets = true
 }
 
+# SSE-KMS with the audit key (below); was SSE-S3/AES256 until P6-CI-6. The S3 Bucket Key
+# is deliberately OFF: AWS documents that a trail delivering into a bucket WITH a Bucket
+# Key also needs kms:Decrypt in the key policy to be created or updated, and a single-
+# region management-events trail makes few KMS requests, so the narrower grant wins.
+# ORDERED AFTER THE TRAIL (review FREEZE-1, permissions lane F2): the bucket default moves
+# to the audit key only once the trail itself encrypts with it. If UpdateTrail fails, the
+# bucket default stays SSE-S3 and delivery keeps working; the reverse order could leave a
+# keyless trail writing into a bucket whose default is a key that admits CloudTrail only
+# with its own encryption context. Roll back in the reverse order. The audit key must
+# outlive every retained log object: once logs are written under it, scheduling its
+# deletion makes the audit history unreadable after the deletion window.
 resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
   bucket = aws_s3_bucket.audit.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.audit.arn
     }
+    bucket_key_enabled = false
   }
+
+  depends_on = [aws_cloudtrail.audit]
 }
 
 resource "aws_s3_bucket_versioning" "audit" {
@@ -308,6 +329,75 @@ data "aws_caller_identity" "current" {}
 locals {
   trail_name = "${var.name_prefix}-audit"
   trail_arn  = "arn:${data.aws_partition.current.partition}:cloudtrail:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:trail/${local.trail_name}"
+}
+
+# --- Customer-managed audit key (P6-CI-6) -------------------------------------------
+# Symmetric, rotation on, single-region (the trail, the bucket and the key share the
+# provider region, as CloudTrail requires), the maximum recoverable deletion window.
+# Statement 1 is the AWS default key policy's own account-root statement (IAM
+# delegation; keeps the key manageable). Statements 2 and 3 are the CloudTrail
+# statements AWS documents for a trail, each bound to THIS trail by aws:SourceArn; the
+# encrypt statement also requires CloudTrail's own encryption context for this
+# account's trails. CloudTrail gets no kms:Decrypt (no Bucket Key, see the bucket's
+# encryption configuration above) and nothing else.
+resource "aws_kms_key" "audit" {
+  description                        = "SignalNest ${var.name_prefix} audit CMK - encrypts the CloudTrail audit trail's log and digest files and the audit bucket default."
+  key_usage                          = "ENCRYPT_DECRYPT"
+  customer_master_key_spec           = "SYMMETRIC_DEFAULT"
+  enable_key_rotation                = true
+  multi_region                       = false
+  is_enabled                         = true
+  deletion_window_in_days            = 30
+  bypass_policy_lockout_safety_check = false
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableIamPoliciesInThisAccount"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "AllowCloudTrailEncryptForThisTrailOnly"
+        Effect    = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action    = "kms:GenerateDataKey*"
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceArn" = local.trail_arn
+          }
+          StringLike = {
+            "kms:EncryptionContext:aws:cloudtrail:arn" = "arn:${data.aws_partition.current.partition}:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*"
+          }
+        }
+      },
+      {
+        Sid       = "AllowCloudTrailDescribeKeyForThisTrailOnly"
+        Effect    = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action    = "kms:DescribeKey"
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceArn" = local.trail_arn
+          }
+        }
+      },
+    ]
+  })
+
+  tags = {
+    Name = "${var.name_prefix}-audit-cmk"
+  }
+}
+
+resource "aws_kms_alias" "audit" {
+  name          = "alias/${var.name_prefix}/audit"
+  target_key_id = aws_kms_key.audit.key_id
 }
 
 resource "aws_s3_bucket_policy" "audit" {
@@ -360,15 +450,17 @@ resource "aws_s3_bucket_policy" "audit" {
 
 # --- CloudTrail management-events audit trail (§14) --------------------------------
 # Single-region, management events only (control-plane + IAM/secret access),
-# log-file validation enabled. Default SSE; a customer-managed KMS design remains
-# separately authorized. No data events, no organization trail, no CloudWatch
-# Logs delivery (log groups are ecs-owned; trail->logs wiring is not documented).
+# log-file validation enabled. Log and digest files are SSE-KMS-encrypted with the
+# audit key (P6-CI-6; until then SSE-S3 with no trail key). No data events, no
+# organization trail, no CloudWatch Logs delivery (log groups are ecs-owned;
+# trail->logs wiring is not documented).
 resource "aws_cloudtrail" "audit" {
   name                          = local.trail_name
   s3_bucket_name                = aws_s3_bucket.audit.id
   include_global_service_events = true
   is_multi_region_trail         = false
   enable_log_file_validation    = true
+  kms_key_id                    = aws_kms_key.audit.arn
 
   tags = {
     Name = local.trail_name
