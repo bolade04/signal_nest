@@ -268,7 +268,7 @@ class GateCase(unittest.TestCase):
                     code, result, text = self.run_gate("vuln", rep, "--name", "a", "--kind", "filesystem", "--artifact", ".")
                     self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("scanner-side suppression", text)
                     (work / name).unlink()
-            for var in ("TRIVY_IGNORE_UNFIXED", "TRIVY_SEVERITY", "trivy_ignorefile"):
+            for var in ("TRIVY_IGNORE_UNFIXED", "TRIVY_SEVERITY", "trivy_ignorefile", "TRIVY_VULN_SEVERITY_SOURCE"):
                 with self.subTest(var=var):
                     os.environ[var] = "x"
                     try:
@@ -312,6 +312,34 @@ class GateCase(unittest.TestCase):
                 else: v["Severity"] = sev
                 code, result, _ = self._fs(fs_report(runtime_py_vulns=[v]))
                 self.assertEqual((code, result), (2, gate.RESULT_REPORT))
+
+    def test_a_valid_unknown_is_reported_for_triage_and_a_later_critical_rating_fails(self):
+        # Operator decision 2 (2026-10-19): a valid UNKNOWN means unscored and stays reported for triage (not LOW, not resolved);
+        # the same finding, once classified CRITICAL, falls under the unconditional CRITICAL rule (development scope, no fix).
+        unknown = vuln("U-T", "vite", "1", "", "UNKNOWN", uid="dv")
+        code, result, text = self._fs(fs_report(dev_vulns=[unknown]))
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     U-T vite 1 -> no fix [UNKNOWN]", text)
+        code, result, text = self._fs(fs_report(dev_vulns=[dict(unknown, Severity="CRITICAL")]))
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION U-T", text)
+
+    def test_missing_or_invalid_severity_is_malformed_never_read_as_unknown(self):
+        for sev in (None, "", "Unknown", "unknown", "UNSCORED", 0, "LOW "):
+            with self.subTest(sev=sev):
+                v = vuln("S-2", "vite", "1", "", "UNKNOWN", uid="dv")
+                if sev is None: del v["Severity"]
+                else: v["Severity"] = sev
+                code, result, _ = self._fs(fs_report(dev_vulns=[v]))
+                self.assertEqual((code, result), (2, gate.RESULT_REPORT))
+
+    def test_trivys_selected_severity_decides_and_other_ratings_do_not_change_it(self):
+        # Operator decision 1 (2026-10-19): the Severity Trivy selects decides; SeveritySource, VendorSeverity and CVSS stay in
+        # the report and change the result in neither direction (an NVD 9.8 the vendor rates LOW is LOW; a selected CRITICAL fails).
+        low = dict(vuln("V-L", "libc6", "1", "", "LOW"), SeveritySource="debian", VendorSeverity={"nvd": 4, "debian": 1}, CVSS={"nvd": {"V3Score": 9.8}})
+        code, result, text = self.run_gate("vuln", self.write("r.json", image_report([low])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     V-L", text)
+        crit = dict(vuln("V-C", "libc6", "1", "", "CRITICAL"), SeveritySource="nvd", VendorSeverity={"nvd": 4, "debian": 1})
+        code, result, _ = self.run_gate("vuln", self.write("r.json", image_report([crit])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY))
 
     def test_unknown_severity_value_unknown_is_reported_at_lower_severity(self):
         code, result, text = self._fs(fs_report(runtime_py_vulns=[vuln("U-1", "fastapi", "1", "2", "UNKNOWN", uid="py")]))

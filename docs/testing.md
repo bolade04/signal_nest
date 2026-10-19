@@ -266,7 +266,7 @@ The `Container build and security` and `Revision reader` contexts also run Trivy
 dependencies, the three built images, IaC misconfiguration, CycloneDX SBOMs) and Semgrep
 (Python and TypeScript SAST), each evaluated by `security/gate.py` against the ~~PROPOSED~~
 thresholds in `security/policy.json` *(ADOPTED for merge-path enforcement by the operator order
-of 2026-10-19: CRITICAL fails in every scope with or without a fix; the jobs' installed tooling
+of 2026-10-19: a Trivy-selected CRITICAL fails in every covered population with or without a fix; the jobs' installed tooling
 environments are scanned as installed)*. Reports, SBOMs, identity records and gate summaries
 are uploaded as the `security-reports-*` artifacts (30 days). Coverage, declared exclusions,
 the baseline findings on `main` and the failure behaviour are documented in

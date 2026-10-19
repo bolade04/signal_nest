@@ -70,15 +70,34 @@ uploaded as a workflow artifact (`security-reports-container-build`,
   a missing `FixedVersion` can filter a CRITICAL out. **HIGH** keeps the earlier treatment,
   unchanged: images and runtime dependencies fail when a fix exists (a non-empty
   `FixedVersion`, exactly as before), development-scope HIGH findings are `REPORTED`, and
-  unfixed HIGH findings are listed as `EXCLUDED`. MEDIUM and LOW are reported. **Not ruled by
+  unfixed HIGH findings are listed as `EXCLUDED`. MEDIUM and LOW are reported. ~~**Not ruled by
   the order, and disclosed as the implementation's reading (unchanged from before the
   adoption) pending an operator ruling:** the severity evaluated is Trivy's selected `Severity`
   field, so a finding another source rates CRITICAL but Trivy selects lower is evaluated at
-  Trivy's severity. Instances at adoption: `CVE-2019-1010022` in `libc6`/`libc-bin` (API and
+  Trivy's severity.~~ *(Superseded 2026-10-19 by the operator decisions below.)* Instances at
+  adoption, kept as disclosed: `CVE-2019-1010022` in `libc6`/`libc-bin` (API and
   reader images; NVD 9.8, Debian and Trivy LOW) and `CVE-2026-19445` in the reader image's
-  `python3.13` packages (two vendors CRITICAL, Trivy HIGH, no fix: `EXCLUDED`). UNKNOWN
-  (unscored) findings are reported like the lower severities, for example `CVE-2026-82560` in the
-  API image's `perl-base` (no fix). Every lock target Trivy reports must be
+  `python3.13` packages (two vendors CRITICAL, Trivy HIGH, no fix: `EXCLUDED`). ~~UNKNOWN
+  (unscored) findings are reported like the lower severities~~ *(superseded the same day, below)*,
+  for example `CVE-2026-82560` in the API image's `perl-base` (no fix).
+- **Severity source and UNKNOWN (operator decisions of 2026-10-19, merge-path enforcement
+  only):**
+  - **Severity source.** The gate result is decided by the `Severity` that the pinned Trivy
+    (0.76.0) selects by its documented default selection: the selected data source's vendor
+    severity, else a severity derived from the CVSS score, else NVD. No source override (such
+    as `--vuln-severity-source`) is used; the pinned configurations, the reviewed trivy-action
+    inputs and the gate's `TRIVY_*` refusal keep it that way. The reports keep `SeveritySource`,
+    the alternate vendor ratings (`VendorSeverity`) and the CVSS data.
+  - **The guarantee, stated precisely:** Trivy-selected CRITICAL findings fail across the
+    covered populations, with or without a fix. A finding that NVD or another vendor rates
+    higher than Trivy's selection is evaluated at Trivy's selection. That does not establish the
+    finding's harmlessness or remediation; the cases above stay disclosed.
+  - **UNKNOWN.** A valid `UNKNOWN` severity means unscored. The finding stays reported for
+    triage (the summary lists it with the reported severities, tagged `[UNKNOWN]`); it is not
+    LOW, resolved or proof of safety. A missing or unrecognized severity, a malformed report, an
+    unknown scope and an incomplete analysis continue to fail closed. A finding later classified
+    CRITICAL falls under the unconditional CRITICAL rule. `test_gate.py` pins each case.
+- **Lock targets and report shape.** Every lock target Trivy reports must be
   declared runtime or development in the policy; an undeclared target is an incomplete
   analysis (exit 4), and a finding without a recognised severity is a malformed report
   (exit 2), as is a report whose Results, Packages, identifiers or findings do not have the

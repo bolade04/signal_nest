@@ -171,6 +171,7 @@ class ScannerConfiguration(unittest.TestCase):
         anchor = "          list-all-pkgs: true\n"
         self.assertIn(anchor, text)
         for extra in ("          ignore-unfixed: true\n", "          severity: CRITICAL\n", "          trivyignores: .trivyignore\n",
+                      "          vuln-severity-source: nvd\n",
                       "          skip-files: package-lock.json\n", "          skip-dirs: apps\n", "          exit-code: '1'\n"):
             with self.subTest(extra.strip()):
                 _, problems = trivy_step_problems(text.replace(anchor, anchor + extra, 1))
@@ -254,6 +255,10 @@ class ScannerConfiguration(unittest.TestCase):
     def test_the_configuration_check_rejects_a_suppressed_configuration(self):
         text = (ROOT / "security/trivy.yaml").read_text(encoding="utf-8") + "vulnerability:\n  ignore-unfixed: true\n"
         self.assertNotEqual(effective_lines(text), CONFIGS["security/trivy.yaml"])
+        for rel in CONFIGS:  # no severity-source override can be added to a reviewed configuration (operator decision 1, 2026-10-19)
+            with self.subTest(rel):
+                text = (ROOT / rel).read_text(encoding="utf-8") + "vulnerability:\n  severity-source:\n    - nvd\n"
+                self.assertNotEqual(effective_lines(text), CONFIGS[rel])
 
 
 if __name__ == "__main__":

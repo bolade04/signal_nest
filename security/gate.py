@@ -29,9 +29,9 @@ The rule decides by scope and fix availability: CRITICAL fails in every scope wi
 fix, so neither fix availability, a development classification nor missing FixedVersion metadata
 can filter a CRITICAL out; HIGH keeps the treatment it had before the adoption, unchanged: it fails
 in image and runtime scope when a fix exists (a non-empty FixedVersion, exactly as before), is
-REPORTED in development scope and listed as EXCLUDED when no fix exists. The severity is Trivy's
-selected `Severity` field, as before (the severity source is not an operator ruling; see the policy's
-_authority). Every lock target must have a declared scope; an undeclared one is an incomplete
+REPORTED in development scope and listed as EXCLUDED when no fix exists. The severity is the
+`Severity` field the pinned Trivy selects by its documented default selection (operator decision of
+2026-10-19; see the policy's _authority); a valid UNKNOWN is reported. Every lock target must have a declared scope; an undeclared one is an incomplete
 analysis. A report whose Results, Packages, Identifier or Vulnerabilities do not have the scanner's
 shape is malformed (exit 2), never read as "no findings". A gate over a Trivy report (vuln, misconfig,
 sbom) refuses to certify it (exit 4) while Trivy suppression is present where the scans run: an ignore or
