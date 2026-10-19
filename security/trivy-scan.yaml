@@ -1,0 +1,7 @@
+# Trivy configuration for every merge-path Trivy step that needs no other setting (images, installed
+# environments, IaC). It exists to pin the ignore file (P6-CI-6 closure, operator order 2026-10-19): with an
+# explicit configuration and an explicit, tracked, EMPTY ignore file, Trivy reads neither an ignore file nor a
+# configuration file from its working directory, whenever and by whatever code one is created there.
+# security/test_scanner_configuration.py pins this file, the empty ignore file and that every trivy-action
+# step of the two security-scanned jobs passes one of the reviewed configurations.
+ignorefile: security/empty-ignorefile

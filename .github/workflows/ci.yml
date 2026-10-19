@@ -519,7 +519,7 @@ jobs:
       # asked NOT to exit on findings; security/gate.py then (1) validates that the report is
       # the scanner's document shape, (2) proves it describes THIS job's artifact over a
       # non-empty population, (3) evaluates the findings against security/policy.json, whose
-      # thresholds are PROPOSED until adopted by an operator decision, and (4) exits with a
+      # thresholds were ADOPTED for the merge path by the operator order of 2026-10-19, and (4) exits with a
       # distinct code: 3 policy violation, 4 analysis incomplete, 2 report missing/malformed.
       # A scanner crash fails its own step; the gate after it then reports a missing report.
       # Gate steps run `if: always()` so one failing gate does not hide the others' verdicts;
@@ -534,6 +534,9 @@ jobs:
           python3 -m unittest discover -s security -p "test_*.py"
           mkdir -p security-reports
 
+      # Every Trivy step passes a reviewed configuration (security/trivy.yaml, security/controls/trivy-control.yaml
+      # or security/trivy-scan.yaml), each pinning the tracked, empty security/empty-ignorefile, so Trivy reads no ignore
+      # or configuration file from the working directory, whenever one appears (P6-CI-6 closure).
       - name: Trivy — dependency vulnerabilities in the committed locks
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -559,6 +562,7 @@ jobs:
           output: security-reports/trivy-image-api-vuln.json
           exit-code: '0'
           list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
 
       - name: Trivy — worker image vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
@@ -571,6 +575,7 @@ jobs:
           output: security-reports/trivy-image-worker-vuln.json
           exit-code: '0'
           list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
 
       - name: Trivy — API image SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -581,6 +586,7 @@ jobs:
           format: cyclonedx
           output: security-reports/sbom-image-api.cdx.json
           exit-code: '0'
+          trivy-config: security/trivy-scan.yaml
 
       - name: Trivy — worker image SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -591,6 +597,7 @@ jobs:
           format: cyclonedx
           output: security-reports/sbom-image-worker.cdx.json
           exit-code: '0'
+          trivy-config: security/trivy-scan.yaml
 
       - name: Trivy — repository dependency SBOM (CycloneDX, committed locks)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -614,6 +621,7 @@ jobs:
           output: security-reports/trivy-config.json
           exit-code: '0'
           skip-dirs: security/controls
+          trivy-config: security/trivy-scan.yaml
 
       - name: Set up Python (security tooling)
         uses: actions/setup-python@v6
@@ -646,7 +654,7 @@ jobs:
           --config .security-venv/semgrep-rules --json --output security-reports/semgrep.json
           apps scripts security
 
-      - name: Gate — lock vulnerabilities (runtime scope gates, development scope reported)
+      - name: Gate — lock vulnerabilities (CRITICAL in every scope; HIGH with a fix in runtime scope; development HIGH reported)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln
@@ -655,7 +663,9 @@ jobs:
           --expect-target apps/api/requirements-runtime.txt
           --expect-target apps/api/requirements-dev.txt
           --expect-target scripts/requirements-gate.txt
+          --expect-target scripts/requirements-gate-hashes.txt
           --expect-target security/requirements-semgrep.txt
+          --expect-target apps/revision-reader/requirements-dev.txt
 
       - name: Gate — API image vulnerabilities (OS packages and the locked Python set)
         if: always()
@@ -733,6 +743,7 @@ jobs:
         run: >-
           python3 security/gate.py vuln security-reports/control-vuln.json --name control-vuln
           --kind filesystem --artifact security/controls/vuln --expect-target pinned-vulnerable.txt --expect-fail
+          --control-target-scope pinned-vulnerable.txt=runtime
 
       - name: Negative control — Trivy scans an inert module with an open security-group rule
         if: always()
@@ -744,6 +755,7 @@ jobs:
           format: json
           output: security-reports/control-iac.json
           exit-code: '0'
+          trivy-config: security/trivy-scan.yaml
 
       # With the exceptions file loaded, the inert finding must STILL be a violation: no entry may
       # except it (the entries are also stale against this fixture, so the control names the check).
@@ -776,6 +788,7 @@ jobs:
           format: json
           output: security-reports/control-iac-exceptions.json
           exit-code: '0'
+          trivy-config: security/trivy-scan.yaml
 
       - name: Negative control — every IaC exception mutation must fail the gate, the baseline must pass
         if: always()
@@ -814,11 +827,83 @@ jobs:
           python3 security/gate.py sbom security-reports/control-sbom.cdx.json --name control-sbom
           --kind filesystem --artifact security/controls/vuln --min-components 2 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
 
+      # P6-CI-6 closure: the security-tool venv is scanned AS INSTALLED (its hash-locked Semgrep set
+      # plus the interpreter's bundled pip, which the lock does not carry) and every distribution its
+      # own pip inspect lists must be in that scan; the inventory is taken again just before the
+      # completeness step, so anything installed after the scan fails completeness.
+      - name: Inventory the security tooling venv as installed (pip inspect)
+        if: always()
+        run: .security-venv/bin/python -m pip inspect > security-reports/security-tooling-venv-installed.json
+
+      - name: Trivy — security tooling venv vulnerabilities, scanned as installed
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: .security-venv
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-security-tooling-venv-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Gate — security tooling venv (every installed distribution scanned; CRITICAL fails)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-security-tooling-venv-vuln.json --name security-tooling-venv
+          --kind tooling --artifact .security-venv --env-root .security-venv --min-lang-packages 60
+          --installed-inventory security-reports/security-tooling-venv-installed.json
+
+      # Real-scanner negative control for the installed-environment (rootfs) scans: an inert dist-info
+      # (metadata only, no code) of a known-vulnerable PyYAML, with its inventory, must be found by Trivy rootfs and fail
+      # the tooling gate.
+      - name: Negative control — Trivy scans an inert installed environment carrying a known CRITICAL (rootfs)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: security/controls/tooling-env
+          scanners: vuln
+          format: json
+          output: security-reports/control-tooling-rootfs.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Negative control — the tooling gate must fail on it
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/control-tooling-rootfs.json --name control-tooling-rootfs
+          --kind tooling --artifact security/controls/tooling-env --env-root security/controls/tooling-env --min-lang-packages 1
+          --installed-inventory security/controls/tooling-env-installed.json --expect-fail
+
+      # Regression controls for the adopted vulnerability policy: each case copies one real report of
+      # THIS run, injects one synthetic finding (or changes the population) and runs the real gate on the
+      # copy, which must reach the case's stated outcome (security/vuln_policy_controls.py).
+      - name: Negative control — the adopted vulnerability policy over this run's lock, API image and security tooling reports
+        if: always()
+        run: python3 security/vuln_policy_controls.py check container security-reports
+
+      - name: Inventory the security tooling venv again, after every other step (a later install must fail)
+        if: always()
+        run: .security-venv/bin/python -m pip inspect > security-reports/security-tooling-venv-installed-final.json
+
+      - name: Gate — security tooling venv, final inventory against the same scan
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-security-tooling-venv-vuln.json --name security-tooling-venv-final
+          --kind tooling --artifact .security-venv --env-root .security-venv --min-lang-packages 60
+          --installed-inventory security-reports/security-tooling-venv-installed-final.json
+
       - name: Every required security analysis ran and was gated (completeness)
         if: always()
         run: >-
           python3 security/gate.py complete --name complete
           --expect-pass locks-vuln --expect-pass image-api-vuln --expect-pass image-worker-vuln
+          --expect-pass security-tooling-venv --expect-pass security-tooling-venv-final
           --expect-pass sbom-image-api --expect-pass sbom-image-worker --expect-pass sbom-locks
           --expect-pass iac --expect-pass sast --expect-pass control-sbom
           --expect-control control-vuln --expect-control control-iac --expect-control control-sast
@@ -834,6 +919,35 @@ jobs:
           --expect-control control-iac-exc-tree-nonlocal-module --expect-control control-iac-exc-tree-escaping-local-module
           --expect-control control-iac-exc-tree-symlink-dotdot-escape --expect-control control-iac-exc-tree-tofu-file
           --expect-control control-iac-exc-tree-provisioner --expect-control control-iac-exc-alb-log-bucket-not-aes256
+          --expect-control control-vulnpol-baseline-locks --expect-control control-vulnpol-baseline-api-image
+          --expect-control control-vulnpol-baseline-security-tooling
+          --expect-control control-vulnpol-critical-nofix-security-tooling
+          --expect-control control-vulnpol-security-tooling-package-not-scanned
+          --expect-control control-vulnpol-critical-fix-api-image-os
+          --expect-control control-vulnpol-critical-nofix-api-image-os
+          --expect-control control-vulnpol-critical-nofix-api-image-python
+          --expect-control control-vulnpol-critical-fix-runtime-lock
+          --expect-control control-vulnpol-critical-nofix-runtime-lock
+          --expect-control control-vulnpol-critical-nofix-npm-runtime
+          --expect-control control-vulnpol-critical-fix-npm-dev
+          --expect-control control-vulnpol-critical-nofix-npm-dev
+          --expect-control control-vulnpol-critical-fix-security-tool-lock
+          --expect-control control-vulnpol-critical-nofix-security-tool-lock
+          --expect-control control-vulnpol-critical-nofix-reader-tooling-lock
+          --expect-control control-vulnpol-critical-status-fixed-no-version-runtime-lock
+          --expect-control control-vulnpol-critical-wontfix-api-image-os
+          --expect-control control-vulnpol-critical-fixdeferred-api-image-os
+          --expect-control control-vulnpol-critical-eol-runtime-lock --expect-control control-vulnpol-critical-ghsa-npm-dev
+          --expect-control control-vulnpol-critical-unmatched-uid-runtime-lock
+          --expect-control control-vulnpol-critical-nofix-api-image-gobinary
+          --expect-control control-vulnpol-high-status-fixed-no-version-runtime-lock
+          --expect-control control-tooling-rootfs
+          --expect-control control-vulnpol-high-fix-api-image --expect-control control-vulnpol-high-nofix-api-image
+          --expect-control control-vulnpol-high-fix-runtime-lock
+          --expect-control control-vulnpol-high-nofix-runtime-lock --expect-control control-vulnpol-high-fix-npm-dev
+          --expect-control control-vulnpol-high-fix-security-tool-lock
+          --expect-control control-vulnpol-undeclared-lock-target
+          --expect-control control-vulnpol-missing-severity-runtime-lock
 
       - name: Upload security reports, SBOMs and gate summaries
         if: always()
@@ -918,19 +1032,29 @@ jobs:
           cache: pip
           cache-dependency-path: apps/revision-reader/pyproject.toml
 
-      - name: Install the reader (editable) with its dev extra
+      - name: Install the reader (editable) with its dev extra, from the hash-locked tooling lock
         # Editable, so the tests exercise the working tree rather than a copy in
         # site-packages that could drift from what the image builds.
+        # P6-CI-6 closure (operator order 2026-10-19): every package this venv holds comes from the
+        # hash-locked apps/revision-reader/requirements-dev.txt (the dev extra, the reader's own
+        # dependencies, pip itself, the setuptools build backend and PyYAML), installed with
+        # --require-hashes --no-deps. The interpreter's bundled bootstrap pip performs that one install
+        # and is replaced by the locked pip; the editable install runs with --no-build-isolation, so no
+        # unpinned build dependency is fetched. The venv is scanned AS INSTALLED and reconciled against
+        # its own pip inspect inventory at the end of this job (twice, so a later install fails).
         run: |
           python -m venv .reader-venv
-          .reader-venv/bin/pip install --upgrade pip
-          .reader-venv/bin/pip install -e "apps/revision-reader[dev]"
+          .reader-venv/bin/python -m pip install --require-hashes --no-deps -r apps/revision-reader/requirements-dev.txt
+          .reader-venv/bin/python -m pip install --no-deps --no-build-isolation -e apps/revision-reader
+          .reader-venv/bin/python -m pip check
           # GATE 4N-I28BH-E2. The main Gate-4N security suite runs UNDER this reader venv
           # (the "Operator permission-set policy and cache-classification tests" step), and its
           # strict bootstrap (signalnest_bootstrap.establish -> executable_inventory) imports
           # yaml. The venv is isolated (no --system-site-packages), so the system-python install
           # of the pinned Gate contract below does NOT reach it. Install the SAME pinned contract
           # here so every interpreter that executes a YAML-dependent Gate consumer has PyYAML.
+          # (Already satisfied: the hash-locked install above carries the same PyYAML pin, and
+          # security/test_tooling_locks.py fails if the two pins ever differ.)
           .reader-venv/bin/pip install -r scripts/requirements-gate.txt
 
       # GATE 4N-I26C. The Gate 4N guards run under the SYSTEM python3, not the reader venv, and
@@ -938,8 +1062,10 @@ jobs:
       # PyYAML nothing installed: on a runner all three would have exited 2 "refused", which
       # reads like a policy decision rather than a missing package. Installed HERE, before the
       # first guard, from the pinned contract in scripts/requirements-gate.txt.
+      # P6-CI-6 closure: installed from scripts/requirements-gate-hashes.txt, the hash lock compiled
+      # from that contract (the same PyYAML pin), with --require-hashes --no-deps.
       - name: Install Gate 4N guard dependencies
-        run: python3 -m pip install -r scripts/requirements-gate.txt
+        run: python3 -m pip install --require-hashes --no-deps -r scripts/requirements-gate-hashes.txt
 
       - name: Gate 4N guard dependency contract
         id: gate_dependencies
@@ -1484,7 +1610,6 @@ jobs:
           SIGNALNEST_ANCHOR_TIER: TIER_1_SYNTHETIC
           SIGNALNEST_CANDIDATE_MANIFEST: ${{ github.workspace }}/tests/fixtures/candidate-manifest.json
         run: |
-          .reader-venv/bin/pip install pytest
           # GATE 4N-I28BH-E5. The strict Gate-4N bootstrap adjudicates the AMBIENT Docker
           # configuration surface (docker_boundary), and a GitHub-hosted runner ships
           # ~/.docker/config.json carrying registry 'auths' — which docker_boundary declares
@@ -1756,6 +1881,7 @@ jobs:
           output: security-reports/trivy-image-reader-vuln.json
           exit-code: '0'
           list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
 
       - name: Trivy — reader image SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -1766,6 +1892,7 @@ jobs:
           format: cyclonedx
           output: security-reports/sbom-image-reader.cdx.json
           exit-code: '0'
+          trivy-config: security/trivy-scan.yaml
 
       - name: Gate — reader image vulnerabilities (OS packages and the pinned psycopg)
         if: always()
@@ -1781,11 +1908,123 @@ jobs:
           --image-id-from security-reports/trivy-image-reader-vuln.json
           --identity-out security-reports/sbom-image-reader.identity.json
 
+      # P6-CI-6 closure: the reader job's installed tooling — the .reader-venv (hash-locked) and the job's
+      # system interpreter (its bundled pip and the Gate 4N PyYAML) — is scanned AS INSTALLED after every
+      # step that installs into it, and every distribution their own pip inspect lists must be in the scan.
+      # The inventories are taken again just before completeness, so a later install fails completeness.
+      - name: Inventory the reader tooling environments as installed (pip inspect)
+        if: always()
+        run: |
+          .reader-venv/bin/python -m pip inspect > security-reports/reader-tooling-venv-installed.json
+          python3 -m pip inspect > security-reports/reader-tooling-syspy-installed.json
+
+      - name: Trivy — reader tooling venv vulnerabilities, scanned as installed
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: .reader-venv
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-reader-tooling-venv-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Trivy — reader job system interpreter packages, scanned as installed
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: ${{ env.pythonLocation }}
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-reader-tooling-syspy-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Gate — reader tooling venv (every installed distribution scanned; CRITICAL fails)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-reader-tooling-venv-vuln.json --name reader-tooling-venv
+          --kind tooling --artifact .reader-venv --env-root .reader-venv --min-lang-packages 15
+          --installed-inventory security-reports/reader-tooling-venv-installed.json
+
+      - name: Gate — reader job system interpreter (every installed distribution scanned; CRITICAL fails)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-reader-tooling-syspy-vuln.json --name reader-tooling-syspy
+          --kind tooling --artifact "${{ env.pythonLocation }}" --env-root "${{ env.pythonLocation }}" --min-lang-packages 2
+          --installed-inventory security-reports/reader-tooling-syspy-installed.json
+
+      # Real-scanner negative control for the installed-environment (rootfs) scans (this job runs its own Trivy and DB): an inert dist-info
+      # (metadata only, no code) of a known-vulnerable PyYAML, with its inventory, must be found by Trivy rootfs and fail
+      # the tooling gate.
+      - name: Negative control — Trivy scans an inert installed environment carrying a known CRITICAL (rootfs)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: security/controls/tooling-env
+          scanners: vuln
+          format: json
+          output: security-reports/control-tooling-rootfs.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Negative control — the tooling gate must fail on it
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/control-tooling-rootfs.json --name control-tooling-rootfs
+          --kind tooling --artifact security/controls/tooling-env --env-root security/controls/tooling-env --min-lang-packages 1
+          --installed-inventory security/controls/tooling-env-installed.json --expect-fail
+
+      - name: Negative control — the adopted vulnerability policy over this run's reader image and tooling reports
+        if: always()
+        run: python3 security/vuln_policy_controls.py check reader security-reports
+
+      - name: Inventory the reader tooling environments again, after every other step (a later install must fail)
+        if: always()
+        run: |
+          .reader-venv/bin/python -m pip inspect > security-reports/reader-tooling-venv-installed-final.json
+          python3 -m pip inspect > security-reports/reader-tooling-syspy-installed-final.json
+
+      - name: Gate — reader tooling environments, final inventories against the same scans
+        if: always()
+        run: |
+          python3 security/gate.py vuln security-reports/trivy-reader-tooling-venv-vuln.json --name reader-tooling-venv-final --kind tooling --artifact .reader-venv --env-root .reader-venv --min-lang-packages 15 --installed-inventory security-reports/reader-tooling-venv-installed-final.json
+          python3 security/gate.py vuln security-reports/trivy-reader-tooling-syspy-vuln.json --name reader-tooling-syspy-final --kind tooling --artifact "${{ env.pythonLocation }}" --env-root "${{ env.pythonLocation }}" --min-lang-packages 2 --installed-inventory security-reports/reader-tooling-syspy-installed-final.json
+
       - name: Every required reader security analysis ran and was gated (completeness)
         if: always()
         run: >-
           python3 security/gate.py complete --name complete
           --expect-pass image-reader-vuln --expect-pass sbom-image-reader
+          --expect-pass reader-tooling-venv --expect-pass reader-tooling-syspy
+          --expect-pass reader-tooling-venv-final --expect-pass reader-tooling-syspy-final
+          --expect-control control-vulnpol-baseline-reader-image
+          --expect-control control-vulnpol-baseline-reader-tooling
+          --expect-control control-vulnpol-critical-fix-reader-image
+          --expect-control control-vulnpol-critical-nofix-reader-image
+          --expect-control control-vulnpol-critical-fix-reader-tooling
+          --expect-control control-vulnpol-critical-nofix-reader-tooling
+          --expect-control control-vulnpol-high-fix-reader-tooling
+          --expect-control control-vulnpol-high-nofix-reader-image
+          --expect-control control-vulnpol-reader-tooling-package-not-scanned
+          --expect-control control-vulnpol-reader-tooling-installed-after-scan
+          --expect-control control-vulnpol-reader-tooling-version-differs
+          --expect-control control-vulnpol-reader-tooling-inventory-of-another-environment
+          --expect-control control-vulnpol-critical-nofix-reader-tooling-vendored
+          --expect-control control-vulnpol-critical-nofix-reader-tooling-node-pkg
+          --expect-control control-vulnpol-critical-wontfix-reader-image-os
+          --expect-control control-vulnpol-baseline-reader-syspy --expect-control control-vulnpol-critical-nofix-reader-syspy
+          --expect-control control-vulnpol-reader-syspy-package-not-scanned
+          --expect-control control-tooling-rootfs
 
       - name: Upload reader security report, SBOM and gate summaries
         if: always()

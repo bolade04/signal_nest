@@ -12,7 +12,8 @@ analysis service is involved; the publish workflows (`staging-publish.yml`,
 
 | Category | Tool | Job | Population analysed | Report |
 |---|---|---|---|---|
-| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `security/requirements-semgrep.txt` | `trivy-locks-vuln.json` |
+| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `scripts/requirements-gate-hashes.txt`, `security/requirements-semgrep.txt`, `apps/revision-reader/requirements-dev.txt` | `trivy-locks-vuln.json` |
+| Vulnerabilities, installed tooling (2026-10-19) | Trivy 0.76.0 `rootfs`, reconciled against the environment's own `pip inspect` | Container build and security; Revision reader | `.security-venv` (Semgrep and its hash-locked set, plus the interpreter's bundled pip); `.reader-venv` (the hash-locked reader tooling set); the reader job's interpreter prefix (`pythonLocation`: its pip and the Gate 4N PyYAML) — each as installed, inventoried again before completeness | `trivy-*-tooling-*-vuln.json`, `*-tooling-*-installed*.json` |
 | Vulnerabilities, built images | Trivy 0.76.0 | Container build and security; Revision reader | OS packages and installed Python packages of `signalnest-api:ci`, `signalnest-worker:ci`, `signalnest-revision-reader:ci` as built in that run | `trivy-image-*-vuln.json` |
 | SAST | Semgrep 1.181.0 (hash-locked install, `security/requirements-semgrep.txt`) with registry rulesets `p/python`, `p/typescript`, `p/javascript`, `p/react`, `p/security-audit` | Container build and security | `apps/`, `scripts/`, `security/` minus `.semgrepignore` (tests, e2e, generated and vendored paths) and `security/controls` | `semgrep.json`, `semgrep-rules-provenance.json` |
 | IaC / configuration | Trivy 0.76.0 misconfiguration checks | Container build and security | `infra/aws` OpenTofu root and modules, `infra/aws/bootstrap`, both Dockerfiles (13 targets, 246 checks at the baseline) | `trivy-config.json` |
@@ -27,8 +28,13 @@ uploaded as a workflow artifact (`security-reports-container-build`,
 
 ### What is NOT covered (declared exclusions)
 
-- The revision reader's `pyproject.toml` has no lock; its dependency set is analysed only as
-  installed inside the built reader image (OS packages and `psycopg`), not from a manifest.
+- ~~The revision reader's `pyproject.toml` has no lock; its dependency set is analysed only as
+  installed inside the built reader image (OS packages and `psycopg`), not from a manifest.~~
+  *(2026-10-19: the reader's CI tooling set — its dependencies, the `[dev]` extra, pip, the
+  setuptools build backend and PyYAML — is locked with hashes in
+  `apps/revision-reader/requirements-dev.txt`, scanned as a lock and as installed. The shipped
+  image is unchanged: its Dockerfile copies `pyproject.toml`, `revision_reader/` and `assets/`
+  only, and its runtime set is still analysed as installed inside the built image.)*
 - GitHub Actions workflow files, `infra/docker-compose.yml` and `.github/dependabot.yml`
   are not configuration classes Trivy's checks evaluate; they are not IaC-scanned.
 - Semgrep runs the community registry rulesets. Their TypeScript/React content is largely
@@ -48,12 +54,37 @@ uploaded as a workflow artifact (`security-reports-container-build`,
 - Nothing is signed or attested; the SBOMs are files bound to the commit and image id by
   the identity records, not provenance attestations.
 
-## Policy — PROPOSED, enforced, not adopted
+## Policy — ADOPTED for the merge path (operator order 2026-10-19)
 
-`security/policy.json` holds the thresholds the gates enforce. Its `_authority` block cites
-what the repository's sources settle and what they do not:
+~~Policy — PROPOSED, enforced, not adopted~~ *(the heading until 2026-10-19)*
 
-- **Vulnerabilities**: CRITICAL/HIGH fail, and only when a fixed version exists — this is
+`security/policy.json` holds the thresholds the gates enforce. Since the operator order of
+2026-10-19 its `_status` is ADOPTED for merge-path enforcement: it governs the required gates of
+`ci.yml` only, and changes no live environment, deployment or publish workflow
+(`staging-publish.yml` and `reader-publish.yml` keep their own Trivy steps and thresholds).
+
+- **Vulnerabilities (adopted 2026-10-19)**: rules are per severity, and the severity is
+  evaluated first. **CRITICAL fails in every scope** — built images, runtime dependencies and
+  development, test and security-tool dependencies, including installed tooling environments —
+  whether or not a fix is published; neither fix availability, development classification nor
+  a missing `FixedVersion` can filter a CRITICAL out. **HIGH** keeps the earlier treatment,
+  unchanged: images and runtime dependencies fail when a fix exists (a non-empty
+  `FixedVersion`, exactly as before), development-scope HIGH findings are `REPORTED`, and
+  unfixed HIGH findings are listed as `EXCLUDED`. MEDIUM and LOW are reported. **Not ruled by
+  the order, and disclosed as the implementation's reading (unchanged from before the
+  adoption) pending an operator ruling:** the severity evaluated is Trivy's selected `Severity`
+  field, so a finding another source rates CRITICAL but Trivy selects lower is evaluated at
+  Trivy's severity. Instances at adoption: `CVE-2019-1010022` in `libc6`/`libc-bin` (API and
+  reader images; NVD 9.8, Debian and Trivy LOW) and `CVE-2026-19445` in the reader image's
+  `python3.13` packages (two vendors CRITICAL, Trivy HIGH, no fix: `EXCLUDED`). UNKNOWN
+  (unscored) findings are reported like the lower severities, for example `CVE-2026-82560` in the
+  API image's `perl-base` (no fix). Every lock target Trivy reports must be
+  declared runtime or development in the policy; an undeclared target is an incomplete
+  analysis (exit 4), and a finding without a recognised severity is a malformed report
+  (exit 2), as is a report whose Results, Packages, identifiers or findings do not have the
+  scanner's shape (never read as "no findings"). The policy file is validated: a rule set with a
+  gap, an overlap, an unknown scope or the superseded key shape is refused (exit 2).
+- ~~**Vulnerabilities**: CRITICAL/HIGH fail, and only when a fixed version exists — this is
   the publish-time Trivy policy (`docs/operations/staging-publish-workflow.md` §5/§9: an
   INFRA-5-set threshold "pending an explicit repository-wide severity decision",
   `ignore-unfixed: true` "subject to review") carried onto the merge path. Every finding the
@@ -61,8 +92,10 @@ what the repository's sources settle and what they do not:
   hidden. Runtime-scope lock findings and image findings gate; development-scope lock
   findings (npm `dev`, `requirements-dev.txt`, `requirements-gate.txt`, the Semgrep lock) are
   `REPORTED` and do not gate (exit criterion 12 names runtime dependencies). Gating
-  development scope too is an open operator choice.
-- **IaC**: CRITICAL/HIGH misconfigurations fail. No source sets an IaC threshold; this is by
+  development scope too is an open operator choice.~~ *(Superseded 2026-10-19 by the adopted
+  rules above; the HIGH part is unchanged.)*
+- **IaC** *(threshold and the six named exceptions explicitly adopted, unchanged, 2026-10-19)*:
+  CRITICAL/HIGH misconfigurations fail. No source sets an IaC threshold; this is by
   analogy with the vulnerability threshold. ~~No ignore file is tracked, so findings the
   infrastructure accepts by documented decision (for example the public ALB, or the WAF
   deferral recorded as `P6-INF-11`) currently FAIL this gate until an operator adopts a
@@ -70,8 +103,14 @@ what the repository's sources settle and what they do not:
   reviewed exceptions file `security/misconfig-exceptions.json` is adopted for the six class
   A/B/C findings and the four class D findings are remediated — see "IaC exceptions" below.
   No Trivy ignore file is used, the threshold is unchanged, and an excepted finding is still
-  listed.)*
-- **SAST**: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
+  listed.)* *(Since 2026-10-19, `test_scanner_configuration.py` fails on any of:
+  - an ignore or Trivy configuration file in the checkout;
+  - such a file named in the workflow;
+  - a trivy-action step that is not in a reviewed line shape.
+  Every gate over a Trivy report also refuses one present in its working directory at run time.
+  See "Closure tranche".)*
+- **SAST** *(adopted, unchanged, 2026-10-19; so are scanner-error handling and the SBOM rules
+  below)*: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
 - **SBOM identity**: each identity record names the reviewed commit (`commit`: the pull
   request head, or the pushed commit on `main`) and the commit actually checked out
@@ -244,6 +283,175 @@ and the case list (against the completeness step of `ci.yml`).
 Terraform state creates and attaches by looking the ALB up, and its opaque-construct list is
 a denylist. `C1` has no expiry: the annual review is a written trigger, not a mechanical one.
 
+## Closure tranche (2026-10-19, operator order; IaC, SAST, SBOM and scanner-error rules unchanged)
+
+The P6-CI-6 closure assessment found a CRITICAL finding merging clean in four classes: a
+CRITICAL with no published fix; a CRITICAL in development scope (npm development packages, the
+API dev lock, the Semgrep lock); a CRITICAL in the reader image with no fix; and anything in the
+reader job's installed tooling, which no scan covered. This tranche closes them on the merge path:
+
+- **Severity first.** `gate.py vuln` applies the adopted per-severity rules above.
+- **Installed tooling is scanned as installed.** `gate.py vuln --kind tooling` takes a Trivy
+  `rootfs` report of an environment and that environment's `pip inspect` inventory
+  (`--installed-inventory`, `--env-root`). Every installed distribution must appear in the
+  scan at its own metadata path with the same name and version, or the analysis is incomplete
+  (exit 4). An inventory of another environment or below the floor fails the same way. Vendored
+  copies the scan also reports, such as pip's own vendored packages, are evaluated as well. Each
+  environment is inventoried a second time just before the completeness step, and the
+  final inventory is gated against the same scan, so a package installed after the scan fails
+  completeness. The inventories are taken without `--local`, so a distribution a path entry
+  brings in from outside the environment is listed and fails the location check instead of
+  being left out. A real-scanner control in each job (`control-tooling-rootfs`) scans an inert
+  installed environment, `security/controls/tooling-env` (one dist-info of PyYAML 5.3.1,
+  metadata only), with Trivy `rootfs`; the tooling gate must fail on CVE-2020-14343, so a scan
+  that silently stopped finding installed packages cannot stay green.
+- **The reader job's installs are hash-locked.** `.reader-venv` is installed with
+  `--require-hashes --no-deps` from `apps/revision-reader/requirements-dev.txt`, compiled with
+  pip-tools from `pyproject.toml` (base and `[dev]`) plus `requirements-dev.in` (pip,
+  setuptools, PyYAML). The editable install runs with `--no-deps --no-build-isolation`, so no
+  unpinned build dependency is fetched. The unpinned `pip install --upgrade pip` and the later
+  `pip install pytest` are gone, and `pip check` must pass. The interpreter's bundled pip
+  performs the first hashed install and is then replaced by the locked pip. The system
+  interpreter's Gate 4N PyYAML comes from `scripts/requirements-gate-hashes.txt`, compiled
+  from the unchanged contract `scripts/requirements-gate.txt` (same pin, `--require-hashes
+  --no-deps`). The venv's own `pip install -r scripts/requirements-gate.txt` line (pinned by
+  Gate 4N-I28BH-E2) is kept and is already satisfied. It runs unhashed, so it is a no-op only
+  while every PyYAML pin agrees. `test_tooling_locks.py` fails if they ever differ. It also
+  fails if:
+  - a requirement in the two locks lacks a hash;
+  - the reader lock misses a dependency or the build backend that `pyproject.toml` declares;
+  - the two jobs' installer-shaped lines differ from the reviewed set.
+
+  An installer-shaped line, with backslash continuations joined, is any of:
+  - pip under any version suffix (`pip3.12`), or pipx, uv, conda, poetry, pdm, npm, npx, yarn,
+    pnpm, gem, cargo, apt, apt-get or brew. The match covers a command word, a word after a quote
+    or `$(`, and a `bin/` path;
+  - `-m` with or without a space before pip, ensurepip, venv, virtualenv, pipx or uv;
+  - `pip._internal`, `import pip` or `from pip`;
+  - `--upgrade-deps`, `setup.py install`, get-pip, `go install` or setup-python's `pip-install`
+    input;
+  - a curl or wget download piped into a shell.
+
+  The check reads text. An installer reached another way (for example through a script the job
+  runs) is not seen by it. Such an installer lands either in an environment the final
+  inventories reconcile, where completeness fails, or outside every scanned environment, which
+  is the disclosed limit.
+- **Controls.** `vuln_policy_controls.py` takes this run's real reports and runs the real gate
+  on 32 mutated copies in the container job and 18 in the reader job, each listed by
+  `--expect-control control-vulnpol-*` in its job's completeness step. The cases cover:
+  - CRITICAL with and without a fix in images, runtime locks, npm runtime and development
+    packages, the security-tool lock, the reader tooling lock, both installed tooling venvs and
+    the reader job's interpreter prefix;
+  - the shapes real reports carry: the no-fix statuses `will_not_fix`, `fix_deferred` and
+    `end_of_life`; a fix recorded without a `FixedVersion`; an advisory-style id; a package
+    identifier matching no package; a vendored copy without a `FilePath`; a Go binary in an
+    image; node packages in a tooling scan;
+  - the retained HIGH behaviour (violation, excluded, reported, and `Status: fixed` without a
+    `FixedVersion` still excluded);
+  - an undeclared lock target, a missing severity, and five ways a tooling population can be
+    incomplete.
+
+  `test_vuln_policy_controls.py` pins the case lists, the gate arguments, each gate's own
+  inventory, and the order inventory → scan → gate → controls → final inventory → final gate →
+  completeness against `ci.yml`. It also shows that under the superseded policy exactly the 24
+  pass-through cases fail.
+
+  Scanner-side suppression is closed structurally and then guarded at two points:
+  - **Structurally.** Every trivy-action step passes a reviewed configuration: `security/trivy.yaml`,
+    `security/controls/trivy-control.yaml` or `security/trivy-scan.yaml`. Each pins `ignorefile` to the
+    tracked, empty `security/empty-ignorefile`. With an explicit configuration and an explicit ignore
+    file, Trivy reads neither an ignore file nor a configuration file from its working directory. Such a
+    file therefore cannot filter a scan, whichever code creates it (a script, a test, a background
+    process) and whenever it does so. The pinned files themselves remain workspace files; see the
+    disclosed limit below. This was measured locally with Trivy 0.76.0 for `fs`, `rootfs` and
+    `config` scans, with and without the pinned configuration.
+  - **Statically.** `test_scanner_configuration.py` fails on:
+    - a `.trivyignore*` or `trivy.y*ml` at the repository root, which is the scans' working
+      directory;
+    - any change to the two tracked Trivy configurations;
+    - such a file named anywhere in the workflow outside the two reviewed configuration paths;
+    - a `TRIVY_*` variable in the workflow;
+    - a trivy-action step that passes no reviewed configuration, a configuration that does not pin the
+      empty ignore file, or an ignore file that is not empty;
+    - any trivy-action step line outside the reviewed shapes. The step check reads line shapes,
+      so a quoted key, a flow mapping, another indentation, an `env` block or an unreviewed input
+      or value is rejected, not interpreted. Unreviewed inputs include `ignore-unfixed`,
+      `severity`, `trivyignores` and `skip-files`.
+  - **At run time.** Every gate over a Trivy report (`vuln`, `misconfig`, `sbom`) refuses to
+    certify it (exit 4) while a `.trivyignore*` or `trivy.y*ml` exists in its working directory,
+    which the scans share, or while any `TRIVY_*` variable is set. trivy-action v0.36.0 keeps its
+    own settings in a step-local file that it deletes, so it sets none.
+
+  - **Where Trivy runs.** In the two security-scanned jobs, Trivy runs only through the reviewed
+    trivy-action steps:
+    - their number is pinned (13 and 5);
+    - every `uses:` reference is from a reviewed set, and no local action is allowed. A flow-style or
+      quoted `uses` is read too;
+    - no run line invokes `trivy` directly;
+    - no scanning or gating step changes its working directory away from the one the run-time
+      refusal checks, and no `defaults:` block sets one.
+    The refusal's own list of file names is pinned literally in the test.
+
+  Each check also runs against deliberately suppressed copies. The step and route checks read line
+  shapes and fail closed. A legitimate edit, such as a version bump, a digest pin, a new input,
+  `timeout-minutes` or a comment that names trivy-action inside another step, therefore fails until
+  the test is updated with it, and is reviewed that way.
+
+  **Disclosed limit:** no mechanical check here can see a change that defeats the scans by means its
+  text does not reveal, for example:
+  - an obfuscated scanner invocation;
+  - a `TRIVY_*` variable set only in the environment of a scan step;
+  - code that rewrites a report between a scan and its gate.
+
+  Such a change can sit in `ci.yml` or `security/`, but also in ANY file the two jobs execute before
+  their gates: the scripts, tests and application code they run. The control for those is review of
+  every such change. A suppression file that such code plants in the working directory is closed
+  structurally by the pinned configuration above. The pinned configurations and the empty ignore
+  file are themselves workspace files, though. Code the jobs run could alter them during a run and
+  restore them before the gates, and their run-time integrity rests on that same review.
+- **Measured locally (2026-10-19, Trivy 0.76.0, macOS builds of the same locks):** 0 CRITICAL
+  in every population. Locks: `source-map-js` HIGH `REPORTED` (development), `braces` HIGH
+  `EXCLUDED` (no fix), five MEDIUM, including `mcp` 1.29.0 in the Semgrep lock, which remains a
+  separate obligation. Reader tooling venv: 17 installed distributions all scanned; 4 HIGH
+  `REPORTED` (pip 26.2.1's vendored `msgpack`, `setuptools` and `urllib3`). Security tooling
+  venv: 67 of 67 scanned, 7 lower. The toolcache interpreter of the runner holds pip 25.0.1
+  only (MEDIUM/LOW). CI on the pull request is the measurement of record.
+- **Reproduced locally from `ci.yml`** (Trivy CLI with each step's own inputs; image scans
+  substituted with merge run 39255973756's real reports, because this host has no container
+  runtime): every security step of both jobs passes, completeness included.
+
+**Residual tooling gaps, reported and not closed here.** Each of these is a repository-controlled
+or runner-provided population that no merge-path scan covers:
+
+- The API venvs of `Frontend quality`, `Backend quality`, `Migrations and API contract` and
+  `Integration smoke` run an unpinned `pip install --upgrade pip`. Their `-e apps/api` installs
+  use build isolation, which fetches an unpinned setuptools (`apps/api/README-deps.md`). The
+  hash-locked `apps/api/requirements-dev.txt` they install is scanned as a lock only, not as
+  installed.
+- `.locktools` (`pip==25.1.1`, `pip-tools==7.5.2`, Backend quality) is pinned but not hashed,
+  and its transitive distributions float (below).
+- `node_modules` from `npm ci` is integrity-checked against the scanned `package-lock.json`,
+  but is not scanned as installed.
+- The interpreters and runtimes come from the runner and the setup actions: toolcache Python
+  and Node, each venv's bundled bootstrap pip, the Container build job's system interpreter
+  (stdlib-only scripts, not scanned) and the Trivy binary that `trivy-action` downloads.
+  The OpenTofu binary and providers rely on the provider lock (one platform's checksums).
+  GitHub Actions code is pinned by tag, not by digest (`P6-CI-9`).
+- The image's base pip 25.0.1 under `/usr/local` (API and worker images) is scanned in the
+  image, as before.
+- Container images that required jobs run but do not build: the `postgres:16` service
+  (Backend quality and Migrations and API contract; by tag, not digest) and the BuildKit image
+  `docker/setup-buildx-action` starts. Also the Playwright Chromium build that
+  `npm run e2e:install` downloads in Frontend quality.
+- Docker build stages: only the final images are scanned.
+  - `apps/api/Dockerfile` builds from `python:3.12-slim` by tag, not digest. Its builder stage
+    installs `build-essential` and runs an unpinned `pip install --upgrade pip`.
+  - The reader's builder stage runs `pip install --prefix=/install .`, pinned (`psycopg[binary]==3.2.3`)
+    but unhashed, with build isolation.
+  - Neither builder stage's tooling ships. The shipped image contracts are unchanged here.
+- `.locktools` installs pip-tools 7.5.2 by version only. Its transitive distributions (`build`,
+  `click`, `packaging`, `pyproject_hooks`, `setuptools`, `wheel`) float.
+
 ## Failure behaviour (proved by `security/test_gate.py` and the CI negative controls)
 
 - A scanner crash fails its own step; the gate then reports `FAIL (report missing or
@@ -252,6 +460,11 @@ a denylist. `C1` has no expiry: the annual review is a written trigger, not a me
   population, an SBOM whose `ImageID` differs from the vulnerability report's or carries
   conflicting identity values, a gate summary with other than exactly one `RESULT` line, or
   a Semgrep run with recorded errors is `FAIL (scanner execution incomplete)` (exit 4).
+- A lock target the policy does not declare, an installed tooling distribution absent from
+  its scan, or Trivy suppression (an ignore or configuration file in the working directory, a
+  `TRIVY_*` variable) is `FAIL (scanner execution incomplete)` (exit 4); a finding with no recognised
+  severity, a malformed `pip inspect` inventory or a policy whose rules have a gap is `FAIL
+  (report missing or malformed)` (exit 2).
 - A finding at gating severity is `FAIL (policy violation)` (exit 3) — distinct from the two
   above in the summary and in the exit code. With the IaC exceptions file, so is an expired,
   stale, miscounted or condition-failing entry (`EXCEPTION_*` lines in the summary).
@@ -270,6 +483,10 @@ mkdir -p security-reports
 trivy fs --scanners vuln --list-all-pkgs --config security/trivy.yaml --skip-dirs security/controls --format json -o security-reports/trivy-locks-vuln.json .
 python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln --kind filesystem --artifact . --expect-target package-lock.json
 python3 -m venv .security-venv && .security-venv/bin/python -m pip install --require-hashes -r security/requirements-semgrep.txt
+.security-venv/bin/python -m pip inspect --local > security-reports/security-tooling-venv-installed.json
+trivy rootfs --scanners vuln --list-all-pkgs --format json -o security-reports/trivy-security-tooling-venv-vuln.json .security-venv
+python3 security/gate.py vuln security-reports/trivy-security-tooling-venv-vuln.json --name security-tooling-venv --kind tooling --artifact .security-venv --env-root .security-venv --min-lang-packages 60 --installed-inventory security-reports/security-tooling-venv-installed.json
+python3 security/vuln_policy_controls.py check container security-reports   # needs the API image report too
 .security-venv/bin/python -m unittest discover -s security -p "fetcher_selftest.py"
 .security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules
 .security-venv/bin/semgrep scan --metrics=off --no-rewrite-rule-ids --timeout 60 --timeout-threshold 0 --exclude security/controls --config .security-venv/semgrep-rules --json --output security-reports/semgrep.json apps scripts security
@@ -283,4 +500,9 @@ python3 security/iac_exception_controls.py check security-reports/control-iac-ex
 
 `security/requirements-semgrep.txt` is regenerated like the API locks
 (`pip-compile --generate-hashes --no-strip-extras security/requirements-semgrep.in`, pip
-25.1.1 / pip-tools 7.5.2); a manual edit breaks the hashes.
+25.1.1 / pip-tools 7.5.2); a manual edit breaks the hashes. The reader tooling lock and the
+Gate 4N hash lock are regenerated the same way, from their own directories:
+`pip-compile --generate-hashes --allow-unsafe --strip-extras --extra dev --output-file
+requirements-dev.txt pyproject.toml requirements-dev.in` (in `apps/revision-reader/`) and
+`pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file
+requirements-gate-hashes.txt requirements-gate.txt` (in `scripts/`).

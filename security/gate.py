@@ -18,8 +18,31 @@ the reports directory and exits with a code that keeps the three failure classes
     6  a negative control did not behave as intended (see --expect-fail).
 
 Nothing here invokes a scanner, reads the network, or imports anything outside the
-standard library. The policy values are PROPOSED (see security/policy.json); this module
-enforces whatever that file says and adopts nothing on its own.
+standard library. The policy values were ADOPTED for merge-path enforcement by the operator
+order of 2026-10-19 (see security/policy.json); this module enforces exactly what that file
+says and adopts nothing on its own.
+
+Vulnerabilities (P6-CI-6 closure, operator order 2026-10-19) are evaluated SEVERITY FIRST. A
+finding's severity selects its rule in `vulnerabilities.severity_rules`; a severity with no rule
+must be listed in `report_severities`; any other or missing severity makes the report malformed.
+The rule decides by scope and fix availability: CRITICAL fails in every scope with or without a
+fix, so neither fix availability, a development classification nor missing FixedVersion metadata
+can filter a CRITICAL out; HIGH keeps the treatment it had before the adoption, unchanged: it fails
+in image and runtime scope when a fix exists (a non-empty FixedVersion, exactly as before), is
+REPORTED in development scope and listed as EXCLUDED when no fix exists. The severity is Trivy's
+selected `Severity` field, as before (the severity source is not an operator ruling; see the policy's
+_authority). Every lock target must have a declared scope; an undeclared one is an incomplete
+analysis. A report whose Results, Packages, Identifier or Vulnerabilities do not have the scanner's
+shape is malformed (exit 2), never read as "no findings". A gate over a Trivy report (vuln, misconfig,
+sbom) refuses to certify it (exit 4) while Trivy suppression is present where the scans run: an ignore or
+configuration file in the working directory or a TRIVY_* environment variable (SCANNER_SUPPRESSION_FILES).
+
+Installed tooling (`vuln --kind tooling`): a CI environment scanned as INSTALLED (Trivy rootfs over
+a virtual environment or interpreter prefix) is reconciled against the environment's own inventory
+(`pip inspect` JSON): every installed distribution must appear in the scan at its own dist-info
+location with the same name and version, or the analysis is incomplete — so a package that the
+scan omitted, or that was installed after the scan (a later inventory checked against the same
+report), fails completeness instead of escaping coverage.
 
 IaC exceptions (P6-CI-6, operator order 2026-10-18). `misconfig --exceptions FILE` applies the
 tracked, reviewed security/misconfig-exceptions.json. An exception never hides a finding: an
@@ -63,7 +86,9 @@ RESULT_CONTROL_BAD = "RESULT: NEGATIVE CONTROL FAILED"
 
 # Trivy reports a plain directory as "filesystem" and a directory that is a git repository root
 # (the CI checkout) as "repository"; both are filesystem scans of the checked-out tree.
-ARTIFACT_TYPES = {"image": ("container_image",), "filesystem": ("filesystem", "repository")}
+ARTIFACT_TYPES = {"image": ("container_image",), "filesystem": ("filesystem", "repository"),
+                  # an installed environment (a CI venv or interpreter prefix) scanned with `trivy rootfs`
+                  "tooling": ("filesystem",)}
 SBOM_COMPONENT_TYPES = {"image": "container", "filesystem": "application"}
 IMAGE_ID_PROPERTY = "aquasecurity:trivy:ImageID"
 
@@ -139,19 +164,97 @@ def _props(component: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- vulnerabilities
-def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
-                  expect_targets: list[str], min_lang_packages: int) -> tuple[list[str], list[str]]:
-    """Trivy JSON (SchemaVersion 2) vulnerability report. Returns (summary lines, violations)."""
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+VULN_SCOPES = ("image", "runtime", "development")
+_LEGACY_VULN_KEYS = ("fail_severities", "fail_requires_fix_available", "scope_actions")
+
+
+def vuln_policy(policy: dict) -> dict:
+    """The vulnerability section, validated. A policy the gate cannot read with certainty is refused
+    (exit 2) rather than interpreted: a missing rule, an unknown scope or severity, a severity that is
+    neither ruled nor reported, a target declared twice or a leftover key of the superseded shape."""
     vp = policy["vulnerabilities"]
-    fail_sev = set(vp["fail_severities"])
-    needs_fix = bool(vp.get("fail_requires_fix_available", True))
-    actions = vp["scope_actions"]
-    dev_targets = set(vp.get("development_targets") or [])
+    for key in _LEGACY_VULN_KEYS:
+        _require(key not in vp, f"policy: vulnerabilities.{key} belongs to the superseded policy shape; use severity_rules", ReportError)
+    rules = vp.get("severity_rules")
+    _require(isinstance(rules, dict) and rules, "policy: vulnerabilities.severity_rules missing or empty", ReportError)
+    out_rules = {}
+    for sev, rule in rules.items():
+        _require(sev in SEVERITIES, f"policy: unknown severity {sev!r} in severity_rules", ReportError)
+        _require(isinstance(rule, dict) and set(rule) == {"fail_scopes", "fail_requires_fix_available"},
+                 f"policy: severity_rules.{sev} must carry exactly fail_scopes and fail_requires_fix_available", ReportError)
+        scopes = rule["fail_scopes"]
+        _require(isinstance(scopes, list) and scopes and all(x in VULN_SCOPES for x in scopes) and len(set(scopes)) == len(scopes),
+                 f"policy: severity_rules.{sev}.fail_scopes must be a non-empty list of distinct scopes from {VULN_SCOPES}", ReportError)
+        _require(isinstance(rule["fail_requires_fix_available"], bool), f"policy: severity_rules.{sev}.fail_requires_fix_available must be a boolean", ReportError)
+        out_rules[sev] = (set(scopes), rule["fail_requires_fix_available"])
+    report = vp.get("report_severities")
+    _require(isinstance(report, list) and all(x in SEVERITIES for x in report) and not set(report) & set(out_rules),
+             "policy: report_severities must list known severities that have no rule", ReportError)
+    _require(set(out_rules) | set(report) == set(SEVERITIES), f"policy: every severity {SEVERITIES} must be ruled or reported", ReportError)
+    runtime, development = vp.get("runtime_targets"), vp.get("development_targets")
+    for name, val in (("runtime_targets", runtime), ("development_targets", development)):
+        _require(isinstance(val, list) and all(isinstance(x, str) and x for x in val), f"policy: vulnerabilities.{name} must be a list of paths", ReportError)
+    _require(not set(runtime) & set(development), "policy: a target is declared both runtime and development", ReportError)
+    for name in ("npm_dev_scope", "tooling_scope"):
+        _require(vp.get(name) in VULN_SCOPES, f"policy: vulnerabilities.{name} must be one of {VULN_SCOPES}", ReportError)
+    return {"rules": out_rules, "report": set(report), "runtime": set(runtime), "development": set(development),
+            "npm_dev_scope": vp["npm_dev_scope"], "tooling_scope": vp["tooling_scope"]}
+
+
+def _norm_dist(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", str(name)).lower()
+
+
+def load_installed(path: pathlib.Path) -> object:
+    return load_json(path, "installed-distribution inventory (pip inspect)")
+
+
+def _installed_dists(inventory: object, env_root: pathlib.Path) -> list[tuple[str, str, str]]:
+    """(normalised name, version, dist-info path relative to env_root) for each distribution in a
+    `pip inspect` document; anything else is a malformed inventory, and a distribution whose
+    metadata lies outside env_root is an inventory of a different environment."""
+    _require(isinstance(inventory, dict) and inventory.get("version") == "1", "pip inspect inventory: not a version-1 pip inspect document", ReportError)
+    items = inventory.get("installed")
+    _require(isinstance(items, list), "pip inspect inventory: 'installed' missing or not a list", ReportError)
+    root = os.path.realpath(env_root)
+    out = []
+    for it in items:
+        meta = it.get("metadata") if isinstance(it, dict) else None
+        loc = it.get("metadata_location") if isinstance(it, dict) else None
+        _require(isinstance(meta, dict) and isinstance(meta.get("name"), str) and isinstance(meta.get("version"), str) and isinstance(loc, str),
+                 f"pip inspect inventory: an entry lacks metadata.name / metadata.version / metadata_location: {it!r:.200}", ReportError)
+        rel = os.path.relpath(os.path.realpath(loc), root)
+        _require(not rel.startswith(os.pardir) and not os.path.isabs(rel),
+                 f"installed distribution {meta['name']} {meta['version']} has its metadata at {loc}, outside the scanned environment {env_root}")
+        out.append((_norm_dist(meta["name"]), meta["version"], rel.replace(os.sep, "/")))
+    return out
+
+
+def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
+                  expect_targets: list[str], min_lang_packages: int, installed: object = None,
+                  env_root: pathlib.Path | None = None, control_target_scopes: dict | None = None) -> tuple[list[str], list[str]]:
+    """Trivy JSON (SchemaVersion 2) vulnerability report. Returns (summary lines, violations)."""
+    vp = vuln_policy(policy)
+    rules = vp["rules"]
+    control_target_scopes = control_target_scopes or {}
     lines: list[str] = []
 
     _require(isinstance(report, dict), "trivy vulnerability report: top level is not an object", ReportError)
     _require(report.get("SchemaVersion") == 2, f"trivy vulnerability report: SchemaVersion is {report.get('SchemaVersion')!r}, expected 2", ReportError)
     _require(isinstance(report.get("Results"), list), "trivy vulnerability report: 'Results' missing or not a list", ReportError)
+    for res in report["Results"]:
+        _require(isinstance(res, dict), f"trivy vulnerability report: a Result is not an object: {res!r:.120}", ReportError)
+        for key in ("Packages", "Vulnerabilities"):
+            val = res.get(key)
+            _require(val is None or (isinstance(val, list) and all(isinstance(x, dict) for x in val)),
+                     f"trivy vulnerability report: {key} of {res.get('Target')!r} is not a list of objects", ReportError)
+        for pkg in res.get("Packages") or []:
+            _require(pkg.get("Identifier") is None or isinstance(pkg.get("Identifier"), dict),
+                     f"trivy vulnerability report: a package Identifier in {res.get('Target')!r} is not an object", ReportError)
+        for vuln in res.get("Vulnerabilities") or []:
+            _require(vuln.get("PkgIdentifier") is None or isinstance(vuln.get("PkgIdentifier"), dict),
+                     f"trivy vulnerability report: a PkgIdentifier in {res.get('Target')!r} is not an object", ReportError)
     _require(report.get("ArtifactType") in ARTIFACT_TYPES[kind],
              f"artifact type is {report.get('ArtifactType')!r}, expected one of {ARTIFACT_TYPES[kind]} for kind {kind}")
     _require(report.get("ArtifactName") == artifact,
@@ -171,50 +274,90 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
         _require(lang_pkgs >= min_lang_packages,
                  f"image report lists {lang_pkgs} language packages, expected at least {min_lang_packages} — the application dependency layer was not analysed")
         lines.append(f"population: {os_pkgs} OS packages, {lang_pkgs} language packages (floor {min_lang_packages})")
+    elif kind == "tooling":
+        _require(installed is not None and env_root is not None, "tooling: an installed-distribution inventory and the environment root are required", ReportError)
+        dists = _installed_dists(installed, env_root)
+        _require(len(dists) >= min_lang_packages,
+                 f"the environment's inventory lists {len(dists)} installed distributions, expected at least {min_lang_packages} — not an inventory of the installed tooling")
+        scanned: dict = {}
+        for r in results:
+            if r.get("Class") == "lang-pkgs" and r.get("Type") == "python-pkg":
+                for pkg in r.get("Packages") or []:
+                    if isinstance(pkg, dict) and pkg.get("FilePath"):
+                        scanned.setdefault(str(pkg["FilePath"]).replace(os.sep, "/"), set()).add((_norm_dist(pkg.get("Name")), pkg.get("Version")))
+        total = sum(len(r.get("Packages") or []) for r in results if r.get("Class") == "lang-pkgs")
+        missing = []
+        for name, version, rel in dists:
+            places = [rel, rel + "/METADATA", rel + "/PKG-INFO"]
+            if not any((name, version) in scanned.get(pl, set()) for pl in places):
+                missing.append(f"{name} {version} at {rel}")
+        _require(not missing, f"{len(missing)} installed distribution(s) are absent from the scan of {artifact} (installed but not scanned, or installed after the scan): {missing}")
+        lines.append(f"population: {len(dists)} installed distributions (floor {min_lang_packages}), every one present in the scan at its own metadata path; "
+                     f"{total} language packages scanned (vendored copies included)")
     else:
         by_target = {r.get("Target"): r for r in results}
         for target in expect_targets:
             _require(target in by_target, f"expected target {target!r} is absent from the filesystem report — the lock was not analysed")
             n = len(by_target[target].get("Packages") or [])
             _require(n >= 1, f"target {target!r} lists no packages — an empty population is not coverage")
+        undeclared = [r.get("Target") for r in results if r.get("Class") == "lang-pkgs"
+                      and r.get("Target") not in vp["runtime"] | vp["development"] | set(control_target_scopes)]
+        _require(not undeclared, f"lock target(s) {undeclared} have no declared scope in the policy (runtime_targets / development_targets) — the analysis cannot be classified")
         lines.append("population: " + ", ".join(
             f"{r.get('Target')} ({r.get('Type')}): {len(r.get('Packages') or [])} packages, "
             f"{sum(1 for p in r.get('Packages') or [] if p.get('Dev'))} development"
             for r in results))
 
+    def scope_of(target: str, pkg: dict) -> str:
+        if kind == "image":
+            return "image"
+        if kind == "tooling":
+            return vp["tooling_scope"]
+        if target in control_target_scopes:
+            return control_target_scopes[target]
+        if target in vp["development"]:
+            return "development"
+        if target in vp["runtime"]:
+            return vp["npm_dev_scope"] if pkg.get("Dev") else "runtime"
+        raise IncompleteError(f"finding in target {target!r}, which has no declared scope")  # unreachable after the population check
+
     violations: list[str] = []
     excluded: list[str] = []
     reported: list[str] = []
     lower: list[str] = []
+    by_severity: dict = {}
     for result in results:
         target = result.get("Target")
-        packages = {p.get("Identifier", {}).get("UID"): p for p in result.get("Packages") or [] if isinstance(p, dict)}
+        # A package without a UID is never matched: a finding without an identifier must not borrow the scope of
+        # whichever package also lacks one.
+        packages = {uid: p for p in result.get("Packages") or [] if (uid := (p.get("Identifier") or {}).get("UID")) is not None}
         for vuln in result.get("Vulnerabilities") or []:
-            sev = vuln.get("Severity", "UNKNOWN")
+            sev = vuln.get("Severity")
+            _require(sev in SEVERITIES, f"trivy vulnerability report: finding {vuln.get('VulnerabilityID')!r} has severity {sev!r}, not one of {SEVERITIES}", ReportError)
+            # Fix availability is decided exactly as before the adoption (a non-empty FixedVersion); it
+            # only matters for a rule that requires a fix (HIGH) — the CRITICAL rule requires none.
             fixed = vuln.get("FixedVersion") or ""
+            fix_available = bool(fixed)
             uid = (vuln.get("PkgIdentifier") or {}).get("UID")
-            pkg = packages.get(uid) or {}
-            if kind == "image":
-                scope = "image"
-            elif pkg.get("Dev") or target in dev_targets:
-                scope = "development"
-            else:
-                scope = "runtime"
+            scope = scope_of(target, (packages.get(uid) if uid is not None else None) or {})
+            by_severity[sev] = by_severity.get(sev, 0) + 1
             desc = (f"{vuln.get('VulnerabilityID')} {vuln.get('PkgName')} {vuln.get('InstalledVersion')} -> "
                     f"{fixed or 'no fix'} [{sev}] scope={scope} status={vuln.get('Status')} target={target}")
-            if sev not in fail_sev:
+            if sev not in rules:
                 lower.append(desc)
                 continue
-            if needs_fix and not fixed:
-                excluded.append(desc)
-                continue
-            if actions.get(scope) == "fail":
+            fail_scopes, needs_fix = rules[sev]
+            if scope in fail_scopes and (fix_available or not needs_fix):
                 violations.append(desc)
+            elif needs_fix and not fix_available:
+                excluded.append(desc)
             else:
                 reported.append(desc)
-    lines.append(f"findings at gating severity {sorted(fail_sev)}: {len(violations)} violating, "
+    rule_text = "; ".join(f"{s} fails in {sorted(rules[s][0])}{' when a fix exists' if rules[s][1] else ' with or without a fix'}" for s in SEVERITIES if s in rules)
+    lines.append(f"rules: {rule_text}; reported: {sorted(vp['report'])}")
+    lines.append(f"findings at gating severity {[s for s in SEVERITIES if s in rules]}: {len(violations)} violating, "
                  f"{len(reported)} reported (non-gating scope), {len(excluded)} excluded (no fix available); "
-                 f"{len(lower)} at lower severity")
+                 f"{len(lower)} at lower severity; by severity {dict(sorted(by_severity.items()))}")
     lines += [f"  VIOLATION {d}" for d in violations]
     lines += [f"  REPORTED  {d}" for d in reported]
     lines += [f"  EXCLUDED  {d}" for d in excluded]
@@ -1063,6 +1206,18 @@ def check_complete(reports_dir: pathlib.Path, expect_pass: list[str], expect_con
 
 
 # --------------------------------------------------------------------------- CLI
+# Files and variables through which Trivy filters its own findings before any report exists (P6-CI-6 closure, operator
+# order 2026-10-19): Trivy reads `.trivyignore` and `trivy.yaml` from its working directory and every TRIVY_* variable.
+# The scans and the gates share the job's working directory, so a gate over a Trivy report refuses to certify it while
+# any of them is present (security/test_scanner_configuration.py checks the checkout and the workflow text).
+SCANNER_SUPPRESSION_FILES = (".trivyignore", ".trivyignore.yaml", ".trivyignore.yml", "trivy.yaml", "trivy.yml", ".trivy.yaml", ".trivy.yml")
+
+
+def scanner_suppression(cwd: pathlib.Path, environ) -> list[str]:
+    found = [f"{name} in the working directory" for name in SCANNER_SUPPRESSION_FILES if (cwd / name).exists()]
+    return found + [f"the environment variable {key}" for key in sorted(environ) if key.upper().startswith("TRIVY_")]
+
+
 def _write_summary(summary_path: pathlib.Path, header: list[str], lines: list[str], result: str) -> None:
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(header + lines + [result]) + "\n"
@@ -1079,6 +1234,7 @@ def run(args: argparse.Namespace) -> int:
     outcome: tuple[str, int]
     violations_seen: list[str] = []
     baseline = getattr(args, "control_baseline", False)
+    control_scopes: dict = {}
     if (args.expect_violation and not args.expect_fail) or (getattr(args, "report_prefix", None) and not (args.expect_fail or baseline)) \
             or (baseline and (args.expect_fail or not getattr(args, "report_prefix", None))):
         # Control-only options. Refusing them elsewhere means the real gate can never be pointed at a
@@ -1087,6 +1243,22 @@ def run(args: argparse.Namespace) -> int:
         sys.stderr.write("--report-prefix requires --expect-fail or --control-baseline; --expect-violation requires --expect-fail; "
                          "--control-baseline requires --report-prefix and excludes --expect-fail\n")
         return EXIT_USAGE
+    if args.command == "vuln":
+        tooling = args.kind == "tooling"
+        if tooling != bool(args.installed_inventory) or tooling != bool(args.env_root) or (args.control_target_scope and not args.expect_fail):
+            # --kind tooling must reconcile against the environment's own inventory; the other kinds may not
+            # take one. --control-target-scope (classifying a fixture's target) is a negative-control option:
+            # the real gate can never re-scope a target.
+            sys.stderr.write("--kind tooling requires --installed-inventory and --env-root, and only it accepts them; "
+                             "--control-target-scope requires --expect-fail\n")
+            return EXIT_USAGE
+        control_scopes = {}
+        for item in args.control_target_scope or []:
+            target, sep, scope = item.rpartition("=")
+            if not sep or not target or scope not in VULN_SCOPES:
+                sys.stderr.write(f"--control-target-scope expects TARGET=SCOPE with SCOPE in {VULN_SCOPES}, got {item!r}\n")
+                return EXIT_USAGE
+            control_scopes[target] = scope
     try:
         if args.command == "complete":
             lines = check_complete(reports_dir, args.expect_pass or [], args.expect_control or [])
@@ -1095,11 +1267,27 @@ def run(args: argparse.Namespace) -> int:
             report_path = pathlib.Path(args.report)
             header.append(f"report: {report_path}" + (f" sha256 {_sha256(report_path)}" if report_path.is_file() else " (missing)"))
             violations: list[str] = []
+            if args.command in ("vuln", "misconfig", "sbom"):
+                suppression = scanner_suppression(pathlib.Path.cwd(), os.environ)
+                _require(not suppression, f"scanner-side suppression is present where the scans run ({'; '.join(suppression)}); Trivy "
+                                          "filters findings through it before any report exists, so this report cannot be certified")
+                header.append("scanner suppression: none (no Trivy ignore or configuration file in the working directory, no TRIVY_* variable)")
             if args.command == "vuln":
+                installed = None
+                if args.installed_inventory:
+                    inv_path = pathlib.Path(args.installed_inventory)
+                    header.append(f"installed inventory: {inv_path}" + (f" sha256 {_sha256(inv_path)}" if inv_path.is_file() else " (missing)")
+                                  + f"; environment root {args.env_root}")
+                if control_scopes:
+                    header.append(f"control target scopes (negative control only): {control_scopes}")
                 report = load_json(report_path, "trivy vulnerability report")
+                if args.installed_inventory:
+                    installed = load_installed(pathlib.Path(args.installed_inventory))
                 lines, violations = evaluate_vuln(report, policy, kind=args.kind, artifact=args.artifact,
                                                   expect_targets=args.expect_target or [],
-                                                  min_lang_packages=args.min_lang_packages)
+                                                  min_lang_packages=args.min_lang_packages, installed=installed,
+                                                  env_root=pathlib.Path(args.env_root) if args.env_root else None,
+                                                  control_target_scopes=control_scopes)
             elif args.command == "misconfig":
                 report = load_json(report_path, "trivy misconfiguration report")
                 exceptions = None
@@ -1182,7 +1370,10 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--kind", choices=sorted(ARTIFACT_TYPES), required=True)
     v.add_argument("--artifact", required=True, help="expected ArtifactName (image reference or scan root)")
     v.add_argument("--expect-target", action="append", help="filesystem: a lock target that must be present and populated")
-    v.add_argument("--min-lang-packages", type=int, default=1, help="image: minimum language packages")
+    v.add_argument("--min-lang-packages", type=int, default=1, help="image: minimum language packages; tooling: minimum installed distributions")
+    v.add_argument("--installed-inventory", help="tooling: the environment's `pip inspect` JSON; every installed distribution must be in the scan")
+    v.add_argument("--env-root", help="tooling: the scanned environment's root (the Trivy rootfs scan target)")
+    v.add_argument("--control-target-scope", action="append", help="negative controls only (requires --expect-fail): TARGET=SCOPE for a fixture lock target")
 
     m = sub.add_parser("misconfig"); common(m)
     m.add_argument("--expect-type", action="append", help="a configuration type that must appear (dockerfile, terraform)")
