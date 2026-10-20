@@ -7,7 +7,8 @@
 For every installed pip in each environment (read from the environment's own `pip inspect`
 inventory), write the pins that pip declares in its pip/_vendor/vendor.txt to
 DIR/LABEL/requirements-vendored-pip.txt, one exact pin per line. pip vendors those packages
-without dist-info, so a scan of the installed environment cannot see them by metadata; a Trivy
+without dist-info, so a scan of the installed environment sees them only through an SBOM pip ships (26.2.1
+has one, 25.x has none); a Trivy
 filesystem scan of the staged list analyses them by name and version. An environment with no pip
 gets no file. The reading is security/gate.py's own (pip_vendored_pins), and the tooling gate
 re-reads vendor.txt from the environment rather than trusting the staged file.

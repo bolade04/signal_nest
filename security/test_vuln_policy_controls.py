@@ -238,16 +238,26 @@ class Pinning(unittest.TestCase):
                 self.assertIn("--expect-fail\n          --expect-violation target=control/requirements-vendored-pip.txt", text)
                 self.assertIn("--vendored-artifact .vendored-pins-control --vendored-target control/requirements-vendored-pip.txt", text)
 
-    def test_the_hash_locked_environments_are_made_read_only_after_their_first_inventory(self):
+    def test_the_hash_locked_environments_are_made_read_only_at_the_end_of_their_install(self):
+        # No repository code may run between an environment's hash-locked install and `readonly`: the command is the very
+        # next line of the same step (round-2 finding A2R-1), and it precedes the first inventory and every gate.
+        pairs = {"apps/api/.venv": "--no-deps --no-build-isolation -e apps/api",
+                 ".locktools": ".locktools/bin/python -m pip check"}
         for group in ctl.API_JOBS:
             job = job_text(self.text, JOBS[group])
-            roots = "apps/api/.venv .locktools" if group == "backend" else "apps/api/.venv"
-            with self.subTest(group):
-                cmd = f"python3 security/stage_inputs.py readonly {roots}\n"
-                self.assertEqual(job.count(cmd), 1)
-                first = job.index("apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json")
-                self.assertLess(first, job.index(cmd))
-                self.assertLess(job.index(cmd), job.index("--name api-venv\n"))
+            for env, last_install_line in pairs.items():
+                if env == ".locktools" and group != "backend":
+                    continue
+                with self.subTest(group=group, env=env):
+                    cmd = f"python3 security/stage_inputs.py readonly {env}\n"
+                    self.assertEqual(job.count(cmd), 1)
+                    lines = [l.strip() for l in job.splitlines()]
+                    k = lines.index(cmd.strip())
+                    self.assertIn(last_install_line, lines[k - 1], "readonly must directly follow the install")
+                    self.assertLess(job.index(cmd), job.index("security-reports/api-venv-installed.json"))
+                    self.assertLess(job.index(cmd), job.index("--name api-venv\n"))
+        for group in set(JOBS) - set(ctl.API_JOBS):
+            self.assertNotIn("stage_inputs.py readonly", job_text(self.text, JOBS[group]))
 
     def test_every_installed_environment_is_staged_for_the_vendored_pin_scan_it_is_gated_on(self):
         for key, (_, args, inv_name, vend_name, _) in ctl.REPORTS.items():

@@ -137,6 +137,8 @@ def GOBINARY(name: str):
 #           | ("truncate-inventory",) | ("truncate-lang",)                   one below the gate's --min-lang-packages floor
 #           | ("unlocked", how)   a distribution installed AND scanned outside the locks ("add") or at another version ("version")
 #           | ("append-pip",)     an installed pip in a final image's Python population
+#           | ("vendored-artifact",)   the vendored-pin report renamed to describe another directory
+#           | ("extra-not-editable",)  the --locked-extra project's direct_url removed from the inventory (not from the checkout)
 #           | ("drop-binary", name) | ("drop-stdlib", name) | ("manifest-digest", name)    the binary analysis and its staging record
 #   fixed:  True (FixedVersion + Status fixed) | False (Status affected) | "status-only" (Status fixed, no FixedVersion)
 #           | "status:<s>" (Status <s>, no FixedVersion);  uid: a PkgIdentifier UID matching no package
@@ -200,6 +202,7 @@ CASES: dict = {
     "critical-nofix-security-tooling-vendored-pin": ("container", "security-tooling", ("inject-vendored", "CRITICAL", False), "violation", "CONTROL-critical-nofix-security-tooling-vendored-pin"),
     "security-tooling-vendored-pin-not-scanned": ("container", "security-tooling", ("drop-vendored",), "incomplete", "absent from the vendored-pin scan"),
     "security-tooling-truncated-inventory": ("container", "security-tooling", ("truncate-inventory",), "incomplete", "expected at least"),
+    "security-tooling-vendored-report-of-another-directory": ("container", "security-tooling", ("vendored-artifact",), "incomplete", "the report describes something else"),
     "api-image-installer-present": ("container", "api-image", ("append-pip",), "incomplete", "ships an installer"),
     "api-image-truncated-lang-packages": ("container", "api-image", ("truncate-lang",), "incomplete", "expected at least"),
     "baseline-container-binaries": ("container", "container-binaries", ("baseline",), "pass", None),
@@ -211,9 +214,11 @@ CASES: dict = {
     "critical-nofix-reader-tooling-vendored-pin": ("reader", "reader-tooling", ("inject-vendored", "CRITICAL", False), "violation", "CONTROL-critical-nofix-reader-tooling-vendored-pin"),
     "reader-tooling-vendored-pin-not-scanned": ("reader", "reader-tooling", ("drop-vendored",), "incomplete", "absent from the vendored-pin scan"),
     "reader-tooling-truncated-inventory": ("reader", "reader-tooling", ("truncate-inventory",), "incomplete", "expected at least"),
+    "reader-tooling-vendored-report-of-another-directory": ("reader", "reader-tooling", ("vendored-artifact",), "incomplete", "the report describes something else"),
     "critical-nofix-reader-syspy-vendored-pin": ("reader", "reader-syspy", ("inject-vendored", "CRITICAL", False), "violation", "CONTROL-critical-nofix-reader-syspy-vendored-pin"),
     "reader-syspy-vendored-pin-not-scanned": ("reader", "reader-syspy", ("drop-vendored",), "incomplete", "absent from the vendored-pin scan"),
     "reader-syspy-truncated-inventory": ("reader", "reader-syspy", ("truncate-inventory",), "incomplete", "expected at least"),
+    "reader-syspy-vendored-report-of-another-directory": ("reader", "reader-syspy", ("vendored-artifact",), "incomplete", "the report describes something else"),
     "reader-image-installer-present": ("reader", "reader-image", ("append-pip",), "incomplete", "ships an installer"),
     "reader-image-truncated-lang-packages": ("reader", "reader-image", ("truncate-lang",), "incomplete", "expected at least"),
     "baseline-reader-binaries": ("reader", "reader-binaries", ("baseline",), "pass", None),
@@ -238,7 +243,10 @@ def _environment_cases(group: str, key: str) -> dict:
         f"{key}-installed-outside-the-locks": (group, key, ("unlocked", "add"), "incomplete", "not in the lock(s)"),
         f"{key}-version-differs-from-the-lock": (group, key, ("unlocked", "version"), "incomplete", "differ from the locked version"),
         f"{key}-vendored-pin-not-scanned": (group, key, ("drop-vendored",), "incomplete", "absent from the vendored-pin scan"),
+        f"{key}-vendored-report-of-another-directory": (group, key, ("vendored-artifact",), "incomplete", "the report describes something else"),
         f"{key}-truncated-inventory": (group, key, ("truncate-inventory",), "incomplete", "expected at least"),
+        **({f"{key}-project-not-from-the-checkout": (group, key, ("extra-not-editable",), "incomplete", "not installed from the checkout")}
+           if "--locked-extra" in REPORTS[key][1] else {}),
     }
 
 
@@ -378,6 +386,18 @@ def build_case(name: str, reports_dir: pathlib.Path, out_dir: pathlib.Path) -> t
             if not res.get("Packages"):
                 raise ControlError(f"{name}: the vendored-pin result {target!r} lists no package to drop")
             res["Packages"].pop(0)
+    elif kind == "vendored-artifact":
+        if vendored is None:
+            raise ControlError(f"{name}: the case has no vendored-pin report")
+        vendored["ArtifactName"] = "control/another-directory"
+    elif kind == "extra-not-editable":
+        norm = lambda s: re.sub(r"[-_.]+", "-", str(s)).lower()
+        extras = {norm(args[i + 1]) for i, a in enumerate(args) if a == "--locked-extra"}
+        hit = [it for it in inventory["installed"] if norm(it["metadata"]["name"]) in extras and "direct_url" in it]
+        if not hit:
+            raise ControlError(f"{name}: no --locked-extra entry with a direct_url in the real inventory")
+        for it in hit:
+            del it["direct_url"]
     elif kind == "truncate-inventory":
         floor = int(_arg(args, "--min-lang-packages"))
         if floor < 1 or len(inventory["installed"]) < floor:

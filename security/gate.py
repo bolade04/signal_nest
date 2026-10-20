@@ -68,7 +68,7 @@ runtime stage.
 
 Scanner and tool binaries (`vuln --kind binary`, operator order 2026-10-20): the Trivy and OpenTofu binaries
 the job actually executes are copied into a staging directory (security/stage_inputs.py, which records the
-path each was executed from and its sha256) and scanned with `trivy rootfs` (Go binary analysis). For every
+path each resolves to on PATH, the path the job's steps run it from, and its sha256) and scanned with `trivy rootfs` (Go binary analysis). For every
 named binary the gate requires: the staged copy and the executed file to hash to the pinned release digest
 (security/scanner-binaries.json); exactly one gobinary result for it, listing the pinned main module at the
 pinned version and the Go standard library with a version. A binary Trivy could not analyse is an incomplete
@@ -272,7 +272,8 @@ VENDOR_TXT = ("pip", "_vendor", "vendor.txt")
 def pip_vendored_pins(installed: object, env_root: pathlib.Path) -> list[tuple[str, str, list[tuple[str, str]]]]:
     """For every installed pip in a `pip inspect` inventory: (pip version, vendor.txt path relative to
     env_root, [(normalised name, version)] of the packages that pip declares it vendors). pip vendors
-    them without dist-info, so an installed-environment scan cannot see them by metadata. A pip whose
+    them without dist-info, so an installed-environment scan sees them only through an SBOM pip ships (pip 26.2.1
+    has one, 25.x has none). A pip whose
     vendor.txt is missing or carries a line that is not an exact pin cannot be accounted for: incomplete."""
     out = []
     root = os.path.realpath(env_root)
@@ -541,7 +542,8 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
                      f"{unsupported}: main module {roots}, expected {pin['module']} {pin['module_version']} — not a clean scan")
             std = [x.get("Version") for x in pkgs if x.get("Name") == "stdlib"]
             _require(len(std) == 1 and bool(std[0]), f"{unsupported}: the Go standard library version was not recovered ({std}) — not a clean scan")
-            lines.append(f"binary {name}: executed from {origin}; the executed file and the staged copy hash to the pinned release digest {got} "
+            lines.append(f"binary {name}: resolved on PATH at staging time to {origin} (the path the job's steps run it from); that file "
+                         f"and the staged copy hash to the pinned release digest {got} "
                          f"({pin.get('release_asset', 'release')}); Go binary analysis: main module {pin['module']} {pin['module_version']}, "
                          f"Go standard library {std[0]}, {len(pkgs)} modules")
         lines.append("not established by this analysis: code outside the module graph recorded in the binaries' build information, modules changed "

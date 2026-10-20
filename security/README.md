@@ -370,13 +370,16 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   - a curl or wget download piped into a shell.
 
   The check reads text. An installer reached another way (for example through a script the job
-  runs) is not seen by it. Such an installer lands either in an environment the final
+  runs) is not seen by it. ~~Such an installer lands either in an environment the final
   inventories reconcile, where completeness fails, or outside every scanned environment, which
-  is the disclosed limit.
+  is the disclosed limit.~~ *(Corrected 2026-10-20: a package installed and removed again between two
+  inventories lands in neither — both inventories agree and completeness passes. Since the coverage-gap
+  tranche the API venvs and `.locktools` are read-only from the end of their install, which stops an
+  ordinary such install there; see "What is observed, and when" under "Coverage-gap tranche".)*
 - **Controls.** `vuln_policy_controls.py` takes this run's real reports and runs the real gate
-  on 32 mutated copies in the container job and 18 in the reader job *(43 and 33 since 2026-10-20,
-  plus 16 in each of Frontend quality, Migrations and API contract and Integration smoke and 26 in
-  Backend quality: 150 in all)*, each listed by
+  on 32 mutated copies in the container job and 18 in the reader job *(44 and 35 since 2026-10-20,
+  plus 18 in each of Frontend quality, Migrations and API contract and Integration smoke and 29 in
+  Backend quality: 162 in all)*, each listed by
   `--expect-control control-vulnpol-*` in its job's completeness step. The cases cover:
   - CRITICAL with and without a fix in images, runtime locks, npm runtime and development
     packages, the security-tool lock, the reader tooling lock, both installed tooling venvs and
@@ -526,7 +529,8 @@ existing tooling scope applies to the executed binaries and to vendored packages
    distribution, `--require-hashes --no-deps`, then `pip check`). It is scanned with Trivy `rootfs`,
    and the tooling gate reconciles it against its own `pip inspect` inventory and against the lock
    (`--locked-by`): installed == the lock's pins, at the locked versions. It is made read-only right
-   after its first inventory, and it is inventoried and gated again at the end of the job. pip-tools reads the API project's static `[project]` metadata, so
+   after its install, before the lock check's own tests run, and it is inventoried and gated again at the
+   end of the job. pip-tools reads the API project's static `[project]` metadata, so
    no build backend runs in the check; `tools/verify_locks.py` now also runs pip-compile with
    `--no-build-isolation`, so a backend that ever has to run (dynamic dependencies) is this lock's
    setuptools, never one fetched unpinned into a temporary build environment.
@@ -540,15 +544,23 @@ existing tooling scope applies to the executed binaries and to vendored packages
    own policy controls and both real-scanner controls, takes the inventory again after every other step
    and gates it, and ends with a completeness step and a report artifact.
 
-   **What is observed, and when.** Each hash-locked environment is observed at two points: its first
-   inventory and scan, and its final inventory, gated against the same scan. Right after the first
-   inventory, `stage_inputs.py readonly` removes every write permission from it, and both of its gates
-   require it to be still read-only (`--require-read-only`). An ordinary install or uninstall by a later
-   step therefore fails that step instead of slipping in and out between the two observations. Every
-   installer-shaped line of every job is pinned (`test_tooling_locks.py`), so a new install line in the
-   workflow fails review. What none of this stops is code the jobs run (a test, a script) that first
-   restores write permission, installs and later removes a package, or installs outside every scanned
-   environment: that is the disclosed limit above (decision packet D8), and its control is review.
+   **What is observed, and when.** The API venv and `.locktools` are each observed at two points: the
+   first inventory and scan, and the final inventory, gated against the same scan. The last line of each
+   one's install (`stage_inputs.py readonly`, which directly follows the hash-locked install, before any
+   repository code runs) removes every write permission from it, and both of its gates require it to be
+   still read-only (`--require-read-only`). An ordinary install or uninstall by any later step therefore
+   fails that step instead of slipping in and out unobserved, before or between the two observations.
+   Every installer-shaped line of every job is pinned (`test_tooling_locks.py`), so a new install line in
+   the workflow fails review. What none of this stops:
+   - code that runs inside the install itself: pip, and the setuptools build backend that the editable
+     install runs over the tracked `pyproject.toml`;
+   - any code the jobs run that can change or bypass file permissions, including through `sudo`, which
+     GitHub-hosted runners grant the job user;
+   - installs outside every scanned environment.
+
+   That is the disclosed limit above (decision packet D8), and its control is review. The other
+   hash-locked environments (`.security-venv`, `.reader-venv`, the reader job's interpreter prefix) are not
+   made read-only; they are inventoried after the code their jobs run.
 3. **pip's vendored packages.** pip vendors its dependencies without dist-info, so a `rootfs` scan
    sees them only when pip ships an SBOM of them (26.2.1 does; 25.0.1 and 25.1.1 do not).
    `stage_inputs.py vendored` writes each installed pip's own `pip/_vendor/vendor.txt` pins to a staged
@@ -568,7 +580,8 @@ existing tooling scope applies to the executed binaries and to vendored packages
    since every job now runs Trivy) and `tofu` (Revision reader) executables the jobs resolve on PATH and records
    the executed path and its sha256. Trivy `rootfs` analyses the copies as Go binaries, and the binary
    gate requires:
-   - the copy and the executed file to hash to the release digest in `scanner-binaries.json`;
+   - the copy and the file the binary resolved to on PATH at staging time (the path the job's steps run
+     it from) to hash to the release digest in `scanner-binaries.json`;
    - one Go binary result per binary, naming the pinned main module and version and recovering the Go
      standard library version.
 
@@ -586,9 +599,9 @@ existing tooling scope applies to the executed binaries and to vendored packages
 
 **Population floors, re-derived from measured inventories** (local measurements on macOS builds of
 the same locks, which carry no environment markers; the pull request's exact-head CI run is the
-measurement of record). The rule is the closure tranche's: a floor of about 90 % of the measured
-count, rounded down (60 of 67, 15 of 17, 40 of 48; here 52 of 58 and 7 of 8), so that a routine
-dependency removal does not trip it while an empty or truncated inventory does. For the two
+measurement of record). The floors are set somewhat below the measured counts, as the closure
+tranche's were (60 of 67, 15 of 17, 40 of 48: 83 to 90 %; here 52 of 58 and 7 of 8), so that a routine
+dependency removal does not trip them while an empty or truncated inventory does. For the two
 hash-locked environments the binding check is the exact reconciliation against their locks; the floor
 only guards the inventory before that check. Every floor has a control that truncates the population
 one below it and must fail.
@@ -623,7 +636,7 @@ one below it and must fail.
 | `postgres:16` service, BuildKit image | Backend quality, Migrations and API contract; Container build and security | unresolved (decision packet) |
 | Docker builder stages (the API builder's unpinned pip upgrade and build isolation; the reader builder) | Container build and security; Revision reader | unresolved (decision packet); only final images are scanned |
 | GitHub Actions code | all jobs | unresolved (decision packet); tag pinning belongs to `P6-CI-9` |
-| **Native libraries bundled inside wheels**, without dist-info: `psycopg-binary` 3.3.6 carries 15 shared libraries in `psycopg_binary.libs/`, among them OpenSSL 3.5.8 (`libssl`, `libcrypto`), libpq 5.18, Kerberos, OpenLDAP and SASL; `numpy` 2.5.3 carries OpenBLAS, libgfortran and libquadmath (measured in the Linux wheels of the locks); both are runtime pins | API venvs; API and worker images; the reader image's `psycopg-binary` 3.2.3 (same class, not measured) | **not analysed**: an installed-environment or image scan identifies the wheel by its own name and version only; under the adopted source the bundled libraries have no Trivy selection (decision packet D4 readings apply). Compiled extensions may also link third-party code statically, which no file listing shows |
+| **Native libraries bundled inside wheels**, without dist-info: `psycopg-binary` 3.3.6 carries 15 shared libraries in `psycopg_binary.libs/`, among them OpenSSL 3.5.8 (`libssl`, `libcrypto`), libpq 5.18, Kerberos, OpenLDAP and SASL; `numpy` 2.5.3 carries OpenBLAS, libgfortran and libquadmath (measured in the Linux wheels of the locks); both are runtime pins | API venvs; API and worker images; the reader image's `psycopg-binary` 3.2.3 (same class, not measured) | **not analysed**: an installed-environment or image scan identifies the wheel by its own name and version only; under the adopted source the bundled libraries have no Trivy selection (decision packet D4 readings apply). Compiled extensions also carry third-party C code linked in: marker strings of libuv (`uvloop`), libyaml (PyYAML's `_yaml`) and llhttp (`httptools`) are in their Linux extension modules (measured; static linkage inferred, as these wheels carry no `.libs/`) |
 | Other vendored code without dist-info: `botocore/vendored` (`six`, a `requests` shim) and the C sources `httptools` compiles in | API venvs; API and worker images | not analysed by name and version (found locally in the API venv); reported |
 
 *(Also corrected: the "Running locally" example below took the inventory with `pip inspect --local`,

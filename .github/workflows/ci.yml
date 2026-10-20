@@ -105,27 +105,28 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
+        # repository code runs; the venv is scanned as installed below.
         run: |
           python -m venv apps/api/.venv
           apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt
           apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
+          python3 security/stage_inputs.py readonly apps/api/.venv
 
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # Right after the first inventory the environment is made read-only, and both of its gates require that, so an
-      # ordinary later install or uninstall fails its step instead of escaping both inventories; the inventory is taken
-      # again at the end of the job, so an install that does land fails completeness. The Trivy binary the job executes
-      # is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
+      # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
+      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv as installed and stage the packages its installer vendors
         if: always()
         run: |
           mkdir -p security-reports
           apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json
           python3 security/stage_inputs.py vendored --out .vendored-pins --env api-venv apps/api/.venv security-reports/api-venv-installed.json
-          python3 security/stage_inputs.py readonly apps/api/.venv
 
       - name: Trivy — API venv vulnerabilities, scanned as installed
         if: always()
@@ -301,7 +302,9 @@ jobs:
           --expect-control control-vulnpol-frontend-api-venv-installed-outside-the-locks
           --expect-control control-vulnpol-frontend-api-venv-version-differs-from-the-lock
           --expect-control control-vulnpol-frontend-api-venv-vendored-pin-not-scanned
+          --expect-control control-vulnpol-frontend-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-frontend-api-venv-truncated-inventory
+          --expect-control control-vulnpol-frontend-api-venv-project-not-from-the-checkout
           --expect-control control-vulnpol-baseline-frontend-binaries
           --expect-control control-vulnpol-critical-nofix-frontend-binary-trivy
           --expect-control control-vulnpol-high-fix-frontend-binary-trivy
@@ -364,13 +367,15 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
+        # repository code runs; the venv is scanned as installed below.
         run: |
           mkdir -p ci-logs
           python -m venv apps/api/.venv
           apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
+          python3 security/stage_inputs.py readonly apps/api/.venv
 
       - name: Lock reproducibility (linux/amd64)
         # P6-PLAT-4: the committed locks must be a valid resolution of pyproject.toml under the
@@ -389,11 +394,13 @@ jobs:
         # apps/api/requirements-locktools.txt (pip, pip-tools and every transitive dependency, with --require-hashes
         # --no-deps). pip-tools reads the project's static metadata, so no build backend runs; verify_locks.py also
         # runs pip-compile with --no-build-isolation, so a backend that ever has to run is this lock's setuptools,
-        # never an unpinned build-isolation fetch. .locktools is scanned as installed and reconciled against its lock below.
+        # never an unpinned build-isolation fetch. .locktools is made read-only before the tools tests run, and it is scanned as
+        # installed and reconciled against its lock below.
         run: |
           python -m venv .locktools
           .locktools/bin/python -m pip install --quiet --require-hashes --no-deps -r apps/api/requirements-locktools.txt
           .locktools/bin/python -m pip check
+          python3 security/stage_inputs.py readonly .locktools
           .locktools/bin/python -m pip --version
           .locktools/bin/python -m piptools compile --version
           cd apps/api
@@ -410,10 +417,10 @@ jobs:
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # Right after the first inventory the environment is made read-only, and both of its gates require that, so an
-      # ordinary later install or uninstall fails its step instead of escaping both inventories; the inventory is taken
-      # again at the end of the job, so an install that does land fails completeness. The Trivy binary the job executes
-      # is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
+      # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
+      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv and the lock toolchain venv as installed and stage the packages their installers vendor
         if: always()
         run: |
@@ -422,7 +429,6 @@ jobs:
           .locktools/bin/python -m pip inspect > security-reports/locktools-installed.json
           python3 security/stage_inputs.py vendored --out .vendored-pins --env api-venv apps/api/.venv security-reports/api-venv-installed.json \
             --env locktools .locktools security-reports/locktools-installed.json
-          python3 security/stage_inputs.py readonly apps/api/.venv .locktools
 
       - name: Trivy — API venv vulnerabilities, scanned as installed
         if: always()
@@ -665,7 +671,9 @@ jobs:
           --expect-control control-vulnpol-backend-api-venv-installed-outside-the-locks
           --expect-control control-vulnpol-backend-api-venv-version-differs-from-the-lock
           --expect-control control-vulnpol-backend-api-venv-vendored-pin-not-scanned
+          --expect-control control-vulnpol-backend-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-backend-api-venv-truncated-inventory
+          --expect-control control-vulnpol-backend-api-venv-project-not-from-the-checkout
           --expect-control control-vulnpol-baseline-backend-binaries
           --expect-control control-vulnpol-critical-nofix-backend-binary-trivy
           --expect-control control-vulnpol-high-fix-backend-binary-trivy
@@ -681,6 +689,7 @@ jobs:
           --expect-control control-vulnpol-backend-locktools-installed-outside-the-locks
           --expect-control control-vulnpol-backend-locktools-version-differs-from-the-lock
           --expect-control control-vulnpol-backend-locktools-vendored-pin-not-scanned
+          --expect-control control-vulnpol-backend-locktools-vendored-report-of-another-directory
           --expect-control control-vulnpol-backend-locktools-truncated-inventory
 
       - name: Upload backend security reports and gate summaries
@@ -743,7 +752,8 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
+        # repository code runs; the venv is scanned as installed below.
         run: |
           mkdir -p ci-logs
           npm ci 2>&1 | tee ci-logs/npm-ci.log
@@ -751,6 +761,7 @@ jobs:
           apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
+          python3 security/stage_inputs.py readonly apps/api/.venv
 
       - name: Migration round-trip + seed idempotency
         working-directory: apps/api
@@ -776,17 +787,16 @@ jobs:
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # Right after the first inventory the environment is made read-only, and both of its gates require that, so an
-      # ordinary later install or uninstall fails its step instead of escaping both inventories; the inventory is taken
-      # again at the end of the job, so an install that does land fails completeness. The Trivy binary the job executes
-      # is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
+      # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
+      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv as installed and stage the packages its installer vendors
         if: always()
         run: |
           mkdir -p security-reports
           apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json
           python3 security/stage_inputs.py vendored --out .vendored-pins --env api-venv apps/api/.venv security-reports/api-venv-installed.json
-          python3 security/stage_inputs.py readonly apps/api/.venv
 
       - name: Trivy — API venv vulnerabilities, scanned as installed
         if: always()
@@ -994,7 +1004,9 @@ jobs:
           --expect-control control-vulnpol-migrations-api-venv-installed-outside-the-locks
           --expect-control control-vulnpol-migrations-api-venv-version-differs-from-the-lock
           --expect-control control-vulnpol-migrations-api-venv-vendored-pin-not-scanned
+          --expect-control control-vulnpol-migrations-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-migrations-api-venv-truncated-inventory
+          --expect-control control-vulnpol-migrations-api-venv-project-not-from-the-checkout
           --expect-control control-vulnpol-baseline-migrations-binaries
           --expect-control control-vulnpol-critical-nofix-migrations-binary-trivy
           --expect-control control-vulnpol-high-fix-migrations-binary-trivy
@@ -1698,6 +1710,7 @@ jobs:
           --expect-control control-vulnpol-critical-nofix-security-tooling-vendored-pin
           --expect-control control-vulnpol-security-tooling-vendored-pin-not-scanned
           --expect-control control-vulnpol-security-tooling-truncated-inventory
+          --expect-control control-vulnpol-security-tooling-vendored-report-of-another-directory
           --expect-control control-vulnpol-api-image-installer-present
           --expect-control control-vulnpol-api-image-truncated-lang-packages
           --expect-control control-vulnpol-baseline-container-binaries
@@ -1736,27 +1749,28 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
+        # repository code runs; the venv is scanned as installed below.
         run: |
           python -m venv apps/api/.venv
           apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt
           apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
+          python3 security/stage_inputs.py readonly apps/api/.venv
 
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # Right after the first inventory the environment is made read-only, and both of its gates require that, so an
-      # ordinary later install or uninstall fails its step instead of escaping both inventories; the inventory is taken
-      # again at the end of the job, so an install that does land fails completeness. The Trivy binary the job executes
-      # is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
+      # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
+      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv as installed and stage the packages its installer vendors
         if: always()
         run: |
           mkdir -p security-reports
           apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json
           python3 security/stage_inputs.py vendored --out .vendored-pins --env api-venv apps/api/.venv security-reports/api-venv-installed.json
-          python3 security/stage_inputs.py readonly apps/api/.venv
 
       - name: Trivy — API venv vulnerabilities, scanned as installed
         if: always()
@@ -1933,7 +1947,9 @@ jobs:
           --expect-control control-vulnpol-integration-api-venv-installed-outside-the-locks
           --expect-control control-vulnpol-integration-api-venv-version-differs-from-the-lock
           --expect-control control-vulnpol-integration-api-venv-vendored-pin-not-scanned
+          --expect-control control-vulnpol-integration-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-integration-api-venv-truncated-inventory
+          --expect-control control-vulnpol-integration-api-venv-project-not-from-the-checkout
           --expect-control control-vulnpol-baseline-integration-binaries
           --expect-control control-vulnpol-critical-nofix-integration-binary-trivy
           --expect-control control-vulnpol-high-fix-integration-binary-trivy
@@ -3076,9 +3092,11 @@ jobs:
           --expect-control control-vulnpol-critical-nofix-reader-tooling-vendored-pin
           --expect-control control-vulnpol-reader-tooling-vendored-pin-not-scanned
           --expect-control control-vulnpol-reader-tooling-truncated-inventory
+          --expect-control control-vulnpol-reader-tooling-vendored-report-of-another-directory
           --expect-control control-vulnpol-critical-nofix-reader-syspy-vendored-pin
           --expect-control control-vulnpol-reader-syspy-vendored-pin-not-scanned
           --expect-control control-vulnpol-reader-syspy-truncated-inventory
+          --expect-control control-vulnpol-reader-syspy-vendored-report-of-another-directory
           --expect-control control-vulnpol-reader-image-installer-present
           --expect-control control-vulnpol-reader-image-truncated-lang-packages
           --expect-control control-vulnpol-baseline-reader-binaries
