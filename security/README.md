@@ -439,8 +439,19 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   `EXCLUDED` (no fix), five MEDIUM, including `mcp` 1.29.0 in the Semgrep lock, which remains a
   separate obligation. Reader tooling venv: 17 installed distributions all scanned; 4 HIGH
   `REPORTED` (pip 26.2.1's vendored `msgpack`, `setuptools` and `urllib3`). Security tooling
-  venv: 67 of 67 scanned, 7 lower. The toolcache interpreter of the runner holds pip 25.0.1
-  only (MEDIUM/LOW). CI on the pull request is the measurement of record.
+  venv: 67 of 67 scanned, 7 lower. ~~The toolcache interpreter of the runner holds pip 25.0.1
+  only (MEDIUM/LOW).~~ *(Superseded 2026-10-20: that sentence came from a local scan of the
+  `actions/python-versions` 3.12.15 Linux tarball, not from the runner. The CI measurement is
+  the next bullet.)* CI on the pull request is the measurement of record.
+- **Measured in CI (exact-head run 39337491390 on `f3fb4d59`; gate summary 2026-10-20T00:06Z):** the
+  reader job's interpreter prefix (`pythonLocation`, `/opt/hostedtoolcache/Python/3.12.15/x64`) held 2
+  installed distributions (pip 26.2.1 and PyYAML 6.0.3) and 21 scanned language packages,
+  vendored copies included. Under the adopted tooling policy its gate `REPORTED` 4 HIGH findings
+  (development scope: reported, not failing): `GHSA-6v7p-g79w-8964` (msgpack 1.1.2),
+  `CVE-2025-47273` (setuptools 70.3.0), and `CVE-2026-97687` and `CVE-2026-97689` (urllib3
+  2.7.0). Package versions and findings change from run to run: each run's
+  `reader-tooling-syspy.summary.txt` gate summary, in its `security-reports-revision-reader`
+  artifact, is the record for that run.
 - **Reproduced locally from `ci.yml`** (Trivy CLI with each step's own inputs; image scans
   substituted with merge run 39255973756's real reports, because this host has no container
   runtime): every security step of both jobs passes, completeness included.
