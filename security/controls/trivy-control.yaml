@@ -4,3 +4,6 @@
 scan:
   file-patterns:
     - "pip:pinned-vulnerable\\.txt"
+# Pin the ignore file to the tracked, empty security/empty-ignorefile (P6-CI-6 closure): no ignore file in the
+# working directory is ever read.
+ignorefile: security/empty-ignorefile

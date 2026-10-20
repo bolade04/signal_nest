@@ -7,6 +7,7 @@ and asserts the exit code and the RESULT line. Run: python3 -m unittest discover
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -161,10 +162,235 @@ class GateCase(unittest.TestCase):
         code, result, text = self.run_gate("vuln", self.write("r.json", fs_report(dev_vulns=[vuln("CVE-8", "vite", "1", "2", "HIGH", uid="dv")])), "--name", "a", "--kind", "filesystem", "--artifact", ".", "--expect-target", "package-lock.json")
         self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("REPORTED  CVE-8", text); self.assertIn("scope=development", text)
 
-    def test_fs_dev_lock_target_is_development_scope(self):
+    def test_fs_dev_lock_target_critical_violates_under_the_adopted_policy(self):
+        # Replaces the pre-adoption assertion that a CRITICAL in a development lock was only REPORTED
+        # (the P6-CI-6 closure assessment's class (iii) pass-through): CRITICAL now fails in every scope.
         doc = fs_report(); doc["Results"][2]["Vulnerabilities"] = [vuln("CVE-7", "pytest", "1", "2", "CRITICAL", uid="pd")]
         code, result, text = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "filesystem", "--artifact", ".", "--expect-target", "apps/api/requirements-dev.txt")
-        self.assertEqual(code, 0); self.assertIn("REPORTED  CVE-7", text)
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION CVE-7", text); self.assertIn("scope=development", text)
+
+    def test_fs_dev_lock_target_high_is_still_only_reported(self):
+        doc = fs_report(); doc["Results"][2]["Vulnerabilities"] = [vuln("CVE-7H", "pytest", "1", "2", "HIGH", uid="pd")]
+        code, result, text = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "filesystem", "--artifact", ".", "--expect-target", "apps/api/requirements-dev.txt")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("REPORTED  CVE-7H", text); self.assertIn("scope=development", text)
+
+    # ---- the adopted severity-first precedence (operator order 2026-10-19)
+    def _fs(self, doc, *extra):
+        return self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "filesystem", "--artifact", ".", *extra)
+
+    def test_critical_without_a_fix_violates_in_every_scope(self):
+        cases = [("image", image_report([vuln("C-I", "libc6", "1", "", "CRITICAL")]), ("--kind", "image", "--artifact", "signalnest-api:ci")),
+                 ("runtime", fs_report(runtime_py_vulns=[vuln("C-R", "fastapi", "1", "", "CRITICAL", uid="py")]), ()),
+                 ("npm-dev", fs_report(dev_vulns=[vuln("C-N", "vite", "1", "", "CRITICAL", uid="dv")]), ())]
+        for label, doc, kind in cases:
+            with self.subTest(label):
+                argv = ["vuln", self.write("r.json", doc), "--name", "a"] + (list(kind) if kind else ["--kind", "filesystem", "--artifact", "."])
+                code, result, text = self.run_gate(*argv)
+                self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION C-", text); self.assertIn("no fix", text)
+
+    def test_critical_with_status_fixed_but_no_fixed_version_violates(self):
+        v = vuln("C-M", "fastapi", "1", "", "CRITICAL", uid="py"); v["Status"] = "fixed"; del v["FixedVersion"]
+        code, result, _ = self._fs(fs_report(runtime_py_vulns=[v]))
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY))
+
+    def test_high_fix_availability_is_the_pre_adoption_rule(self):
+        # HIGH keeps its treatment unchanged: only a non-empty FixedVersion is a fix (as before the
+        # adoption), so Status "fixed" without a FixedVersion stays EXCLUDED and listed.
+        v = vuln("H-M", "fastapi", "1", "", "HIGH", uid="py"); v["Status"] = "fixed"
+        code, result, text = self._fs(fs_report(runtime_py_vulns=[v]))
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("EXCLUDED  H-M", text)
+
+    def test_critical_violates_whatever_its_status(self):
+        for status in ("affected", "will_not_fix", "end_of_life", "fix_deferred", "under_investigation", "not_affected", "unknown", None):
+            for label, doc, kind in (("image", lambda v: image_report([v]), ("--kind", "image", "--artifact", "signalnest-api:ci")),
+                                     ("npm-dev", lambda v: fs_report(dev_vulns=[v]), ("--kind", "filesystem", "--artifact", "."))):
+                with self.subTest(status=status, scope=label):
+                    v = vuln("C-S", "vite" if label == "npm-dev" else "libc6", "1", "", "CRITICAL", uid="dv" if label == "npm-dev" else "u1")
+                    v["Status"] = status
+                    code, result, text = self.run_gate("vuln", self.write("r.json", doc(v)), "--name", "a", *kind)
+                    self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION C-S", text)
+
+    def test_critical_is_decided_by_severity_not_by_identifier_scheme(self):
+        for vid in ("GHSA-abcd-efgh-ijkl", "PYSEC-2026-1", "OSV-2026-1", "DLA-1234-1"):
+            with self.subTest(vid):
+                code, result, text = self._fs(fs_report(dev_vulns=[vuln(vid, "vite", "1", "", "CRITICAL", uid="dv")]))
+                self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn(f"VIOLATION {vid}", text)
+
+    def test_critical_whose_package_identifier_matches_no_package_violates(self):
+        for uid in ("no-such-package", None):
+            with self.subTest(uid=uid):
+                code, result, _ = self._fs(fs_report(runtime_py_vulns=[vuln("C-U", "fastapi", "1", "", "CRITICAL", uid=uid)]))
+                self.assertEqual((code, result), (3, gate.RESULT_POLICY))
+
+    def test_critical_in_a_non_python_language_result_of_an_image_violates(self):
+        for rtype in ("gobinary", "jar", "rust-binary", "node-pkg"):
+            with self.subTest(rtype):
+                doc = image_report()
+                doc["Results"].append({"Target": f"usr/local/bin/x ({rtype})", "Class": "lang-pkgs", "Type": rtype,
+                                       "Packages": [{"Name": "x", "Version": "1", "Identifier": {"UID": "x1"}}],
+                                       "Vulnerabilities": [vuln("C-G", "x", "1", "", "CRITICAL", uid="x1")]})
+                code, result, text = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+                self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION C-G", text)
+
+    def test_a_report_without_the_scanners_shape_is_malformed_not_empty(self):
+        shapes = {
+            "result not an object": lambda d: d["Results"].append(5),
+            "Vulnerabilities an int": lambda d: d["Results"][1].__setitem__("Vulnerabilities", 7),
+            "Vulnerabilities an object": lambda d: d["Results"][1].__setitem__("Vulnerabilities", {}),
+            "Vulnerabilities false": lambda d: d["Results"][1].__setitem__("Vulnerabilities", False),
+            "Vulnerabilities a string": lambda d: d["Results"][1].__setitem__("Vulnerabilities", ""),
+            "a finding not an object": lambda d: d["Results"][1].__setitem__("Vulnerabilities", ["x"]),
+            "Packages a string": lambda d: d["Results"][1].__setitem__("Packages", "fastapi"),
+            "Identifier a string": lambda d: d["Results"][1]["Packages"][0].__setitem__("Identifier", "py"),
+            "PkgIdentifier a string": lambda d: d["Results"][1].__setitem__("Vulnerabilities", [dict(vuln("C-1", "fastapi", "1", "", "CRITICAL"), PkgIdentifier="py")]),
+        }
+        for label, mutate in shapes.items():
+            with self.subTest(label):
+                doc = fs_report(); mutate(doc)
+                code, result, _ = self._fs(doc)
+                self.assertEqual((code, result), (2, gate.RESULT_REPORT))
+
+    def test_a_finding_without_an_identifier_does_not_borrow_another_packages_scope(self):
+        doc = fs_report(npm_vulns=[dict(vuln("H-N", "react", "1", "2", "HIGH"), PkgIdentifier=None)])
+        doc["Results"][0]["Packages"].append({"Name": "dev-noid", "Dev": True, "Identifier": None})
+        code, result, text = self._fs(doc)
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("scope=runtime", text)
+
+    def test_a_trivy_report_is_refused_while_scanner_suppression_is_present(self):
+        cwd = os.getcwd()
+        work = self.dir / "work"; work.mkdir()
+        rep = self.write("r.json", fs_report())
+        try:
+            os.chdir(work)
+            for name in gate.SCANNER_SUPPRESSION_FILES:
+                with self.subTest(file=name):
+                    (work / name).write_text("CVE-2020-14343\n")
+                    code, result, text = self.run_gate("vuln", rep, "--name", "a", "--kind", "filesystem", "--artifact", ".")
+                    self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("scanner-side suppression", text)
+                    (work / name).unlink()
+            for var in ("TRIVY_IGNORE_UNFIXED", "TRIVY_SEVERITY", "trivy_ignorefile", "TRIVY_VULN_SEVERITY_SOURCE"):
+                with self.subTest(var=var):
+                    os.environ[var] = "x"
+                    try:
+                        code, result, _ = self.run_gate("vuln", rep, "--name", "a", "--kind", "filesystem", "--artifact", ".")
+                    finally:
+                        del os.environ[var]
+                    self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+            (work / ".trivyignore").write_text("AWS-0107\n")
+            code, result, _ = self.run_gate("misconfig", self.write("m.json", misconfig_report()), "--name", "m", "--expect-type", "dockerfile", "--expect-type", "terraform")
+            self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+            code, result, _ = self.run_gate("sbom", self.write("s.json", sbom()), "--name", "s", "--kind", "image", "--artifact", "signalnest-api:ci",
+                                            "--min-components", "1", "--commit", "a" * 40, "--checkout", "a" * 40)
+            self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+            code, _, _ = self.run_gate("sast", self.write("g.json", sast_report()), "--name", "g", "--expect-prefix", "apps/api/app")
+            self.assertEqual(code, 0, "a Trivy ignore file has no bearing on the Semgrep gate")
+        finally:
+            os.chdir(cwd)
+
+    def test_a_clean_working_directory_is_recorded_in_the_summary(self):
+        _, _, text = self._fs(fs_report())
+        self.assertIn("scanner suppression: none", text)
+
+    def test_a_package_without_an_identifier_is_accepted(self):
+        doc = fs_report(); doc["Results"][1]["Packages"].append({"Name": "noid", "Identifier": None})
+        code, result, _ = self._fs(doc)
+        self.assertEqual((code, result), (0, gate.RESULT_PASS))
+
+    def test_high_without_a_fix_in_runtime_is_listed_as_excluded(self):
+        code, result, text = self._fs(fs_report(runtime_py_vulns=[vuln("H-X", "fastapi", "1", "", "HIGH", uid="py")]))
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("EXCLUDED  H-X", text)
+
+    def test_high_npm_development_without_a_fix_is_listed_as_excluded(self):
+        code, result, text = self._fs(fs_report(dev_vulns=[vuln("H-D", "vite", "1", "", "HIGH", uid="dv")]))
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("EXCLUDED  H-D", text)
+
+    def test_missing_or_unknown_severity_is_a_malformed_report(self):
+        for sev in (None, "SEVERE", "critical"):
+            with self.subTest(sev):
+                v = vuln("S-1", "fastapi", "1", "2", "CRITICAL", uid="py")
+                if sev is None: del v["Severity"]
+                else: v["Severity"] = sev
+                code, result, _ = self._fs(fs_report(runtime_py_vulns=[v]))
+                self.assertEqual((code, result), (2, gate.RESULT_REPORT))
+
+    def test_a_valid_unknown_is_reported_for_triage_and_a_later_critical_rating_fails(self):
+        # Operator decision 2 (2026-10-19): a valid UNKNOWN means unscored and stays reported for triage (not LOW, not resolved);
+        # the same finding, once classified CRITICAL, falls under the unconditional CRITICAL rule (development scope, no fix).
+        unknown = vuln("U-T", "vite", "1", "", "UNKNOWN", uid="dv")
+        code, result, text = self._fs(fs_report(dev_vulns=[unknown]))
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     U-T vite 1 -> no fix [UNKNOWN]", text)
+        code, result, text = self._fs(fs_report(dev_vulns=[dict(unknown, Severity="CRITICAL")]))
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION U-T", text)
+        # ... in an image too (the disclosed instance CVE-2026-82560 is an image finding): reported, then unconditional once CRITICAL
+        img_unknown = vuln("U-I", "perl-base", "1", "", "UNKNOWN")
+        code, result, text = self.run_gate("vuln", self.write("r.json", image_report([img_unknown])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     U-I perl-base 1 -> no fix [UNKNOWN] scope=image", text)
+        code, result, text = self.run_gate("vuln", self.write("r.json", image_report([dict(img_unknown, Severity="CRITICAL")])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY)); self.assertIn("VIOLATION U-I", text)
+
+    def test_missing_or_invalid_severity_is_malformed_never_read_as_unknown(self):
+        for sev in (None, "", "Unknown", "unknown", "UNSCORED", 0, "LOW "):
+            with self.subTest(sev=sev):
+                v = vuln("S-2", "vite", "1", "", "UNKNOWN", uid="dv")
+                if sev is None: del v["Severity"]
+                else: v["Severity"] = sev
+                code, result, _ = self._fs(fs_report(dev_vulns=[v]))
+                self.assertEqual((code, result), (2, gate.RESULT_REPORT))
+
+    def test_trivys_selected_severity_decides_and_other_ratings_do_not_change_it(self):
+        # Operator decision 1 (2026-10-19): the Severity Trivy selects decides; SeveritySource, VendorSeverity and CVSS stay in
+        # the report and change the result in neither direction (an NVD 9.8 the vendor rates LOW is LOW; a selected CRITICAL fails).
+        low = dict(vuln("V-L", "libc6", "1", "", "LOW"), SeveritySource="debian", VendorSeverity={"nvd": 4, "debian": 1}, CVSS={"nvd": {"V3Score": 9.8}})
+        code, result, text = self.run_gate("vuln", self.write("r.json", image_report([low])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS)); self.assertIn("lower     V-L", text)
+        crit = dict(vuln("V-C", "libc6", "1", "", "CRITICAL"), SeveritySource="nvd", VendorSeverity={"nvd": 4, "debian": 1})
+        code, result, _ = self.run_gate("vuln", self.write("r.json", image_report([crit])), "--name", "a", "--kind", "image", "--artifact", "signalnest-api:ci")
+        self.assertEqual((code, result), (3, gate.RESULT_POLICY))
+
+    def test_unknown_severity_value_unknown_is_reported_at_lower_severity(self):
+        code, result, text = self._fs(fs_report(runtime_py_vulns=[vuln("U-1", "fastapi", "1", "2", "UNKNOWN", uid="py")]))
+        self.assertEqual(code, 0); self.assertIn("lower     U-1", text)
+
+    def test_a_lock_target_with_no_declared_scope_is_incomplete(self):
+        doc = fs_report(); doc["Results"].append({"Target": "tools/requirements-new.txt", "Class": "lang-pkgs", "Type": "pip",
+                                                  "Packages": [{"Name": "x", "Identifier": {"UID": "nx"}}]})
+        code, result, text = self._fs(doc)
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("no declared scope", text)
+
+    def test_control_target_scope_is_refused_outside_a_negative_control(self):
+        code = gate.main(["--policy", str(POLICY), "--reports-dir", str(self.reports), "vuln", self.write("r.json", fs_report()), "--name", "a",
+                          "--kind", "filesystem", "--artifact", ".", "--control-target-scope", "x=runtime"])
+        self.assertEqual(code, gate.EXIT_USAGE)
+
+    def test_control_target_scope_classifies_a_fixture_inside_a_negative_control(self):
+        doc = {"SchemaVersion": 2, "ArtifactName": "c", "ArtifactType": "filesystem", "Results": [
+            {"Target": "pinned-vulnerable.txt", "Class": "lang-pkgs", "Type": "pip", "Packages": [{"Name": "pyyaml", "Identifier": {"UID": "y"}}],
+             "Vulnerabilities": [vuln("C-F", "pyyaml", "5.3.1", "5.4", "CRITICAL", uid="y")]}]}
+        code, result, _ = self.run_gate("vuln", self.write("r.json", doc), "--name", "a", "--kind", "filesystem", "--artifact", "c",
+                                        "--expect-target", "pinned-vulnerable.txt", "--expect-fail", "--control-target-scope", "pinned-vulnerable.txt=runtime")
+        self.assertEqual((code, result), (0, gate.RESULT_CONTROL_OK))
+
+    def test_policy_of_the_superseded_shape_or_with_a_gap_is_refused(self):
+        base = json.loads(POLICY.read_text())
+        mutations = {
+            "legacy key": lambda d: d["vulnerabilities"].__setitem__("fail_requires_fix_available", True),
+            "severity neither ruled nor reported": lambda d: d["vulnerabilities"]["report_severities"].remove("LOW"),
+            "unknown scope": lambda d: d["vulnerabilities"]["severity_rules"]["CRITICAL"]["fail_scopes"].append("tooling"),
+            "target twice": lambda d: d["vulnerabilities"]["development_targets"].append("package-lock.json"),
+            "non-boolean fix flag": lambda d: d["vulnerabilities"]["severity_rules"]["HIGH"].__setitem__("fail_requires_fix_available", "yes"),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label):
+                doc = json.loads(json.dumps(base)); mutate(doc); pol = self.write("p.json", doc)
+                code = gate.main(["--policy", pol, "--reports-dir", str(self.reports), "vuln", self.write("r.json", fs_report()), "--name", "a", "--kind", "filesystem", "--artifact", "."])
+                self.assertEqual(code, gate.EXIT_REPORT)
+
+    def test_the_tracked_policy_is_adopted_and_fails_critical_everywhere(self):
+        doc = json.loads(POLICY.read_text())
+        self.assertTrue(doc["_status"].startswith("ADOPTED"))
+        rules = doc["vulnerabilities"]["severity_rules"]
+        self.assertEqual(set(rules["CRITICAL"]["fail_scopes"]), set(gate.VULN_SCOPES)); self.assertFalse(rules["CRITICAL"]["fail_requires_fix_available"])
+        self.assertEqual((set(rules["HIGH"]["fail_scopes"]), rules["HIGH"]["fail_requires_fix_available"]), ({"image", "runtime"}, True))
 
     def test_fs_runtime_python_critical_violates(self):
         code, result, _ = self.run_gate("vuln", self.write("r.json", fs_report(runtime_py_vulns=[vuln("CVE-6", "fastapi", "1", "2", "CRITICAL", uid="py")])), "--name", "a", "--kind", "filesystem", "--artifact", ".", "--expect-target", "apps/api/requirements-runtime.txt")

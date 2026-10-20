@@ -1,0 +1,10 @@
+# Reader TOOLING lock inputs (P6-CI-6 closure): what the required "Revision reader" CI job installs
+# into .reader-venv beyond pyproject.toml's own dependencies and its [dev] extra. requirements-dev.txt
+# is compiled from pyproject.toml (base + dev) plus this file, with hashes. Never edited by hand.
+#   pip        - the installer itself, installed from the lock instead of an unpinned self-upgrade
+#   setuptools - the build backend (pyproject [build-system]); the editable install runs with
+#                --no-build-isolation so no unpinned build dependency is fetched
+#   PyYAML     - the Gate 4N contract, at the exact pin of scripts/requirements-gate.txt
+pip
+setuptools>=68
+PyYAML==6.0.3

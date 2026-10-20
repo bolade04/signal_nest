@@ -14,3 +14,4 @@ report fails the control, so a scanner that silently stops finding things cannot
 | SAST, Python | `sast/insecure_sample.py` (`subprocess` with `shell=True`) | ERROR severity |
 | SAST, TypeScript | `sast/insecure_sample.ts` (`crypto.createCipher`) | ERROR severity |
 | SBOM | `vuln/pinned-vulnerable.txt` | a CycloneDX inventory with the one pinned component |
+| Installed environment (Trivy `rootfs`, tooling gate; 2026-10-19) | `tooling-env/lib/python3.12/site-packages/PyYAML-5.3.1.dist-info/METADATA` (metadata only, no code) with its `pip inspect`-shaped inventory `tooling-env-installed.json` (paths relative to the repository root) | CVE-2020-14343, CRITICAL, fixed in 5.4 |

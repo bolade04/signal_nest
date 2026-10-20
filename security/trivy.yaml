@@ -11,3 +11,6 @@ scan:
   include-dev-deps: true
 pkg:
   include-dev-deps: true
+# Pin the ignore file to the tracked, empty security/empty-ignorefile (P6-CI-6 closure): no ignore file in the
+# working directory is ever read.
+ignorefile: security/empty-ignorefile
