@@ -3,9 +3,13 @@
 The reader job installs its venv from apps/revision-reader/requirements-dev.txt with --require-hashes,
 the system interpreter's Gate 4N PyYAML from scripts/requirements-gate-hashes.txt, and keeps one
 unhashed line (`.reader-venv/bin/pip install -r scripts/requirements-gate.txt`, pinned byte-exactly by
-tests/test_i28bh_e2_ci_guard_repairs.py) that is a no-op only while every PyYAML pin agrees. These
-assertions keep that true, keep every requirement hashed, keep the locks covering what the reader
-declares and builds with, and pin every installer-shaped line of the two security-scanned jobs: any line
+tests/test_i28bh_e2_ci_guard_repairs.py) that is a no-op only while every PyYAML pin agrees. The four jobs
+that create the API venv install pip and the setuptools build backend from apps/api/requirements-bootstrap.txt,
+and Backend quality installs its lock toolchain (.locktools) from apps/api/requirements-locktools.txt (P6-CI-6
+coverage gaps, operator order 2026-10-20). These assertions keep that true, keep every requirement hashed, keep
+the locks covering what the reader and the API declare and build with, keep the bootstrap pins equal to the
+reader tooling lock's and the lock toolchain equal to the documented one, and pin every installer-shaped line
+of EVERY job of ci.yml (all six run security gates since the coverage-gap tranche): any line
 (backslash continuations joined) that invokes pip, pipx, ensurepip, venv, uv, conda, poetry, npm, gem, cargo,
 apt and the like as a command, as `-m <module>` or from a `bin/` directory, upgrades a venv's seed packages,
 pipes a download into a shell or runs `setup.py install`. A new one, or a changed one, fails here until reviewed.
@@ -24,14 +28,70 @@ READER_LOCK = ROOT / "apps" / "revision-reader" / "requirements-dev.txt"
 READER_IN = ROOT / "apps" / "revision-reader" / "requirements-dev.in"
 GATE_CONTRACT = ROOT / "scripts" / "requirements-gate.txt"
 GATE_LOCK = ROOT / "scripts" / "requirements-gate-hashes.txt"
-# Every installer-shaped line of the two security-scanned jobs, exactly as written in ci.yml (stripped).
+API_BOOTSTRAP_LOCK = ROOT / "apps" / "api" / "requirements-bootstrap.txt"
+API_LOCKTOOLS_LOCK = ROOT / "apps" / "api" / "requirements-locktools.txt"
+# Every installer-shaped line of every job, exactly as written in ci.yml (stripped).
 INSTALLER_TOOLS = (r"pip[0-9.]*|pipx|uv|uvx|conda|mamba|micromamba|poetry|pdm|easy_install|hatch|rye|npm|npx|yarn|pnpm|corepack|gem|cargo|"
                    r"apt-get|apt|brew|snap|dpkg")
 INSTALLER_LINE = re.compile(rf"(?:^|[\s;&|(`$\"'=]|/bin/)(?:{INSTALLER_TOOLS})(?=[\s)\"';&|]|$)"
                             r"|\s-m\s*(?:pip|ensurepip|venv|virtualenv|pipx|uv)\b|\bpip\._internal\b|\b(?:import|from)\s+pip\b"
                             r"|--upgrade-deps|setup\.py\s+(?:install|develop)|get-pip|\bgo\s+install\b|\bpip-install\s*:"
                             r"|\b(?:curl|wget)\b[^|\n]*\|\s*(?:ba|z)?sh", re.I)
+API_VENV_INVENTORY = {
+    "run: apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed-final.json",
+}
 ALLOWED_INSTALLER_LINES = {
+    "frontend-quality": {
+        "cache: npm",
+        "cache: pip",
+        "run: npm run test:ci-pipefail",
+        "npm ci 2>&1 | tee ci-logs/npm-ci.log",
+        "run: npm run lint 2>&1 | tee ci-logs/frontend-lint.log",
+        "run: npm run type-check 2>&1 | tee ci-logs/frontend-typecheck.log",
+        "run: npm run test 2>&1 | tee ci-logs/frontend-test.log",
+        "run: npm run build 2>&1 | tee ci-logs/frontend-build.log",
+        "python -m venv apps/api/.venv",
+        "apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt",
+        "apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt",
+        "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api",
+        "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
+        "run: npm run e2e:install --workspace apps/web 2>&1 | tee ci-logs/frontend-e2e-install.log",
+    } | API_VENV_INVENTORY,
+    "backend-quality": {
+        "cache: pip",
+        "python -m venv apps/api/.venv",
+        "apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log",
+        "apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log",
+        "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log",
+        "python -m venv .locktools",
+        ".locktools/bin/python -m pip install --quiet --require-hashes --no-deps -r apps/api/requirements-locktools.txt",
+        ".locktools/bin/python -m pip check",
+        ".locktools/bin/python -m pip --version",
+        "apps/api/.venv/bin/python -m pip check",
+        "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
+        ".locktools/bin/python -m pip inspect > security-reports/locktools-installed.json",
+        "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed-final.json",
+        ".locktools/bin/python -m pip inspect > security-reports/locktools-installed-final.json",
+    },
+    "migration-and-contract": {
+        "cache: npm",
+        "cache: pip",
+        "npm ci 2>&1 | tee ci-logs/npm-ci.log",
+        "python -m venv apps/api/.venv",
+        "apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log",
+        "apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log",
+        "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log",
+        "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
+        "npm run gen:types 2>&1 | tee ci-logs/gen-types.log",
+    } | API_VENV_INVENTORY,
+    "integration-smoke": {
+        "cache: pip",
+        "python -m venv apps/api/.venv",
+        "apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt",
+        "apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt",
+        "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api",
+        "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
+    } | API_VENV_INVENTORY,
     "container-build": {
         "- name: Inventory the security tooling venv as installed (pip inspect)",
         "cache: pip",
@@ -99,7 +159,7 @@ class ToolingLocks(unittest.TestCase):
         self.assertNotIn(None, versions.values(), versions)
 
     def test_every_locked_requirement_carries_hashes(self):
-        for path in (READER_LOCK, GATE_LOCK):
+        for path in (READER_LOCK, GATE_LOCK, API_BOOTSTRAP_LOCK, API_LOCKTOOLS_LOCK):
             with self.subTest(str(path.relative_to(ROOT))):
                 entries = lock_entries(path)
                 self.assertTrue(entries)
@@ -122,8 +182,42 @@ class ToolingLocks(unittest.TestCase):
         for tool in ("pip", "setuptools", "pyyaml", "psycopg-binary"):
             self.assertIn(tool, locked)
 
+    def test_the_api_bootstrap_lock_is_pip_and_the_build_backend_at_the_reader_locks_pins(self):
+        boot, reader = lock_entries(API_BOOTSTRAP_LOCK), lock_entries(READER_LOCK)
+        self.assertEqual(set(boot), {"pip", "setuptools"})
+        for name in boot:
+            with self.subTest(name):
+                self.assertEqual(boot[name][0], reader[name][0])
+                self.assertEqual(sorted(boot[name][1]), sorted(reader[name][1]))
+        project = tomllib.loads((ROOT / "apps" / "api" / "pyproject.toml").read_text(encoding="utf-8"))
+        for req in project["build-system"]["requires"]:
+            self.assertIn(norm(re.match(r"[A-Za-z0-9._-]+", req).group(0)), boot, f"{req} (build-system) is not in the bootstrap lock")
+        self.assertEqual(pins(ROOT / "apps" / "api" / "requirements-bootstrap.in"), {n: v for n, (v, _) in boot.items()})
+
+    def test_the_lock_toolchain_lock_holds_the_documented_toolchain(self):
+        tools = lock_entries(API_LOCKTOOLS_LOCK)
+        documented = {"pip": "25.1.1", "pip-tools": "7.5.2"}           # README-deps.md and tools/verify_locks.py TOOLCHAIN
+        self.assertIn('TOOLCHAIN = {"pip": "25.1.1", "pip-tools": "7.5.2"}', (ROOT / "apps" / "api" / "tools" / "verify_locks.py").read_text(encoding="utf-8"))
+        for name, version in documented.items():
+            self.assertEqual(tools[name][0], version)
+        self.assertEqual(pins(ROOT / "apps" / "api" / "requirements-locktools.in"), documented)
+        self.assertIn("setuptools", tools, "verify_locks.py builds metadata with --no-build-isolation, so the build backend must be in the lock")
+
+    def test_the_api_venv_and_lock_toolchain_installs_are_hash_locked_and_never_upgrade_unpinned(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("pip install --upgrade pip", text)
+        self.assertNotIn('"pip==25.1.1" "pip-tools==7.5.2"', text)
+        self.assertNotIn("--no-deps -e apps/api\n", text)
+        for job in ("frontend-quality", "backend-quality", "migration-and-contract", "integration-smoke"):
+            with self.subTest(job):
+                body = job_text(text, job)
+                self.assertEqual(body.count("-r apps/api/requirements-bootstrap.txt"), 1)
+                self.assertEqual(body.count("--no-deps --no-build-isolation -e apps/api"), 1)
+
     def test_the_scanned_jobs_run_only_the_reviewed_installer_lines(self):
         text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = set(re.findall(r"(?m)^  ([a-z0-9-]+):$", text.split("\njobs:\n", 1)[1]))
+        self.assertEqual(jobs, set(ALLOWED_INSTALLER_LINES), "every job of ci.yml has its installer lines pinned")
         for job, allowed in ALLOWED_INSTALLER_LINES.items():
             with self.subTest(job):
                 self.assertEqual(installer_lines(job_text(text, job)), allowed)

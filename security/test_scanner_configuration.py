@@ -11,8 +11,10 @@ pins `ignorefile` to the tracked, empty security/empty-ignorefile: with an expli
 file, Trivy reads no ignore or configuration file from its working directory, so such a file created there
 by ANY code the jobs run (a script, a test, a background process) cannot filter a scan, whatever its timing. The step check reads LINE SHAPES, not YAML meaning, so it fails closed: a quoted
 key, a flow mapping, another indentation or any unrecognised line is rejected rather than interpreted.
-No suppression file name may appear in the workflow outside the two reviewed configuration paths. In the
-two security-scanned jobs, Trivy may run ONLY through the reviewed trivy-action steps: their number is
+No suppression file name may appear in the workflow outside the two reviewed configuration paths. In every
+job of ci.yml (all six run Trivy since the P6-CI-6 coverage-gap tranche of 2026-10-20: the four API-venv jobs
+scan their installed environments, the two security-scanned jobs also the binaries they execute), Trivy may run
+ONLY through the reviewed trivy-action steps: their number is
 pinned, every `uses:` reference is from a reviewed set (no local actions), no run line invokes `trivy`,
 and no scanning or gating step changes its working directory away from the one the run-time refusal
 checks. What text cannot see (a file or variable created at run time) is refused by the gate itself
@@ -36,8 +38,15 @@ ROOT = HERE.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 # The run-time refusal's file names, pinned literally (a shrunk tuple in gate.py must fail here, not shrink the test).
 SUPPRESSION_FILES = (".trivyignore", ".trivyignore.yaml", ".trivyignore.yml", "trivy.yaml", "trivy.yml", ".trivy.yaml", ".trivy.yml")
-TRIVY_STEPS = {"container-build": 13, "revision-reader": 5}
+TRIVY_STEPS = {"frontend-quality": 2, "backend-quality": 3, "migration-and-contract": 2, "container-build": 17,
+               "integration-smoke": 2, "revision-reader": 9}
 REVIEWED_USES = {
+    "frontend-quality": {"actions/checkout@v7", "actions/setup-node@v6", "actions/setup-python@v6", "actions/upload-artifact@v7",
+                         "aquasecurity/trivy-action@v0.36.0"},
+    "backend-quality": {"actions/checkout@v7", "actions/setup-python@v6", "actions/upload-artifact@v7", "aquasecurity/trivy-action@v0.36.0"},
+    "migration-and-contract": {"actions/checkout@v7", "actions/setup-node@v6", "actions/setup-python@v6", "actions/upload-artifact@v7",
+                               "aquasecurity/trivy-action@v0.36.0"},
+    "integration-smoke": {"actions/checkout@v7", "actions/setup-python@v6", "actions/upload-artifact@v7", "aquasecurity/trivy-action@v0.36.0"},
     "container-build": {"actions/checkout@v7", "actions/setup-python@v6", "actions/upload-artifact@v7", "aquasecurity/trivy-action@v0.36.0",
                         "docker/build-push-action@v6", "docker/setup-buildx-action@v3"},
     "revision-reader": {"actions/checkout@v7", "actions/setup-python@v6", "actions/upload-artifact@v7", "aquasecurity/trivy-action@v0.36.0",
@@ -163,7 +172,7 @@ class ScannerConfiguration(unittest.TestCase):
 
     def test_every_trivy_step_uses_only_reviewed_inputs(self):
         steps, problems = trivy_step_problems(WORKFLOW.read_text(encoding="utf-8"))
-        self.assertGreaterEqual(steps, 18, "the trivy-action steps were not all found; the check would be vacuous")
+        self.assertEqual(steps, sum(TRIVY_STEPS.values()), "the trivy-action steps were not all found; the check would be vacuous")
         self.assertEqual(problems, [])
 
     def test_the_step_check_rejects_a_suppressed_workflow(self):
@@ -221,7 +230,34 @@ class ScannerConfiguration(unittest.TestCase):
         self.assertEqual(tuple(gate.SCANNER_SUPPRESSION_FILES), SUPPRESSION_FILES)
 
     def test_trivy_runs_only_through_the_reviewed_steps(self):
-        self.assertEqual(trivy_route_problems(WORKFLOW.read_text(encoding="utf-8")), [])
+        text = WORKFLOW.read_text(encoding="utf-8")
+        jobs = set(re.findall(r"(?m)^  ([a-z0-9-]+):$", text.split("\njobs:\n", 1)[1]))
+        self.assertEqual(jobs, set(TRIVY_STEPS), "every job of ci.yml is checked")
+        self.assertEqual(set(REVIEWED_USES), set(TRIVY_STEPS))
+        self.assertEqual(trivy_route_problems(text), [])
+
+    def test_the_binary_pins_follow_the_versions_the_workflow_installs(self):
+        import json
+        pins = json.loads((ROOT / "security" / "scanner-binaries.json").read_text(encoding="utf-8"))
+        text = WORKFLOW.read_text(encoding="utf-8")
+        versions = set(re.findall(r"(?m)^          version: v(\S+)$", text))
+        self.assertEqual(versions, {pins["binaries"]["trivy"]["version"]})
+        self.assertEqual(set(re.findall(r"(?m)^          tofu_version: (\S+)$", text)), {pins["binaries"]["tofu"]["version"]})
+        self.assertIn(f'EXPECTED_TOFU_VERSION = "{pins["binaries"]["tofu"]["version"]}"',
+                      (ROOT / "scripts" / "check_toolchain_integrity.py").read_text(encoding="utf-8"))
+        for name, pin in pins["binaries"].items():
+            with self.subTest(name):
+                self.assertEqual(pin["module_version"], "v" + pin["version"])
+                self.assertRegex(pin["sha256"], r"^[0-9a-f]{64}$")
+                self.assertIn(pin["version"], pin["release_asset"])
+        self.assertEqual(pins["jobs"], {"container-build": ["trivy"], "revision-reader": ["trivy", "tofu"]})
+        for job, names in pins["jobs"].items():   # each job that executes a pinned binary gates it, by that job's list
+            with self.subTest(job):
+                body = job_text(text, job)
+                self.assertIn(f"--kind binary --artifact .scanner-binaries --binary-job {job} --binary-pins security/scanner-binaries.json", body)
+                self.assertIn(f"python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job {job} ", body)
+                self.assertIn("--expect-pass scanner-binaries", body)
+        self.assertEqual(text.count("opentofu/setup-opentofu@"), 1, "OpenTofu runs only in the job that analyses its binary")
 
     def test_the_route_check_rejects_other_ways_of_running_trivy(self):
         text = WORKFLOW.read_text(encoding="utf-8")

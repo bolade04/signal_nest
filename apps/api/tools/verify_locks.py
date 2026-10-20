@@ -27,7 +27,12 @@ package source. ``--compile-arg`` accepts only the options the offline regressio
 and ``--find-links`` only as an absolute local directory together with ``--no-index``;
 pip-compile then reads a private copy of that directory holding only its ``*.whl`` and
 ``*.tar.gz`` files, so no page in it can add a source and a later change to it is not seen.
-The pip and pip-tools versions are read in the same isolated mode. The verifier's own process
+pip-tools reads the project's static ``[project]`` metadata, so no build backend runs today.
+pip-compile also runs with ``--no-build-isolation`` (P6-CI-6 coverage gaps): should the metadata
+ever have to be built (dynamic dependencies), it is built with the setuptools of the lock
+toolchain itself (``requirements-locktools.txt``, hash-locked and scanned as installed in CI),
+never with a build backend fetched unpinned from the index into a temporary environment. The pip
+and pip-tools versions are read in the same isolated mode. The verifier's own process
 is not isolated; the CI step sets no ``PYTHON*`` variable that CPython reads (the workflow's
 ``PYTHON_VERSION`` is not one).
 
@@ -251,7 +256,7 @@ def compile_lock(
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable, "-I", "-m", "piptools", "compile", "--quiet", "--no-config",
-        "--generate-hashes", "--no-reuse-hashes", "--strip-extras",
+        "--generate-hashes", "--no-reuse-hashes", "--strip-extras", "--no-build-isolation",
     ]
     for extra in extras:
         command += ["--extra", extra]

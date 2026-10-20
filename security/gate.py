@@ -42,7 +42,33 @@ a virtual environment or interpreter prefix) is reconciled against the environme
 (`pip inspect` JSON): every installed distribution must appear in the scan at its own dist-info
 location with the same name and version, or the analysis is incomplete — so a package that the
 scan omitted, or that was installed after the scan (a later inventory checked against the same
-report), fails completeness instead of escaping coverage.
+report), fails completeness instead of escaping coverage. Three further checks belong to the same kind
+(P6-CI-6 coverage gaps, operator order 2026-10-20):
+  * vendored copies: every installed pip vendors packages that carry no dist-info of their own. The gate
+    reads each installed pip's own `pip/_vendor/vendor.txt` from the environment and requires exactly
+    those pins in a filesystem scan of the staged pin list (`--vendored-report`, `--vendored-target`,
+    staged by security/stage_inputs.py); their findings are evaluated at the tooling scope. A pip without
+    a readable vendor.txt, or an installed pip with no vendored-pin scan, is an incomplete analysis.
+  * reproducible installation (`--locked-by LOCK`, `--locked-extra NAME`): the installed distributions
+    must be exactly the pins of the hash locks (plus the named project installed from the checkout), at
+    the locked versions; anything installed outside the locks is an incomplete analysis.
+  * population: the summary states how many scanned packages sit at an installed distribution's metadata,
+    at another metadata path inside the environment (e.g. setuptools/_vendor) and without a file path (from
+    an SBOM a package ships), instead of a blanket "vendored copies included".
+
+Final images (`vuln --kind image`): an image whose report lists an installed pip fails as incomplete,
+because an image scan does not analyse pip's vendored copies; the API Dockerfile removes pip and the
+interpreter's bundled ensurepip wheel from its runtime stage.
+
+Scanner and tool binaries (`vuln --kind binary`, operator order 2026-10-20): the Trivy and OpenTofu binaries
+the job actually executes are copied into a staging directory (security/stage_inputs.py, which records the
+path each was executed from and its sha256) and scanned with `trivy rootfs` (Go binary analysis). For every
+named binary the gate requires: the staged copy and the executed file to hash to the pinned release digest
+(security/scanner-binaries.json); exactly one gobinary result for it, listing the pinned main module at the
+pinned version and the Go standard library with a version. A binary Trivy could not analyse is an incomplete
+analysis, never a clean one. Findings are evaluated at the tooling scope. What the analysis does NOT establish
+is printed in the summary: code outside the module graph recorded in the binary's build information, modules
+changed without a version change, and vulnerabilities absent from Trivy's database.
 
 IaC exceptions (P6-CI-6, operator order 2026-10-18). `misconfig --exceptions FILE` applies the
 tracked, reviewed security/misconfig-exceptions.json. An exception never hides a finding: an
@@ -88,7 +114,9 @@ RESULT_CONTROL_BAD = "RESULT: NEGATIVE CONTROL FAILED"
 # (the CI checkout) as "repository"; both are filesystem scans of the checked-out tree.
 ARTIFACT_TYPES = {"image": ("container_image",), "filesystem": ("filesystem", "repository"),
                   # an installed environment (a CI venv or interpreter prefix) scanned with `trivy rootfs`
-                  "tooling": ("filesystem",)}
+                  "tooling": ("filesystem",),
+                  # staged copies of the scanner and tool binaries a job executes, scanned with `trivy rootfs`
+                  "binary": ("filesystem",)}
 SBOM_COMPONENT_TYPES = {"image": "container", "filesystem": "application"}
 IMAGE_ID_PROPERTY = "aquasecurity:trivy:ImageID"
 
@@ -231,9 +259,122 @@ def _installed_dists(inventory: object, env_root: pathlib.Path) -> list[tuple[st
     return out
 
 
+_PIN_LINE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;#\\]+)$")
+VENDOR_TXT = ("pip", "_vendor", "vendor.txt")
+
+
+def pip_vendored_pins(installed: object, env_root: pathlib.Path) -> list[tuple[str, str, list[tuple[str, str]]]]:
+    """For every installed pip in a `pip inspect` inventory: (pip version, vendor.txt path relative to
+    env_root, [(normalised name, version)] of the packages that pip declares it vendors). pip vendors
+    them without dist-info, so an installed-environment scan cannot see them by metadata. A pip whose
+    vendor.txt is missing or carries a line that is not an exact pin cannot be accounted for: incomplete."""
+    out = []
+    root = os.path.realpath(env_root)
+    for name, version, rel in _installed_dists(installed, env_root):
+        if name != "pip":
+            continue
+        site = posixpath.dirname(rel)
+        vendor = pathlib.Path(root, site, *VENDOR_TXT)
+        vrel = posixpath.join(site, *VENDOR_TXT)
+        _require(vendor.is_file(), f"pip {version} is installed at {rel} but {vrel} is absent: the packages it vendors cannot be accounted for")
+        pins = []
+        for raw in vendor.read_text(encoding="utf-8").splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            m = _PIN_LINE.match(line)
+            _require(m is not None, f"{vrel} carries a line that is not an exact name==version pin: {raw!r}; the vendored packages cannot be accounted for")
+            pins.append((_norm_dist(m.group(1)), m.group(2)))
+        _require(pins, f"{vrel} declares no vendored package: not a pip vendor list")
+        out.append((version, vrel, pins))
+    return out
+
+
+def lock_pins(path: pathlib.Path) -> dict:
+    """normalised name -> version for a pip-tools --generate-hashes lock."""
+    _require(path.is_file(), f"lock file is missing: {path}", ReportError)
+    out: dict = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if not raw or raw.startswith((" ", "#")):
+            continue
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+?)\s*\\?$", raw)
+        _require(m is not None, f"{path}: unexpected lock line {raw!r}", ReportError)
+        out[_norm_dist(m.group(1))] = m.group(2)
+    _require(out, f"{path}: the lock pins nothing", ReportError)
+    return out
+
+
+def _check_locked(dists: list[tuple[str, str, str]], locks: list[pathlib.Path], extras: list[str]) -> str:
+    """The installed distributions must be exactly the locks' pins (plus the named extras, any version)."""
+    pinned: dict = {}
+    for lock in locks:
+        for name, version in lock_pins(lock).items():
+            _require(pinned.get(name, version) == version, f"{name} is pinned at two versions across {[str(x) for x in locks]}", ReportError)
+            pinned[name] = version
+    extra = {_norm_dist(x) for x in extras}
+    installed = {name: version for name, version, _ in dists}
+    unlocked = sorted(f"{n} {v}" for n, v in installed.items() if n not in pinned and n not in extra)
+    differ = sorted(f"{n} {v} (locked {pinned[n]})" for n, v in installed.items() if n in pinned and pinned[n] != v)
+    absent = sorted(f"{n}=={v}" for n, v in pinned.items() if n not in installed)
+    absent += sorted(n for n in extra if n not in installed)
+    _require(not unlocked, f"{len(unlocked)} installed distribution(s) are not in the lock(s) — installed outside the hash-locked installation: {unlocked}")
+    _require(not differ, f"{len(differ)} installed distribution(s) differ from the locked version: {differ}")
+    _require(not absent, f"{len(absent)} locked distribution(s) are not installed: {absent}")
+    return (f"installation: the {len(installed)} installed distributions are exactly the {len(pinned)} pins of "
+            f"{', '.join(str(x) for x in locks)}" + (f" plus {sorted(extra)} (installed from the checkout)" if extra else "")
+            + ", at the locked versions")
+
+
+def _vendored_result(vreport: object, target: str, expected: list[tuple[str, str]]) -> dict:
+    """The vendored-pin scan's result for `target`, checked to list exactly the expected pins."""
+    _require(isinstance(vreport, dict) and vreport.get("SchemaVersion") == 2 and isinstance(vreport.get("Results"), list),
+             "vendored-pin report: not a Trivy SchemaVersion 2 report with a Results list", ReportError)
+    _require(vreport.get("ArtifactType") in ARTIFACT_TYPES["filesystem"],
+             f"vendored-pin report: artifact type is {vreport.get('ArtifactType')!r}, expected a filesystem scan of the staged pin lists")
+    hits = [r for r in vreport["Results"] if isinstance(r, dict) and r.get("Target") == target]
+    if not expected:
+        _require(not hits or not (hits[0].get("Packages") or []), f"vendored-pin report lists packages for {target!r}, but no installed pip declares any")
+        return {}
+    _require(len(hits) == 1, f"vendored-pin report carries {len(hits)} results for {target!r}, expected exactly one — the staged pin list was not analysed")
+    res = hits[0]
+    _require(res.get("Class") == "lang-pkgs" and res.get("Type") == "pip", f"vendored-pin result {target!r} is {res.get('Class')}/{res.get('Type')}, expected lang-pkgs/pip")
+    for key in ("Packages", "Vulnerabilities"):
+        val = res.get(key)
+        _require(val is None or (isinstance(val, list) and all(isinstance(x, dict) for x in val)),
+                 f"vendored-pin report: {key} of {target!r} is not a list of objects", ReportError)
+    scanned = {(_norm_dist(p.get("Name")), p.get("Version")) for p in res.get("Packages") or []}
+    want = set(expected)
+    missing = sorted(f"{n} {v}" for n, v in want - scanned)
+    extra = sorted(f"{n} {v}" for n, v in scanned - want)
+    _require(not missing, f"{len(missing)} vendored package(s) are absent from the vendored-pin scan {target!r}: {missing}")
+    _require(not extra, f"the vendored-pin scan {target!r} lists {len(extra)} package(s) no installed pip declares: {extra}")
+    return res
+
+
+def load_binary_pins(path: pathlib.Path, job: str) -> dict:
+    """The pins of the binaries `job` must analyse (security/scanner-binaries.json: `jobs` names them per job)."""
+    doc = load_json(path, "scanner binary pins")
+    bins = doc.get("binaries") if isinstance(doc, dict) else None
+    _require(isinstance(bins, dict), f"{path}: 'binaries' missing or not an object", ReportError)
+    names = (doc.get("jobs") or {}).get(job) if isinstance(doc.get("jobs"), dict) else None
+    _require(isinstance(names, list) and names and all(isinstance(n, str) and n for n in names) and len(set(names)) == len(names),
+             f"{path}: no list of distinct binaries for job {job!r} under 'jobs'", ReportError)
+    out = {}
+    for name in names:
+        pin = bins.get(name)
+        _require(isinstance(pin, dict) and re.fullmatch(r"[0-9a-f]{64}", str(pin.get("sha256", ""))) and isinstance(pin.get("module"), str)
+                 and isinstance(pin.get("module_version"), str), f"{path}: no complete pin (sha256, module, module_version) for binary {name!r}", ReportError)
+        out[name] = pin
+    return out
+
+
 def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
                   expect_targets: list[str], min_lang_packages: int, installed: object = None,
-                  env_root: pathlib.Path | None = None, control_target_scopes: dict | None = None) -> tuple[list[str], list[str]]:
+                  env_root: pathlib.Path | None = None, control_target_scopes: dict | None = None,
+                  vendored_report: object = None, vendored_target: str | None = None,
+                  locked_by: list[pathlib.Path] | None = None, locked_extra: list[str] | None = None,
+                  binaries: list[str] | None = None, binary_pins: dict | None = None,
+                  binary_manifest: object = None) -> tuple[list[str], list[str]]:
     """Trivy JSON (SchemaVersion 2) vulnerability report. Returns (summary lines, violations)."""
     vp = vuln_policy(policy)
     rules = vp["rules"]
@@ -260,6 +401,7 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
     _require(report.get("ArtifactName") == artifact,
              f"artifact name is {report.get('ArtifactName')!r}, expected {artifact!r} — the report describes something else")
     results = report["Results"]
+    extra_results: list[dict] = []      # analyses evaluated with this report's (the vendored-pin scan)
     lines.append(f"artifact: {report['ArtifactName']} ({report['ArtifactType']}); created {report.get('CreatedAt')}")
 
     if kind == "image":
@@ -274,6 +416,11 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
         _require(lang_pkgs >= min_lang_packages,
                  f"image report lists {lang_pkgs} language packages, expected at least {min_lang_packages} — the application dependency layer was not analysed")
         lines.append(f"population: {os_pkgs} OS packages, {lang_pkgs} language packages (floor {min_lang_packages})")
+        pips = sorted({f"pip {p.get('Version')} at {p.get('FilePath')}" for r in results if r.get("Class") == "lang-pkgs" and r.get("Type") == "python-pkg"
+                       for p in r.get("Packages") or [] if _norm_dist(p.get("Name")) == "pip"})
+        _require(not pips, f"the image ships an installer ({'; '.join(pips)}): an image scan does not analyse the packages pip vendors, "
+                           "so the final image must not carry pip")
+        lines.append("installers: no pip in the image's analysed Python population")
     elif kind == "tooling":
         _require(installed is not None and env_root is not None, "tooling: an installed-distribution inventory and the environment root are required", ReportError)
         dists = _installed_dists(installed, env_root)
@@ -292,8 +439,70 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
             if not any((name, version) in scanned.get(pl, set()) for pl in places):
                 missing.append(f"{name} {version} at {rel}")
         _require(not missing, f"{len(missing)} installed distribution(s) are absent from the scan of {artifact} (installed but not scanned, or installed after the scan): {missing}")
+        own = {pl for _, _, rel in dists for pl in (rel, rel + "/METADATA", rel + "/PKG-INFO")}
+        lang = [p for r in results if r.get("Class") == "lang-pkgs" for p in r.get("Packages") or [] if isinstance(p, dict)]
+        no_path = sum(1 for p in lang if not p.get("FilePath"))
+        at_own = sum(1 for p in lang if p.get("FilePath") and str(p["FilePath"]).replace(os.sep, "/") in own)
         lines.append(f"population: {len(dists)} installed distributions (floor {min_lang_packages}), every one present in the scan at its own metadata path; "
-                     f"{total} language packages scanned (vendored copies included)")
+                     f"the scan lists {total} language packages: {at_own} at an installed distribution's metadata, {len(lang) - at_own - no_path} at other "
+                     f"metadata paths inside the environment (e.g. setuptools/_vendor), {no_path} without a file path (from an SBOM a package ships, "
+                     f"e.g. pip's _vendor/bom.cdx.json)")
+        if locked_by:
+            lines.append(_check_locked(dists, locked_by, locked_extra or []))
+        vendors = pip_vendored_pins(installed, env_root)
+        expected = sorted({pin for _, _, pins in vendors for pin in pins})
+        _require(not vendors or (vendored_report is not None and vendored_target),
+                 f"{'; '.join(f'pip {v} declares {len(pins)} vendored packages ({vrel})' for v, vrel, pins in vendors)}, but no vendored-pin scan "
+                 "was given (--vendored-report, --vendored-target): they are not accounted for")
+        if vendored_report is not None:
+            res = _vendored_result(vendored_report, vendored_target, expected)
+            if res:
+                extra_results.append(res)
+        if vendors:
+            lines.append(f"vendored: {'; '.join(f'pip {v} declares {len(pins)} vendored packages in {vrel}' for v, vrel, pins in vendors)}; "
+                         f"all {len(expected)} are in the vendored-pin scan {vendored_target!r} and evaluated at the tooling scope")
+        else:
+            lines.append("vendored: no pip is installed in this environment")
+    elif kind == "binary":
+        _require(bool(binaries) and binary_pins is not None and binary_manifest is not None,
+                 "binary: the binary names, their pins and the staging manifest are required", ReportError)
+        manifest = binary_manifest.get("binaries") if isinstance(binary_manifest, dict) else None
+        _require(isinstance(manifest, dict), "binary staging manifest: 'binaries' missing or not an object", ReportError)
+        by_target: dict = {}
+        for r in results:
+            by_target.setdefault(r.get("Target"), []).append(r)
+        unexpected = sorted(str(x) for x in by_target if x not in binaries)
+        _require(not unexpected, f"the binary scan reports results for {unexpected}, which are not the staged binaries {binaries}")
+        for name in binaries:
+            pin = binary_pins[name]
+            staged = pathlib.Path(artifact, name)
+            _require(staged.is_file() and not staged.is_symlink(), f"the staged copy of {name} ({staged}) is missing")
+            got = _sha256(staged)
+            _require(got == pin["sha256"], f"the staged copy of {name} hashes to {got}, not the pinned release digest {pin['sha256']}")
+            entry = manifest.get(name)
+            _require(isinstance(entry, dict) and isinstance(entry.get("origin"), str) and entry.get("sha256") == pin["sha256"],
+                     f"the staging manifest does not record {name} at the pinned release digest: {entry!r:.200}")
+            origin = pathlib.Path(entry["origin"])
+            _require(origin.is_file(), f"the executed {name} ({origin}) is no longer present")
+            now = _sha256(origin)
+            _require(now == pin["sha256"], f"the executed {name} at {origin} hashes to {now}, not the pinned release digest {pin['sha256']}")
+            unsupported = f"Trivy's analysis of {name} is unsupported or incomplete"
+            found = by_target.get(name) or []
+            _require(len(found) == 1, f"{unsupported}: the scan carries {len(found)} results for it, expected exactly one Go binary result — not a clean scan")
+            res = found[0]
+            pkgs = [x for x in res.get("Packages") or [] if isinstance(x, dict)]
+            _require(res.get("Class") == "lang-pkgs" and res.get("Type") == "gobinary" and pkgs,
+                     f"{unsupported}: its result is {res.get('Class')}/{res.get('Type')} with {len(pkgs)} packages — not a clean scan")
+            roots = [(x.get("Name"), x.get("Version")) for x in pkgs if x.get("Relationship") == "root"]
+            _require(roots == [(pin["module"], pin["module_version"])],
+                     f"{unsupported}: main module {roots}, expected {pin['module']} {pin['module_version']} — not a clean scan")
+            std = [x.get("Version") for x in pkgs if x.get("Name") == "stdlib"]
+            _require(len(std) == 1 and bool(std[0]), f"{unsupported}: the Go standard library version was not recovered ({std}) — not a clean scan")
+            lines.append(f"binary {name}: executed from {origin}; the executed file and the staged copy hash to the pinned release digest {got} "
+                         f"({pin.get('release_asset', 'release')}); Go binary analysis: main module {pin['module']} {pin['module_version']}, "
+                         f"Go standard library {std[0]}, {len(pkgs)} modules")
+        lines.append("not established by this analysis: code outside the module graph recorded in the binaries' build information, modules changed "
+                     "without a version change, vulnerabilities absent from Trivy's database, and the binaries' build provenance beyond the release digest")
     else:
         by_target = {r.get("Target"): r for r in results}
         for target in expect_targets:
@@ -311,7 +520,7 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
     def scope_of(target: str, pkg: dict) -> str:
         if kind == "image":
             return "image"
-        if kind == "tooling":
+        if kind in ("tooling", "binary"):
             return vp["tooling_scope"]
         if target in control_target_scopes:
             return control_target_scopes[target]
@@ -326,7 +535,7 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
     reported: list[str] = []
     lower: list[str] = []
     by_severity: dict = {}
-    for result in results:
+    for result in results + extra_results:
         target = result.get("Target")
         # A package without a UID is never matched: a finding without an identifier must not borrow the scope of
         # whichever package also lacks one.
@@ -1252,6 +1461,15 @@ def run(args: argparse.Namespace) -> int:
             sys.stderr.write("--kind tooling requires --installed-inventory and --env-root, and only it accepts them; "
                              "--control-target-scope requires --expect-fail\n")
             return EXIT_USAGE
+        binary = args.kind == "binary"
+        if (not tooling and (args.vendored_report or args.vendored_target or args.locked_by or args.locked_extra)) \
+                or bool(args.vendored_report) != bool(args.vendored_target) or (args.locked_extra and not args.locked_by) \
+                or binary != bool(args.binary_job) or binary != bool(args.binary_pins) or binary != bool(args.binary_manifest):
+            # The vendored-pin scan and the lock reconciliation belong to an installed environment; the binary
+            # names, pins and staging manifest to --kind binary, and to nothing else.
+            sys.stderr.write("--vendored-report/--vendored-target (together) and --locked-by/--locked-extra are --kind tooling options; "
+                             "--kind binary requires --binary-job, --binary-pins and --binary-manifest, and only it accepts them\n")
+            return EXIT_USAGE
         control_scopes = {}
         for item in args.control_target_scope or []:
             target, sep, scope = item.rpartition("=")
@@ -1280,14 +1498,37 @@ def run(args: argparse.Namespace) -> int:
                                   + f"; environment root {args.env_root}")
                 if control_scopes:
                     header.append(f"control target scopes (negative control only): {control_scopes}")
+                vendored = binary_pins = binary_manifest = None
+                if args.vendored_report:
+                    vpath = pathlib.Path(args.vendored_report)
+                    header.append(f"vendored-pin report: {vpath}" + (f" sha256 {_sha256(vpath)}" if vpath.is_file() else " (missing)")
+                                  + f"; target {args.vendored_target}")
+                for lock in args.locked_by or []:
+                    lpath = pathlib.Path(lock)
+                    header.append(f"lock: {lpath}" + (f" sha256 {_sha256(lpath)}" if lpath.is_file() else " (missing)"))
+                if args.binary_job:
+                    header.append(f"binaries of job: {args.binary_job}")
+                    for what, value in (("binary pins", args.binary_pins), ("binary staging manifest", args.binary_manifest)):
+                        bpath = pathlib.Path(value)
+                        header.append(f"{what}: {bpath}" + (f" sha256 {_sha256(bpath)}" if bpath.is_file() else " (missing)"))
                 report = load_json(report_path, "trivy vulnerability report")
                 if args.installed_inventory:
                     installed = load_installed(pathlib.Path(args.installed_inventory))
+                if args.vendored_report:
+                    vendored = load_json(pathlib.Path(args.vendored_report), "trivy vendored-pin report")
+                if args.binary_job:
+                    binary_pins = load_binary_pins(pathlib.Path(args.binary_pins), args.binary_job)
+                    binary_manifest = load_json(pathlib.Path(args.binary_manifest), "binary staging manifest")
                 lines, violations = evaluate_vuln(report, policy, kind=args.kind, artifact=args.artifact,
                                                   expect_targets=args.expect_target or [],
                                                   min_lang_packages=args.min_lang_packages, installed=installed,
                                                   env_root=pathlib.Path(args.env_root) if args.env_root else None,
-                                                  control_target_scopes=control_scopes)
+                                                  control_target_scopes=control_scopes,
+                                                  vendored_report=vendored, vendored_target=args.vendored_target,
+                                                  locked_by=[pathlib.Path(x) for x in args.locked_by or []],
+                                                  locked_extra=args.locked_extra or [],
+                                                  binaries=list(binary_pins or {}), binary_pins=binary_pins,
+                                                  binary_manifest=binary_manifest)
             elif args.command == "misconfig":
                 report = load_json(report_path, "trivy misconfiguration report")
                 exceptions = None
@@ -1374,6 +1615,13 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--installed-inventory", help="tooling: the environment's `pip inspect` JSON; every installed distribution must be in the scan")
     v.add_argument("--env-root", help="tooling: the scanned environment's root (the Trivy rootfs scan target)")
     v.add_argument("--control-target-scope", action="append", help="negative controls only (requires --expect-fail): TARGET=SCOPE for a fixture lock target")
+    v.add_argument("--vendored-report", help="tooling: the filesystem scan of the staged vendored-pin lists (security/stage_inputs.py vendored)")
+    v.add_argument("--vendored-target", help="tooling: this environment's target in the vendored-pin report")
+    v.add_argument("--locked-by", action="append", help="tooling: a hash lock the environment was installed from; installed == the locks' pins")
+    v.add_argument("--locked-extra", action="append", help="tooling: a distribution installed from the checkout, not from a lock (e.g. the editable project)")
+    v.add_argument("--binary-job", help="binary: the job whose binaries (named under `jobs` in --binary-pins) must each be analysed")
+    v.add_argument("--binary-pins", help="binary: the pinned release digests and modules (security/scanner-binaries.json)")
+    v.add_argument("--binary-manifest", help="binary: the staging manifest (security/stage_inputs.py binaries)")
 
     m = sub.add_parser("misconfig"); common(m)
     m.add_argument("--expect-type", action="append", help="a configuration type that must appear (dockerfile, terraform)")

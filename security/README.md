@@ -3,7 +3,10 @@
 This directory wires CVE, dependency, SAST and IaC analysis plus SBOM generation into the
 two existing **required** CI contexts that build artifacts — `Container build and security`
 and `Revision reader (unit, IaC contract, in-image)` — so that every pull request to `main`
-and every push to `main` is analysed before merge. The six required context names and the
+and every push to `main` is analysed before merge. *(Since the coverage-gap tranche of
+2026-10-20, the four other required contexts — `Frontend quality`, `Backend quality`,
+`Migrations and API contract` and `Integration smoke` — also scan, as installed, the environments
+they install; see "Coverage-gap tranche".)* The six required context names and the
 repository ruleset are unchanged. No optional job, no manual workflow and no external
 analysis service is involved; the publish workflows (`staging-publish.yml`,
 `reader-publish.yml`) and their Trivy steps are untouched.
@@ -13,7 +16,9 @@ analysis service is involved; the publish workflows (`staging-publish.yml`,
 | Category | Tool | Job | Population analysed | Report |
 |---|---|---|---|---|
 | Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `scripts/requirements-gate-hashes.txt`, `security/requirements-semgrep.txt`, `apps/revision-reader/requirements-dev.txt` | `trivy-locks-vuln.json` |
-| Vulnerabilities, installed tooling (2026-10-19) | Trivy 0.76.0 `rootfs`, reconciled against the environment's own `pip inspect` | Container build and security; Revision reader | `.security-venv` (Semgrep and its hash-locked set, plus the interpreter's bundled pip); `.reader-venv` (the hash-locked reader tooling set); the reader job's interpreter prefix (`pythonLocation`: its pip and the Gate 4N PyYAML) — each as installed, inventoried again before completeness | `trivy-*-tooling-*-vuln.json`, `*-tooling-*-installed*.json` |
+| Vulnerabilities, installed tooling (2026-10-19; extended 2026-10-20) | Trivy 0.76.0 `rootfs`, reconciled against the environment's own `pip inspect` (and, for the hash-locked API environments, against their locks) | Container build and security; Revision reader; since 2026-10-20 Frontend quality, Backend quality, Migrations and API contract, Integration smoke | `.security-venv` (Semgrep and its hash-locked set, plus the interpreter's bundled pip); `.reader-venv` (the hash-locked reader tooling set); the reader job's interpreter prefix (`pythonLocation`: its pip and the Gate 4N PyYAML); `apps/api/.venv` in each of the four API jobs (the bootstrap and dev locks plus the editable project); `.locktools` in Backend quality (its lock) — each as installed, inventoried again before completeness | `trivy-*-tooling-*-vuln.json`, `trivy-api-venv-vuln.json`, `trivy-locktools-vuln.json`, `*-installed*.json` |
+| Vulnerabilities, packages an installed pip vendors (2026-10-20) | Trivy 0.76.0 `fs` over the pins each installed pip declares in `pip/_vendor/vendor.txt`, staged by `stage_inputs.py` | every job above, for each environment it scans as installed | the vendored packages of every installed pip of those environments (they carry no dist-info, so the `rootfs` scan sees them only when pip ships an SBOM of them) | `trivy-vendored-pins-vuln.json` |
+| Vulnerabilities, scanner and tool binaries (2026-10-20) | Trivy 0.76.0 `rootfs` Go binary analysis of copies of the executed binaries, bound to pinned release digests (`scanner-binaries.json`) | Container build and security (Trivy); Revision reader (Trivy, OpenTofu) | the `trivy` and `tofu` executables the jobs run: their Go module graph and Go standard library version | `trivy-scanner-binaries-vuln.json`, `scanner-binaries-manifest.json` |
 | Vulnerabilities, built images | Trivy 0.76.0 | Container build and security; Revision reader | OS packages and installed Python packages of `signalnest-api:ci`, `signalnest-worker:ci`, `signalnest-revision-reader:ci` as built in that run | `trivy-image-*-vuln.json` |
 | SAST | Semgrep 1.181.0 (hash-locked install, `security/requirements-semgrep.txt`) with registry rulesets `p/python`, `p/typescript`, `p/javascript`, `p/react`, `p/security-audit` | Container build and security | `apps/`, `scripts/`, `security/` minus `.semgrepignore` (tests, e2e, generated and vendored paths) and `security/controls` | `semgrep.json`, `semgrep-rules-provenance.json` |
 | IaC / configuration | Trivy 0.76.0 misconfiguration checks | Container build and security | `infra/aws` OpenTofu root and modules, `infra/aws/bootstrap`, both Dockerfiles (13 targets, 246 checks at the baseline) | `trivy-config.json` |
@@ -320,8 +325,13 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   `rootfs` report of an environment and that environment's `pip inspect` inventory
   (`--installed-inventory`, `--env-root`). Every installed distribution must appear in the
   scan at its own metadata path with the same name and version, or the analysis is incomplete
-  (exit 4). An inventory of another environment or below the floor fails the same way. Vendored
-  copies the scan also reports, such as pip's own vendored packages, are evaluated as well. Each
+  (exit 4). An inventory of another environment or below the floor fails the same way. ~~Vendored
+  copies the scan also reports, such as pip's own vendored packages, are evaluated as well.~~
+  *(Corrected 2026-10-20: a vendored copy is evaluated only when the scan reports it, and an
+  installed-environment scan reports pip's vendored packages only when that pip ships an SBOM of
+  them: pip 26.2.1 does (18 packages); pip 25.0.1 and 25.1.1 do not, so the vendored packages of the
+  `.security-venv` and `.locktools` pips and of the base image pip 25.0.1 were not analysed. Since the
+  coverage-gap tranche every installed pip's own vendor list is analysed by a separate scan.)* Each
   environment is inventoried a second time just before the completeness step, and the
   final inventory is gated against the same scan, so a package installed after the scan fails
   completeness. The inventories are taken without `--local`, so a distribution a path entry
@@ -345,7 +355,7 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   fails if:
   - a requirement in the two locks lacks a hash;
   - the reader lock misses a dependency or the build backend that `pyproject.toml` declares;
-  - the two jobs' installer-shaped lines differ from the reviewed set.
+  - the two jobs' installer-shaped lines differ from the reviewed set *(every job's since 2026-10-20)*.
 
   An installer-shaped line, with backslash continuations joined, is any of:
   - pip under any version suffix (`pip3.12`), or pipx, uv, conda, poetry, pdm, npm, npx, yarn,
@@ -362,7 +372,9 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   inventories reconcile, where completeness fails, or outside every scanned environment, which
   is the disclosed limit.
 - **Controls.** `vuln_policy_controls.py` takes this run's real reports and runs the real gate
-  on 32 mutated copies in the container job and 18 in the reader job, each listed by
+  on 32 mutated copies in the container job and 18 in the reader job *(43 and 33 since 2026-10-20,
+  plus 10 in each of Frontend quality, Migrations and API contract and Integration smoke and 20 in
+  Backend quality: 126 in all)*, each listed by
   `--expect-control control-vulnpol-*` in its job's completeness step. The cases cover:
   - CRITICAL with and without a fix in images, runtime locks, npm runtime and development
     packages, the security-tool lock, the reader tooling lock, both installed tooling venvs and
@@ -379,7 +391,7 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   `test_vuln_policy_controls.py` pins the case lists, the gate arguments, each gate's own
   inventory, and the order inventory → scan → gate → controls → final inventory → final gate →
   completeness against `ci.yml`. It also shows that under the superseded policy exactly the 24
-  pass-through cases fail.
+  pass-through cases fail *(40 since 2026-10-20)*.
 
   Scanner-side suppression is closed structurally and then guarded at two points:
   - **Structurally.** Every trivy-action step passes a reviewed configuration: `security/trivy.yaml`,
@@ -407,9 +419,9 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
     which the scans share, or while any `TRIVY_*` variable is set. trivy-action v0.36.0 keeps its
     own settings in a step-local file that it deletes, so it sets none.
 
-  - **Where Trivy runs.** In the two security-scanned jobs, Trivy runs only through the reviewed
+  - **Where Trivy runs.** In the two security-scanned jobs *(every job since 2026-10-20)*, Trivy runs only through the reviewed
     trivy-action steps:
-    - their number is pinned (13 and 5);
+    - their number is pinned (13 and 5; *since 2026-10-20 every job: 2, 3, 2, 17, 2 and 9, in workflow order*);
     - every `uses:` reference is from a reviewed set, and no local action is allowed. A flow-style or
       quoted `uses` is read too;
     - no run line invokes `trivy` directly;
@@ -456,25 +468,35 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   substituted with merge run 39255973756's real reports, because this host has no container
   runtime): every security step of both jobs passes, completeness included.
 
-**Residual tooling gaps, reported and not closed here.** Each of these is a repository-controlled
+**Residual tooling gaps, reported and not closed here** *(the list as the closure tranche left it,
+kept as written; its state after the coverage-gap tranche of 2026-10-20 is the table under
+"Coverage-gap tranche" below)*. Each of these is a repository-controlled
 or runner-provided population that no merge-path scan covers:
 
-- The API venvs of `Frontend quality`, `Backend quality`, `Migrations and API contract` and
+- ~~The API venvs of `Frontend quality`, `Backend quality`, `Migrations and API contract` and
   `Integration smoke` run an unpinned `pip install --upgrade pip`. Their `-e apps/api` installs
   use build isolation, which fetches an unpinned setuptools (`apps/api/README-deps.md`). The
   hash-locked `apps/api/requirements-dev.txt` they install is scanned as a lock only, not as
-  installed.
-- `.locktools` (`pip==25.1.1`, `pip-tools==7.5.2`, Backend quality) is pinned but not hashed,
-  and its transitive distributions float (below).
+  installed.~~ *(Addressed 2026-10-20: repair 2 under "Coverage-gap tranche".)*
+- ~~`.locktools` (`pip==25.1.1`, `pip-tools==7.5.2`, Backend quality) is pinned but not hashed,
+  and its transitive distributions float (below).~~ *(Addressed 2026-10-20: repair 1.)*
 - `node_modules` from `npm ci` is integrity-checked against the scanned `package-lock.json`,
   but is not scanned as installed.
-- The interpreters and runtimes come from the runner and the setup actions: toolcache Python
+- ~~The interpreters and runtimes come from the runner and the setup actions: toolcache Python
   and Node, each venv's bundled bootstrap pip, the Container build job's system interpreter
   (stdlib-only scripts, not scanned) and the Trivy binary that `trivy-action` downloads.
-  The OpenTofu binary and providers rely on the provider lock (one platform's checksums).
-  GitHub Actions code is pinned by tag, not by digest (`P6-CI-9`).
-- The image's base pip 25.0.1 under `/usr/local` (API and worker images) is scanned in the
-  image, as before.
+  The OpenTofu binary and providers rely on the provider lock (one platform's checksums).~~
+  *(Corrected 2026-10-20, by population; the table under "Coverage-gap tranche" is the state. The
+  reader job's interpreter prefix's **installed distributions** were already scanned as installed by
+  the closure tranche, so "not scanned" did not hold for them; the other jobs' prefixes are not
+  scanned. **Interpreter binaries and standard library** (CPython with its bundled ensurepip wheel,
+  Node.js) are analysed in no job. A venv's bundled bootstrap pip is replaced by a locked pip, or in
+  `.security-venv` scanned as installed with its vendored packages. The Trivy and OpenTofu binaries
+  are now analysed; the OpenTofu providers are not.)* GitHub Actions code is pinned by tag, not by
+  digest (`P6-CI-9`).
+- ~~The image's base pip 25.0.1 under `/usr/local` (API and worker images) is scanned in the
+  image, as before.~~ *(Corrected 2026-10-20: its dist-info was scanned, but the packages it vendors
+  were not; it is now removed from the runtime stage, with the bundled ensurepip wheel.)*
 - Container images that required jobs run but do not build: the `postgres:16` service
   (Backend quality and Migrations and API contract; by tag, not digest) and the BuildKit image
   `docker/setup-buildx-action` starts. Also the Playwright Chromium build that
@@ -485,8 +507,112 @@ or runner-provided population that no merge-path scan covers:
   - The reader's builder stage runs `pip install --prefix=/install .`, pinned (`psycopg[binary]==3.2.3`)
     but unhashed, with build isolation.
   - Neither builder stage's tooling ships. The shipped image contracts are unchanged here.
-- `.locktools` installs pip-tools 7.5.2 by version only. Its transitive distributions (`build`,
-  `click`, `packaging`, `pyproject_hooks`, `setuptools`, `wheel`) float.
+- ~~`.locktools` installs pip-tools 7.5.2 by version only. Its transitive distributions (`build`,
+  `click`, `packaging`, `pyproject_hooks`, `setuptools`, `wheel`) float.~~ *(Addressed 2026-10-20:
+  every one is in `apps/api/requirements-locktools.txt`, with hashes.)*
+
+## Coverage-gap tranche (2026-10-20, operator order; severity source, CRITICAL, HIGH and UNKNOWN rules and the six IaC exceptions unchanged)
+
+The fresh closure assessment of the merged closure work found populations that a required context
+installs or executes but that no scan analysed. The operator order of 2026-10-20 directs four repairs,
+made here. No vulnerability exclusion is added, and nothing here decides whether P6-CI-6 is closable.
+`policy.json` changes only by declaring the scope of the two new lock targets and by stating that the
+existing tooling scope applies to the executed binaries and to vendored packages.
+
+1. **`.locktools` is scanned as installed.** Backend quality installs its lock toolchain from the
+   hash lock `apps/api/requirements-locktools.txt` (pip 25.1.1, pip-tools 7.5.2 and every transitive
+   distribution, `--require-hashes --no-deps`, then `pip check`). It is scanned with Trivy `rootfs`,
+   and the tooling gate reconciles it against its own `pip inspect` inventory and against the lock
+   (`--locked-by`): installed == the lock's pins, at the locked versions. It is inventoried and gated
+   again at the end of the job. pip-tools reads the API project's static `[project]` metadata, so
+   no build backend runs in the check; `tools/verify_locks.py` now also runs pip-compile with
+   `--no-build-isolation`, so a backend that ever has to run (dynamic dependencies) is this lock's
+   setuptools, never one fetched unpinned into a temporary build environment.
+2. **The API venvs' bootstrap pip and build tooling.** In Frontend quality, Backend quality,
+   Migrations and API contract and Integration smoke, the unpinned `pip install --upgrade pip` is
+   replaced by `apps/api/requirements-bootstrap.txt` (pip 26.2.1 and setuptools 84.0.0, the reader
+   tooling lock's pins and hashes), and `-e apps/api` runs with `--no-build-isolation`. Each job scans
+   its `apps/api/.venv` as installed, reconciles it against its inventory and against the bootstrap and
+   dev locks plus the editable project (`--locked-extra signalnest-api`), runs its own policy controls,
+   takes the inventory again after every other step and gates it, and ends with a completeness step
+   and a report artifact. Every installer-shaped line of every job is pinned
+   (`test_tooling_locks.py`), so a new install line fails review; an install that bypasses the text
+   lands in a reconciled environment (completeness fails) or outside every scanned one (the disclosed
+   limit above).
+3. **pip's vendored packages.** pip vendors its dependencies without dist-info, so a `rootfs` scan
+   sees them only when pip ships an SBOM of them (26.2.1 does; 25.0.1 and 25.1.1 do not).
+   `stage_inputs.py vendored` writes each installed pip's own `pip/_vendor/vendor.txt` pins to a staged
+   requirements list, a Trivy `fs` scan analyses it, and the tooling gate re-reads `vendor.txt` from
+   the environment and requires exactly those pins in that scan. Their findings are evaluated at the
+   tooling scope. A pip without a readable vendor list, or with no vendored-pin scan, is an incomplete
+   analysis. A real-scanner control (`control-vendored-pins`, both security-scanned jobs) stages an inert
+   environment whose pip vendors PyYAML 5.3.1, which exists nowhere else, and must fail on
+   CVE-2020-14343 in the vendored-pin target. **Final images:** the API Dockerfile's runtime stage now
+   removes the base image's pip 25.0.1 (with its launchers) and the interpreter's bundled ensurepip
+   wheel; nothing at runtime installs packages or creates a virtualenv with pip. After the stage's last
+   `COPY`, a build-time check fails the image build if any pip package, pip metadata, wheel file or pip
+   launcher remains under `/usr/local`, `/opt/venv` or `/app`, or if either interpreter can import pip;
+   the publish workflow builds the same Dockerfile, so it runs there too. The image gate also fails on
+   any pip its scan lists. The reader image's distroless base carries neither.
+4. **The Trivy and OpenTofu binaries.** `stage_inputs.py binaries` copies the `trivy` (both
+   security-scanned jobs) and `tofu` (Revision reader) executables the jobs resolve on PATH and records
+   the executed path and its sha256. Trivy `rootfs` analyses the copies as Go binaries, and the binary
+   gate requires:
+   - the copy and the executed file to hash to the release digest in `scanner-binaries.json`;
+   - one Go binary result per binary, naming the pinned main module and version and recovering the Go
+     standard library version.
+
+   Each digest was derived from the vendor's release asset after checking the asset against the
+   release's published checksum file, which checks integrity against the release page, not a
+   signature. A binary Trivy cannot analyse is an incomplete analysis, never a clean one: measured
+   locally, Trivy 0.76.0 writes no Results at all for an executable it cannot analyse.
+
+   What the analysis establishes: the module graph and Go version recorded in each binary's build
+   information, matched against Trivy's database. Measured locally on the release binaries: Trivy
+   v0.76.0 on Go 1.27.2, 377 modules; OpenTofu v1.12.5 on Go 1.26.5, 253 modules.
+
+   What it does not establish: code outside that module graph, modules changed without a version
+   change, vulnerabilities absent from Trivy's database, and build provenance beyond the release digest.
+
+**Population floors, re-derived from measured inventories** (local measurements on macOS builds of
+the same locks, which carry no environment markers; the pull request's exact-head CI run is the
+measurement of record). Every floor has a control that truncates the population one below it and
+must fail.
+
+| Gate | Floor | Before | After | Truncation control |
+|---|---|---|---|---|
+| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, pip 26.2.1, setuptools 84.0.0, the project) | `<job>-api-venv-truncated-inventory` |
+| `locktools`, `locktools-final` | 7 (new) | no gate; 8 installed, transitive versions floating | 8, all from the lock | `backend-locktools-truncated-inventory` |
+| `security-tooling-venv` | 60 (unchanged) | 67 | 67 | `security-tooling-truncated-inventory` |
+| `reader-tooling-venv` | 15 (unchanged) | 17 | 17 | `reader-tooling-truncated-inventory` |
+| `reader-tooling-syspy` | 2 (unchanged) | 2 | 2 | `reader-syspy-truncated-inventory` |
+| `image-api-vuln`, `image-worker-vuln` | 40 language packages (unchanged) | 48 | 47 expected (pip removed) | `api-image-truncated-lang-packages` |
+| `image-reader-vuln` | 1 (unchanged) | 3 | 3 | `reader-image-truncated-lang-packages` |
+| vendored-pin scans | none: exactly the pins of `vendor.txt` | — | 18 (pip 26.2.1), 20 (pip 25.1.1) | `*-vendored-pin-not-scanned` |
+
+**Populations after this tranche.** The decision packet named below is evidence, not a tracked file;
+"unresolved" means an operator decision is pending and nothing here decides it.
+
+| Population | Jobs | State |
+|---|---|---|
+| `apps/api/.venv`, installed distributions and pip's vendored packages | the four API jobs | scanned as installed; exactly the locks plus the project; final inventory gated |
+| `.locktools` | Backend quality | the same, against its own lock |
+| API and worker final images: the base pip 25.0.1 and the bundled ensurepip wheel | Container build and security | removed in the runtime stage; asserted at build time after the last layer; the image gate refuses pip |
+| Trivy binary | Container build and security; Revision reader | Go binary analysis; release digest pinned |
+| OpenTofu binary | Revision reader | the same |
+| OpenTofu provider binaries (`hashicorp/aws` in the module caches) | Revision reader | **not analysed**; the provider lock verifies the download (one platform's checksums). Not named by the order; reported |
+| The interpreter prefix's **installed distributions** (`pythonLocation`) | Revision reader | scanned as installed (pip and the Gate 4N PyYAML) with pip's vendored packages |
+| The same, in the other five jobs | all but Revision reader | **not scanned**. Present, but no repository step installs into it or runs its pip; the jobs run stdlib-only security scripts with it and create venvs from it |
+| **Interpreter binaries and standard library**: CPython, including its bundled ensurepip wheel, which seeds each `python -m venv`; Node.js | all jobs | **not analysed**; unresolved (decision packet, interpreter binaries) |
+| `node_modules` from `npm ci` | Frontend quality; Migrations and API contract | integrity-checked against the scanned `package-lock.json`; not scanned as installed |
+| Playwright Chromium and its `--with-deps` OS packages | Frontend quality | unresolved (decision packet) |
+| `postgres:16` service, BuildKit image | Backend quality, Migrations and API contract; Container build and security | unresolved (decision packet) |
+| Docker builder stages (the API builder's unpinned pip upgrade and build isolation; the reader builder) | Container build and security; Revision reader | unresolved (decision packet); only final images are scanned |
+| GitHub Actions code | all jobs | unresolved (decision packet); tag pinning belongs to `P6-CI-9` |
+| Other vendored code without dist-info: `botocore/vendored` (`six`, a `requests` shim) and the C sources `httptools` compiles in | API venvs; API and worker images | not analysed by name and version (found locally in the API venv); reported |
+
+*(Also corrected: the "Running locally" example below took the inventory with `pip inspect --local`,
+which the closure tranche had already ruled out; it now matches CI.)*
 
 ## Failure behaviour (proved by `security/test_gate.py` and the CI negative controls)
 
@@ -519,9 +645,14 @@ mkdir -p security-reports
 trivy fs --scanners vuln --list-all-pkgs --config security/trivy.yaml --skip-dirs security/controls --format json -o security-reports/trivy-locks-vuln.json .
 python3 security/gate.py vuln security-reports/trivy-locks-vuln.json --name locks-vuln --kind filesystem --artifact . --expect-target package-lock.json
 python3 -m venv .security-venv && .security-venv/bin/python -m pip install --require-hashes -r security/requirements-semgrep.txt
-.security-venv/bin/python -m pip inspect --local > security-reports/security-tooling-venv-installed.json
-trivy rootfs --scanners vuln --list-all-pkgs --format json -o security-reports/trivy-security-tooling-venv-vuln.json .security-venv
-python3 security/gate.py vuln security-reports/trivy-security-tooling-venv-vuln.json --name security-tooling-venv --kind tooling --artifact .security-venv --env-root .security-venv --min-lang-packages 60 --installed-inventory security-reports/security-tooling-venv-installed.json
+.security-venv/bin/python -m pip inspect > security-reports/security-tooling-venv-installed.json
+trivy rootfs --scanners vuln --list-all-pkgs --config security/trivy-scan.yaml --format json -o security-reports/trivy-security-tooling-venv-vuln.json .security-venv
+python3 security/stage_inputs.py vendored --out .vendored-pins --env security-venv .security-venv security-reports/security-tooling-venv-installed.json
+trivy fs --scanners vuln --list-all-pkgs --config security/trivy.yaml --format json -o security-reports/trivy-vendored-pins-vuln.json .vendored-pins
+python3 security/gate.py vuln security-reports/trivy-security-tooling-venv-vuln.json --name security-tooling-venv --kind tooling --artifact .security-venv --env-root .security-venv --min-lang-packages 60 --vendored-report security-reports/trivy-vendored-pins-vuln.json --vendored-target security-venv/requirements-vendored-pip.txt --installed-inventory security-reports/security-tooling-venv-installed.json
+python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job container-build --out .scanner-binaries --manifest security-reports/scanner-binaries-manifest.json
+trivy rootfs --scanners vuln --list-all-pkgs --config security/trivy-scan.yaml --format json -o security-reports/trivy-scanner-binaries-vuln.json .scanner-binaries
+python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries --kind binary --artifact .scanner-binaries --binary-job container-build --binary-pins security/scanner-binaries.json --binary-manifest security-reports/scanner-binaries-manifest.json
 python3 security/vuln_policy_controls.py check container security-reports   # needs the API image report too
 .security-venv/bin/python -m unittest discover -s security -p "fetcher_selftest.py"
 .security-venv/bin/python security/fetch_semgrep_rules.py .security-venv/semgrep-rules
@@ -541,4 +672,6 @@ Gate 4N hash lock are regenerated the same way, from their own directories:
 `pip-compile --generate-hashes --allow-unsafe --strip-extras --extra dev --output-file
 requirements-dev.txt pyproject.toml requirements-dev.in` (in `apps/revision-reader/`) and
 `pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file
-requirements-gate-hashes.txt requirements-gate.txt` (in `scripts/`).
+requirements-gate-hashes.txt requirements-gate.txt` (in `scripts/`). The API bootstrap and lock-toolchain locks are
+regenerated in `apps/api/` with `pip-compile --allow-unsafe --generate-hashes --strip-extras --output-file
+requirements-bootstrap.txt requirements-bootstrap.in` (and the same for `requirements-locktools`).

@@ -1,0 +1,36 @@
+{
+  "_comment": "P6-CI-6 coverage gaps (operator order 2026-10-20). The release digests of the scanner and tool binaries the required CI jobs execute, for the binary gate (security/gate.py vuln --kind binary): the binary a job actually runs, and the copy Trivy analyses, must both hash to `sha256`, and Trivy's Go binary analysis must report `module` at `module_version` and recover the Go standard library version. Each `sha256` was derived from the vendor's release asset after checking that asset against the release's published checksum file (`release_checksums`); that checks integrity against the release page, not a signature. `jobs` names, per required CI job, the binaries that job executes and must analyse; `installed_by` names the workflow input that selects the version; security/test_scanner_configuration.py keeps the versions here equal to the workflow's.",
+  "jobs": {
+    "container-build": [
+      "trivy"
+    ],
+    "revision-reader": [
+      "trivy",
+      "tofu"
+    ]
+  },
+  "binaries": {
+    "trivy": {
+      "version": "0.76.0",
+      "module": "github.com/aquasecurity/trivy",
+      "module_version": "v0.76.0",
+      "platform": "linux_amd64",
+      "sha256": "1f889576636db0623539cb339df7d06c40ebf39e7919489eafa1160e29808f19",
+      "release_asset": "trivy_0.76.0_Linux-64bit.tar.gz",
+      "release_asset_sha256": "e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7",
+      "release_checksums": "https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_checksums.txt",
+      "installed_by": "aquasecurity/trivy-action@v0.36.0 with version: v0.76.0 (its setup-trivy step puts the binary on PATH)"
+    },
+    "tofu": {
+      "version": "1.12.5",
+      "module": "github.com/opentofu/opentofu",
+      "module_version": "v1.12.5",
+      "platform": "linux_amd64",
+      "sha256": "36dae7ca1e4f1552a6faef27179dc16ef403203e956f31416c17b3d87a38c3f4",
+      "release_asset": "tofu_1.12.5_linux_amd64.zip",
+      "release_asset_sha256": "dade9650e6b74fc7a8b986bd8717497d32f9e09cf82e479afef4977fa3085536",
+      "release_checksums": "https://github.com/opentofu/opentofu/releases/download/v1.12.5/tofu_1.12.5_SHA256SUMS",
+      "installed_by": "opentofu/setup-opentofu@v1 with tofu_version: 1.12.5 and tofu_wrapper: false"
+    }
+  }
+}

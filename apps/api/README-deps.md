@@ -8,6 +8,8 @@ artifact hashes:
 |---|---|---|
 | `requirements-runtime.txt` | `[project.dependencies]` + the `full` extra | `Dockerfile` builder stage (`pip install --require-hashes`) — exactly what reaches the production image |
 | `requirements-dev.txt` | the same, plus the `dev` extra, constrained to the runtime pins | CI (`.github/workflows/ci.yml`) and local test environments |
+| `requirements-bootstrap.txt` (2026-10-20) | `requirements-bootstrap.in`: pip and the setuptools build backend, at the reader tooling lock's pins | the four CI jobs that create `apps/api/.venv`, installed first with `--require-hashes --no-deps` |
+| `requirements-locktools.txt` (2026-10-20) | `requirements-locktools.in`: the documented lock toolchain (pip 25.1.1, pip-tools 7.5.2) and every transitive distribution | CI job *Backend quality*, the `.locktools` venv that runs `tools/verify_locks.py` |
 
 Rules:
 
@@ -17,7 +19,11 @@ Rules:
   exactly as before this change: the `pip` self-upgrade (`pip install --upgrade pip`) in the
   image and CI, and the build-isolation fetch of `setuptools>=68` that `pip install .`
   performs for the project's own metadata. Neither is application code; pinning them is a
-  separate decision.
+  separate decision. *(2026-10-20, P6-CI-6 coverage gaps: in CI both are gone — pip and setuptools
+  come from `requirements-bootstrap.txt` and the editable install runs with
+  `--no-build-isolation`; each job scans its venv as installed and reconciles it against these
+  locks (`security/README.md`). They remain in the Dockerfile's builder stage, whose tooling does
+  not ship; the builder stages are an open operator decision.)*
 - Never edit a lock by hand — a manual edit breaks the hashes. Change `pyproject.toml`
   (or just re-resolve) and regenerate both files.
 - Dependabot watches `apps/api` and updates these files alongside `pyproject.toml`.
@@ -36,6 +42,11 @@ pip-compile --generate-hashes --strip-extras --extra full \
 pip-compile --generate-hashes --strip-extras --extra full --extra dev \
   --constraint requirements-runtime.txt \
   --output-file requirements-dev.txt pyproject.toml
+# the bootstrap and lock-toolchain locks (2026-10-20); --allow-unsafe keeps pip and setuptools
+pip-compile --allow-unsafe --generate-hashes --strip-extras \
+  --output-file requirements-bootstrap.txt requirements-bootstrap.in
+pip-compile --allow-unsafe --generate-hashes --strip-extras \
+  --output-file requirements-locktools.txt requirements-locktools.in
 ```
 
 **Upgrading is an explicit maintenance action.** A newer release on PyPI never changes the
@@ -86,8 +97,11 @@ pinned artifact. Recomputed hashes come from the index's published digests (the 
 API), so a file added to or removed from an already-pinned release changes the expected set
 and fails the check until the locks are regenerated. Resolution reads the index's current
 metadata. pip-tools reads the project's static `[project]` metadata, so no build backend runs;
-dynamic dependencies would bring an unpinned `setuptools>=68` fetch into the check. Only pip
-and pip-tools are pinned in the tool venv; their own dependencies are not. The check runs on
+~~dynamic dependencies would bring an unpinned `setuptools>=68` fetch into the check. Only pip
+and pip-tools are pinned in the tool venv; their own dependencies are not.~~ *(Since 2026-10-20
+the tool venv is installed from the hash lock `requirements-locktools.txt` — pip, pip-tools and
+every transitive distribution — and pip-compile runs with `--no-build-isolation`, so dynamic
+dependencies would be built with that lock's setuptools, not an unpinned fetch.)* The check runs on
 linux/amd64 with Python 3.12 only; it is not an offline or universal reproducibility
 guarantee.
 

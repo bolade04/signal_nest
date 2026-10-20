@@ -267,7 +267,10 @@ dependencies, the three built images, IaC misconfiguration, CycloneDX SBOMs) and
 (Python and TypeScript SAST), each evaluated by `security/gate.py` against the ~~PROPOSED~~
 thresholds in `security/policy.json` *(ADOPTED for merge-path enforcement by the operator order
 of 2026-10-19: a Trivy-selected CRITICAL fails in every covered population with or without a fix; the jobs' installed tooling
-environments are scanned as installed)*. Reports, SBOMs, identity records and gate summaries
+environments are scanned as installed)*. *(Since 2026-10-20, P6-CI-6 coverage gaps: Frontend quality, Backend
+quality, Migrations and API contract and Integration smoke also scan the environments they install
+(`apps/api/.venv`, and `.locktools` in Backend quality) as installed, with the packages their pip vendors,
+and the two contexts above also analyse the Trivy and OpenTofu binaries they execute.)* Reports, SBOMs, identity records and gate summaries
 are uploaded as the `security-reports-*` artifacts (30 days). Coverage, declared exclusions,
 the baseline findings on `main` and the failure behaviour are documented in
 `security/README.md`; the gate's own tests run with
