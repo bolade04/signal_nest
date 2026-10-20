@@ -7,7 +7,7 @@ and every push to `main` is analysed before merge. *(Since the coverage-gap tran
 2026-10-20, the four other required contexts — `Frontend quality`, `Backend quality`,
 `Migrations and API contract` and `Integration smoke` — also scan, as installed, the API virtualenv
 they install (`apps/api/.venv`, and the lock toolchain `.locktools` in Backend quality), and every
-context analyses the Trivy binary it executes; their other installs (`node_modules`, the Playwright
+context analyses the Trivy binary on its PATH; their other installs (`node_modules`, the Playwright
 browser) are not scanned as installed. See "Coverage-gap tranche".)* The six required context names and the
 repository ruleset are unchanged. No optional job, no manual workflow and no external
 analysis service is involved; the publish workflows (`staging-publish.yml`,
@@ -522,7 +522,7 @@ The fresh closure assessment of the merged closure work found populations that a
 installs or executes but that no scan analysed. The operator order of 2026-10-20 directs four repairs,
 made here. No vulnerability exclusion is added, and nothing here decides whether P6-CI-6 is closable.
 `policy.json` changes only by declaring the scope of the two new lock targets and by stating that the
-existing tooling scope applies to the executed binaries and to vendored packages.
+existing tooling scope applies to the scanner and tool binaries and to vendored packages.
 
 1. **`.locktools` is scanned as installed.** Backend quality installs its lock toolchain from the
    hash lock `apps/api/requirements-locktools.txt` (pip 25.1.1, pip-tools 7.5.2 and every transitive
@@ -541,8 +541,16 @@ existing tooling scope applies to the executed binaries and to vendored packages
    install in every job now carries `--only-binary :all:`: a locked dependency built from an sdist would have
    its build requirements fetched unpinned and unhashed, run, and deleted, where no inventory or scan sees them
    (round-3 finding A3R-1, reproduced); every current pin has a Linux cp312 wheel, so the flag changes nothing
-   today and makes such a lock line fail its install. The API project's build backend is pinned by a test to
-   `setuptools.build_meta`, with no in-tree backend and no `setup.py`/`setup.cfg`. Each job scans
+   today and makes such a lock line fail its install. Because pip applies option lines in a requirements file
+   after its command line, every lock that ci.yml or the API Dockerfile installs from (the set is derived from
+   the files) must hold only pins, `--hash=sha256:` continuations and comments (`gate.parse_lock`'s strict grammar,
+   also used by `--locked-by`); a `--no-binary` continuation, `--only-binary=:none:`, `-c`, an index line or a
+   URL requirement in a lock fails the security self-tests (round-4 finding A4R-1, reproduced). Every hash-locked
+   install also runs `pip install --isolated`, so no `PIP_*` variable or user pip configuration (a constraint file
+   naming `--no-binary`, for example) applies, and every venv is created with `--clear`. The API project's build
+   backend is pinned by a test to `setuptools.build_meta`, with no in-tree backend, no `setup.py`/`setup.cfg`, no
+   `cmdclass` and no `dynamic` fields, and no tracked top-level `pip`, `venv`, `ensurepip` or `piptools` module may
+   shadow what the installs run with `python -m`. Each job scans
    its `apps/api/.venv` as installed, reconciles it against its inventory and against the bootstrap and
    dev locks plus the editable project (`--locked-extra signalnest-api`, which must be an editable
    install from a directory inside the working directory, per `pip inspect`'s `direct_url`), runs its
@@ -552,7 +560,7 @@ existing tooling scope applies to the executed binaries and to vendored packages
    **What is observed, and when.** The API venv and `.locktools` are each observed at two points: the
    first inventory and scan, and the final inventory, gated against the same scan. Each is created with
    `--clear`, so nothing an earlier step left there survives, and the last line of its install
-   (`stage_inputs.py readonly`, which directly follows the hash-locked install; a test pins each install's
+   (`stage_inputs.py readonly`, which directly follows the editable install, or for `.locktools` its `pip check`; a test pins each install's
    command list exactly) removes every write permission from it, so no later step runs with it writable. Both
    of its gates require it to be still read-only (`--require-read-only`). An ordinary install or uninstall by
    any later step therefore fails that step instead of slipping in and out unobserved, before or between the
@@ -560,7 +568,9 @@ existing tooling scope applies to the executed binaries and to vendored packages
    Every installer-shaped line of every job is pinned (`test_tooling_locks.py`), so a new install line in
    the workflow fails review. What none of this stops:
    - code that runs inside the install itself: pip, and the setuptools build backend that the editable
-     install runs over the tracked `pyproject.toml`;
+     install runs over the tracked `pyproject.toml` (its declarative configuration is pinned as above);
+   - pip configuration that `--isolated` still reads: a site configuration in the venv (empty, as the venv
+     was just cleared) and the global one, which only `sudo` can write;
    - any code the jobs run that undoes the measure: an unprivileged `chmod`, replacing the directory through
      its writable parent, or `sudo`, which GitHub-hosted runners grant the job user. It stops accidental
      installs, not deliberate ones;

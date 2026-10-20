@@ -242,8 +242,8 @@ class Pinning(unittest.TestCase):
         # No code but pip and the locked build backend may run between creating an environment and `readonly`: each install's
         # command list, from `python -m venv --clear` to `readonly`, is pinned EXACTLY (round-2 finding A2R-1, round-3 A3R-2),
         # and `readonly` precedes the first inventory and every gate.
-        boot = "apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt"
-        dev = "apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt"
+        boot = "apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt"
+        dev = "apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt"
         edit = "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api"
         tee, tee_a = " 2>&1 | tee ci-logs/pip-install.log", " 2>&1 | tee -a ci-logs/pip-install.log"
         plain = ["python -m venv --clear apps/api/.venv", boot, dev, edit, "python3 security/stage_inputs.py readonly apps/api/.venv"]
@@ -253,7 +253,7 @@ class Pinning(unittest.TestCase):
                     "migrations": {"apps/api/.venv": logged},
                     "backend": {"apps/api/.venv": logged, ".locktools": [
                         "python -m venv --clear .locktools",
-                        ".locktools/bin/python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt",
+                        ".locktools/bin/python -m pip install --isolated --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt",
                         ".locktools/bin/python -m pip check", "python3 security/stage_inputs.py readonly .locktools"]}}
         for group, envs in expected.items():
             job = job_text(self.text, JOBS[group])

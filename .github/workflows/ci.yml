@@ -106,13 +106,14 @@ jobs:
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
         # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
-        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed; --isolated ignores PIP_* variables and
+        # user pip configuration, through which a constraint file could re-enable one. The venv is created with --clear,
         # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
         # writable; it is scanned as installed below.
         run: |
           python -m venv --clear apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
-          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
+          apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
+          apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
           python3 security/stage_inputs.py readonly apps/api/.venv
 
@@ -122,7 +123,7 @@ jobs:
       # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
-      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The Trivy binary on the job's PATH is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv as installed and stage the packages its installer vendors
         if: always()
         run: |
@@ -158,11 +159,11 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy.yaml
 
-      - name: Stage the scanner binary this job executes
+      - name: Stage the scanner binary on this job's PATH
         if: always()
         run: python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job frontend-quality --out .scanner-binaries --manifest security-reports/scanner-binaries-manifest.json
 
-      - name: Trivy — the scanner binary this job executes (Go binary analysis)
+      - name: Trivy — the scanner binary on this job's PATH (Go binary analysis)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -176,7 +177,7 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy-scan.yaml
 
-      - name: Gate — the scanner binary this job executes (pinned release digest, Go binary analysis present; CRITICAL fails)
+      - name: Gate — the scanner binary on this job's PATH (pinned release digest, Go binary analysis present; CRITICAL fails)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries
@@ -372,14 +373,15 @@ jobs:
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
         # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
-        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed; --isolated ignores PIP_* variables and
+        # user pip configuration, through which a constraint file could re-enable one. The venv is created with --clear,
         # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
         # writable; it is scanned as installed below.
         run: |
           mkdir -p ci-logs
           python -m venv --clear apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
-          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
+          apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
           python3 security/stage_inputs.py readonly apps/api/.venv
 
@@ -404,7 +406,7 @@ jobs:
         # installed and reconciled against its lock below.
         run: |
           python -m venv --clear .locktools
-          .locktools/bin/python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt
+          .locktools/bin/python -m pip install --isolated --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt
           .locktools/bin/python -m pip check
           python3 security/stage_inputs.py readonly .locktools
           .locktools/bin/python -m pip --version
@@ -426,7 +428,7 @@ jobs:
       # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
-      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The Trivy binary on the job's PATH is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv and the lock toolchain venv as installed and stage the packages their installers vendor
         if: always()
         run: |
@@ -478,11 +480,11 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy.yaml
 
-      - name: Stage the scanner binary this job executes
+      - name: Stage the scanner binary on this job's PATH
         if: always()
         run: python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job backend-quality --out .scanner-binaries --manifest security-reports/scanner-binaries-manifest.json
 
-      - name: Trivy — the scanner binary this job executes (Go binary analysis)
+      - name: Trivy — the scanner binary on this job's PATH (Go binary analysis)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -496,7 +498,7 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy-scan.yaml
 
-      - name: Gate — the scanner binary this job executes (pinned release digest, Go binary analysis present; CRITICAL fails)
+      - name: Gate — the scanner binary on this job's PATH (pinned release digest, Go binary analysis present; CRITICAL fails)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries
@@ -761,15 +763,16 @@ jobs:
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
         # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
-        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed; --isolated ignores PIP_* variables and
+        # user pip configuration, through which a constraint file could re-enable one. The venv is created with --clear,
         # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
         # writable; it is scanned as installed below.
         run: |
           mkdir -p ci-logs
           npm ci 2>&1 | tee ci-logs/npm-ci.log
           python -m venv --clear apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
-          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
+          apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
           python3 security/stage_inputs.py readonly apps/api/.venv
 
@@ -800,7 +803,7 @@ jobs:
       # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
-      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The Trivy binary on the job's PATH is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv as installed and stage the packages its installer vendors
         if: always()
         run: |
@@ -836,11 +839,11 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy.yaml
 
-      - name: Stage the scanner binary this job executes
+      - name: Stage the scanner binary on this job's PATH
         if: always()
         run: python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job migration-and-contract --out .scanner-binaries --manifest security-reports/scanner-binaries-manifest.json
 
-      - name: Trivy — the scanner binary this job executes (Go binary analysis)
+      - name: Trivy — the scanner binary on this job's PATH (Go binary analysis)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -854,7 +857,7 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy-scan.yaml
 
-      - name: Gate — the scanner binary this job executes (pinned release digest, Go binary analysis present; CRITICAL fails)
+      - name: Gate — the scanner binary on this job's PATH (pinned release digest, Go binary analysis present; CRITICAL fails)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries
@@ -1310,8 +1313,8 @@ jobs:
 
       - name: Create the security tooling virtualenv (Semgrep, hash-locked)
         run: |
-          python3 -m venv .security-venv
-          .security-venv/bin/python -m pip install --quiet --require-hashes --only-binary :all: -r security/requirements-semgrep.txt
+          python3 -m venv --clear .security-venv
+          .security-venv/bin/python -m pip install --isolated --quiet --require-hashes --only-binary :all: -r security/requirements-semgrep.txt
           .security-venv/bin/semgrep --version
 
       - name: Fetch and validate the Semgrep rulesets (provenance recorded)
@@ -1516,9 +1519,9 @@ jobs:
         run: .security-venv/bin/python -m pip inspect > security-reports/security-tooling-venv-installed.json
 
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the packages the installed pip vendors (no dist-info) are
-      # analysed from a staged pin list, and the Trivy binary this job executes is analysed (Go binary analysis) and
+      # analysed from a staged pin list, and the Trivy binary on this job's PATH is analysed (Go binary analysis) and
       # bound to its pinned release digest (security/scanner-binaries.json).
-      - name: Stage the packages the security tooling venv's installer vendors, and the scanner binary this job executes
+      - name: Stage the packages the security tooling venv's installer vendors, and the scanner binary on this job's PATH
         if: always()
         run: |
           python3 security/stage_inputs.py vendored --out .vendored-pins --env security-venv .security-venv security-reports/security-tooling-venv-installed.json
@@ -1538,7 +1541,7 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy.yaml
 
-      - name: Trivy — the scanner binary this job executes (Go binary analysis)
+      - name: Trivy — the scanner binary on this job's PATH (Go binary analysis)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -1574,7 +1577,7 @@ jobs:
           --vendored-report security-reports/trivy-vendored-pins-vuln.json --vendored-artifact .vendored-pins --vendored-target security-venv/requirements-vendored-pip.txt
           --installed-inventory security-reports/security-tooling-venv-installed.json
 
-      - name: Gate — the scanner binary this job executes (pinned release digest, Go binary analysis present; CRITICAL fails)
+      - name: Gate — the scanner binary on this job's PATH (pinned release digest, Go binary analysis present; CRITICAL fails)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries
@@ -1762,13 +1765,14 @@ jobs:
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
         # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
-        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed; --isolated ignores PIP_* variables and
+        # user pip configuration, through which a constraint file could re-enable one. The venv is created with --clear,
         # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
         # writable; it is scanned as installed below.
         run: |
           python -m venv --clear apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
-          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
+          apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
+          apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
           python3 security/stage_inputs.py readonly apps/api/.venv
 
@@ -1778,7 +1782,7 @@ jobs:
       # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
-      # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      # The Trivy binary on the job's PATH is analysed and bound to its pinned release digest (security/scanner-binaries.json).
       - name: Inventory the API venv as installed and stage the packages its installer vendors
         if: always()
         run: |
@@ -1814,11 +1818,11 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy.yaml
 
-      - name: Stage the scanner binary this job executes
+      - name: Stage the scanner binary on this job's PATH
         if: always()
         run: python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job integration-smoke --out .scanner-binaries --manifest security-reports/scanner-binaries-manifest.json
 
-      - name: Trivy — the scanner binary this job executes (Go binary analysis)
+      - name: Trivy — the scanner binary on this job's PATH (Go binary analysis)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -1832,7 +1836,7 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy-scan.yaml
 
-      - name: Gate — the scanner binary this job executes (pinned release digest, Go binary analysis present; CRITICAL fails)
+      - name: Gate — the scanner binary on this job's PATH (pinned release digest, Go binary analysis present; CRITICAL fails)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries
@@ -2033,8 +2037,8 @@ jobs:
         # unpinned build dependency is fetched. The venv is scanned AS INSTALLED and reconciled against
         # its own pip inspect inventory at the end of this job (twice, so a later install fails).
         run: |
-          python -m venv .reader-venv
-          .reader-venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-dev.txt
+          python -m venv --clear .reader-venv
+          .reader-venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-dev.txt
           .reader-venv/bin/python -m pip install --no-deps --no-build-isolation -e apps/revision-reader
           .reader-venv/bin/python -m pip check
           # GATE 4N-I28BH-E2. The main Gate-4N security suite runs UNDER this reader venv
@@ -2055,9 +2059,10 @@ jobs:
       # P6-CI-6 closure: installed from scripts/requirements-gate-hashes.txt, the hash lock compiled
       # from that contract (the same PyYAML pin), with --require-hashes --no-deps.
       - name: Install Gate 4N guard dependencies
-        # --only-binary :all: (P6-CI-6 coverage gaps): a source build would fetch its build requirements unpinned and unhashed.
+        # --only-binary :all: (P6-CI-6 coverage gaps): a source build would fetch its build requirements unpinned and unhashed;
+        # --isolated: no PIP_* variable or user configuration (a constraint file could re-enable a source build) applies.
         run: |
-          python3 -m pip install --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt
+          python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt
 
       - name: Gate 4N guard dependency contract
         id: gate_dependencies
@@ -2911,9 +2916,9 @@ jobs:
           python3 -m pip inspect > security-reports/reader-tooling-syspy-installed.json
 
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the packages the two environments' pips vendor (no dist-info)
-      # are analysed from staged pin lists, and the Trivy and OpenTofu binaries this job executes are analysed (Go binary
+      # are analysed from staged pin lists, and the Trivy and OpenTofu binaries on this job's PATH are analysed (Go binary
       # analysis) and bound to their pinned release digests (security/scanner-binaries.json).
-      - name: Stage the packages the reader tooling environments' installers vendor, and the binaries this job executes
+      - name: Stage the packages the reader tooling environments' installers vendor, and the binaries on this job's PATH
         if: always()
         run: |
           python3 security/stage_inputs.py vendored --out .vendored-pins --env reader-venv .reader-venv security-reports/reader-tooling-venv-installed.json --env reader-syspy "${{ env.pythonLocation }}" security-reports/reader-tooling-syspy-installed.json
@@ -2961,7 +2966,7 @@ jobs:
           list-all-pkgs: true
           trivy-config: security/trivy.yaml
 
-      - name: Trivy — the scanner and tool binaries this job executes (Go binary analysis)
+      - name: Trivy — the scanner and tool binaries on this job's PATH (Go binary analysis)
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -2991,7 +2996,7 @@ jobs:
           --vendored-report security-reports/trivy-vendored-pins-vuln.json --vendored-artifact .vendored-pins --vendored-target reader-syspy/requirements-vendored-pip.txt
           --installed-inventory security-reports/reader-tooling-syspy-installed.json
 
-      - name: Gate — the scanner and tool binaries this job executes (pinned release digests, Go binary analysis present; CRITICAL fails)
+      - name: Gate — the scanner and tool binaries on this job's PATH (pinned release digests, Go binary analysis present; CRITICAL fails)
         if: always()
         run: >-
           python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries

@@ -51,8 +51,8 @@ ALLOWED_INSTALLER_LINES = {
         "run: npm run test 2>&1 | tee ci-logs/frontend-test.log",
         "run: npm run build 2>&1 | tee ci-logs/frontend-build.log",
         "python -m venv --clear apps/api/.venv",
-        "apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt",
-        "apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt",
+        "apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt",
+        "apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt",
         "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api",
         "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
         "run: npm run e2e:install --workspace apps/web 2>&1 | tee ci-logs/frontend-e2e-install.log",
@@ -60,11 +60,11 @@ ALLOWED_INSTALLER_LINES = {
     "backend-quality": {
         "cache: pip",
         "python -m venv --clear apps/api/.venv",
-        "apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log",
-        "apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log",
+        "apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log",
+        "apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log",
         "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log",
         "python -m venv --clear .locktools",
-        ".locktools/bin/python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt",
+        ".locktools/bin/python -m pip install --isolated --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt",
         ".locktools/bin/python -m pip check",
         ".locktools/bin/python -m pip --version",
         "apps/api/.venv/bin/python -m pip check",
@@ -78,8 +78,8 @@ ALLOWED_INSTALLER_LINES = {
         "cache: pip",
         "npm ci 2>&1 | tee ci-logs/npm-ci.log",
         "python -m venv --clear apps/api/.venv",
-        "apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log",
-        "apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log",
+        "apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log",
+        "apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log",
         "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log",
         "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
         "npm run gen:types 2>&1 | tee ci-logs/gen-types.log",
@@ -87,28 +87,28 @@ ALLOWED_INSTALLER_LINES = {
     "integration-smoke": {
         "cache: pip",
         "python -m venv --clear apps/api/.venv",
-        "apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt",
-        "apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt",
+        "apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt",
+        "apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt",
         "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api",
         "apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json",
     } | API_VENV_INVENTORY,
     "container-build": {
         "- name: Inventory the security tooling venv as installed (pip inspect)",
         "cache: pip",
-        "python3 -m venv .security-venv",
-        ".security-venv/bin/python -m pip install --quiet --require-hashes --only-binary :all: -r security/requirements-semgrep.txt",
+        "python3 -m venv --clear .security-venv",
+        ".security-venv/bin/python -m pip install --isolated --quiet --require-hashes --only-binary :all: -r security/requirements-semgrep.txt",
         "run: .security-venv/bin/python -m pip inspect > security-reports/security-tooling-venv-installed.json",
         "run: .security-venv/bin/python -m pip inspect > security-reports/security-tooling-venv-installed-final.json",
     },
     "revision-reader": {
         "- name: Inventory the reader tooling environments as installed (pip inspect)",
         "cache: pip",
-        "python -m venv .reader-venv",
-        ".reader-venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-dev.txt",
+        "python -m venv --clear .reader-venv",
+        ".reader-venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-dev.txt",
         ".reader-venv/bin/python -m pip install --no-deps --no-build-isolation -e apps/revision-reader",
         ".reader-venv/bin/python -m pip check",
         ".reader-venv/bin/pip install -r scripts/requirements-gate.txt",
-        "python3 -m pip install --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt",
+        "python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt",
         ".reader-venv/bin/python -m pip inspect > security-reports/reader-tooling-venv-installed.json",
         "python3 -m pip inspect > security-reports/reader-tooling-syspy-installed.json",
         ".reader-venv/bin/python -m pip inspect > security-reports/reader-tooling-venv-installed-final.json",
@@ -224,9 +224,75 @@ class ToolingLocks(unittest.TestCase):
         for line in hashed:
             with self.subTest(line):
                 self.assertIn("--only-binary :all:", line)
+                self.assertIn("pip install --isolated ", line)   # no PIP_* variable or user configuration (round-4 A4R-2)
         for line in lines:     # no install from a lock or the index escapes the rule by dropping --require-hashes
             if re.search(r"\bpip install\b.*\s-r\s", line) and "--require-hashes" not in line:
                 self.assertEqual(line, ".reader-venv/bin/pip install -r scripts/requirements-gate.txt")   # pinned no-op (module docstring)
+
+    def test_every_lock_an_install_reads_is_only_pins_hashes_and_comments(self):
+        # pip applies option lines of a requirements file after its command line, so a `--no-binary=x` continuation,
+        # `--only-binary=:none:`, `-c`, `--index-url` and the like inside a lock would undo `--only-binary :all:` or
+        # `--require-hashes` for the whole install (round-4 finding A4R-1). Every lock ci.yml or the API Dockerfile installs
+        # from is read with gate.parse_lock's strict grammar; the set is derived from the files, so a new lock is covered too.
+        import sys
+        sys.path.insert(0, str(ROOT / "security"))
+        import gate
+        text = WORKFLOW.read_text(encoding="utf-8") + (ROOT / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
+        named = set(re.findall(r"(?<!\S)-r\s+(\S+\.txt)", text))
+        locks = set()
+        for rel in named:
+            path = ROOT / rel if (ROOT / rel).is_file() else ROOT / "apps" / "api" / rel      # the Dockerfile's context is apps/api
+            self.assertTrue(path.is_file(), rel)
+            locks.add(path)
+        self.assertEqual({str(p.relative_to(ROOT)) for p in locks}, {
+            "apps/api/requirements-bootstrap.txt", "apps/api/requirements-dev.txt", "apps/api/requirements-runtime.txt",
+            "apps/api/requirements-locktools.txt", "security/requirements-semgrep.txt", "apps/revision-reader/requirements-dev.txt",
+            "scripts/requirements-gate-hashes.txt", "scripts/requirements-gate.txt"})
+        for path in sorted(locks):
+            with self.subTest(str(path.relative_to(ROOT))):
+                self.assertTrue(gate.parse_lock(path, hashed=path.name != "requirements-gate.txt"))
+
+    def test_the_strict_lock_grammar_refuses_every_option_shape(self):
+        import sys, tempfile
+        sys.path.insert(0, str(ROOT / "security"))
+        import gate
+        h = "    --hash=sha256:" + "ab" * 32
+        good = f"# header\nfoo==1.0 \\\n{h} \\\n{h}\n    # via bar\n"
+        shapes = {
+            "option continuation": f"foo==1.0 \\\n    --no-binary=foo \\\n{h}\n",
+            "indented option line": f"foo==1.0 \\\n{h}\n    --no-binary foo\n",
+            "top-level option line": f"--only-binary=:none:\nfoo==1.0 \\\n{h}\n",
+            "constraint line": f"-c other.txt\nfoo==1.0 \\\n{h}\n",
+            "index line": f"--index-url https://example.invalid/simple\nfoo==1.0 \\\n{h}\n",
+            "url requirement": f"foo @ https://example.invalid/foo.tar.gz \\\n{h}\n",
+            "option after a hash": f"foo==1.0 \\\n{h} --no-binary=foo\n",
+            "unhashed pin": "foo==1.0\n",
+            "unterminated": f"foo==1.0 \\\n{h} \\\n",
+            "duplicate": f"foo==1.0 \\\n{h}\nfoo==1.0 \\\n{h}\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "lock.txt"
+            path.write_text(good, encoding="utf-8")
+            self.assertEqual(gate.parse_lock(path), {"foo": "1.0"})
+            for label, text in shapes.items():
+                with self.subTest(label):
+                    path.write_text(text, encoding="utf-8")
+                    with self.assertRaises(gate.ReportError):
+                        gate.parse_lock(path)
+
+    def test_the_lock_toolchain_lock_holds_exactly_the_toolchain_closure(self):
+        # An extra name in the lock toolchain lock would be installed into .locktools from a wheel and scanned, but nothing else
+        # needs it there; keep the set to pip-tools' closure (round-4 finding A4R-1, the extra-pin part).
+        self.assertEqual(set(lock_entries(API_LOCKTOOLS_LOCK)),
+                         {"build", "click", "packaging", "pip", "pip-tools", "pyproject-hooks", "setuptools", "wheel"})
+
+    def test_no_repository_module_shadows_what_the_installs_run_with_python_m(self):
+        # `python -m venv`, `-m ensurepip` (which venv runs) and `-m pip` run at the workspace root, where `-m` puts the working
+        # directory first on sys.path: a tracked top-level pip, venv or ensurepip would run instead (round-4 finding A4R-3).
+        for name in ("pip", "venv", "ensurepip", "piptools"):
+            for entry in (name, f"{name}.py"):
+                with self.subTest(entry):
+                    self.assertFalse((ROOT / entry).exists(), f"a top-level {entry} would shadow `python -m {name}`")
 
     def test_the_api_project_builds_only_with_the_locked_setuptools_backend(self):
         # The editable install runs the project's build backend inside the install step, before `readonly` (round-3 finding A3R-3):
@@ -236,6 +302,12 @@ class ToolingLocks(unittest.TestCase):
         self.assertNotIn("backend-path", project["build-system"])
         for name in ("setup.py", "setup.cfg"):
             self.assertFalse((ROOT / "apps" / "api" / name).exists(), f"apps/api/{name} would run inside the editable install")
+        # pyproject-only routes to repository code inside the build (round-4 finding A4R-3): setuptools imports a cmdclass
+        # module, and resolves `attr:`/`file:` dynamic fields from the project's own files.
+        setuptools_table = project.get("tool", {}).get("setuptools", {})
+        self.assertNotIn("cmdclass", setuptools_table)
+        self.assertNotIn("dynamic", setuptools_table)
+        self.assertNotIn("dynamic", project["project"])
 
     def test_the_scanned_jobs_run_only_the_reviewed_installer_lines(self):
         text = WORKFLOW.read_text(encoding="utf-8")

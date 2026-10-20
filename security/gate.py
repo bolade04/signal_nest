@@ -69,9 +69,9 @@ does, 25.x does not); the API Dockerfile removes pip and the interpreter's bundl
 runtime stage.
 
 Scanner and tool binaries (`vuln --kind binary`, operator order 2026-10-20): the Trivy and OpenTofu binaries
-the job actually executes are copied into a staging directory (security/stage_inputs.py, which records the
+the job resolves on PATH (where the setup actions put the binaries its steps run) are copied into a staging directory (security/stage_inputs.py, which records the
 path each resolves to on PATH at staging time, and its sha256) and scanned with `trivy rootfs` (Go binary analysis). For every
-named binary the gate requires: the staged copy and the executed file to hash to the pinned release digest
+named binary the gate requires: the staged copy and the file it resolved to on PATH to hash to the pinned release digest
 (security/scanner-binaries.json); exactly one gobinary result for it, listing the pinned main module at the
 pinned version and the Go standard library with a version. A binary Trivy could not analyse is an incomplete
 analysis, never a clean one. Findings are evaluated at the tooling scope. What the analysis does NOT establish
@@ -299,18 +299,52 @@ def pip_vendored_pins(installed: object, env_root: pathlib.Path) -> list[tuple[s
     return out
 
 
-def lock_pins(path: pathlib.Path) -> dict:
-    """normalised name -> version for a pip-tools --generate-hashes lock."""
+_LOCK_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[A-Za-z0-9,._-]+\])?==([^\s\\]+)( \\)?$")
+_LOCK_HASH = re.compile(r"^    --hash=sha256:[0-9a-f]{64}( \\)?$")
+_LOCK_COMMENT = re.compile(r"^ *#")
+
+
+def parse_lock(path: pathlib.Path, *, hashed: bool = True) -> dict:
+    """normalised name -> version for a pip-tools lock read with a STRICT grammar (round-4 finding A4R-1).
+
+    Only these lines are accepted: blank lines, comment lines (`#`, indented or not), pin lines
+    `name[extras]==version` (ending ` \\` when hashes follow) and, for a hashed lock, `    --hash=sha256:<64 hex>`
+    continuation lines, the last one without ` \\`. Anything else — an option line such as `--no-binary`,
+    `--only-binary=:none:`, `--index-url` or `-c`, indented or not, an option on a continuation line, a URL or
+    path requirement — is refused, because pip applies option lines from a requirements file after its command
+    line, so one such line would undo `--only-binary :all:` or `--require-hashes` for the whole install."""
     _require(path.is_file(), f"lock file is missing: {path}", ReportError)
     out: dict = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        if not raw or raw.startswith((" ", "#")):
+    expect_hash = False      # the previous line ended in ` \\`, so the next must be a hash line
+    entry_hashes = 0
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        where = f"{path}:{number}"
+        if expect_hash:
+            m = _LOCK_HASH.match(raw)
+            _require(m is not None, f"{where}: expected a `--hash=sha256:` continuation line, found {raw!r}", ReportError)
+            entry_hashes += 1
+            expect_hash = m.group(1) is not None
             continue
-        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+?)\s*\\?$", raw)
-        _require(m is not None, f"{path}: unexpected lock line {raw!r}", ReportError)
-        out[_norm_dist(m.group(1))] = m.group(2)
+        if not raw.strip() or _LOCK_COMMENT.match(raw):
+            continue
+        m = _LOCK_PIN.match(raw)
+        _require(m is not None, f"{where}: unexpected lock line {raw!r} (only pins, hashes and comments are accepted)", ReportError)
+        name = _norm_dist(m.group(1))
+        _require(name not in out, f"{where}: {name} is pinned twice", ReportError)
+        out[name] = m.group(3)
+        if hashed:
+            _require(m.group(4) is not None, f"{where}: {name}=={m.group(3)} carries no hash", ReportError)
+            expect_hash, entry_hashes = True, 0
+        else:
+            _require(m.group(4) is None, f"{where}: an unhashed lock carries a continuation", ReportError)
+    _require(not expect_hash, f"{path}: the last entry's hash continuation is unterminated", ReportError)
     _require(out, f"{path}: the lock pins nothing", ReportError)
     return out
+
+
+def lock_pins(path: pathlib.Path) -> dict:
+    """normalised name -> version for a pip-tools --generate-hashes lock (strict grammar, see parse_lock)."""
+    return parse_lock(path, hashed=True)
 
 
 def _editable_from_checkout(installed: object, name: str) -> str | None:
@@ -529,9 +563,9 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
             _require(isinstance(entry, dict) and isinstance(entry.get("origin"), str) and entry.get("sha256") == pin["sha256"],
                      f"the staging manifest does not record {name} at the pinned release digest: {entry!r:.200}")
             origin = pathlib.Path(entry["origin"])
-            _require(origin.is_file(), f"the executed {name} ({origin}) is no longer present")
+            _require(origin.is_file(), f"{name} as resolved on PATH at staging time ({origin}) is no longer present")
             now = _sha256(origin)
-            _require(now == pin["sha256"], f"the executed {name} at {origin} hashes to {now}, not the pinned release digest {pin['sha256']}")
+            _require(now == pin["sha256"], f"{name} as resolved on PATH at staging time ({origin}) hashes to {now}, not the pinned release digest {pin['sha256']}")
             unsupported = f"Trivy's analysis of {name} is unsupported or incomplete"
             found = by_target.get(name) or []
             _require(len(found) == 1, f"{unsupported}: the scan carries {len(found)} results for it, expected exactly one Go binary result — not a clean scan")

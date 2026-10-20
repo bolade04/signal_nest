@@ -270,7 +270,7 @@ of 2026-10-19: a Trivy-selected CRITICAL fails in every covered population with 
 environments are scanned as installed)*. *(Since 2026-10-20, P6-CI-6 coverage gaps: Frontend quality, Backend
 quality, Migrations and API contract and Integration smoke also scan the environments they install
 (`apps/api/.venv`, and `.locktools` in Backend quality) as installed, with the packages their pip vendors,
-every context analyses the Trivy binary it executes, and Revision reader also the OpenTofu binary.)* Reports, SBOMs, identity records and gate summaries
+every context analyses the Trivy binary on its PATH, and Revision reader also the OpenTofu binary.)* Reports, SBOMs, identity records and gate summaries
 are uploaded as the `security-reports-*` artifacts (30 days). Coverage, declared exclusions,
 the baseline findings on `main` and the failure behaviour are documented in
 `security/README.md`; the gate's own tests run with

@@ -91,7 +91,7 @@ def stage_binaries(out: pathlib.Path, manifest: pathlib.Path, names: list[str]) 
     for name in names:
         where = shutil.which(name)
         if where is None:
-            raise gate.ReportError(f"{name} is not on PATH: the binary the job executes cannot be staged")
+            raise gate.ReportError(f"{name} is not on PATH: the binary the job's steps resolve there cannot be staged")
         origin = pathlib.Path(os.path.realpath(where))
         if not origin.is_file():
             raise gate.ReportError(f"{name} resolves to {origin}, which is not a regular file")

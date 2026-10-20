@@ -412,7 +412,7 @@ class BinaryCase(unittest.TestCase):
         self.assertEqual(code, gate.EXIT_INCOMPLETE); self.assertIn("the staged copy of tofu hashes to", text)
         (self.stage / "tofu").write_bytes(b"synthetic tofu"); (self.origin / "tofu").write_bytes(b"replaced after staging")
         code, text = self.run_gate([self.result("trivy"), self.result("tofu")])
-        self.assertEqual(code, gate.EXIT_INCOMPLETE); self.assertIn("the executed tofu at", text)
+        self.assertEqual(code, gate.EXIT_INCOMPLETE); self.assertIn("tofu as resolved on PATH at staging time", text)
         (self.origin / "tofu").write_bytes(b"synthetic tofu"); self.manifest["binaries"]["tofu"]["sha256"] = "0" * 64
         code, text = self.run_gate([self.result("trivy"), self.result("tofu")])
         self.assertEqual(code, gate.EXIT_INCOMPLETE); self.assertIn("staging manifest does not record tofu", text)
