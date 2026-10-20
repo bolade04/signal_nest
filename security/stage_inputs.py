@@ -15,7 +15,7 @@ re-reads vendor.txt from the environment rather than trusting the staged file.
 
     python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job JOB --out DIR --manifest FILE
 
-Copy each executable the pins file names for JOB (`jobs`), resolved on PATH exactly as the job's steps resolve it, to DIR/NAME
+Copy each executable the pins file names for JOB (`jobs`), resolved on PATH at staging time, to DIR/NAME
 (mode kept: Trivy analyses executables only) and record in FILE the path it resolved to and its
 sha256, for a `trivy rootfs` Go binary analysis of the copies. The binary gate re-hashes both the
 copy and the recorded path against the pinned release digest.
@@ -23,9 +23,10 @@ copy and the recorded path against the pinned release digest.
     python3 security/stage_inputs.py readonly ROOT [ROOT ...]
 
 Remove every write permission from each installed environment (its directories and files; symbolic links are
-left alone), right after its first inventory, so that an ordinary later install or uninstall into it fails its
-step instead of escaping both inventories. The tooling gate's --require-read-only checks it at each gate. Code
-that restores write permission first is not stopped by this (the README's disclosed limit).
+left alone), as the last line of its own install, so that an ordinary later install or uninstall into it fails
+its step instead of escaping both inventories. The tooling gate's --require-read-only checks it at each gate.
+Every step's code can undo it (an unprivileged chmod, or replacing the directory through its writable parent):
+it stops accidental installs, not deliberate ones (the README's disclosed limit).
 
 DIR must not exist yet, so nothing stale is ever scanned. Exit 0 staged, 2 an input is missing or
 cannot be accounted for, 5 usage. Stdlib only; no network.

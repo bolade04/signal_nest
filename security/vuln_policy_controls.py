@@ -139,6 +139,7 @@ def GOBINARY(name: str):
 #           | ("append-pip",)     an installed pip in a final image's Python population
 #           | ("vendored-artifact",)   the vendored-pin report renamed to describe another directory
 #           | ("extra-not-editable",)  the --locked-extra project's direct_url removed from the inventory (not from the checkout)
+#           | ("extra-url", url)       the --locked-extra project's direct_url pointed at another URL (an index, or outside the workspace)
 #           | ("drop-binary", name) | ("drop-stdlib", name) | ("manifest-digest", name)    the binary analysis and its staging record
 #   fixed:  True (FixedVersion + Status fixed) | False (Status affected) | "status-only" (Status fixed, no FixedVersion)
 #           | "status:<s>" (Status <s>, no FixedVersion);  uid: a PkgIdentifier UID matching no package
@@ -245,7 +246,9 @@ def _environment_cases(group: str, key: str) -> dict:
         f"{key}-vendored-pin-not-scanned": (group, key, ("drop-vendored",), "incomplete", "absent from the vendored-pin scan"),
         f"{key}-vendored-report-of-another-directory": (group, key, ("vendored-artifact",), "incomplete", "the report describes something else"),
         f"{key}-truncated-inventory": (group, key, ("truncate-inventory",), "incomplete", "expected at least"),
-        **({f"{key}-project-not-from-the-checkout": (group, key, ("extra-not-editable",), "incomplete", "not installed from the checkout")}
+        **({f"{key}-project-not-from-the-checkout": (group, key, ("extra-not-editable",), "incomplete", "not installed from the checkout"),
+            f"{key}-project-from-an-index-url": (group, key, ("extra-url", "https://files.example.invalid/signalnest_api.whl"), "incomplete", "not a local directory"),
+            f"{key}-project-from-outside-the-workspace": (group, key, ("extra-url", "file:///control/outside/apps/api"), "incomplete", "outside the working directory")}
            if "--locked-extra" in REPORTS[key][1] else {}),
     }
 
@@ -398,6 +401,14 @@ def build_case(name: str, reports_dir: pathlib.Path, out_dir: pathlib.Path) -> t
             raise ControlError(f"{name}: no --locked-extra entry with a direct_url in the real inventory")
         for it in hit:
             del it["direct_url"]
+    elif kind == "extra-url":
+        norm = lambda s: re.sub(r"[-_.]+", "-", str(s)).lower()
+        extras = {norm(args[i + 1]) for i, a in enumerate(args) if a == "--locked-extra"}
+        hit = [it for it in inventory["installed"] if norm(it["metadata"]["name"]) in extras and "direct_url" in it]
+        if not hit:
+            raise ControlError(f"{name}: no --locked-extra entry with a direct_url in the real inventory")
+        for it in hit:
+            it["direct_url"]["url"] = change[1]
     elif kind == "truncate-inventory":
         floor = int(_arg(args, "--min-lang-packages"))
         if floor < 1 or len(inventory["installed"]) < floor:

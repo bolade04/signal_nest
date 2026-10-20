@@ -21,7 +21,8 @@ Rules:
   performs for the project's own metadata. Neither is application code; pinning them is a
   separate decision. *(2026-10-20, P6-CI-6 coverage gaps: in CI both are gone — pip and setuptools
   come from `requirements-bootstrap.txt` and the editable install runs with
-  `--no-build-isolation`; each job scans its venv as installed and reconciles it against these
+  `--no-build-isolation`, and every hash-locked install carries `--only-binary :all:`, so no locked dependency
+  is built from source with unpinned build requirements; each job scans its venv as installed and reconciles it against these
   locks (`security/README.md`). They remain in the Dockerfile's builder stage, whose tooling does
   not ship; the builder stages are an open operator decision.)*
 - Never edit a lock by hand — a manual edit breaks the hashes. Change `pyproject.toml`

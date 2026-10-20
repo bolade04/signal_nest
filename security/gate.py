@@ -54,9 +54,11 @@ report), fails completeness instead of escaping coverage. Three further checks b
     must be exactly the pins of the hash locks (plus the named project, which must be an editable install
     from a directory inside the working directory), at the locked versions; anything installed outside the
     locks is an incomplete analysis.
-  * read-only between inventories (`--require-read-only`): an environment made read-only right after its
-    first inventory (security/stage_inputs.py readonly) must still be read-only at each gate, so an
-    ordinary later install or uninstall fails its step instead of escaping both inventories.
+  * read-only from the end of the install (`--require-read-only`): an environment made read-only by the last
+    line of its own install (security/stage_inputs.py readonly) must still be read-only at each gate, so an
+    ordinary later install or uninstall fails its step instead of escaping both inventories. Every step's code
+    can undo that (an unprivileged chmod, or replacing the directory through its writable parent); it stops
+    accidental installs, not deliberate ones.
   * population: the summary states how many scanned packages sit at an installed distribution's metadata,
     at another metadata path inside the environment (e.g. setuptools/_vendor) and without a file path (from
     an SBOM a package ships), instead of a blanket "vendored copies included".
@@ -68,7 +70,7 @@ runtime stage.
 
 Scanner and tool binaries (`vuln --kind binary`, operator order 2026-10-20): the Trivy and OpenTofu binaries
 the job actually executes are copied into a staging directory (security/stage_inputs.py, which records the
-path each resolves to on PATH, the path the job's steps run it from, and its sha256) and scanned with `trivy rootfs` (Go binary analysis). For every
+path each resolves to on PATH at staging time, and its sha256) and scanned with `trivy rootfs` (Go binary analysis). For every
 named binary the gate requires: the staged copy and the executed file to hash to the pinned release digest
 (security/scanner-binaries.json); exactly one gobinary result for it, listing the pinned main module at the
 pinned version and the Go standard library with a version. A binary Trivy could not analyse is an incomplete
@@ -488,9 +490,9 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
                         writable.append(os.path.relpath(path, env_root))
             if os.lstat(env_root).st_mode & 0o222:
                 writable.insert(0, ".")
-            _require(not writable, f"{len(writable)} path(s) of {artifact} are writable, so it was not kept read-only after its first inventory "
+            _require(not writable, f"{len(writable)} path(s) of {artifact} are writable, so it was not kept read-only from the end of its install "
                                    f"(an install or uninstall in between would not be observed): {sorted(writable)[:5]}")
-            lines.append(f"read-only: every file and directory of {artifact} is without write permission (made read-only after its first inventory)")
+            lines.append(f"read-only: every file and directory of {artifact} is without write permission (made read-only at the end of its install)")
         if locked_by:
             lines.append(_check_locked(dists, locked_by, locked_extra or [], installed))
         vendors = pip_vendored_pins(installed, env_root)
@@ -542,7 +544,7 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
                      f"{unsupported}: main module {roots}, expected {pin['module']} {pin['module_version']} — not a clean scan")
             std = [x.get("Version") for x in pkgs if x.get("Name") == "stdlib"]
             _require(len(std) == 1 and bool(std[0]), f"{unsupported}: the Go standard library version was not recovered ({std}) — not a clean scan")
-            lines.append(f"binary {name}: resolved on PATH at staging time to {origin} (the path the job's steps run it from); that file "
+            lines.append(f"binary {name}: resolved on PATH at staging time to {origin}; that file "
                          f"and the staged copy hash to the pinned release digest {got} "
                          f"({pin.get('release_asset', 'release')}); Go binary analysis: main module {pin['module']} {pin['module_version']}, "
                          f"Go standard library {std[0]}, {len(pkgs)} modules")
@@ -1667,7 +1669,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--vendored-report", help="tooling: the filesystem scan of the staged vendored-pin lists (security/stage_inputs.py vendored)")
     v.add_argument("--vendored-target", help="tooling: this environment's target in the vendored-pin report")
     v.add_argument("--vendored-artifact", help="tooling: the staging directory the vendored-pin report must describe (its ArtifactName)")
-    v.add_argument("--require-read-only", action="store_true", help="tooling: the environment must be without write permission (made read-only after its first inventory)")
+    v.add_argument("--require-read-only", action="store_true", help="tooling: the environment must be without write permission (made read-only at the end of its install)")
     v.add_argument("--locked-by", action="append", help="tooling: a hash lock the environment was installed from; installed == the locks' pins")
     v.add_argument("--locked-extra", action="append", help="tooling: a distribution installed from the checkout, not from a lock (e.g. the editable project)")
     v.add_argument("--binary-job", help="binary: the job whose binaries (named under `jobs` in --binary-pins) must each be analysed")

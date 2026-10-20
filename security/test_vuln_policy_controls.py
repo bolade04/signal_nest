@@ -239,23 +239,34 @@ class Pinning(unittest.TestCase):
                 self.assertIn("--vendored-artifact .vendored-pins-control --vendored-target control/requirements-vendored-pip.txt", text)
 
     def test_the_hash_locked_environments_are_made_read_only_at_the_end_of_their_install(self):
-        # No repository code may run between an environment's hash-locked install and `readonly`: the command is the very
-        # next line of the same step (round-2 finding A2R-1), and it precedes the first inventory and every gate.
-        pairs = {"apps/api/.venv": "--no-deps --no-build-isolation -e apps/api",
-                 ".locktools": ".locktools/bin/python -m pip check"}
-        for group in ctl.API_JOBS:
+        # No code but pip and the locked build backend may run between creating an environment and `readonly`: each install's
+        # command list, from `python -m venv --clear` to `readonly`, is pinned EXACTLY (round-2 finding A2R-1, round-3 A3R-2),
+        # and `readonly` precedes the first inventory and every gate.
+        boot = "apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt"
+        dev = "apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt"
+        edit = "apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api"
+        tee, tee_a = " 2>&1 | tee ci-logs/pip-install.log", " 2>&1 | tee -a ci-logs/pip-install.log"
+        plain = ["python -m venv --clear apps/api/.venv", boot, dev, edit, "python3 security/stage_inputs.py readonly apps/api/.venv"]
+        logged = ["python -m venv --clear apps/api/.venv", boot + tee, dev + tee_a, edit + tee_a,
+                  "python3 security/stage_inputs.py readonly apps/api/.venv"]
+        expected = {"frontend": {"apps/api/.venv": plain}, "integration": {"apps/api/.venv": plain},
+                    "migrations": {"apps/api/.venv": logged},
+                    "backend": {"apps/api/.venv": logged, ".locktools": [
+                        "python -m venv --clear .locktools",
+                        ".locktools/bin/python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt",
+                        ".locktools/bin/python -m pip check", "python3 security/stage_inputs.py readonly .locktools"]}}
+        for group, envs in expected.items():
             job = job_text(self.text, JOBS[group])
-            for env, last_install_line in pairs.items():
-                if env == ".locktools" and group != "backend":
-                    continue
+            lines = [l.strip() for l in job.splitlines() if l.strip() and not l.strip().startswith("#")]
+            for env, commands in envs.items():
                 with self.subTest(group=group, env=env):
-                    cmd = f"python3 security/stage_inputs.py readonly {env}\n"
+                    k = lines.index(commands[0])
+                    self.assertEqual(lines[k:k + len(commands)], commands, "the install is not exactly the reviewed command list")
+                    cmd = commands[-1] + "\n"
                     self.assertEqual(job.count(cmd), 1)
-                    lines = [l.strip() for l in job.splitlines()]
-                    k = lines.index(cmd.strip())
-                    self.assertIn(last_install_line, lines[k - 1], "readonly must directly follow the install")
                     self.assertLess(job.index(cmd), job.index("security-reports/api-venv-installed.json"))
                     self.assertLess(job.index(cmd), job.index("--name api-venv\n"))
+            self.assertEqual(job.count("stage_inputs.py readonly"), len(envs))
         for group in set(JOBS) - set(ctl.API_JOBS):
             self.assertNotIn("stage_inputs.py readonly", job_text(self.text, JOBS[group]))
 
@@ -331,7 +342,7 @@ class Cases(unittest.TestCase):
         self.saved_load_policy = gate.load_policy
         self.saved_pyloc = os.environ.get("pythonLocation")
         os.environ["pythonLocation"] = self.pyloc
-        for env in READ_ONLY_ENVS:                       # made read-only after the first inventory, as in CI
+        for env in READ_ONLY_ENVS:                       # made read-only at the end of their install, as in CI
             self.set_writable(self.root / env, False)
 
     @staticmethod

@@ -105,19 +105,21 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
-        # repository code runs; the venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
+        # writable; it is scanned as installed below.
         run: |
-          python -m venv apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt
-          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt
+          python -m venv --clear apps/api/.venv
+          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
+          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
           python3 security/stage_inputs.py readonly apps/api/.venv
 
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
       # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
@@ -305,6 +307,8 @@ jobs:
           --expect-control control-vulnpol-frontend-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-frontend-api-venv-truncated-inventory
           --expect-control control-vulnpol-frontend-api-venv-project-not-from-the-checkout
+          --expect-control control-vulnpol-frontend-api-venv-project-from-an-index-url
+          --expect-control control-vulnpol-frontend-api-venv-project-from-outside-the-workspace
           --expect-control control-vulnpol-baseline-frontend-binaries
           --expect-control control-vulnpol-critical-nofix-frontend-binary-trivy
           --expect-control control-vulnpol-high-fix-frontend-binary-trivy
@@ -367,13 +371,15 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
-        # repository code runs; the venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
+        # writable; it is scanned as installed below.
         run: |
           mkdir -p ci-logs
-          python -m venv apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
-          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
+          python -m venv --clear apps/api/.venv
+          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
           python3 security/stage_inputs.py readonly apps/api/.venv
 
@@ -397,8 +403,8 @@ jobs:
         # never an unpinned build-isolation fetch. .locktools is made read-only before the tools tests run, and it is scanned as
         # installed and reconciled against its lock below.
         run: |
-          python -m venv .locktools
-          .locktools/bin/python -m pip install --quiet --require-hashes --no-deps -r apps/api/requirements-locktools.txt
+          python -m venv --clear .locktools
+          .locktools/bin/python -m pip install --quiet --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-locktools.txt
           .locktools/bin/python -m pip check
           python3 security/stage_inputs.py readonly .locktools
           .locktools/bin/python -m pip --version
@@ -417,7 +423,7 @@ jobs:
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
       # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
@@ -674,6 +680,8 @@ jobs:
           --expect-control control-vulnpol-backend-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-backend-api-venv-truncated-inventory
           --expect-control control-vulnpol-backend-api-venv-project-not-from-the-checkout
+          --expect-control control-vulnpol-backend-api-venv-project-from-an-index-url
+          --expect-control control-vulnpol-backend-api-venv-project-from-outside-the-workspace
           --expect-control control-vulnpol-baseline-backend-binaries
           --expect-control control-vulnpol-critical-nofix-backend-binary-trivy
           --expect-control control-vulnpol-high-fix-backend-binary-trivy
@@ -752,14 +760,16 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
-        # repository code runs; the venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
+        # writable; it is scanned as installed below.
         run: |
           mkdir -p ci-logs
           npm ci 2>&1 | tee ci-logs/npm-ci.log
-          python -m venv apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
-          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
+          python -m venv --clear apps/api/.venv
+          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt 2>&1 | tee ci-logs/pip-install.log
+          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt 2>&1 | tee -a ci-logs/pip-install.log
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api 2>&1 | tee -a ci-logs/pip-install.log
           python3 security/stage_inputs.py readonly apps/api/.venv
 
@@ -787,7 +797,7 @@ jobs:
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
       # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
@@ -1007,6 +1017,8 @@ jobs:
           --expect-control control-vulnpol-migrations-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-migrations-api-venv-truncated-inventory
           --expect-control control-vulnpol-migrations-api-venv-project-not-from-the-checkout
+          --expect-control control-vulnpol-migrations-api-venv-project-from-an-index-url
+          --expect-control control-vulnpol-migrations-api-venv-project-from-outside-the-workspace
           --expect-control control-vulnpol-baseline-migrations-binaries
           --expect-control control-vulnpol-critical-nofix-migrations-binary-trivy
           --expect-control control-vulnpol-high-fix-migrations-binary-trivy
@@ -1299,7 +1311,7 @@ jobs:
       - name: Create the security tooling virtualenv (Semgrep, hash-locked)
         run: |
           python3 -m venv .security-venv
-          .security-venv/bin/python -m pip install --quiet --require-hashes -r security/requirements-semgrep.txt
+          .security-venv/bin/python -m pip install --quiet --require-hashes --only-binary :all: -r security/requirements-semgrep.txt
           .security-venv/bin/semgrep --version
 
       - name: Fetch and validate the Semgrep rulesets (provenance recorded)
@@ -1749,19 +1761,21 @@ jobs:
         # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
         # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
         # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
-        # --no-build-isolation, so no unpinned build dependency is fetched. The last line makes the venv read-only before any
-        # repository code runs; the venv is scanned as installed below.
+        # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed. The venv is created with --clear,
+        # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
+        # writable; it is scanned as installed below.
         run: |
-          python -m venv apps/api/.venv
-          apps/api/.venv/bin/python -m pip install --require-hashes --no-deps -r apps/api/requirements-bootstrap.txt
-          apps/api/.venv/bin/pip install --require-hashes -r apps/api/requirements-dev.txt
+          python -m venv --clear apps/api/.venv
+          apps/api/.venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
+          apps/api/.venv/bin/pip install --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
           apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
           python3 security/stage_inputs.py readonly apps/api/.venv
 
       # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
       # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
       # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
-      # The environment was made read-only at the end of its own install, before any repository code ran, and both of
+      # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
       # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
       # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
       # The Trivy binary the job executes is analysed and bound to its pinned release digest (security/scanner-binaries.json).
@@ -1950,6 +1964,8 @@ jobs:
           --expect-control control-vulnpol-integration-api-venv-vendored-report-of-another-directory
           --expect-control control-vulnpol-integration-api-venv-truncated-inventory
           --expect-control control-vulnpol-integration-api-venv-project-not-from-the-checkout
+          --expect-control control-vulnpol-integration-api-venv-project-from-an-index-url
+          --expect-control control-vulnpol-integration-api-venv-project-from-outside-the-workspace
           --expect-control control-vulnpol-baseline-integration-binaries
           --expect-control control-vulnpol-critical-nofix-integration-binary-trivy
           --expect-control control-vulnpol-high-fix-integration-binary-trivy
@@ -2018,7 +2034,7 @@ jobs:
         # its own pip inspect inventory at the end of this job (twice, so a later install fails).
         run: |
           python -m venv .reader-venv
-          .reader-venv/bin/python -m pip install --require-hashes --no-deps -r apps/revision-reader/requirements-dev.txt
+          .reader-venv/bin/python -m pip install --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-dev.txt
           .reader-venv/bin/python -m pip install --no-deps --no-build-isolation -e apps/revision-reader
           .reader-venv/bin/python -m pip check
           # GATE 4N-I28BH-E2. The main Gate-4N security suite runs UNDER this reader venv
@@ -2039,7 +2055,9 @@ jobs:
       # P6-CI-6 closure: installed from scripts/requirements-gate-hashes.txt, the hash lock compiled
       # from that contract (the same PyYAML pin), with --require-hashes --no-deps.
       - name: Install Gate 4N guard dependencies
-        run: python3 -m pip install --require-hashes --no-deps -r scripts/requirements-gate-hashes.txt
+        # --only-binary :all: (P6-CI-6 coverage gaps): a source build would fetch its build requirements unpinned and unhashed.
+        run: |
+          python3 -m pip install --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt
 
       - name: Gate 4N guard dependency contract
         id: gate_dependencies
