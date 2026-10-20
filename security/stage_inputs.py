@@ -19,6 +19,13 @@ Copy each executable the pins file names for JOB (`jobs`), resolved on PATH exac
 sha256, for a `trivy rootfs` Go binary analysis of the copies. The binary gate re-hashes both the
 copy and the recorded path against the pinned release digest.
 
+    python3 security/stage_inputs.py readonly ROOT [ROOT ...]
+
+Remove every write permission from each installed environment (its directories and files; symbolic links are
+left alone), right after its first inventory, so that an ordinary later install or uninstall into it fails its
+step instead of escaping both inventories. The tooling gate's --require-read-only checks it at each gate. Code
+that restores write permission first is not stopped by this (the README's disclosed limit).
+
 DIR must not exist yet, so nothing stale is ever scanned. Exit 0 staged, 2 an input is missing or
 cannot be accounted for, 5 usage. Stdlib only; no network.
 """
@@ -101,6 +108,25 @@ def stage_binaries(out: pathlib.Path, manifest: pathlib.Path, names: list[str]) 
     return lines
 
 
+def make_read_only(roots: list[str]) -> list[str]:
+    lines = []
+    for root in roots:
+        top = pathlib.Path(root)
+        if top.is_symlink() or not top.is_dir():
+            raise gate.ReportError(f"{root} is not a directory: nothing to make read-only")
+        count = 0
+        for here, dirs, files in os.walk(top, topdown=False):
+            for name in files + dirs:
+                path = os.path.join(here, name)
+                if os.path.islink(path):
+                    continue
+                os.chmod(path, os.lstat(path).st_mode & ~0o222)
+                count += 1
+        os.chmod(top, os.lstat(top).st_mode & ~0o222)
+        lines.append(f"{root}: {count + 1} files and directories made read-only")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -112,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--job", required=True)
     b.add_argument("--out", required=True)
     b.add_argument("--manifest", required=True)
+    r = sub.add_parser("readonly")
+    r.add_argument("roots", nargs="+")
     try:
         args = p.parse_args(argv)
     except SystemExit as exc:
@@ -119,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "vendored":
             lines = stage_vendored(pathlib.Path(args.out), [tuple(e) for e in args.env])
+        elif args.command == "readonly":
+            lines = make_read_only(args.roots)
         else:
             names = list(gate.load_binary_pins(pathlib.Path(args.pins), args.job))
             lines = stage_binaries(pathlib.Path(args.out), pathlib.Path(args.manifest), names)

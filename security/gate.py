@@ -46,19 +46,25 @@ report), fails completeness instead of escaping coverage. Three further checks b
 (P6-CI-6 coverage gaps, operator order 2026-10-20):
   * vendored copies: every installed pip vendors packages that carry no dist-info of their own. The gate
     reads each installed pip's own `pip/_vendor/vendor.txt` from the environment and requires exactly
-    those pins in a filesystem scan of the staged pin list (`--vendored-report`, `--vendored-target`,
-    staged by security/stage_inputs.py); their findings are evaluated at the tooling scope. A pip without
+    those pins in a filesystem scan of the staged pin list (`--vendored-report`, which must describe the
+    staging directory `--vendored-artifact`, and `--vendored-target`, staged by security/stage_inputs.py);
+    their findings are evaluated at the tooling scope. A pip without
     a readable vendor.txt, or an installed pip with no vendored-pin scan, is an incomplete analysis.
   * reproducible installation (`--locked-by LOCK`, `--locked-extra NAME`): the installed distributions
-    must be exactly the pins of the hash locks (plus the named project installed from the checkout), at
-    the locked versions; anything installed outside the locks is an incomplete analysis.
+    must be exactly the pins of the hash locks (plus the named project, which must be an editable install
+    from a directory inside the working directory), at the locked versions; anything installed outside the
+    locks is an incomplete analysis.
+  * read-only between inventories (`--require-read-only`): an environment made read-only right after its
+    first inventory (security/stage_inputs.py readonly) must still be read-only at each gate, so an
+    ordinary later install or uninstall fails its step instead of escaping both inventories.
   * population: the summary states how many scanned packages sit at an installed distribution's metadata,
     at another metadata path inside the environment (e.g. setuptools/_vendor) and without a file path (from
     an SBOM a package ships), instead of a blanket "vendored copies included".
 
 Final images (`vuln --kind image`): an image whose report lists an installed pip fails as incomplete,
-because an image scan does not analyse pip's vendored copies; the API Dockerfile removes pip and the
-interpreter's bundled ensurepip wheel from its runtime stage.
+because an image scan analyses pip's vendored copies only when that pip ships an SBOM of them (pip 26.2.1
+does, 25.x does not); the API Dockerfile removes pip and the interpreter's bundled ensurepip wheel from its
+runtime stage.
 
 Scanner and tool binaries (`vuln --kind binary`, operator order 2026-10-20): the Trivy and OpenTofu binaries
 the job actually executes are copied into a staging directory (security/stage_inputs.py, which records the
@@ -304,33 +310,57 @@ def lock_pins(path: pathlib.Path) -> dict:
     return out
 
 
-def _check_locked(dists: list[tuple[str, str, str]], locks: list[pathlib.Path], extras: list[str]) -> str:
-    """The installed distributions must be exactly the locks' pins (plus the named extras, any version)."""
+def _editable_from_checkout(installed: object, name: str) -> str | None:
+    """Why the inventory's `name` is not an editable install from a file:// URL inside the working directory, or None."""
+    entries = [it for it in installed.get("installed", []) if _norm_dist((it.get("metadata") or {}).get("name", "")) == name]
+    if len(entries) != 1:
+        return f"{len(entries)} inventory entries"
+    direct = entries[0].get("direct_url")
+    if not isinstance(direct, dict) or not (direct.get("dir_info") or {}).get("editable") is True:
+        return "not an editable install (no direct_url.dir_info.editable)"
+    url = direct.get("url")
+    if not isinstance(url, str) or not url.startswith("file://"):
+        return f"installed from {url!r}, not a local directory"
+    path = os.path.realpath(url[len("file://"):])
+    rel = os.path.relpath(path, os.path.realpath(os.getcwd()))
+    if rel.startswith(os.pardir) or os.path.isabs(rel):
+        return f"installed from {path}, outside the working directory"
+    return None
+
+
+def _check_locked(dists: list[tuple[str, str, str]], locks: list[pathlib.Path], extras: list[str], installed: object = None) -> str:
+    """The installed distributions must be exactly the locks' pins (plus the named extras, any version, each an editable
+    install from the checkout)."""
     pinned: dict = {}
     for lock in locks:
         for name, version in lock_pins(lock).items():
             _require(pinned.get(name, version) == version, f"{name} is pinned at two versions across {[str(x) for x in locks]}", ReportError)
             pinned[name] = version
     extra = {_norm_dist(x) for x in extras}
+    inventory = installed if installed is not None else {"installed": []}
     installed = {name: version for name, version, _ in dists}
     unlocked = sorted(f"{n} {v}" for n, v in installed.items() if n not in pinned and n not in extra)
     differ = sorted(f"{n} {v} (locked {pinned[n]})" for n, v in installed.items() if n in pinned and pinned[n] != v)
     absent = sorted(f"{n}=={v}" for n, v in pinned.items() if n not in installed)
     absent += sorted(n for n in extra if n not in installed)
+    not_checkout = sorted(f"{n}: {why}" for n in extra if n in installed and (why := _editable_from_checkout(inventory, n)))
     _require(not unlocked, f"{len(unlocked)} installed distribution(s) are not in the lock(s) — installed outside the hash-locked installation: {unlocked}")
     _require(not differ, f"{len(differ)} installed distribution(s) differ from the locked version: {differ}")
     _require(not absent, f"{len(absent)} locked distribution(s) are not installed: {absent}")
+    _require(not not_checkout, f"--locked-extra distribution(s) not installed from the checkout: {not_checkout}")
     return (f"installation: the {len(installed)} installed distributions are exactly the {len(pinned)} pins of "
-            f"{', '.join(str(x) for x in locks)}" + (f" plus {sorted(extra)} (installed from the checkout)" if extra else "")
+            f"{', '.join(str(x) for x in locks)}" + (f" plus {sorted(extra)} (editable installs from the working directory, per pip inspect's direct_url)" if extra else "")
             + ", at the locked versions")
 
 
-def _vendored_result(vreport: object, target: str, expected: list[tuple[str, str]]) -> dict:
+def _vendored_result(vreport: object, artifact: str, target: str, expected: list[tuple[str, str]]) -> dict:
     """The vendored-pin scan's result for `target`, checked to list exactly the expected pins."""
     _require(isinstance(vreport, dict) and vreport.get("SchemaVersion") == 2 and isinstance(vreport.get("Results"), list),
              "vendored-pin report: not a Trivy SchemaVersion 2 report with a Results list", ReportError)
     _require(vreport.get("ArtifactType") in ARTIFACT_TYPES["filesystem"],
              f"vendored-pin report: artifact type is {vreport.get('ArtifactType')!r}, expected a filesystem scan of the staged pin lists")
+    _require(vreport.get("ArtifactName") == artifact,
+             f"vendored-pin report: artifact name is {vreport.get('ArtifactName')!r}, expected {artifact!r} — the report describes something else")
     hits = [r for r in vreport["Results"] if isinstance(r, dict) and r.get("Target") == target]
     if not expected:
         _require(not hits or not (hits[0].get("Packages") or []), f"vendored-pin report lists packages for {target!r}, but no installed pip declares any")
@@ -371,7 +401,8 @@ def load_binary_pins(path: pathlib.Path, job: str) -> dict:
 def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
                   expect_targets: list[str], min_lang_packages: int, installed: object = None,
                   env_root: pathlib.Path | None = None, control_target_scopes: dict | None = None,
-                  vendored_report: object = None, vendored_target: str | None = None,
+                  vendored_report: object = None, vendored_target: str | None = None, vendored_artifact: str | None = None,
+                  require_read_only: bool = False,
                   locked_by: list[pathlib.Path] | None = None, locked_extra: list[str] | None = None,
                   binaries: list[str] | None = None, binary_pins: dict | None = None,
                   binary_manifest: object = None) -> tuple[list[str], list[str]]:
@@ -418,8 +449,8 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
         lines.append(f"population: {os_pkgs} OS packages, {lang_pkgs} language packages (floor {min_lang_packages})")
         pips = sorted({f"pip {p.get('Version')} at {p.get('FilePath')}" for r in results if r.get("Class") == "lang-pkgs" and r.get("Type") == "python-pkg"
                        for p in r.get("Packages") or [] if _norm_dist(p.get("Name")) == "pip"})
-        _require(not pips, f"the image ships an installer ({'; '.join(pips)}): an image scan does not analyse the packages pip vendors, "
-                           "so the final image must not carry pip")
+        _require(not pips, f"the image ships an installer ({'; '.join(pips)}): an image scan analyses the packages pip vendors only when "
+                           "that pip ships an SBOM of them (pip 26.2.1 does, 25.x does not), so the final image must not carry pip")
         lines.append("installers: no pip in the image's analysed Python population")
     elif kind == "tooling":
         _require(installed is not None and env_root is not None, "tooling: an installed-distribution inventory and the environment root are required", ReportError)
@@ -445,17 +476,29 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
         at_own = sum(1 for p in lang if p.get("FilePath") and str(p["FilePath"]).replace(os.sep, "/") in own)
         lines.append(f"population: {len(dists)} installed distributions (floor {min_lang_packages}), every one present in the scan at its own metadata path; "
                      f"the scan lists {total} language packages: {at_own} at an installed distribution's metadata, {len(lang) - at_own - no_path} at other "
-                     f"metadata paths inside the environment (e.g. setuptools/_vendor), {no_path} without a file path (from an SBOM a package ships, "
-                     f"e.g. pip's _vendor/bom.cdx.json)")
+                     f"metadata paths inside the environment (e.g. setuptools/_vendor), {no_path} without a file path (for example the "
+                     f"packages listed by an SBOM a package ships, such as pip's _vendor/bom.cdx.json)")
+        if require_read_only:
+            writable = []
+            for here, dirs, files in os.walk(env_root):
+                for name in dirs + files:
+                    path = os.path.join(here, name)
+                    if not os.path.islink(path) and os.lstat(path).st_mode & 0o222:
+                        writable.append(os.path.relpath(path, env_root))
+            if os.lstat(env_root).st_mode & 0o222:
+                writable.insert(0, ".")
+            _require(not writable, f"{len(writable)} path(s) of {artifact} are writable, so it was not kept read-only after its first inventory "
+                                   f"(an install or uninstall in between would not be observed): {sorted(writable)[:5]}")
+            lines.append(f"read-only: every file and directory of {artifact} is without write permission (made read-only after its first inventory)")
         if locked_by:
-            lines.append(_check_locked(dists, locked_by, locked_extra or []))
+            lines.append(_check_locked(dists, locked_by, locked_extra or [], installed))
         vendors = pip_vendored_pins(installed, env_root)
         expected = sorted({pin for _, _, pins in vendors for pin in pins})
         _require(not vendors or (vendored_report is not None and vendored_target),
                  f"{'; '.join(f'pip {v} declares {len(pins)} vendored packages ({vrel})' for v, vrel, pins in vendors)}, but no vendored-pin scan "
                  "was given (--vendored-report, --vendored-target): they are not accounted for")
         if vendored_report is not None:
-            res = _vendored_result(vendored_report, vendored_target, expected)
+            res = _vendored_result(vendored_report, vendored_artifact, vendored_target, expected)
             if res:
                 extra_results.append(res)
         if vendors:
@@ -1462,12 +1505,15 @@ def run(args: argparse.Namespace) -> int:
                              "--control-target-scope requires --expect-fail\n")
             return EXIT_USAGE
         binary = args.kind == "binary"
-        if (not tooling and (args.vendored_report or args.vendored_target or args.locked_by or args.locked_extra)) \
-                or bool(args.vendored_report) != bool(args.vendored_target) or (args.locked_extra and not args.locked_by) \
+        if (not tooling and (args.vendored_report or args.vendored_target or args.vendored_artifact or args.locked_by or args.locked_extra
+                             or args.require_read_only)) \
+                or not (bool(args.vendored_report) == bool(args.vendored_target) == bool(args.vendored_artifact)) \
+                or (args.locked_extra and not args.locked_by) \
                 or binary != bool(args.binary_job) or binary != bool(args.binary_pins) or binary != bool(args.binary_manifest):
             # The vendored-pin scan and the lock reconciliation belong to an installed environment; the binary
             # names, pins and staging manifest to --kind binary, and to nothing else.
-            sys.stderr.write("--vendored-report/--vendored-target (together) and --locked-by/--locked-extra are --kind tooling options; "
+            sys.stderr.write("--vendored-report/--vendored-target/--vendored-artifact (together), --locked-by/--locked-extra and --require-read-only "
+                             "are --kind tooling options; "
                              "--kind binary requires --binary-job, --binary-pins and --binary-manifest, and only it accepts them\n")
             return EXIT_USAGE
         control_scopes = {}
@@ -1502,7 +1548,7 @@ def run(args: argparse.Namespace) -> int:
                 if args.vendored_report:
                     vpath = pathlib.Path(args.vendored_report)
                     header.append(f"vendored-pin report: {vpath}" + (f" sha256 {_sha256(vpath)}" if vpath.is_file() else " (missing)")
-                                  + f"; target {args.vendored_target}")
+                                  + f"; artifact {args.vendored_artifact}; target {args.vendored_target}")
                 for lock in args.locked_by or []:
                     lpath = pathlib.Path(lock)
                     header.append(f"lock: {lpath}" + (f" sha256 {_sha256(lpath)}" if lpath.is_file() else " (missing)"))
@@ -1525,6 +1571,7 @@ def run(args: argparse.Namespace) -> int:
                                                   env_root=pathlib.Path(args.env_root) if args.env_root else None,
                                                   control_target_scopes=control_scopes,
                                                   vendored_report=vendored, vendored_target=args.vendored_target,
+                                                  vendored_artifact=args.vendored_artifact, require_read_only=args.require_read_only,
                                                   locked_by=[pathlib.Path(x) for x in args.locked_by or []],
                                                   locked_extra=args.locked_extra or [],
                                                   binaries=list(binary_pins or {}), binary_pins=binary_pins,
@@ -1617,6 +1664,8 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--control-target-scope", action="append", help="negative controls only (requires --expect-fail): TARGET=SCOPE for a fixture lock target")
     v.add_argument("--vendored-report", help="tooling: the filesystem scan of the staged vendored-pin lists (security/stage_inputs.py vendored)")
     v.add_argument("--vendored-target", help="tooling: this environment's target in the vendored-pin report")
+    v.add_argument("--vendored-artifact", help="tooling: the staging directory the vendored-pin report must describe (its ArtifactName)")
+    v.add_argument("--require-read-only", action="store_true", help="tooling: the environment must be without write permission (made read-only after its first inventory)")
     v.add_argument("--locked-by", action="append", help="tooling: a hash lock the environment was installed from; installed == the locks' pins")
     v.add_argument("--locked-extra", action="append", help="tooling: a distribution installed from the checkout, not from a lock (e.g. the editable project)")
     v.add_argument("--binary-job", help="binary: the job whose binaries (named under `jobs` in --binary-pins) must each be analysed")

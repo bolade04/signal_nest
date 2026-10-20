@@ -1,7 +1,19 @@
 {
-  "_comment": "P6-CI-6 coverage gaps (operator order 2026-10-20). The release digests of the scanner and tool binaries the required CI jobs execute, for the binary gate (security/gate.py vuln --kind binary): the binary a job actually runs, and the copy Trivy analyses, must both hash to `sha256`, and Trivy's Go binary analysis must report `module` at `module_version` and recover the Go standard library version. Each `sha256` was derived from the vendor's release asset after checking that asset against the release's published checksum file (`release_checksums`); that checks integrity against the release page, not a signature. `jobs` names, per required CI job, the binaries that job executes and must analyse; `installed_by` names the workflow input that selects the version; security/test_scanner_configuration.py keeps the versions here equal to the workflow's.",
+  "_comment": "P6-CI-6 coverage gaps (operator order 2026-10-20). The release digests of the scanner and tool binaries the required CI jobs execute, for the binary gate (security/gate.py vuln --kind binary): the binary a job actually runs, and the copy Trivy analyses, must both hash to `sha256`, and Trivy's Go binary analysis must report `module` at `module_version` and recover the Go standard library version. Each `sha256` was derived from the vendor's release asset after checking that asset against the release's published checksum file (`release_checksums`); that checks integrity against the release page, not a signature. `jobs` names, per required CI job, the binaries that job executes and must analyse (every job that runs a trivy-action step executes Trivy; only Revision reader runs OpenTofu; security/test_scanner_configuration.py derives that list from the workflow and requires it here); `installed_by` names the workflow input that selects the version; security/test_scanner_configuration.py keeps the versions here equal to the workflow's.",
   "jobs": {
+    "frontend-quality": [
+      "trivy"
+    ],
+    "backend-quality": [
+      "trivy"
+    ],
+    "migration-and-contract": [
+      "trivy"
+    ],
     "container-build": [
+      "trivy"
+    ],
+    "integration-smoke": [
       "trivy"
     ],
     "revision-reader": [

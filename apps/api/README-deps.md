@@ -111,7 +111,12 @@ is wrong and is a defect in pip-tools 7.5.2's header reconstruction (`piptools/u
 for its *default* value. Reproduction: `printf 'six\n' > req.in && pip-compile req.in`
 prints `--no-index` in the header while resolving from PyPI, and a real
 `pip-compile --no-index req.in` fails with "No matching distribution found". Use the
-commands above, never the header line.
+commands above, never the header line. *(2026-10-20: the same caveat applies to
+`requirements-bootstrap.txt` and `requirements-locktools.txt`, compiled against PyPI with the commands
+above. `tools/verify_locks.py` re-resolves only the runtime and dev locks; the bootstrap and
+lock-toolchain locks are checked by their hash-checked installs, `pip check`, the scanned-as-installed
+reconciliation against them and the pin-agreement tests in `security/test_tooling_locks.py`, not by a
+resolution check.)*
 
 Hashes cover every published artifact of each pinned version, so one lock is intended to
 serve the linux/amd64 image, CI and macOS development; that equivalence is established by

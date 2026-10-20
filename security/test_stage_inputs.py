@@ -107,6 +107,32 @@ class Staging(unittest.TestCase):
         finally:
             os.environ["PATH"] = saved
 
+    def test_readonly_removes_every_write_permission_and_leaves_links_alone(self):
+        env = self.dir / "venv"
+        env_with(env, [("pip", "26.2.1")], "requests==2.32.3\n")
+        (env / "lib64").symlink_to("lib")
+        (env / "bin").mkdir(); (env / "bin" / "python").write_text("x", encoding="utf-8")
+        try:
+            code, text = self.run_main("readonly", str(env))
+            self.assertEqual(code, 0, text)
+            for here, dirs, files in os.walk(env):
+                for name in dirs + files:
+                    path = os.path.join(here, name)
+                    if not os.path.islink(path):
+                        self.assertEqual(os.lstat(path).st_mode & 0o222, 0, path)
+            self.assertEqual(os.lstat(env).st_mode & 0o222, 0)
+            self.assertTrue((env / "lib64").is_symlink())
+            with self.assertRaises(PermissionError):           # an ordinary later write fails
+                (env / "lib" / "late-install.txt").write_text("x", encoding="utf-8")
+        finally:
+            for here, dirs, files in os.walk(env):
+                os.chmod(here, 0o755)
+                for name in files:
+                    if not os.path.islink(os.path.join(here, name)):
+                        os.chmod(os.path.join(here, name), 0o644)
+        code, _ = self.run_main("readonly", str(self.dir / "missing"))
+        self.assertEqual(code, gate.EXIT_REPORT)
+
     def test_the_real_pins_name_each_jobs_binaries(self):
         doc = json.loads((HERE / "scanner-binaries.json").read_text(encoding="utf-8"))
         for job in doc["jobs"]:

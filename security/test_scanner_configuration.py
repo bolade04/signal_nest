@@ -38,8 +38,8 @@ ROOT = HERE.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 # The run-time refusal's file names, pinned literally (a shrunk tuple in gate.py must fail here, not shrink the test).
 SUPPRESSION_FILES = (".trivyignore", ".trivyignore.yaml", ".trivyignore.yml", "trivy.yaml", "trivy.yml", ".trivy.yaml", ".trivy.yml")
-TRIVY_STEPS = {"frontend-quality": 2, "backend-quality": 3, "migration-and-contract": 2, "container-build": 17,
-               "integration-smoke": 2, "revision-reader": 9}
+TRIVY_STEPS = {"frontend-quality": 6, "backend-quality": 7, "migration-and-contract": 6, "container-build": 17,
+               "integration-smoke": 6, "revision-reader": 9}
 REVIEWED_USES = {
     "frontend-quality": {"actions/checkout@v7", "actions/setup-node@v6", "actions/setup-python@v6", "actions/upload-artifact@v7",
                          "aquasecurity/trivy-action@v0.36.0"},
@@ -250,7 +250,15 @@ class ScannerConfiguration(unittest.TestCase):
                 self.assertEqual(pin["module_version"], "v" + pin["version"])
                 self.assertRegex(pin["sha256"], r"^[0-9a-f]{64}$")
                 self.assertIn(pin["version"], pin["release_asset"])
-        self.assertEqual(pins["jobs"], {"container-build": ["trivy"], "revision-reader": ["trivy", "tofu"]})
+        # The binaries each job executes, derived from the workflow: every job with a trivy-action step runs Trivy, and the
+        # job that sets up OpenTofu runs tofu. Each such job must analyse exactly those, by its own list in the pins.
+        derived = {}
+        for job in TRIVY_STEPS:
+            body = job_text(text, job)
+            names = (["trivy"] if "uses: aquasecurity/trivy-action@" in body else []) + (["tofu"] if "uses: opentofu/setup-opentofu@" in body else [])
+            if names:
+                derived[job] = names
+        self.assertEqual(pins["jobs"], derived)
         for job, names in pins["jobs"].items():   # each job that executes a pinned binary gates it, by that job's list
             with self.subTest(job):
                 body = job_text(text, job)

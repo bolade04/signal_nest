@@ -71,18 +71,21 @@ LOCKS_ARGS = ["--kind", "filesystem", "--artifact", ".",
 API_IMAGE_ARGS = ["--kind", "image", "--artifact", "signalnest-api:ci", "--min-lang-packages", "40"]
 READER_IMAGE_ARGS = ["--kind", "image", "--artifact", "signalnest-revision-reader:ci", "--min-lang-packages", "1"]
 VENDORED = "trivy-vendored-pins-vuln.json"      # each job's filesystem scan of its staged vendored-pin lists
+VENDORED_ARTIFACT = ".vendored-pins"          # the staging directory each vendored-pin report must describe
 READER_TOOLING_ARGS = ["--kind", "tooling", "--artifact", ".reader-venv", "--env-root", ".reader-venv", "--min-lang-packages", "15",
-                       "--vendored-target", "reader-venv/requirements-vendored-pip.txt"]
+                       "--vendored-artifact", VENDORED_ARTIFACT, "--vendored-target", "reader-venv/requirements-vendored-pip.txt"]
 SECURITY_TOOLING_ARGS = ["--kind", "tooling", "--artifact", ".security-venv", "--env-root", ".security-venv", "--min-lang-packages", "60",
-                         "--vendored-target", "security-venv/requirements-vendored-pip.txt"]
+                         "--vendored-artifact", VENDORED_ARTIFACT, "--vendored-target", "security-venv/requirements-vendored-pip.txt"]
 PYTHON_LOCATION = "${{ env.pythonLocation }}"   # resolved from the environment at run time, as the workflow resolves it
 READER_SYSPY_ARGS = ["--kind", "tooling", "--artifact", PYTHON_LOCATION, "--env-root", PYTHON_LOCATION, "--min-lang-packages", "2",
-                     "--vendored-target", "reader-syspy/requirements-vendored-pip.txt"]
+                     "--vendored-artifact", VENDORED_ARTIFACT, "--vendored-target", "reader-syspy/requirements-vendored-pip.txt"]
 API_VENV_ARGS = ["--kind", "tooling", "--artifact", "apps/api/.venv", "--env-root", "apps/api/.venv", "--min-lang-packages", "52",
                  "--locked-by", "apps/api/requirements-bootstrap.txt", "--locked-by", "apps/api/requirements-dev.txt",
-                 "--locked-extra", "signalnest-api", "--vendored-target", "api-venv/requirements-vendored-pip.txt"]
+                 "--locked-extra", "signalnest-api", "--vendored-artifact", VENDORED_ARTIFACT,
+                 "--vendored-target", "api-venv/requirements-vendored-pip.txt", "--require-read-only"]
 LOCKTOOLS_ARGS = ["--kind", "tooling", "--artifact", ".locktools", "--env-root", ".locktools", "--min-lang-packages", "7",
-                  "--locked-by", "apps/api/requirements-locktools.txt", "--vendored-target", "locktools/requirements-vendored-pip.txt"]
+                  "--locked-by", "apps/api/requirements-locktools.txt", "--vendored-artifact", VENDORED_ARTIFACT,
+                  "--vendored-target", "locktools/requirements-vendored-pip.txt", "--require-read-only"]
 
 
 def binary_args(job: str) -> list[str]:
@@ -91,6 +94,8 @@ def binary_args(job: str) -> list[str]:
 
 BINARY_MANIFEST = "scanner-binaries-manifest.json"
 API_JOBS = ("frontend", "backend", "migrations", "integration")
+API_JOB_IDS = {"frontend": "frontend-quality", "backend": "backend-quality", "migrations": "migration-and-contract",
+               "integration": "integration-smoke"}
 
 # key: (report, gate arguments, inventory, vendored-pin report, binary staging manifest). The driver passes the
 # inventory (--installed-inventory), the vendored-pin report (--vendored-report) and the manifest (--binary-manifest)
@@ -108,6 +113,7 @@ REPORTS = {
 }
 for _job in API_JOBS:
     REPORTS[f"{_job}-api-venv"] = ("trivy-api-venv-vuln.json", API_VENV_ARGS, "api-venv-installed.json", VENDORED, None)
+    REPORTS[f"{_job}-binaries"] = ("trivy-scanner-binaries-vuln.json", binary_args(API_JOB_IDS[_job]), None, None, BINARY_MANIFEST)
 
 # Package selectors: (result predicate, package predicate) over the real report.
 OS_PKG = (lambda r: r.get("Class") == "os-pkgs", lambda p: True)
@@ -236,8 +242,22 @@ def _environment_cases(group: str, key: str) -> dict:
     }
 
 
+def _binary_cases(group: str) -> dict:
+    """The Trivy binary cases of one API job (it runs Trivy, so it analyses the Trivy it executes)."""
+    key = f"{group}-binaries"
+    return {
+        f"baseline-{key}": (group, key, ("baseline",), "pass", None),
+        f"critical-nofix-{group}-binary-trivy": (group, key, ("inject", GOBINARY("trivy"), "CRITICAL", False), "violation", f"CONTROL-critical-nofix-{group}-binary-trivy"),
+        f"high-fix-{group}-binary-trivy": (group, key, ("inject", GOBINARY("trivy"), "HIGH", True), "reported", f"CONTROL-high-fix-{group}-binary-trivy"),
+        f"{group}-binary-trivy-analysis-missing": (group, key, ("drop-binary", "trivy"), "incomplete", "unsupported or incomplete"),
+        f"{group}-binary-trivy-stdlib-missing": (group, key, ("drop-stdlib", "trivy"), "incomplete", "standard library version was not recovered"),
+        f"{group}-binary-trivy-manifest-digest-differs": (group, key, ("manifest-digest", "trivy"), "incomplete", "staging manifest does not record"),
+    }
+
+
 for _job in API_JOBS:
     CASES.update(_environment_cases(_job, f"{_job}-api-venv"))
+    CASES.update(_binary_cases(_job))
 CASES.update(_environment_cases("backend", "backend-locktools"))
 GROUPS = ("container", "reader") + API_JOBS
 

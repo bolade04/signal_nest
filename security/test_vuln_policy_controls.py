@@ -43,6 +43,7 @@ REAL_STEPS = {"locks": {"locks-vuln": None}, "api-image": {"image-api-vuln": Non
               "backend-locktools": {"locktools": "locktools-installed.json", "locktools-final": "locktools-installed-final.json"}}
 for _g in ctl.API_JOBS:
     REAL_STEPS[f"{_g}-api-venv"] = {"api-venv": "api-venv-installed.json", "api-venv-final": "api-venv-installed-final.json"}
+    REAL_STEPS[f"{_g}-binaries"] = {"scanner-binaries": None}
 # the inventory commands, in workflow order, per tooling report: (first inventory, final inventory)
 INVENTORY_COMMANDS = {"reader-tooling": ".reader-venv/bin/python -m pip inspect > security-reports/reader-tooling-venv-installed{}.json",
                       "reader-syspy": "python3 -m pip inspect > security-reports/reader-tooling-syspy-installed{}.json",
@@ -67,6 +68,8 @@ PASS_THROUGH = {
     "critical-nofix-reader-syspy-vendored-pin", "critical-nofix-reader-binary-trivy", "critical-nofix-reader-binary-tofu"}
 ENV_KEYS = [f"{g}-api-venv" for g in ctl.API_JOBS] + ["backend-locktools"]
 PASS_THROUGH |= {f"critical-nofix-{k}" for k in ENV_KEYS} | {f"critical-nofix-{k}-vendored-pin" for k in ENV_KEYS}
+PASS_THROUGH |= {f"critical-nofix-{g}-binary-trivy" for g in ctl.API_JOBS}
+READ_ONLY_ENVS = ("apps/api/.venv", ".locktools")       # the gates of these environments carry --require-read-only
 SITE = "lib/python3.12/site-packages"
 PIP_TARGETS = ["apps/api/requirements-runtime.txt", "apps/api/requirements-dev.txt", "apps/api/requirements-bootstrap.txt",
                "apps/api/requirements-locktools.txt", "scripts/requirements-gate.txt",
@@ -217,22 +220,34 @@ class Pinning(unittest.TestCase):
                 self.assertEqual(job.count(cmd.format("")), 1); self.assertEqual(job.count(cmd.format("-final")), 1)
         self.assertNotIn("pip inspect --local", self.text, "--local hides distributions a path entry adds from outside the environment")
 
-    def test_the_rootfs_scanner_control_is_required_in_both_jobs(self):
-        for job in ("container-build", "revision-reader"):
+    def test_the_rootfs_scanner_control_is_required_in_every_job(self):
+        for job in JOBS.values():
             with self.subTest(job):
                 text = job_text(self.text, job)
                 self.assertIn("--expect-control control-tooling-rootfs", text)
                 self.assertIn("scan-ref: security/controls/tooling-env", text)
                 self.assertIn("--name control-tooling-rootfs", text)
 
-    def test_the_vendored_pin_scanner_control_is_required_in_both_security_scanned_jobs(self):
-        for job in ("container-build", "revision-reader"):
+    def test_the_vendored_pin_scanner_control_is_required_in_every_job(self):
+        for job in JOBS.values():
             with self.subTest(job):
                 text = job_text(self.text, job)
                 self.assertIn("--expect-control control-vendored-pins", text)
                 self.assertIn("--env control security/controls/vendored-env security/controls/vendored-env-installed.json", text)
                 self.assertIn("scan-ref: .vendored-pins-control", text)
                 self.assertIn("--expect-fail\n          --expect-violation target=control/requirements-vendored-pip.txt", text)
+                self.assertIn("--vendored-artifact .vendored-pins-control --vendored-target control/requirements-vendored-pip.txt", text)
+
+    def test_the_hash_locked_environments_are_made_read_only_after_their_first_inventory(self):
+        for group in ctl.API_JOBS:
+            job = job_text(self.text, JOBS[group])
+            roots = "apps/api/.venv .locktools" if group == "backend" else "apps/api/.venv"
+            with self.subTest(group):
+                cmd = f"python3 security/stage_inputs.py readonly {roots}\n"
+                self.assertEqual(job.count(cmd), 1)
+                first = job.index("apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json")
+                self.assertLess(first, job.index(cmd))
+                self.assertLess(job.index(cmd), job.index("--name api-venv\n"))
 
     def test_every_installed_environment_is_staged_for_the_vendored_pin_scan_it_is_gated_on(self):
         for key, (_, args, inv_name, vend_name, _) in ctl.REPORTS.items():
@@ -269,24 +284,28 @@ class Cases(unittest.TestCase):
                 (".reader-venv", 17, "trivy-reader-tooling-venv-vuln.json", "reader-tooling-venv-installed.json", "reader-venv", ()),
                 (".security-venv", 67, "trivy-security-tooling-venv-vuln.json", "security-tooling-venv-installed.json", "security-venv", ()),
                 (self.pyloc, 2, "trivy-reader-tooling-syspy-vuln.json", "reader-tooling-syspy-installed.json", "reader-syspy", ()),
-                ("apps/api/.venv", 58, "trivy-api-venv-vuln.json", "api-venv-installed.json", "api-venv", (("signalnest-api", "0.1.0"),)),
+                ("apps/api/.venv", 58, "trivy-api-venv-vuln.json", "api-venv-installed.json", "api-venv", (("signalnest_api", "0.1.0"),)),
                 (".locktools", 8, "trivy-locktools-vuln.json", "locktools-installed.json", "locktools", ())):
             (self.root / env).mkdir(parents=True)
             docs[rep_name], docs[inv_name] = tooling(self.root / env, env, count, extra)
             vendored["Results"].append(vendored_result(label))
         docs[ctl.VENDORED] = vendored
+        for it in docs["api-venv-installed.json"]["installed"]:     # the editable project, as pip inspect records it
+            if it["metadata"]["name"] == "signalnest_api":
+                it["direct_url"] = {"url": "file://" + str(self.root / "apps" / "api"), "dir_info": {"editable": True}}
         # the hash locks the API venv and .locktools reconcile against (cwd-relative, as in CI)
         api = [(it["metadata"]["name"], it["metadata"]["version"]) for it in docs["api-venv-installed.json"]["installed"]]
         (self.root / "apps" / "api").mkdir(parents=True, exist_ok=True)
         (self.root / "apps" / "api" / "requirements-bootstrap.txt").write_text(lock_text([x for x in api if x[0] == "pip"]), encoding="utf-8")
-        (self.root / "apps" / "api" / "requirements-dev.txt").write_text(lock_text([x for x in api if x[0] not in ("pip", "signalnest-api")]), encoding="utf-8")
+        (self.root / "apps" / "api" / "requirements-dev.txt").write_text(lock_text([x for x in api if x[0] not in ("pip", "signalnest_api")]), encoding="utf-8")
         tools = [(it["metadata"]["name"], it["metadata"]["version"]) for it in docs["locktools-installed.json"]["installed"]]
         (self.root / "apps" / "api" / "requirements-locktools.txt").write_text(lock_text(tools), encoding="utf-8")
         # the staged binaries: container-build analyses trivy, revision-reader trivy and tofu (each job its own reports)
         pins, manifest_r, report_r = binaries(self.root, ["trivy", "tofu"])
         (self.root / "security").mkdir()
         (self.root / "security" / "scanner-binaries.json").write_text(json.dumps(
-            {"jobs": {"container-build": ["trivy"], "revision-reader": ["trivy", "tofu"]}, "binaries": pins}), encoding="utf-8")
+            {"jobs": {"container-build": ["trivy"], "revision-reader": ["trivy", "tofu"],
+                      **{ctl.API_JOB_IDS[g]: ["trivy"] for g in ctl.API_JOBS}}, "binaries": pins}), encoding="utf-8")
         manifest_c = {"version": 1, "binaries": {"trivy": manifest_r["binaries"]["trivy"]}}
         report_c = dict(report_r, Results=[r for r in report_r["Results"] if r["Target"] == "trivy"])
         self.dirs = {}
@@ -302,8 +321,21 @@ class Cases(unittest.TestCase):
         self.saved_load_policy = gate.load_policy
         self.saved_pyloc = os.environ.get("pythonLocation")
         os.environ["pythonLocation"] = self.pyloc
+        for env in READ_ONLY_ENVS:                       # made read-only after the first inventory, as in CI
+            self.set_writable(self.root / env, False)
+
+    @staticmethod
+    def set_writable(top: pathlib.Path, writable: bool) -> None:
+        for here, dirs, files in os.walk(top, topdown=False):
+            for n in dirs + files:
+                p = os.path.join(here, n)
+                if not os.path.islink(p):
+                    os.chmod(p, (os.lstat(p).st_mode | 0o200) if writable else (os.lstat(p).st_mode & ~0o222))
+        os.chmod(top, (os.lstat(top).st_mode | 0o200) if writable else (os.lstat(top).st_mode & ~0o222))
 
     def tearDown(self):
+        for env in READ_ONLY_ENVS:
+            self.set_writable(self.root / env, True)
         gate.load_policy = self.saved_load_policy
         if self.saved_pyloc is None:
             os.environ.pop("pythonLocation", None)
@@ -393,7 +425,8 @@ class Cases(unittest.TestCase):
         args, rep, copies = ctl.build_case("baseline-backend-api-venv", self.dirs["backend"], self.root / "w")
         with contextlib.redirect_stdout(io.StringIO()):
             code = gate.main(["--policy", str(HERE / "policy.json"), "--reports-dir", str(self.root / "w"), "vuln", str(rep), "--name", "nov",
-                              *[a for i, a in enumerate(args) if a != "--vendored-target" and (i == 0 or args[i - 1] != "--vendored-target")],
+                              *[a for i, a in enumerate(args) if a not in ("--vendored-target", "--vendored-artifact")
+                                and (i == 0 or args[i - 1] not in ("--vendored-target", "--vendored-artifact"))],
                               "--installed-inventory", str(copies["--installed-inventory"])])
         self.assertEqual(code, gate.EXIT_INCOMPLETE)
         self.assertIn("not accounted for", (self.root / "w" / "nov.summary.txt").read_text())

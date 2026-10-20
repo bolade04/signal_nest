@@ -86,7 +86,8 @@ class ToolingCase(unittest.TestCase):
                 "--kind", "tooling", "--artifact", ".reader-venv", "--min-lang-packages", floor,
                 "--installed-inventory", self.write("inv.json", inv), "--env-root", str(env or self.env), *extra]
         if vrep is not None:
-            argv += ["--vendored-report", self.write("v.json", vendored(self.vendor) if vrep == "default" else vrep), "--vendored-target", VTARGET]
+            argv += ["--vendored-report", self.write("v.json", vendored(self.vendor) if vrep == "default" else vrep),
+                     "--vendored-artifact", ".vendored-pins", "--vendored-target", VTARGET]
         code = gate.main(argv)
         text = (self.reports / "t.summary.txt").read_text(encoding="utf-8")
         return code, [l for l in text.splitlines() if l.startswith("RESULT:")][-1], text
@@ -120,6 +121,14 @@ class ToolingCase(unittest.TestCase):
         self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("no installed pip declares", text)
         code, result, text = self.gate(report(".reader-venv"), inventory(self.env), vrep=vendored(self.vendor, target="other/requirements-vendored-pip.txt"))
         self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("staged pin list was not analysed", text)
+        for name in ("/some/other/dir", None):     # a report of another directory, or of none (A-4)
+            doc = vendored(self.vendor)
+            if name is None:
+                del doc["ArtifactName"]
+            else:
+                doc["ArtifactName"] = name
+            code, result, text = self.gate(report(".reader-venv"), inventory(self.env), vrep=doc)
+            self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("the report describes something else", text)
 
     def test_findings_in_vendored_copies_are_evaluated_at_the_tooling_scope(self):
         crit = dict(vuln("C-VP", "urllib3", "", "CRITICAL"), PkgIdentifier={"UID": "u-urllib3"})
@@ -147,10 +156,56 @@ class ToolingCase(unittest.TestCase):
             out += ["--locked-by", str(path)]
         return out
 
+    def editable(self, inv, name, url):
+        for it in inv["installed"]:
+            if it["metadata"]["name"] == name:
+                it["direct_url"] = {"url": url, "dir_info": {"editable": True}}
+        return inv
+
     def test_an_installation_that_is_exactly_the_locks_passes(self):
-        code, result, text = self.gate(report(".reader-venv"), inventory(self.env), *self.locks(DISTS[:1], DISTS[1:3]), "--locked-extra", "typing-extensions")
-        self.assertEqual((code, result), (0, gate.RESULT_PASS))
+        inv = self.editable(inventory(self.env), "typing_extensions", "file://" + str(pathlib.Path.cwd() / "apps" / "api"))
+        code, result, text = self.gate(report(".reader-venv"), inv, *self.locks(DISTS[:1], DISTS[1:3]), "--locked-extra", "typing-extensions")
+        self.assertEqual((code, result), (0, gate.RESULT_PASS), text)
         self.assertIn("the 4 installed distributions are exactly the 3 pins of", text)
+
+    def test_a_locked_extra_must_be_an_editable_install_from_the_working_directory(self):
+        locks = self.locks(DISTS[:1], DISTS[1:3])
+        for label, inv in (("no direct_url", inventory(self.env)),
+                           ("from an index", self.editable(inventory(self.env), "typing_extensions", "https://files.example.invalid/x.whl")),
+                           ("outside the working directory", self.editable(inventory(self.env), "typing_extensions", "file:///somewhere/else"))):
+            with self.subTest(label):
+                code, result, text = self.gate(report(".reader-venv"), inv, *locks, "--locked-extra", "typing-extensions")
+                self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("not installed from the checkout", text)
+        inv = self.editable(inventory(self.env), "typing_extensions", "file://" + str(pathlib.Path.cwd()))
+        inv["installed"][-1]["direct_url"]["dir_info"] = {}
+        code, result, _ = self.gate(report(".reader-venv"), inv, *locks, "--locked-extra", "typing-extensions")
+        self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE), "a directory install that is not editable")
+
+    # ---------------------------------------------------------------- read-only between inventories (2026-10-20, A-2)
+    def test_an_environment_that_is_not_read_only_fails_the_read_only_requirement(self):
+        import os, stat
+        def set_mode(writable):
+            for here, dirs, files in os.walk(self.env, topdown=False):
+                for n in dirs + files:
+                    p = os.path.join(here, n)
+                    if not os.path.islink(p):
+                        os.chmod(p, (os.lstat(p).st_mode | 0o200) if writable else (os.lstat(p).st_mode & ~0o222))
+            os.chmod(self.env, (os.lstat(self.env).st_mode | 0o200) if writable else (os.lstat(self.env).st_mode & ~0o222))
+        try:
+            (self.env / "lib64").symlink_to("lib")              # a venv's lib64 link: symbolic links are not judged
+            set_mode(False)
+            code, result, text = self.gate(report(".reader-venv"), inventory(self.env), "--require-read-only")
+            self.assertEqual((code, result), (0, gate.RESULT_PASS), text); self.assertIn("read-only: every file and directory", text)
+            target = self.env / SITE / "pip" / "_vendor" / "vendor.txt"
+            os.chmod(target, os.lstat(target).st_mode | stat.S_IWUSR)
+            code, result, text = self.gate(report(".reader-venv"), inventory(self.env), "--require-read-only")
+            self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE)); self.assertIn("lib/python3.12/site-packages/pip/_vendor/vendor.txt", text)
+            os.chmod(target, os.lstat(target).st_mode & ~0o222)
+            os.chmod(self.env, os.lstat(self.env).st_mode | stat.S_IWUSR)     # the root directory itself
+            code, result, _ = self.gate(report(".reader-venv"), inventory(self.env), "--require-read-only")
+            self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+        finally:
+            set_mode(True)
 
     def test_an_installation_outside_or_against_the_locks_is_incomplete(self):
         for label, locks, needle in (("unlocked", self.locks(DISTS[:3]), "not in the lock(s)"),
@@ -246,8 +301,10 @@ class ToolingCase(unittest.TestCase):
         full = base + ["--kind", "tooling", "--artifact", ".reader-venv", "--installed-inventory", inv, "--env-root", str(self.env)]
         self.assertEqual(gate.main(full + ["--vendored-report", rep]), gate.EXIT_USAGE)
         self.assertEqual(gate.main(full + ["--vendored-target", VTARGET]), gate.EXIT_USAGE)
+        self.assertEqual(gate.main(full + ["--vendored-report", rep, "--vendored-target", VTARGET]), gate.EXIT_USAGE, "without --vendored-artifact")
         self.assertEqual(gate.main(full + ["--locked-extra", "x"]), gate.EXIT_USAGE)
-        for extra in (["--vendored-report", rep, "--vendored-target", VTARGET], ["--locked-by", rep], ["--binary-job", "j"]):
+        for extra in (["--vendored-report", rep, "--vendored-target", VTARGET, "--vendored-artifact", "x"], ["--locked-by", rep],
+                      ["--binary-job", "j"], ["--require-read-only"]):
             with self.subTest(extra):
                 self.assertEqual(gate.main(base + ["--kind", "image", "--artifact", "x"] + extra), gate.EXIT_USAGE)
 
