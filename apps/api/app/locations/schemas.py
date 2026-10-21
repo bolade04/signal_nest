@@ -69,14 +69,25 @@ class GeoCoverageOut(GeoCoverageBase):
 
 
 class GeocodeRequest(BaseModel):
-    query: str = Field(min_length=2)
+    query: str = Field(min_length=2, max_length=200)
 
 
 class GeocodeResponse(BaseModel):
+    """One resolved place. A provider may not know every component (a region-level
+    answer has no city), so the text components are nullable."""
+
     latitude: float
     longitude: float
-    city: str
-    state_province: str
-    country: str
-    timezone: str
+    city: str | None
+    state_province: str | None
+    country: str | None
+    timezone: str | None
     confidence: float
+    #: ISO 3166-1 alpha-2 country code, e.g. "CA".
+    country_code: str | None = None
+    #: Normalised region, e.g. "CA-ON" (a known subdivision) or "NG:lagos".
+    region_code: str | None = None
+    #: The provider's one-line description of the place.
+    label: str | None = None
+    #: Which geocoder answered: "fixture" (development/test) or "aws_location".
+    provider: str

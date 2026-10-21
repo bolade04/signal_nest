@@ -1713,6 +1713,7 @@
       "GeocodeRequest": {
         "properties": {
           "query": {
+            "maxLength": 200,
             "minLength": 2,
             "title": "Query",
             "type": "string"
@@ -1725,18 +1726,55 @@
         "type": "object"
       },
       "GeocodeResponse": {
+        "description": "One resolved place. A provider may not know every component (a region-level\nanswer has no city), so the text components are nullable.",
         "properties": {
           "city": {
-            "title": "City",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
           },
           "confidence": {
             "title": "Confidence",
             "type": "number"
           },
           "country": {
-            "title": "Country",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
           },
           "latitude": {
             "title": "Latitude",
@@ -1746,13 +1784,42 @@
             "title": "Longitude",
             "type": "number"
           },
-          "state_province": {
-            "title": "State Province",
+          "provider": {
+            "title": "Provider",
             "type": "string"
           },
+          "region_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Code"
+          },
+          "state_province": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Province"
+          },
           "timezone": {
-            "title": "Timezone",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
         "required": [
@@ -1762,7 +1829,8 @@
           "state_province",
           "country",
           "timezone",
-          "confidence"
+          "confidence",
+          "provider"
         ],
         "title": "GeocodeResponse",
         "type": "object"
@@ -6571,7 +6639,7 @@
     },
     "/api/v1/geocode": {
       "post": {
-        "description": "Scout Reach helper \u2014 geocode an address so a radius can be applied.",
+        "description": "Scout Reach helper \u2014 resolve an address or place to coordinates and a\nnormalised city / region / country. A lookup that finds no single place answers\nwith an error whose message says how to continue (P6-DATA-3).",
         "operationId": "geocode_address_api_v1_geocode_post",
         "parameters": [
           {
