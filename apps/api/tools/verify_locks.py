@@ -1,6 +1,6 @@
 """Verify the committed API dependency locks (P6-PLAT-4) against ``pyproject.toml``.
 
-Run from ``apps/api`` with the pinned lock toolchain (pip 26.2.2, pip-tools 7.6.2; CERT-2, 2026-10-21)::
+Run from ``apps/api`` with the pinned lock toolchain (pip 26.2.2, pip-tools 7.6.2; CERT-2)::
 
     ../../.locktools/bin/python tools/verify_locks.py
 

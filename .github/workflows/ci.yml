@@ -1512,7 +1512,7 @@ jobs:
           --kind filesystem --artifact security/controls/vuln --min-components 2 --commit "${{ github.event.pull_request.head.sha || github.sha }}" --checkout "${{ github.sha }}"
 
       # P6-CI-6 closure: the security-tool venv is scanned AS INSTALLED (its hash-locked Semgrep set
-      # plus the interpreter's bundled pip, which the lock does not carry) and every distribution its
+      # plus its pip, which the lock carries since CERT-2 2026-10-21, replacing the bundled one) and every distribution its
       # own pip inspect lists must be in that scan; the inventory is taken again just before the
       # completeness step, so anything installed after the scan fails completeness.
       - name: Inventory the security tooling venv as installed (pip inspect)
