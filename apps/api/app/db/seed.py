@@ -8,6 +8,11 @@ Everything created here is clearly flagged as simulated (``is_simulated=True`` o
 signals/opportunities). Root entities use stable, deterministic IDs derived from a
 fixed namespace so re-seeding produces identical primary keys.
 
+Each scout request is run the way a customer's "Run now" runs it (P6-UI-009): the
+request is queued with a durable ``scout_request.execute`` job, and the worker's own
+execution path claims, runs and completes that job. A seeded request therefore has
+the same job and run history as one a customer ran.
+
 Scenario: one specialty-coffee brand ("Brew & Bean") operating four fully
 independent locations — Dallas TX, London UK, Lagos NG, Nairobi KE. Each location
 has its own geo-coverage rule, local competitors, a per-location promotion and a
@@ -26,8 +31,6 @@ from typing import Final
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-# Importing the pipeline module registers the ``run_scout_request`` job and gives
-# us direct access to the synchronous runner used below.
 from app.brands.models import Brand, BusinessProfile
 from app.campaign_context.models import (
     AudienceProfile,
@@ -53,7 +56,8 @@ from app.core.security import hash_password
 from app.db.models import Base
 from app.db.session import SessionLocal, engine
 from app.geography.geocoder import geocode
-from app.jobs.pipeline import _run
+from app.jobs.models import Job
+from app.jobs.status import TERMINAL_STATUSES, JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.models import Opportunity
 from app.organizations.models import (
@@ -622,24 +626,114 @@ def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
 
         db.flush()
 
-        # --- Run the pipeline per request (isolated by market) -------------
-        for c, req in requests:
-            stats = _run(db, req.id)
-            logger.info(
-                "seed.scout_completed",
-                extra={"extra_fields": {"market": c["market"], **stats}},
-            )
+        # --- Queue each request's run, as "Run now" does (P6-UI-009) ---------
+        # The run route leaves the request QUEUED (as created above) and enqueues a
+        # durable scout_request.execute job in the same transaction. So does the
+        # seed: the configuration and the queued runs commit together or not at all.
+        # Imported here, not at module scope: the enqueue service registers every job
+        # handler on import, and importing this module must not (test_worker_bootstrap
+        # relies on the worker's own bootstrap being the only thing that does).
+        from app.jobs.service import enqueue_scout_request
 
+        seed_job_ids = [
+            enqueue_scout_request(
+                db,
+                organization_id=org.id,
+                workspace_id=ws.id,
+                scout_request_id=req.id,
+                location_id=req.location_id,
+                campaign_id=req.campaign_id,
+                request_id=req.id,
+                now=now,
+            ).id
+            for _c, req in requests
+        ]
+        others_unfinished = _unfinished_jobs_besides(db, seed_job_ids)
         db.commit()
-        counts = _counts(db)
-        logger.info("seed.done", extra={"extra_fields": counts})
-        _print_summary(db, counts)
-        return counts
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+    # --- Run them on the worker's own execution path (isolated by market) --
+    if others_unfinished:
+        # Draining the queue here would also run someone else's work. Leave the
+        # seed's runs queued for the worker, which processes them like any other.
+        logger.info(
+            "seed.runs_left_queued", extra={"extra_fields": {"other_jobs": others_unfinished}}
+        )
+        print(
+            f"Other unfinished jobs are waiting in this database, so the {len(seed_job_ids)} "
+            "seeded scout runs were left queued for the worker (`npm run dev` starts one). "
+            "Use --reset for a self-contained demo."
+        )
+    else:
+        _execute_seed_runs(seed_job_ids)
+
+    db = SessionLocal()
+    try:
+        counts = _counts(db)
+        logger.info("seed.done", extra={"extra_fields": counts})
+        _print_summary(db, counts)
+        return counts
+    finally:
+        db.close()
+
+
+#: The worker id the seed's own runner claims under; visible only in job internals.
+_SEED_WORKER_ID: Final = "demo-seed"
+
+
+class SeedRunError(RuntimeError):
+    """A seeded scout run did not succeed; the worker recorded why on its job."""
+
+
+def _unfinished_jobs_besides(db: Session, job_ids: list[str]) -> int:
+    """How many jobs other than ``job_ids`` are not yet in a terminal state."""
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.id.not_in(job_ids),
+                Job.status.not_in([s.value for s in TERMINAL_STATUSES]),
+            )
+        )
+        or 0
+    )
+
+
+def _execute_seed_runs(job_ids: list[str]) -> None:
+    """Run the seed's queued jobs exactly as the durable worker process does.
+
+    A real :class:`~app.jobs.worker.JobRunner` claims, runs and completes each job in
+    its own transaction, so every run's status, attempt, timestamps, events and
+    result summary are written by the worker's code — none by the seed. Called only
+    when these are the only unfinished jobs in the database, so the runner cannot
+    claim anyone else's work. A run that fails stays recorded on its job, and the
+    seed stops with an error rather than reporting a complete demo.
+    """
+    # Imported here: the worker module bootstraps the process (handler registry,
+    # full ORM metadata), which only this step needs.
+    from app.jobs.worker import JobRunner
+
+    runner = JobRunner(settings=get_settings(), session_factory=SessionLocal)
+    for _ in job_ids:
+        if not runner.poll_once(worker_id=_SEED_WORKER_ID):
+            break
+    db = SessionLocal()
+    try:
+        statuses = db.execute(select(Job.status).where(Job.id.in_(job_ids))).scalars().all()
+    finally:
+        db.close()
+    succeeded = sum(1 for status in statuses if status == JobStatus.SUCCEEDED.value)
+    if succeeded != len(job_ids):
+        raise SeedRunError(
+            f"{succeeded} of {len(job_ids)} seeded scout runs succeeded; each job records "
+            "its outcome. Fix the cause, then rebuild with --reset."
+        )
+    logger.info("seed.runs_completed", extra={"extra_fields": {"runs": succeeded}})
 
 
 def _print_summary(db: Session, counts: dict[str, int]) -> None:
