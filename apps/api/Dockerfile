@@ -84,12 +84,108 @@ RUN python -m pip uninstall --yes pip \
 # ---------------------------------------------------------------------------
 # runtime — the shared runtime stage (venv + application source, non-root).
 # ---------------------------------------------------------------------------
-FROM base AS runtime
+# D4b ISOLATED CANDIDATE (SPIKE — DO NOT MERGE; operator continuation of 2026-10-21 §5). psycopg runs its pure-Python
+# implementation over Debian's libpq5 instead of psycopg-binary's bundled libpq/OpenSSL/Kerberos/LDAP copies, so the
+# image's OS-package scan lists libpq and the OpenSSL it links as Debian packages. Nothing here addresses the image's
+# own CPython or numpy's bundled OpenBLAS.
+FROM base AS runtime-libs
 
-WORKDIR /app
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y libpq5 \
+    && rm -rf /var/lib/apt/lists/*
 
 # The finished virtualenv (runtime dependencies only — no build toolchain).
 COPY --from=builder /opt/venv /opt/venv
+
+# D4b linkage proof (build time; reads only; fails the build otherwise): psycopg's implementation is "python"; no
+# psycopg_binary / psycopg_c package and no bundled ".libs" directory is installed; the libpq, libssl and libcrypto
+# the process maps are Debian's, under /usr/lib/x86_64-linux-gnu.
+RUN /opt/venv/bin/python - <<'PY'
+import importlib.util, pathlib, re
+import psycopg
+from psycopg import pq
+assert pq.__impl__ == "python", f"psycopg implementation is {pq.__impl__!r}, expected 'python'"
+for mod in ("psycopg_binary", "psycopg_c"):
+    assert importlib.util.find_spec(mod) is None, f"{mod} is installed"
+site = pathlib.Path("/opt/venv/lib/python3.12/site-packages")
+bundled = sorted(str(x) for x in site.iterdir() if x.name.startswith("psycopg_binary") or (x.name.endswith(".libs") and "psycopg" in x.name))
+assert not bundled, f"bundled psycopg libraries present: {bundled}"
+mapped = sorted({l.split()[-1] for l in pathlib.Path("/proc/self/maps").read_text().splitlines() if len(l.split()) >= 6 and l.split()[-1].startswith("/")})
+libs = [x for x in mapped if re.search(r"/lib(pq|ssl|crypto)\.so", x)]
+print("D4b linkage: psycopg", psycopg.__version__, "impl", pq.__impl__, "libpq", pq.version(), "mapped:", libs)
+assert any(re.fullmatch(r"/usr/lib/x86_64-linux-gnu/libpq\.so\.5(\.[0-9]+)*", x) for x in libs), libs
+assert any(re.fullmatch(r"/usr/lib/x86_64-linux-gnu/libssl\.so\.3", x) for x in libs), libs
+assert any(re.fullmatch(r"/usr/lib/x86_64-linux-gnu/libcrypto\.so\.3", x) for x in libs), libs
+assert all(x.startswith("/usr/lib/x86_64-linux-gnu/") for x in libs), libs
+PY
+
+# D4b TLS proof (a throwaway stage: never part of any image; the runtime stage below only bind-mounts its result). A
+# local PostgreSQL server with a test CA proves, through the same libpq/OpenSSL the runtime uses: sslmode=require (the
+# API's documented production minimum) negotiates TLS; verify-full (the reader's mode) accepts the issuing CA and
+# refuses another; sslmode=require refuses a server that offers no TLS.
+FROM runtime-libs AS d4b-tls-proof
+# No default cluster (it would start on 5432); the client libpq5 must stay the runtime's exact package version.
+RUN dpkg-query -W -f='${Package} ${Version}\n' libpq5 > /tmp/libpq5-runtime.txt \
+    && mkdir -p /etc/postgresql-common && echo 'create_main_cluster = false' > /etc/postgresql-common/createcluster.conf \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y postgresql \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W -f='${Package} ${Version}\n' libpq5 | cmp - /tmp/libpq5-runtime.txt \
+    && cat /tmp/libpq5-runtime.txt
+RUN <<'SH'
+set -eu
+PGBIN=$(ls -d /usr/lib/postgresql/*/bin | head -n 1)
+mkdir -p /proof /tmp/tls && cd /tmp/tls
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=d4b-test-ca" -keyout ca.key -out ca.pem 2>/dev/null
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=d4b-other-ca" -keyout other.key -out other-ca.pem 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" -keyout server.key -out server.csr 2>/dev/null
+printf 'subjectAltName=DNS:localhost\n' > san.ext
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 1 -out server.crt -extfile san.ext 2>/dev/null
+chown postgres:postgres server.key server.crt && chmod 600 server.key
+for c in tls plain; do install -d -o postgres -g postgres /tmp/pg-$c; su postgres -s /bin/sh -c "$PGBIN/initdb -D /tmp/pg-$c/data -A trust -U postgres >/dev/null"; done
+printf "ssl = on\nssl_cert_file = '/tmp/tls/server.crt'\nssl_key_file = '/tmp/tls/server.key'\nlisten_addresses = 'localhost'\nport = 55432\nunix_socket_directories = '/tmp/pg-tls'\n" >> /tmp/pg-tls/data/postgresql.conf
+printf "hostssl all all 127.0.0.1/32 trust\nhostssl all all ::1/128 trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\n" > /tmp/pg-tls/data/pg_hba.conf
+printf "ssl = off\nlisten_addresses = 'localhost'\nport = 55433\nunix_socket_directories = '/tmp/pg-plain'\n" >> /tmp/pg-plain/data/postgresql.conf
+for c in tls plain; do su postgres -s /bin/sh -c "$PGBIN/pg_ctl -D /tmp/pg-$c/data -l /tmp/pg-$c/log -w start >/dev/null"; done
+/opt/venv/bin/python - > /proof/d4b-tls.txt <<'PY'
+import pathlib, re
+import psycopg
+from psycopg import pq
+out = [f"psycopg {psycopg.__version__} impl {pq.__impl__} libpq {pq.version()}"]
+base = "host=localhost dbname=postgres user=postgres connect_timeout=5"
+with psycopg.connect(f"{base} port=55432 sslmode=require") as c:
+    pg = c.pgconn
+    assert pg.ssl_in_use, "no TLS under sslmode=require"
+    ssl, version, cipher, bits = c.execute("select ssl, version, cipher, bits from pg_stat_ssl where pid = pg_backend_pid()").fetchone()
+    assert ssl is True, "the server reports the session as not TLS"
+    out.append(f"sslmode=require against the TLS server: connected, client ssl_in_use=True, server pg_stat_ssl: ssl={ssl} version={version} cipher={cipher} bits={bits}")
+with psycopg.connect(f"{base} port=55432 sslmode=verify-full sslrootcert=/tmp/tls/ca.pem") as c:
+    assert c.pgconn.ssl_in_use
+    out.append("sslmode=verify-full with the issuing CA: connected")
+for label, dsn, reason in (("sslmode=verify-full with a different CA", f"{base} port=55432 sslmode=verify-full sslrootcert=/tmp/tls/other-ca.pem", "certificate verify failed"),
+                           ("sslmode=require against a server offering no TLS", f"{base} port=55433 sslmode=require", "server does not support SSL")):
+    try:
+        psycopg.connect(dsn).close()
+    except psycopg.OperationalError as e:
+        msg = " ".join(str(e).split())
+        assert reason in msg, f"{label}: refused for another reason: {msg}"
+        out.append(f"{label}: refused, reason contains {reason!r}: {msg}")
+    else:
+        raise SystemExit(f"{label}: unexpectedly connected")
+mapped = sorted({l.split()[-1] for l in pathlib.Path("/proc/self/maps").read_text().splitlines() if len(l.split()) >= 6 and re.search(r"/lib(pq|ssl|crypto)\.so", l.split()[-1])})
+out.append(f"libraries mapped by the client process: {mapped}")
+print("\n".join(out))
+PY
+for c in tls plain; do su postgres -s /bin/sh -c "$PGBIN/pg_ctl -D /tmp/pg-$c/data -w stop >/dev/null"; done
+cat /proof/d4b-tls.txt
+SH
+
+FROM runtime-libs AS runtime
+
+# Print the D4b TLS proof into the build log (bind mount only: no file of the proof stage enters the image).
+RUN --mount=type=bind,from=d4b-tls-proof,source=/proof,target=/d4b-proof cat /d4b-proof/d4b-tls.txt
+
+WORKDIR /app
 
 # Application source, migrations and Alembic config. ``.dockerignore`` excludes
 # .env, local SQLite databases, VCS metadata, caches and virtualenvs.
