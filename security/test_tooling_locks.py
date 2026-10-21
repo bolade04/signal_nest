@@ -1,7 +1,9 @@
 """The CI tooling installs are hash-locked and agree with each other (P6-CI-6 closure, operator order 2026-10-19).
 
 The reader job installs its venv from apps/revision-reader/requirements-dev.txt with --require-hashes,
-the system interpreter's Gate 4N PyYAML from scripts/requirements-gate-hashes.txt, and keeps one
+the system interpreter's Gate 4N PyYAML from scripts/requirements-gate-hashes.txt, that interpreter's own pip
+from apps/revision-reader/requirements-toolcache-pip.txt (GHSA-6q48-6c7w-9gw2: the toolcache's bundled pip
+vendors its own certifi, so it is replaced from a lock before anything else enters the prefix), and keeps one
 unhashed line (`.reader-venv/bin/pip install -r scripts/requirements-gate.txt`, pinned byte-exactly by
 tests/test_i28bh_e2_ci_guard_repairs.py) that is a no-op only while every PyYAML pin agrees. The four jobs
 that create the API venv install pip and the setuptools build backend from apps/api/requirements-bootstrap.txt,
@@ -30,6 +32,8 @@ GATE_CONTRACT = ROOT / "scripts" / "requirements-gate.txt"
 GATE_LOCK = ROOT / "scripts" / "requirements-gate-hashes.txt"
 API_BOOTSTRAP_LOCK = ROOT / "apps" / "api" / "requirements-bootstrap.txt"
 API_LOCKTOOLS_LOCK = ROOT / "apps" / "api" / "requirements-locktools.txt"
+TOOLCACHE_LOCK = ROOT / "apps" / "revision-reader" / "requirements-toolcache-pip.txt"
+TOOLCACHE_IN = ROOT / "apps" / "revision-reader" / "requirements-toolcache-pip.in"
 # Every installer-shaped line of every job, exactly as written in ci.yml (stripped).
 INSTALLER_TOOLS = (r"pip[0-9.]*|pipx|uv|uvx|conda|mamba|micromamba|poetry|pdm|easy_install|hatch|rye|npm|npx|yarn|pnpm|corepack|gem|cargo|"
                    r"apt-get|apt|brew|snap|dpkg")
@@ -40,6 +44,7 @@ INSTALLER_LINE = re.compile(rf"(?:^|[\s;&|(`$\"'=]|/bin/)(?:{INSTALLER_TOOLS})(?
 API_VENV_INVENTORY = {
     "run: apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed-final.json",
 }
+INSTALL_PREFIX_PIP = "python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-toolcache-pip.txt"
 ALLOWED_INSTALLER_LINES = {
     "frontend-quality": {
         "cache: npm",
@@ -102,12 +107,14 @@ ALLOWED_INSTALLER_LINES = {
     },
     "revision-reader": {
         "- name: Inventory the reader tooling environments as installed (pip inspect)",
+        "- name: Install the locked pip into the job's interpreter prefix (replaces the toolcache's bundled pip)",
         "cache: pip",
         "python -m venv --clear .reader-venv",
         ".reader-venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-dev.txt",
         ".reader-venv/bin/python -m pip install --no-deps --no-build-isolation -e apps/revision-reader",
         ".reader-venv/bin/python -m pip check",
         ".reader-venv/bin/pip install -r scripts/requirements-gate.txt",
+        "python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-toolcache-pip.txt",
         "python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt",
         ".reader-venv/bin/python -m pip inspect > security-reports/reader-tooling-venv-installed.json",
         "python3 -m pip inspect > security-reports/reader-tooling-syspy-installed.json",
@@ -159,7 +166,7 @@ class ToolingLocks(unittest.TestCase):
         self.assertNotIn(None, versions.values(), versions)
 
     def test_every_locked_requirement_carries_hashes(self):
-        for path in (READER_LOCK, GATE_LOCK, API_BOOTSTRAP_LOCK, API_LOCKTOOLS_LOCK):
+        for path in (READER_LOCK, GATE_LOCK, API_BOOTSTRAP_LOCK, API_LOCKTOOLS_LOCK, TOOLCACHE_LOCK):
             with self.subTest(str(path.relative_to(ROOT))):
                 entries = lock_entries(path)
                 self.assertTrue(entries)
@@ -169,6 +176,23 @@ class ToolingLocks(unittest.TestCase):
     def test_the_gate_lock_carries_the_reader_locks_pyyaml_hashes(self):
         self.assertEqual(sorted(lock_entries(GATE_LOCK)["pyyaml"][1]), sorted(lock_entries(READER_LOCK)["pyyaml"][1]))
         self.assertEqual(set(lock_entries(GATE_LOCK)), {"pyyaml"})
+
+    def test_the_toolcache_lock_is_pip_alone_at_the_reader_locks_pin_and_hashes(self):
+        toolcache, reader = lock_entries(TOOLCACHE_LOCK), lock_entries(READER_LOCK)
+        self.assertEqual(set(toolcache), {"pip"})
+        self.assertEqual(toolcache["pip"][0], reader["pip"][0])
+        self.assertEqual(sorted(toolcache["pip"][1]), sorted(reader["pip"][1]))
+        self.assertEqual(pins(TOOLCACHE_IN), {"pip": toolcache["pip"][0]})
+
+    def test_the_prefix_pip_is_installed_once_before_the_gate_pyyaml_and_the_first_prefix_inventory(self):
+        body = job_text(WORKFLOW.read_text(encoding="utf-8"), "revision-reader")
+        pip_install = INSTALL_PREFIX_PIP
+        gate_install = "python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r scripts/requirements-gate-hashes.txt"   # the #233 form (block scalar, --isolated --only-binary :all:)
+        inventory = "python3 -m pip inspect > security-reports/reader-tooling-syspy-installed.json"
+        self.assertEqual(body.count(pip_install), 1)
+        self.assertEqual(body.count("-r " + TOOLCACHE_LOCK.relative_to(ROOT).as_posix()), 1)
+        self.assertLess(body.index(pip_install), body.index(gate_install))
+        self.assertLess(body.index(gate_install), body.index(inventory))
 
     def test_the_reader_lock_covers_what_the_reader_declares_and_builds_with(self):
         project = tomllib.loads((ROOT / "apps" / "revision-reader" / "pyproject.toml").read_text(encoding="utf-8"))
@@ -247,7 +271,7 @@ class ToolingLocks(unittest.TestCase):
         self.assertEqual({str(p.relative_to(ROOT)) for p in locks}, {
             "apps/api/requirements-bootstrap.txt", "apps/api/requirements-dev.txt", "apps/api/requirements-runtime.txt",
             "apps/api/requirements-locktools.txt", "security/requirements-semgrep.txt", "apps/revision-reader/requirements-dev.txt",
-            "scripts/requirements-gate-hashes.txt", "scripts/requirements-gate.txt"})
+            "scripts/requirements-gate-hashes.txt", "scripts/requirements-gate.txt", "apps/revision-reader/requirements-toolcache-pip.txt"})
         for path in sorted(locks):
             with self.subTest(str(path.relative_to(ROOT))):
                 self.assertTrue(gate.parse_lock(path, hashed=path.name != "requirements-gate.txt"))

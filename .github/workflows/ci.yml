@@ -1349,6 +1349,7 @@ jobs:
           --expect-target scripts/requirements-gate-hashes.txt
           --expect-target security/requirements-semgrep.txt
           --expect-target apps/revision-reader/requirements-dev.txt
+          --expect-target apps/revision-reader/requirements-toolcache-pip.txt
 
       - name: Gate — API image vulnerabilities (OS packages and the locked Python set)
         if: always()
@@ -2050,6 +2051,19 @@ jobs:
           # (Already satisfied: the hash-locked install above carries the same PyYAML pin, and
           # security/test_tooling_locks.py fails if the two pins ever differ.)
           .reader-venv/bin/pip install -r scripts/requirements-gate.txt
+
+      # GHSA-6q48-6c7w-9gw2 (certifi < 2026.10.19), 2026-10-21: the interpreter prefix this job's system
+      # python3 lives in (the runner's toolcache, pythonLocation) is scanned AS INSTALLED below, and the pip
+      # that actions/setup-python provisions there vendors a certifi bundle of its own (pip 26.2.1 vendors
+      # certifi 2026.6.17: CRITICAL under the adopted policy). No repository file controlled that pip, so
+      # the prefix's pip is replaced from a hash lock BEFORE anything else is installed into the prefix:
+      # the second hash-locked install into it, of the same form as the Gate 4N PyYAML one below. The
+      # bundled pip performs this one install and is replaced by the locked pip, whose pin equals the
+      # reader tooling lock's (security/test_tooling_locks.py keeps them equal). --only-binary :all:
+      # refuses a source build; --isolated ignores PIP_* variables and user pip configuration.
+      - name: Install the locked pip into the job's interpreter prefix (replaces the toolcache's bundled pip)
+        run: |
+          python3 -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/revision-reader/requirements-toolcache-pip.txt
 
       # GATE 4N-I26C. The Gate 4N guards run under the SYSTEM python3, not the reader venv, and
       # three of them parse this workflow as YAML. Gate 4N-I26B shipped them depending on a
@@ -2906,7 +2920,7 @@ jobs:
           --identity-out security-reports/sbom-image-reader.identity.json
 
       # P6-CI-6 closure: the reader job's installed tooling — the .reader-venv (hash-locked) and the job's
-      # system interpreter (its bundled pip and the Gate 4N PyYAML) — is scanned AS INSTALLED after every
+      # system interpreter (the locked pip, installed over its bundled one, and the Gate 4N PyYAML) — is scanned AS INSTALLED after every
       # step that installs into it, and every distribution their own pip inspect lists must be in the scan.
       # The inventories are taken again just before completeness, so a later install fails completeness.
       - name: Inventory the reader tooling environments as installed (pip inspect)

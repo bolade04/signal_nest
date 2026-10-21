@@ -71,7 +71,8 @@ LOCKS_ARGS = ["--kind", "filesystem", "--artifact", ".",
               "--expect-target", "apps/api/requirements-dev.txt", "--expect-target", "apps/api/requirements-bootstrap.txt",
               "--expect-target", "apps/api/requirements-locktools.txt", "--expect-target", "scripts/requirements-gate.txt",
               "--expect-target", "scripts/requirements-gate-hashes.txt", "--expect-target", "security/requirements-semgrep.txt",
-              "--expect-target", "apps/revision-reader/requirements-dev.txt"]
+              "--expect-target", "apps/revision-reader/requirements-dev.txt",
+              "--expect-target", "apps/revision-reader/requirements-toolcache-pip.txt"]
 API_IMAGE_ARGS = ["--kind", "image", "--artifact", "signalnest-api:ci", "--min-lang-packages", "40"]
 READER_IMAGE_ARGS = ["--kind", "image", "--artifact", "signalnest-revision-reader:ci", "--min-lang-packages", "1"]
 VENDORED = "trivy-vendored-pins-vuln.json"      # each job's filesystem scan of its staged vendored-pin lists

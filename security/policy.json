@@ -67,7 +67,8 @@
       "scripts/requirements-gate.txt",
       "scripts/requirements-gate-hashes.txt",
       "security/requirements-semgrep.txt",
-      "apps/revision-reader/requirements-dev.txt"
+      "apps/revision-reader/requirements-dev.txt",
+      "apps/revision-reader/requirements-toolcache-pip.txt"
     ],
     "npm_dev_scope": "development",
     "tooling_scope": "development",

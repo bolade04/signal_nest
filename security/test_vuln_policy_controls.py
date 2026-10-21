@@ -74,7 +74,7 @@ SITE = "lib/python3.12/site-packages"
 PIP_TARGETS = ["apps/api/requirements-runtime.txt", "apps/api/requirements-dev.txt", "apps/api/requirements-bootstrap.txt",
                "apps/api/requirements-locktools.txt", "scripts/requirements-gate.txt",
                "scripts/requirements-gate-hashes.txt", "security/requirements-semgrep.txt",
-               "apps/revision-reader/requirements-dev.txt"]
+               "apps/revision-reader/requirements-dev.txt", "apps/revision-reader/requirements-toolcache-pip.txt"]
 VENDOR_PINS = [("vend-alpha", "1.0"), ("vend-beta", "2.0")]
 
 
