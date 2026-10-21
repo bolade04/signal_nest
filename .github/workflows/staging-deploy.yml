@@ -1,0 +1,401 @@
+name: Staging deploy
+
+# P6-INF-7 / plan §16 / E2: deploys the api and worker images published for the dispatched
+# `main` commit, records the deployed SHA and digests, and runs a post-deploy smoke test.
+# AUTHORING ONLY: every run is a live execution and needs its own authorization, an OPEN
+# staging window (docs/operations/staging-window.md) and the protected `staging-deploy`
+# environment's human approval. Draft — see docs/operations/delivery-workflows.md.
+#
+# WHAT A DEPLOYMENT IS HERE. OpenTofu stays the only author of task-definition CONTENT: it
+# registers one TEMPLATE revision per family (tag ManagedBy=iac). This workflow registers a
+# release revision that is that template with exactly one field changed — the container
+# image digest, resolved from the immutable ECR tag `<commit>` that `staging-publish.yml`
+# pushed — and moves the service to it (scripts/release_plan.py proves the "exactly one
+# field" claim before anything is registered). It requires the ecs module to ignore
+# `task_definition` drift on the two services, a separate reviewed IaC change.
+#
+# ORDER (docs/operations/deployment.md, "Rolling deployment"):
+#   1. refuse: off main; below the recorded AUTH4_ROLLBACK_FLOOR; a service mid-deployment,
+#      at desired 0, or with circuit-breaker rollback off (the AUTH4 cutover is unfinished);
+#      a target image that was never published or whose push scan reports CRITICAL;
+#   2. run the single migration actor (the migration template + the new worker digest) and
+#      require exit 0 plus its `migrate.upgrade_verify.done` event — replicas never migrate;
+#   3. move both services, wait for stability, and verify that every running task reports
+#      the target digest on the registered revision;
+#   4. append the release to the SSM ledger — which survives window closes, unlike task
+#      definitions — naming what was ACTUALLY running before as `previous`;
+#   5. smoke the live API (health, readiness, the six P6-AUTH-5 headers). A failed smoke
+#      fails the run and leaves the release in place for `staging-rollback.yml`: a rollback
+#      is a separately approved act, never automatic.
+#
+# WHAT IT NEVER DOES: no task-definition content change other than the image, no service
+# creation or deletion, no desired-count, network or role change, no deregistration, no
+# ECS Exec, no secret read, no OpenTofu. It does not perform the P6-AUTH-4 cutover, which
+# remains the three reviewed saved-plan applies of deployment.md.
+#
+# Operator values are environment SECRETS for the reason given in spa-publish.yml.
+
+on:
+  # Manual dispatch ONLY, no inputs: the release is exactly the dispatched commit.
+  workflow_dispatch:
+
+# Deploy and rollback share one group: they serialize, and neither is ever cancelled midway.
+concurrency:
+  group: staging-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    name: Migrate, deploy and smoke the dispatched commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The IAM trust policy pins this exact subject (repo + environment) with StringEquals.
+    environment: staging-deploy
+    permissions:
+      contents: read
+      id-token: write # OIDC federation for this single job only
+    env:
+      NAME_PREFIX: ${{ vars.NAME_PREFIX || 'signalnest-staging' }}
+      ROLLBACK_FLOOR: ${{ vars.DEPLOY_ROLLBACK_FLOOR_COMMIT }}
+      LEDGER_PARAMETER: ${{ vars.RELEASE_LEDGER_PARAMETER }}
+    steps:
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Staging deploy runs only from refs/heads/main (got ${REF})." >&2
+          exit 1
+
+      - name: Fail closed while the prerequisites are absent
+        env:
+          ROLE_ARN: ${{ secrets.DEPLOY_ROLE_ARN }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+          SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }}
+          MIGRATION_SG: ${{ secrets.MIGRATION_SECURITY_GROUP_ID }}
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+        run: |
+          missing=""
+          for v in ROLE_ARN ACCOUNT_ID CLUSTER_ARN SUBNET_IDS MIGRATION_SG API_ORIGIN ROLLBACK_FLOOR LEDGER_PARAMETER; do
+            [ -n "${!v}" ] || missing="${missing} ${v}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing staging-deploy environment values:${missing}." >&2
+            echo "::error::DEPLOY_ROLLBACK_FLOOR_COMMIT exists only after the P6-AUTH-4 cutover recorded AUTH4_ROLLBACK_FLOOR (deployment.md step 11); the first AUTH4 deployment is that cutover, never this workflow." >&2
+            exit 1
+          fi
+          [[ "${ROLLBACK_FLOOR}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::DEPLOY_ROLLBACK_FLOOR_COMMIT must be a 40-character commit SHA." >&2; exit 1; }
+          [[ "${SUBNET_IDS}" =~ ^subnet-[0-9a-f]+(,subnet-[0-9a-f]+)*$ ]] || { echo "::error::PRIVATE_SUBNET_IDS must be a comma-separated list of subnet ids." >&2; exit 1; }
+          [[ "${MIGRATION_SG}" =~ ^sg-[0-9a-f]+$ ]] || { echo "::error::MIGRATION_SECURITY_GROUP_ID must be one security group id." >&2; exit 1; }
+          [[ "${LEDGER_PARAMETER}" =~ ^/[a-z0-9-]+/release/ledger$ ]] || { echo "::error::RELEASE_LEDGER_PARAMETER must be /<prefix>/release/ledger." >&2; exit 1; }
+
+      - name: Check out the exact trusted revision (full history, for the floor check)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Refuse a release below the AUTH4 rollback floor (offline)
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          # Below the floor, revoked and expired sessions work again (deployment.md). The
+          # floor is a commit; every release must contain it.
+          if ! git merge-base --is-ancestor "${ROLLBACK_FLOOR}" "${COMMIT_SHA}"; then
+            echo "::error::The dispatched commit does not contain the recorded AUTH4 rollback floor. Refusing." >&2
+            exit 1
+          fi
+          echo "ok: the release contains the rollback floor"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-staging-deploy-${{ github.run_id }}
+          role-duration-seconds: 2700
+
+      - name: Verify the assumed identity is the intended account
+        env:
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "${actual}" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured account. Refusing to deploy." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured account (id not printed)"
+
+      - name: Resolve the published digests for this commit
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p release
+          for workload in api worker; do
+            rc=0
+            aws ecr describe-images --repository-name "${NAME_PREFIX}/${workload}" \
+              --image-ids imageTag="${COMMIT_SHA}" > "release/target-${workload}-described.json" 2> release/ecr.err || rc=$?
+            if [ "${rc}" -ne 0 ]; then
+              echo "::error::No ${workload} image is published for this commit; run the staging publish workflow first." >&2
+              exit 1
+            fi
+            python3 scripts/release_plan.py image-target --described "release/target-${workload}-described.json" \
+              --repository "${NAME_PREFIX}/${workload}" --commit "${COMMIT_SHA}" --out "release/target-${workload}.json"
+          done
+          echo "ok: both digests resolved from immutable commit tags"
+
+      - name: Read what is running now
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+        run: |
+          aws ecs describe-services --cluster "${CLUSTER_ARN}" \
+            --services "${NAME_PREFIX}-api" "${NAME_PREFIX}-worker" > release/services-before.json
+          for workload in api worker; do
+            arns="$(aws ecs list-tasks --cluster "${CLUSTER_ARN}" --service-name "${NAME_PREFIX}-${workload}" \
+              --desired-status RUNNING --query taskArns --output text)"
+            if [ -z "${arns}" ] || [ "${arns}" = "None" ]; then
+              echo '{"tasks": []}' > "release/tasks-before-${workload}.json"
+            else
+              # shellcheck disable=SC2086 # one task ARN per word
+              aws ecs describe-tasks --cluster "${CLUSTER_ARN}" --tasks ${arns} > "release/tasks-before-${workload}.json"
+            fi
+          done
+          python3 scripts/release_plan.py ecs-running --services release/services-before.json \
+            --api-tasks release/tasks-before-api.json --worker-tasks release/tasks-before-worker.json \
+            --out release/running-before.json
+          # The commit of what runs, from the image's own immutable commit tag.
+          for workload in api worker; do
+            digest="$(python3 -c "import json,sys;print(json.load(open('release/running-before.json'))['images'][sys.argv[1]])" "${workload}")"
+            aws ecr describe-images --repository-name "${NAME_PREFIX}/${workload}" \
+              --image-ids imageDigest="${digest}" > "release/running-${workload}-described.json"
+            python3 scripts/release_plan.py image-commit --described "release/running-${workload}-described.json" \
+              --repository "${NAME_PREFIX}/${workload}" > "release/running-${workload}-commit.txt"
+          done
+          if [ "$(cat release/running-api-commit.txt)" != "$(cat release/running-worker-commit.txt)" ]; then
+            echo "::error::The api and worker services run images of different commits; the running release is ambiguous." >&2
+            exit 1
+          fi
+          echo "ok: the running release is one commit on both services"
+
+      - name: Read the release ledger
+        run: |
+          if ! aws ssm get-parameter-history --name "${LEDGER_PARAMETER}" > release/ledger-history.json 2> release/ssm.err; then
+            echo "::error::The release ledger parameter is not readable (not provisioned?)." >&2
+            exit 1
+          fi
+
+      - name: Select the OpenTofu template revisions and render the releases (offline checks)
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          for family in api worker migration; do
+            echo "[" > "release/candidates-${family}.json"
+            first=yes
+            for arn in $(aws ecs list-task-definitions --family-prefix "${NAME_PREFIX}-${family}" \
+                --status ACTIVE --sort DESC --max-items 20 --query taskDefinitionArns --output text); do
+              [ "${arn}" = "None" ] && continue
+              [ -n "${first}" ] || echo "," >> "release/candidates-${family}.json"
+              first=""
+              aws ecs describe-task-definition --task-definition "${arn}" --include TAGS >> "release/candidates-${family}.json"
+            done
+            echo "]" >> "release/candidates-${family}.json"
+            python3 scripts/release_plan.py ecs-template --candidates "release/candidates-${family}.json" \
+              --family "${NAME_PREFIX}-${family}" --out "release/template-${family}.json"
+          done
+          # The migration actor reuses the worker image (aws-staging-iac-plan.md §26.5).
+          for pair in api:api worker:worker migration:worker; do
+            family="${pair%%:*}"; image="${pair##*:}"
+            digest="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['digest'])" "release/target-${image}.json")"
+            python3 scripts/release_plan.py ecs-render --template "release/template-${family}.json" \
+              --digest "${digest}" --commit "${COMMIT_SHA}" --run-id "${RUN_ID}" --out "release/register-${family}.json"
+          done
+          echo "ok: three release revisions rendered; each differs from its template only by the image digest"
+
+      - name: Register the three release revisions
+        run: |
+          for family in migration api worker; do
+            aws ecs register-task-definition --cli-input-json "file://release/register-${family}.json" \
+              --query taskDefinition.taskDefinitionArn --output text > "release/registered-${family}.txt"
+          done
+          echo "ok: release revisions registered"
+
+      - name: Run the single migration actor and require a verified head
+        id: migrate
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+          SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }}
+          MIGRATION_SG: ${{ secrets.MIGRATION_SECURITY_GROUP_ID }}
+        run: |
+          # No task override of any kind is sent: the registered revision's own command (the
+          # hardened bare `python -m app.db.migrate`) is what runs, and the response is checked.
+          aws ecs run-task \
+            --cluster "${CLUSTER_ARN}" \
+            --task-definition "$(cat release/registered-migration.txt)" \
+            --launch-type FARGATE \
+            --platform-version 1.4.0 \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[${MIGRATION_SG}],assignPublicIp=DISABLED}" \
+            --started-by "gha-${GITHUB_RUN_ID}" > release/migration-run.json
+          python3 - <<'PY'
+          import json, sys
+          run = json.load(open("release/migration-run.json"))
+          if run.get("failures") or len(run.get("tasks") or []) != 1:
+              sys.exit("::error::RunTask for the migration actor reported failures")
+          overrides = run["tasks"][0].get("overrides", {})
+          if set(overrides) - {"containerOverrides", "inferenceAcceleratorOverrides"} or any(
+                  set(c) - {"name"} for c in overrides.get("containerOverrides", [])):
+              sys.exit("::error::the migration task carries an override")
+          open("release/migration-task.txt", "w").write(run["tasks"][0]["taskArn"])
+          PY
+          task_arn="$(cat release/migration-task.txt)"
+          aws ecs wait tasks-stopped --cluster "${CLUSTER_ARN}" --tasks "${task_arn}"
+          aws ecs describe-tasks --cluster "${CLUSTER_ARN}" --tasks "${task_arn}" > release/migration-stopped.json
+          python3 - <<'PY'
+          import json, sys
+          task = json.load(open("release/migration-stopped.json"))["tasks"][0]
+          containers = task.get("containers") or []
+          code = containers[0].get("exitCode") if len(containers) == 1 else None
+          if code != 0:
+              sys.exit(f"::error::the migration actor exited {code!r} (stoppedReason={task.get('stoppedReason')!r}); nothing was deployed")
+          print("ok: migration actor exited 0")
+          PY
+          task_id="${task_arn##*/}"
+          aws logs get-log-events --log-group-name "/ecs/${NAME_PREFIX}-migration" \
+            --log-stream-name "migration/migration/${task_id}" --start-from-head > release/migration-log.json
+          python3 - <<'PY'
+          import json, sys
+          events = json.load(open("release/migration-log.json")).get("events", [])
+          done = []
+          for event in events:
+              try:
+                  line = json.loads(event.get("message", ""))
+              except ValueError:
+                  continue
+              if line.get("event") == "migrate.upgrade_verify.done":
+                  done.append({k: line.get(k) for k in ("code_head", "db_revision")})
+          if len(done) != 1:
+              sys.exit("::error::the migration log does not carry exactly one migrate.upgrade_verify.done event")
+          json.dump(done[0], open("release/migration-result.json", "w"))
+          print(f"ok: schema verified at {done[0]}")
+          PY
+
+      - name: Move both services to the release revisions
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+        run: |
+          for workload in api worker; do
+            aws ecs update-service --cluster "${CLUSTER_ARN}" --service "${NAME_PREFIX}-${workload}" \
+              --task-definition "$(cat "release/registered-${workload}.txt")" > /dev/null
+          done
+          aws ecs wait services-stable --cluster "${CLUSTER_ARN}" --services "${NAME_PREFIX}-api" "${NAME_PREFIX}-worker"
+          echo "ok: both services stable"
+
+      - name: Verify every running task reports the target digest
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+        run: |
+          aws ecs describe-services --cluster "${CLUSTER_ARN}" \
+            --services "${NAME_PREFIX}-api" "${NAME_PREFIX}-worker" > release/services-after.json
+          for workload in api worker; do
+            arns="$(aws ecs list-tasks --cluster "${CLUSTER_ARN}" --service-name "${NAME_PREFIX}-${workload}" \
+              --desired-status RUNNING --query taskArns --output text)"
+            # shellcheck disable=SC2086 # one task ARN per word
+            aws ecs describe-tasks --cluster "${CLUSTER_ARN}" --tasks ${arns} > "release/tasks-after-${workload}.json"
+          done
+          python3 - <<'PY'
+          import json
+          expected = {"images": {}, "task_definitions": {}}
+          for w in ("api", "worker"):
+              expected["images"][w] = json.load(open(f"release/target-{w}.json"))["digest"]
+              expected["task_definitions"][w] = open(f"release/registered-{w}.txt").read().strip().rsplit("/", 1)[-1]
+          json.dump(expected, open("release/expected.json", "w"), indent=2, sort_keys=True)
+          PY
+          python3 scripts/release_plan.py ecs-verify --services release/services-after.json \
+            --api-tasks release/tasks-after-api.json --worker-tasks release/tasks-after-worker.json \
+            --expected release/expected.json
+
+      - name: Append the release to the ledger
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          expected = json.load(open("release/expected.json"))
+          target = {"source_commit": os.environ["COMMIT_SHA"], "images": expected["images"],
+                    "task_definitions": expected["task_definitions"]}
+          json.dump(target, open("release/target.json", "w"))
+          PY
+          python3 scripts/release_plan.py ledger-deploy --history release/ledger-history.json \
+            --running release/running-before.json --running-commit "$(cat release/running-api-commit.txt)" \
+            --target release/target.json --run-id "${RUN_ID}" \
+            --recorded-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --out release/ledger-record.json
+          aws ssm put-parameter --name "${LEDGER_PARAMETER}" --type String --overwrite \
+            --value "file://release/ledger-record.json" > /dev/null
+          echo "ok: release appended to the ledger"
+
+      - name: Post-deploy smoke against the live API
+        env:
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+        run: |
+          if ! python3 scripts/release_plan.py smoke --api-origin "${API_ORIGIN}" --out release/smoke.json; then
+            echo "::error::Post-deploy smoke FAILED. The release stays in place; restore the previous one with the staging rollback workflow (separate approval)." >&2
+            exit 1
+          fi
+          echo "ok: post-deploy smoke passed"
+
+      - name: Record the deployment
+        if: always()
+        run: |
+          mkdir -p release
+          python3 - <<'PY'
+          import json, os
+          def load(path):
+              try:
+                  return json.load(open(path))
+              except (OSError, ValueError):
+                  return None
+          ledger = load("release/ledger-record.json") or {}
+          record = {
+              "kind": "deploy",
+              "source_commit": os.environ.get("GITHUB_SHA"),
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "images": ledger.get("images"),
+              "task_definitions": ledger.get("task_definitions"),
+              "previous": ledger.get("previous"),
+              "ledger_drift_before": ledger.get("ledger_drift_before"),
+              "migration": load("release/migration-result.json"),
+              "smoke": load("release/smoke.json"),
+              "outcome": "${{ job.status }}",
+          }
+          json.dump(record, open("release/deployment-record.json", "w"), indent=2, sort_keys=True)
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload the deployment record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-deployment-${{ github.run_id }}
+          path: release/deployment-record.json
+          retention-days: 90

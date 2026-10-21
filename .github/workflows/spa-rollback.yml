@@ -1,0 +1,231 @@
+name: SPA rollback
+
+# P6-INF-2 / §16: restores the SPA build that the live `index.html` replaced. AUTHORING
+# ONLY: every run is a live execution and needs its own authorization plus the protected
+# `staging-spa-publish` environment's human approval (the same environment and role as
+# `spa-publish.yml` — a rollback writes exactly what a publish writes).
+#
+# ZERO INPUTS. The target is not chosen by the person dispatching: it is the build whose
+# sha256 the live `index.html` records as its predecessor (`previous-index-sha256`, written
+# by `spa-publish.yml`), found among the retained versions of that one key
+# (scripts/release_plan.py spa-rollback-target). The restored object re-states the
+# target's own lineage, so a second rollback continues backwards instead of toggling.
+# Assets are never deleted by a publish, so the restored index's assets are still there.
+#
+# HORIZON: noncurrent versions of `index.html` expire after 30 days (modules/edge
+# lifecycle). Beyond that the workflow refuses; the recovery is to publish the older
+# commit's build again (or roll forward).
+#
+# Operator values are environment SECRETS for the reason given in spa-publish.yml.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: staging-spa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  rollback-spa:
+    name: Restore the SPA build the live index replaced
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging-spa-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::SPA rollback runs only from refs/heads/main (got ${REF})." >&2
+          exit 1
+
+      - name: Fail closed while the prerequisites are absent
+        env:
+          ROLE_ARN: ${{ secrets.SPA_PUBLISH_ROLE_ARN }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+          DISTRIBUTION_ID: ${{ secrets.SPA_DISTRIBUTION_ID }}
+          WEB_FQDN: ${{ secrets.WEB_FQDN }}
+        run: |
+          missing=""
+          for v in ROLE_ARN ACCOUNT_ID BUCKET DISTRIBUTION_ID WEB_FQDN; do
+            [ -n "${!v}" ] || missing="${missing} ${v}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing staging-spa-publish environment secrets:${missing}." >&2
+            exit 1
+          fi
+
+      - name: Check out the exact trusted revision
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.SPA_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-spa-rollback-${{ github.run_id }}
+          role-duration-seconds: 900
+
+      - name: Verify the assumed identity is the intended account
+        env:
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "${actual}" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured account. Refusing to roll back." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured account (id not printed)"
+
+      - name: Read the retained versions of index.html and their lineage
+        env:
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+        run: |
+          mkdir -p spa-rollback
+          aws s3api list-object-versions --bucket "${BUCKET}" --prefix index.html \
+            --max-items 20 > spa-rollback/versions-list.json
+          # Exactly the key index.html (the prefix also matches longer keys), newest first,
+          # delete markers refused: a deleted index is an incident, not a rollback.
+          python3 - <<'PY'
+          import json, sys
+          listing = json.load(open("spa-rollback/versions-list.json"))
+          if any(m.get("Key") == "index.html" and m.get("IsLatest") for m in listing.get("DeleteMarkers") or []):
+              sys.exit("::error::the live index.html is a delete marker; refusing")
+          versions = [v for v in listing.get("Versions") or [] if v.get("Key") == "index.html"]
+          versions.sort(key=lambda v: v["LastModified"], reverse=True)
+          with open("spa-rollback/version-ids.txt", "w") as out:
+              for v in versions:
+                  out.write(f"{v['VersionId']}\t{'true' if v.get('IsLatest') else 'false'}\n")
+          print(f"ok: {len(versions)} retained versions of index.html")
+          PY
+          echo "[" > spa-rollback/versions.json
+          first=yes
+          while IFS=$'\t' read -r version_id is_latest; do
+            aws s3api head-object --bucket "${BUCKET}" --key index.html --version-id "${version_id}" > spa-rollback/head.json
+            [ -n "${first}" ] || echo "," >> spa-rollback/versions.json
+            first=""
+            VERSION_ID="${version_id}" IS_LATEST="${is_latest}" python3 - <<'PY' >> spa-rollback/versions.json
+          import json, os
+          head = json.load(open("spa-rollback/head.json"))
+          print(json.dumps({"VersionId": os.environ["VERSION_ID"],
+                            "IsLatest": os.environ["IS_LATEST"] == "true",
+                            "Metadata": head.get("Metadata") or {}}))
+          PY
+          done < spa-rollback/version-ids.txt
+          echo "]" >> spa-rollback/versions.json
+
+      - name: Select the recorded predecessor (offline)
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 scripts/release_plan.py spa-rollback-target \
+            --versions spa-rollback/versions.json --run-id "${RUN_ID}" --out spa-rollback/target.json
+          python3 -c "import json;t=json.load(open('spa-rollback/target.json'));print('ok: restoring', t['target_source_commit'], t['target_index_sha256'])"
+
+      - name: Restore the predecessor as the current index.html
+        env:
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+        run: |
+          version_id="$(python3 -c "import json;print(json.load(open('spa-rollback/target.json'))['target_version_id'])")"
+          metadata="$(python3 -c "import json;m=json.load(open('spa-rollback/target.json'))['metadata'];print(json.dumps(m))")"
+          # REPLACE, not COPY: the restored object must carry the rolled-back lineage, so its
+          # content type and cache control are restated exactly as spa-publish.yml writes them.
+          aws s3api copy-object --bucket "${BUCKET}" --key index.html \
+            --copy-source "${BUCKET}/index.html?versionId=${version_id}" \
+            --metadata-directive REPLACE \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "no-cache" \
+            --metadata "${metadata}" > /dev/null
+          echo "ok: predecessor restored as the current version"
+
+      - name: Invalidate the index and wait for completion
+        id: invalidate
+        env:
+          DISTRIBUTION_ID: ${{ secrets.SPA_DISTRIBUTION_ID }}
+        run: |
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths /index.html / \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "${DISTRIBUTION_ID}" --id "${invalidation_id}"
+          echo "invalidation_id=${invalidation_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Prove the live page is the restored build
+        env:
+          WEB_FQDN: ${{ secrets.WEB_FQDN }}
+        run: |
+          expected="$(python3 -c "import json;print(json.load(open('spa-rollback/target.json'))['target_index_sha256'])")"
+          for path in / /reset-password; do
+            ok=""
+            for attempt in $(seq 1 10); do
+              rm -f spa-rollback/live.html
+              curl -fsS --max-time 20 -o spa-rollback/live.html "https://${WEB_FQDN}${path}" || true
+              if [ -f spa-rollback/live.html ] && [ "$(sha256sum spa-rollback/live.html | awk '{print $1}')" = "${expected}" ]; then
+                ok=yes
+                break
+              fi
+              sleep 15
+            done
+            if [ -z "${ok}" ]; then
+              echo "::error::The live ${path} is not the restored build." >&2
+              exit 1
+            fi
+            echo "ok: live ${path} equals the restored build"
+          done
+
+      - name: Record the rollback
+        if: always()
+        env:
+          INVALIDATION_ID: ${{ steps.invalidate.outputs.invalidation_id }}
+        run: |
+          mkdir -p spa-rollback
+          python3 - <<'PY'
+          import json, os
+          try:
+              target = json.load(open("spa-rollback/target.json"))
+          except (OSError, ValueError):
+              target = {}
+          record = {
+              "kind": "spa-rollback",
+              "dispatched_commit": os.environ.get("GITHUB_SHA"),
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "restored_source_commit": target.get("target_source_commit"),
+              "restored_index_sha256": target.get("target_index_sha256"),
+              "rolled_back_from_index_sha256": target.get("rolled_back_from_index_sha256"),
+              "invalidation_id": os.environ.get("INVALIDATION_ID") or None,
+              "outcome": "${{ job.status }}",
+          }
+          json.dump(record, open("spa-rollback/rollback-record.json", "w"), indent=2, sort_keys=True)
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload the rollback record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spa-rollback-${{ github.run_id }}
+          path: spa-rollback/rollback-record.json
+          retention-days: 90

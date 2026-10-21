@@ -1,0 +1,304 @@
+name: SPA publish
+
+# P6-INF-2: builds the SPA at the dispatched `main` commit and publishes it to the private
+# SPA origin bucket behind CloudFront (modules/edge). AUTHORING ONLY: every run is a live
+# execution and needs its own authorization plus the protected `staging-spa-publish`
+# environment's human approval. Draft — see docs/operations/delivery-workflows.md.
+#
+# WHAT IT DOES, IN ORDER:
+#   * builds with the API origin compiled in (the P6-AUTH-5 `<meta>` CSP guard runs as part
+#     of the build and fails it on any mismatch),
+#   * classifies every file of the build OFFLINE (scripts/release_plan.py spa-plan): hashed
+#     assets are immutable, `index.html` is revalidated on every request; source maps,
+#     dotfiles, un-hashed assets and unknown types are refused,
+#   * uploads every asset FIRST and `index.html` LAST, so no moment exists in which the live
+#     index references an asset that is not there yet; nothing is ever deleted, so the
+#     previous build's assets stay available to open tabs and to a rollback,
+#   * stamps `index.html` with its own sha256 and the sha256 of the index it replaces — the
+#     chain `spa-rollback.yml` walks,
+#   * invalidates only `/index.html` and `/`, waits for the invalidation, and proves the
+#     live page (and a deep link through the 403/404 -> index.html rewrite) is byte-for-byte
+#     the page the CSP guard checked.
+#
+# WHAT IT NEVER DOES: no `--delete`, no bucket, policy, distribution or key change, no read
+# of any other bucket, no ECS or database access. Rollback is `spa-rollback.yml`.
+#
+# OPERATOR VALUES ARE ENVIRONMENT SECRETS, NOT VARIABLES. None of them is secret, but GitHub
+# masks secrets everywhere, including the `env:` block it prints in a step's log header —
+# where a `vars` value would be shown in clear before any `::add-mask::` could run. This is
+# a public repository's log.
+
+on:
+  # Manual dispatch ONLY, no inputs: what is published is exactly the dispatched commit.
+  # No push or pull_request trigger can reach the OIDC-credentialed job.
+  workflow_dispatch:
+
+concurrency:
+  group: staging-spa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+
+jobs:
+  publish-spa:
+    name: Build, verify and publish the SPA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The IAM trust policy pins this exact subject (repo + environment) with StringEquals.
+    environment: staging-spa-publish
+    permissions:
+      contents: read
+      id-token: write # OIDC federation for this single job only
+    steps:
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::SPA publish runs only from refs/heads/main (got ${REF})." >&2
+          exit 1
+
+      - name: Fail closed while the prerequisites are absent
+        env:
+          ROLE_ARN: ${{ secrets.SPA_PUBLISH_ROLE_ARN }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+          DISTRIBUTION_ID: ${{ secrets.SPA_DISTRIBUTION_ID }}
+          WEB_FQDN: ${{ secrets.WEB_FQDN }}
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+        run: |
+          missing=""
+          for v in ROLE_ARN ACCOUNT_ID BUCKET DISTRIBUTION_ID WEB_FQDN API_ORIGIN; do
+            [ -n "${!v}" ] || missing="${missing} ${v}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing staging-spa-publish environment secrets:${missing}." >&2
+            echo "::error::They exist only after the SPA publisher role is provisioned under its own authorization (P6-INF-2 packet)." >&2
+            exit 1
+          fi
+          case "${API_ORIGIN}" in
+            https://*/*|https://*:*) echo "::error::API_ORIGIN must be https://<host> with no path or port." >&2; exit 1 ;;
+            https://?*) : ;;
+            *) echo "::error::API_ORIGIN must start with https://." >&2; exit 1 ;;
+          esac
+          case "${WEB_FQDN}" in
+            *[!a-z0-9.-]*|"") echo "::error::WEB_FQDN must be a bare lowercase hostname." >&2; exit 1 ;;
+          esac
+
+      - name: Check out the exact trusted revision
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # No dependency cache: the publish path never consumes a cache another, less trusted,
+      # run may have written. `npm ci` installs exactly the lockfile, integrity-checked.
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Production build with the API origin compiled in (CSP guard included)
+        env:
+          VITE_API_BASE_URL: ${{ secrets.API_ORIGIN }}
+        run: npm run build
+
+      - name: Classify the build for upload (offline)
+        run: |
+          mkdir -p spa-release
+          python3 scripts/release_plan.py spa-plan \
+            --dist apps/web/dist \
+            --out spa-release/plan.json \
+            --upload-list spa-release/upload.tsv
+          python3 - <<'PY'
+          import json
+          plan = json.load(open("spa-release/plan.json"))
+          print(f"ok: {plan['count']} files, {plan['total_bytes']} bytes, index sha256 {plan['index_sha256']}")
+          PY
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.SPA_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-spa-publish-${{ github.run_id }}
+          role-duration-seconds: 900
+
+      - name: Verify the assumed identity is the intended account
+        env:
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "${actual}" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured account. Refusing to publish." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured account (id not printed)"
+
+      - name: Record the live index.html before publishing
+        env:
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+        run: |
+          # A missing index (first publish) is not an error; any other failure is.
+          rc=0
+          aws s3api head-object --bucket "${BUCKET}" --key index.html > spa-release/previous-head.json 2> spa-release/head.err || rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            if grep -q "Not Found\|404" spa-release/head.err; then
+              rm -f spa-release/previous-head.json
+              echo "ok: no live index.html (first publish)"
+            else
+              echo "::error::Could not read the live index.html metadata." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Upload every asset first (immutable, never deleted)
+        env:
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+        run: |
+          while IFS=$'\t' read -r key content_type cache_control; do
+            aws s3 cp "apps/web/dist/${key}" "s3://${BUCKET}/${key}" \
+              --content-type "${content_type}" \
+              --cache-control "${cache_control}" \
+              --only-show-errors --no-progress
+          done < spa-release/upload.tsv
+          echo "ok: assets uploaded"
+
+      - name: Upload index.html last, stamped with its lineage
+        env:
+          BUCKET: ${{ secrets.SPA_BUCKET }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          current=""
+          [ -f spa-release/previous-head.json ] && current="--current-head spa-release/previous-head.json"
+          # shellcheck disable=SC2086 # $current is one optional flag pair, intentionally split
+          python3 scripts/release_plan.py spa-index-metadata --plan spa-release/plan.json \
+            ${current} --commit "${COMMIT_SHA}" --run-id "${RUN_ID}" --out spa-release/index-metadata.json
+          metadata="$(python3 -c "import json;m=json.load(open('spa-release/index-metadata.json'));print(','.join(f'{k}={v}' for k,v in sorted(m.items())))")"
+          aws s3 cp apps/web/dist/index.html "s3://${BUCKET}/index.html" \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "no-cache" \
+            --metadata "${metadata}" \
+            --only-show-errors --no-progress
+          echo "ok: index.html uploaded"
+
+      - name: Invalidate the index and wait for completion
+        id: invalidate
+        env:
+          DISTRIBUTION_ID: ${{ secrets.SPA_DISTRIBUTION_ID }}
+        run: |
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths /index.html / \
+            --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "${DISTRIBUTION_ID}" --id "${invalidation_id}"
+          echo "invalidation_id=${invalidation_id}" >> "$GITHUB_OUTPUT"
+          echo "ok: invalidation completed"
+
+      - name: Prove the live page is the page the CSP guard checked
+        env:
+          WEB_FQDN: ${{ secrets.WEB_FQDN }}
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+        run: |
+          expected="$(python3 -c "import json;print(json.load(open('spa-release/plan.json'))['index_sha256'])")"
+          # curl without --compressed receives the stored bytes. The deep link exercises the
+          # distribution's 403/404 -> /index.html rewrite.
+          for path in / /reset-password; do
+            ok=""
+            for attempt in $(seq 1 10); do
+              # A file left by the previous path or attempt must never satisfy this one.
+              rm -f spa-release/live.html
+              curl -fsS --max-time 20 -o spa-release/live.html "https://${WEB_FQDN}${path}" || true
+              if [ -f spa-release/live.html ] && [ "$(sha256sum spa-release/live.html | awk '{print $1}')" = "${expected}" ]; then
+                ok=yes
+                break
+              fi
+              sleep 15
+            done
+            if [ -z "${ok}" ]; then
+              echo "::error::The live ${path} is not byte-identical to the built index.html." >&2
+              exit 1
+            fi
+            echo "ok: live ${path} equals the built index.html"
+          done
+          # Response security headers are P6-INF-19 (a CloudFront response-headers policy).
+          # Until it ships the absence is recorded, not failed; once a CSP header is served,
+          # its connect-src must name the API origin compiled into this build.
+          curl -fsS --max-time 20 -D spa-release/live-headers.txt -o /dev/null "https://${WEB_FQDN}/"
+          API_ORIGIN="${API_ORIGIN}" python3 - <<'PY'
+          import os
+          headers = {}
+          for line in open("spa-release/live-headers.txt", encoding="utf-8", errors="replace"):
+              name, sep, value = line.partition(":")
+              if sep:
+                  headers[name.strip().lower()] = value.strip()
+          csp = headers.get("content-security-policy")
+          if csp is None:
+              print("note: no Content-Security-Policy response header (P6-INF-19 not delivered)")
+          else:
+              connect = next((d.split()[1:] for d in csp.split(";") if d.strip().startswith("connect-src")), [])
+              if os.environ["API_ORIGIN"] not in connect:
+                  raise SystemExit("::error::the served CSP header's connect-src does not name the API origin")
+              if "frame-ancestors 'none'" not in csp:
+                  raise SystemExit("::error::the served CSP header carries no frame-ancestors 'none'")
+              print("ok: the served CSP header names the API origin and forbids framing")
+          PY
+
+      - name: Record the release
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          INVALIDATION_ID: ${{ steps.invalidate.outputs.invalidation_id }}
+        run: |
+          mkdir -p spa-release
+          python3 - <<'PY'
+          import json, os
+          def load(path):
+              try:
+                  return json.load(open(path))
+              except (OSError, ValueError):
+                  return None
+          plan = load("spa-release/plan.json") or {}
+          meta = load("spa-release/index-metadata.json") or {}
+          record = {
+              "kind": "spa-publish",
+              "source_commit": os.environ["COMMIT_SHA"],
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "index_sha256": plan.get("index_sha256"),
+              "previous_index_sha256": meta.get("previous-index-sha256"),
+              "files": plan.get("count"),
+              "invalidation_id": os.environ.get("INVALIDATION_ID") or None,
+              "outcome": "${{ job.status }}",
+          }
+          json.dump(record, open("spa-release/release-record.json", "w"), indent=2, sort_keys=True)
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload the release record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spa-release-${{ github.run_id }}
+          path: |
+            spa-release/release-record.json
+            spa-release/plan.json
+          retention-days: 90

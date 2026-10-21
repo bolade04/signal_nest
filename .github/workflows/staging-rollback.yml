@@ -1,0 +1,291 @@
+name: Staging rollback
+
+# P6-INF-7 / plan §16 / E2: "a one-command redeploy of the prior digest". Restores the api
+# and worker release that the current one replaced, verifies it, smokes it and records it.
+# AUTHORING ONLY: every run is a live execution and needs its own authorization, an OPEN
+# staging window and the protected `staging-deploy` environment's human approval.
+#
+#   gh workflow run staging-rollback.yml --ref main      (then approve the environment)
+#
+# ZERO INPUTS. The target is the latest ledger record's `previous` — what was ACTUALLY
+# running before the current release (scripts/release_plan.py rollback-target) — and only
+# if the services still run exactly what that record says. After a window reopen with older
+# tfvars digests, or any other drift, "the prior digest" is ambiguous and the workflow
+# refuses; the recovery is then the IaC path with explicit digests.
+#
+# A ROLLBACK NEVER MIGRATES. Migrations are additive-first, so the previous code runs on
+# the newer schema (`ahead`, deployment.md). It never rolls below AUTH4_ROLLBACK_FLOOR:
+# the target commit must contain the recorded floor commit, checked offline.
+#
+# Why the rollback registers revisions instead of reusing old ones: task definitions are
+# destroyed at every staging-window close and re-registered at the next open, so the prior
+# release's revision may no longer exist. The prior release is re-rendered from the CURRENT
+# OpenTofu template with the prior digests — the same "image is the only difference" rule
+# as a deploy.
+#
+# Operator values are environment SECRETS for the reason given in spa-publish.yml.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: staging-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  rollback:
+    name: Restore the previous release, verify and smoke it
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging-deploy
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NAME_PREFIX: ${{ vars.NAME_PREFIX || 'signalnest-staging' }}
+      ROLLBACK_FLOOR: ${{ vars.DEPLOY_ROLLBACK_FLOOR_COMMIT }}
+      LEDGER_PARAMETER: ${{ vars.RELEASE_LEDGER_PARAMETER }}
+    steps:
+      - name: Refuse to run off main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Staging rollback runs only from refs/heads/main (got ${REF})." >&2
+          exit 1
+
+      - name: Fail closed while the prerequisites are absent
+        env:
+          ROLE_ARN: ${{ secrets.DEPLOY_ROLE_ARN }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+        run: |
+          missing=""
+          for v in ROLE_ARN ACCOUNT_ID CLUSTER_ARN API_ORIGIN ROLLBACK_FLOOR LEDGER_PARAMETER; do
+            [ -n "${!v}" ] || missing="${missing} ${v}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing staging-deploy environment values:${missing}." >&2
+            exit 1
+          fi
+          [[ "${ROLLBACK_FLOOR}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::DEPLOY_ROLLBACK_FLOOR_COMMIT must be a 40-character commit SHA." >&2; exit 1; }
+          [[ "${LEDGER_PARAMETER}" =~ ^/[a-z0-9-]+/release/ledger$ ]] || { echo "::error::RELEASE_LEDGER_PARAMETER must be /<prefix>/release/ledger." >&2; exit 1; }
+
+      - name: Check out the exact trusted revision (full history, for the floor check)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # ------------------------------------------------------------------
+      # Everything below holds short-lived OIDC-derived credentials.
+      # ------------------------------------------------------------------
+      - name: Authenticate to AWS via GitHub OIDC (no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: signalnest-staging-rollback-${{ github.run_id }}
+          role-duration-seconds: 1800
+
+      - name: Verify the assumed identity is the intended account
+        env:
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "${actual}" != "${ACCOUNT_ID}" ]; then
+            echo "::error::Assumed-role account does not match the configured account. Refusing to roll back." >&2
+            exit 1
+          fi
+          echo "ok: caller identity matches the configured account (id not printed)"
+
+      - name: Read what is running now and the release ledger
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+        run: |
+          mkdir -p release
+          aws ecs describe-services --cluster "${CLUSTER_ARN}" \
+            --services "${NAME_PREFIX}-api" "${NAME_PREFIX}-worker" > release/services-before.json
+          for workload in api worker; do
+            arns="$(aws ecs list-tasks --cluster "${CLUSTER_ARN}" --service-name "${NAME_PREFIX}-${workload}" \
+              --desired-status RUNNING --query taskArns --output text)"
+            if [ -z "${arns}" ] || [ "${arns}" = "None" ]; then
+              echo '{"tasks": []}' > "release/tasks-before-${workload}.json"
+            else
+              # shellcheck disable=SC2086 # one task ARN per word
+              aws ecs describe-tasks --cluster "${CLUSTER_ARN}" --tasks ${arns} > "release/tasks-before-${workload}.json"
+            fi
+          done
+          python3 scripts/release_plan.py ecs-running --services release/services-before.json \
+            --api-tasks release/tasks-before-api.json --worker-tasks release/tasks-before-worker.json \
+            --out release/running-before.json
+          if ! aws ssm get-parameter-history --name "${LEDGER_PARAMETER}" > release/ledger-history.json 2> release/ssm.err; then
+            echo "::error::The release ledger parameter is not readable (not provisioned?)." >&2
+            exit 1
+          fi
+          python3 scripts/release_plan.py rollback-target --history release/ledger-history.json \
+            --running release/running-before.json --out release/rollback-plan.json
+          python3 -c "import json;p=json.load(open('release/rollback-plan.json'));print('ok: restoring', p['target']['source_commit'], 'from', p['rolled_back_from']['source_commit'])"
+
+      - name: Refuse a target below the AUTH4 rollback floor (offline)
+        run: |
+          target="$(python3 -c "import json;print(json.load(open('release/rollback-plan.json'))['target']['source_commit'])")"
+          if ! git cat-file -e "${target}^{commit}" 2>/dev/null; then
+            echo "::error::The rollback target commit is not in main's history. Refusing." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${ROLLBACK_FLOOR}" "${target}"; then
+            echo "::error::The rollback target is below the recorded AUTH4 rollback floor. Refusing (an emergency pre-AUTH4 restore is a separate incident procedure)." >&2
+            exit 1
+          fi
+          echo "ok: the rollback target contains the rollback floor"
+
+      - name: Confirm the prior images still exist under their commit tag
+        run: |
+          commit="$(python3 -c "import json;print(json.load(open('release/rollback-plan.json'))['target']['source_commit'])")"
+          for workload in api worker; do
+            digest="$(python3 -c "import json,sys;print(json.load(open('release/rollback-plan.json'))['target']['images'][sys.argv[1]])" "${workload}")"
+            aws ecr describe-images --repository-name "${NAME_PREFIX}/${workload}" \
+              --image-ids imageDigest="${digest}" > "release/target-${workload}-described.json"
+            tagged="$(python3 scripts/release_plan.py image-commit --described "release/target-${workload}-described.json" \
+              --repository "${NAME_PREFIX}/${workload}")"
+            if [ "${tagged}" != "${commit}" ]; then
+              echo "::error::The prior ${workload} digest is not tagged with the recorded commit. Refusing." >&2
+              exit 1
+            fi
+          done
+          echo "ok: both prior digests exist and carry the recorded commit tag"
+
+      - name: Re-render the prior release from the current OpenTofu templates (offline checks)
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          target_commit="$(python3 -c "import json;print(json.load(open('release/rollback-plan.json'))['target']['source_commit'])")"
+          for family in api worker; do
+            echo "[" > "release/candidates-${family}.json"
+            first=yes
+            for arn in $(aws ecs list-task-definitions --family-prefix "${NAME_PREFIX}-${family}" \
+                --status ACTIVE --sort DESC --max-items 20 --query taskDefinitionArns --output text); do
+              [ "${arn}" = "None" ] && continue
+              [ -n "${first}" ] || echo "," >> "release/candidates-${family}.json"
+              first=""
+              aws ecs describe-task-definition --task-definition "${arn}" --include TAGS >> "release/candidates-${family}.json"
+            done
+            echo "]" >> "release/candidates-${family}.json"
+            python3 scripts/release_plan.py ecs-template --candidates "release/candidates-${family}.json" \
+              --family "${NAME_PREFIX}-${family}" --out "release/template-${family}.json"
+            digest="$(python3 -c "import json,sys;print(json.load(open('release/rollback-plan.json'))['target']['images'][sys.argv[1]])" "${family}")"
+            python3 scripts/release_plan.py ecs-render --template "release/template-${family}.json" \
+              --digest "${digest}" --commit "${target_commit}" --run-id "${RUN_ID}" --out "release/register-${family}.json"
+          done
+
+      - name: Register the revisions and move both services
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+        run: |
+          for workload in api worker; do
+            aws ecs register-task-definition --cli-input-json "file://release/register-${workload}.json" \
+              --query taskDefinition.taskDefinitionArn --output text > "release/registered-${workload}.txt"
+          done
+          for workload in api worker; do
+            aws ecs update-service --cluster "${CLUSTER_ARN}" --service "${NAME_PREFIX}-${workload}" \
+              --task-definition "$(cat "release/registered-${workload}.txt")" > /dev/null
+          done
+          aws ecs wait services-stable --cluster "${CLUSTER_ARN}" --services "${NAME_PREFIX}-api" "${NAME_PREFIX}-worker"
+          echo "ok: both services stable"
+
+      - name: Verify every running task reports the prior digest
+        env:
+          CLUSTER_ARN: ${{ secrets.ECS_CLUSTER_ARN }}
+        run: |
+          aws ecs describe-services --cluster "${CLUSTER_ARN}" \
+            --services "${NAME_PREFIX}-api" "${NAME_PREFIX}-worker" > release/services-after.json
+          for workload in api worker; do
+            arns="$(aws ecs list-tasks --cluster "${CLUSTER_ARN}" --service-name "${NAME_PREFIX}-${workload}" \
+              --desired-status RUNNING --query taskArns --output text)"
+            # shellcheck disable=SC2086 # one task ARN per word
+            aws ecs describe-tasks --cluster "${CLUSTER_ARN}" --tasks ${arns} > "release/tasks-after-${workload}.json"
+          done
+          python3 - <<'PY'
+          import json
+          plan = json.load(open("release/rollback-plan.json"))
+          expected = {"images": plan["target"]["images"], "task_definitions": {}}
+          for w in ("api", "worker"):
+              expected["task_definitions"][w] = open(f"release/registered-{w}.txt").read().strip().rsplit("/", 1)[-1]
+          json.dump(expected, open("release/expected.json", "w"), indent=2, sort_keys=True)
+          PY
+          python3 scripts/release_plan.py ecs-verify --services release/services-after.json \
+            --api-tasks release/tasks-after-api.json --worker-tasks release/tasks-after-worker.json \
+            --expected release/expected.json
+
+      - name: Append the rollback to the ledger
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 -c "import json;json.dump(json.load(open('release/expected.json'))['task_definitions'],open('release/task-definitions.json','w'))"
+          python3 scripts/release_plan.py ledger-rollback --plan release/rollback-plan.json \
+            --task-definitions release/task-definitions.json --run-id "${RUN_ID}" \
+            --recorded-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --out release/ledger-record.json
+          aws ssm put-parameter --name "${LEDGER_PARAMETER}" --type String --overwrite \
+            --value "file://release/ledger-record.json" > /dev/null
+          echo "ok: rollback appended to the ledger"
+
+      - name: Post-rollback smoke against the live API
+        env:
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+        run: |
+          if ! python3 scripts/release_plan.py smoke --api-origin "${API_ORIGIN}" --out release/smoke.json; then
+            echo "::error::Post-rollback smoke FAILED. Escalate under incident_response.md; do not chain further automatic actions." >&2
+            exit 1
+          fi
+          echo "ok: post-rollback smoke passed"
+
+      - name: Record the rollback
+        if: always()
+        run: |
+          mkdir -p release
+          python3 - <<'PY'
+          import json, os
+          def load(path):
+              try:
+                  return json.load(open(path))
+              except (OSError, ValueError):
+                  return None
+          ledger = load("release/ledger-record.json") or {}
+          plan = load("release/rollback-plan.json") or {}
+          record = {
+              "kind": "rollback",
+              "dispatched_commit": os.environ.get("GITHUB_SHA"),
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "restored": plan.get("target"),
+              "rolled_back_from": plan.get("rolled_back_from"),
+              "task_definitions": ledger.get("task_definitions"),
+              "smoke": load("release/smoke.json"),
+              "outcome": "${{ job.status }}",
+          }
+          json.dump(record, open("release/rollback-record.json", "w"), indent=2, sort_keys=True)
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload the rollback record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-rollback-${{ github.run_id }}
+          path: release/rollback-record.json
+          retention-days: 90
