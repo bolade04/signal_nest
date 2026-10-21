@@ -77,11 +77,7 @@ function CapabilityRow({
         <div className="min-w-0">
           <p className="text-sm font-medium">{item.label}</p>
           <p className="text-xs text-muted-foreground">
-            {/* null = no plan record names an activation phase (P6-CAP-3); never
-                render a phase the registry does not claim. */}
-            {item.future_activation_phase
-              ? `First activation planned in Phase ${item.future_activation_phase}`
-              : 'No activation phase planned'}
+            First activation planned in Phase {item.future_activation_phase}
           </p>
         </div>
         <div className="flex items-center gap-2">

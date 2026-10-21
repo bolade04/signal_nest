@@ -40,7 +40,7 @@ enforcement point and its reflection share:
   mutations, tick seeding and the tick's own gate. An honored enable override makes
   that workspace's schedules run while ``scout_scheduling_enabled`` stays ``False``.
 * ``connector_rss`` — LIVE since P6-CAP-1
-  (:func:`app.scouting_requests.connectors.resolve_rss_capability`): live connector
+  (:func:`app.scouting_requests.connectors._rss_enabled_for`): live connector
   selection. Not ``workspace_enableable``, so only the global flag can enable it; a
   disable override (or the ceiling) turns it off for a workspace.
 

@@ -111,23 +111,6 @@ describe('operations page — operator access', () => {
   });
 });
 
-describe('operations page — activation phase (P6-CAP-3)', () => {
-  it('shows a planned phase only where the registry claims one', async () => {
-    const screen = renderApp(<App />, { route: '/operations' });
-
-    const feedback = await capabilityRow(screen, 'Opportunity Feedback');
-    expect(within(feedback).getByText('First activation planned in Phase 4B')).toBeInTheDocument();
-
-    // Scheduling and RSS are 4B non-goals; the registry reports no phase for them,
-    // and the console must not invent one.
-    for (const label of ['Scout Scheduling', 'RSS Connector']) {
-      const row = await capabilityRow(screen, label);
-      expect(within(row).getByText('No activation phase planned')).toBeInTheDocument();
-      expect(within(row).queryByText(/phase 4b/i)).not.toBeInTheDocument();
-    }
-  });
-});
-
 describe('operations page — override mutations', () => {
   it('sets a workspace override behind an explicit confirmation and reflects the new state', async () => {
     const screen = renderApp(<App />, { route: '/operations' });

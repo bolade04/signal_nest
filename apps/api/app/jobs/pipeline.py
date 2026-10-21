@@ -148,12 +148,13 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
+    # P6-CAP-1: the request's own tenant scope decides RSS through the resolver.
     connector = get_connector(
+        source_types=request.source_types or [],
+        market=market,
         db=db,
         organization_id=request.organization_id,
         workspace_id=request.workspace_id,
-        source_types=request.source_types or [],
-        market=market,
     )
     fixtures = connector.fetch(
         market=market,

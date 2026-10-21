@@ -1046,21 +1046,14 @@
         "type": "object"
       },
       "CapabilityRegistryItemOut": {
-        "description": "Operator projection of one capability's frozen governance policy.\n\nA secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` \u2014 the\ntyped capability, its human-safe label, the bound global-flag attribute name\n(non-secret, internal; included for operator explainability), whether an override\nmay enable/disable it per workspace, and the descriptive future-activation phase\n(``None`` when no plan record names one \u2014 P6-CAP-3). Carries no credential, URL,\ncallable, or mutable registry object.",
+        "description": "Operator projection of one capability's frozen governance policy.\n\nA secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` \u2014 the\ntyped capability, its human-safe label, the bound global-flag attribute name\n(non-secret, internal; included for operator explainability), whether an override\nmay enable/disable it per workspace, and the documentation-only future-activation\nphase. Carries no credential, URL, callable, or mutable registry object.",
         "properties": {
           "capability": {
             "$ref": "#/components/schemas/Capability"
           },
           "future_activation_phase": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Future Activation Phase"
+            "title": "Future Activation Phase",
+            "type": "string"
           },
           "global_flag_attr": {
             "title": "Global Flag Attr",

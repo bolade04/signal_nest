@@ -20,9 +20,8 @@ Design invariants:
 * **Portable persisted form.** Each capability persists as its ``StrEnum`` value
   (a plain ``String`` column, repo convention — no native PostgreSQL enum).
 
-This module defines the registry and its metadata only; no precedence is executed
-here. (When 4A-C.1 shipped nothing consumed these policies; since then the resolver,
-the operator console and — since P6-CAP-1 — every capability's enforcement point do.)
+This batch (4A-C.1) defines the registry and its metadata only. No precedence is
+executed here and nothing consumes these policies yet.
 """
 
 from __future__ import annotations
@@ -67,11 +66,8 @@ class CapabilityPolicy:
             this capability off regardless of override or global flag.
         requires_workspace_context: Whether resolving this capability is only
             meaningful within a concrete workspace scope.
-        future_activation_phase: The phase whose plan record names the first real
-            activation of this capability, or ``None`` when no plan record does.
-            Descriptive only — it gates nothing — but it is rendered verbatim by the
-            operator console ("First activation planned in Phase …"), so it must
-            match a governing plan document, never a guess (P6-CAP-3).
+        future_activation_phase: The phase in which the first real activation of
+            this capability is planned. Documentation only; consumed by nothing.
     """
 
     capability: Capability
@@ -81,22 +77,11 @@ class CapabilityPolicy:
     workspace_disableable: bool
     subject_to_safety_ceiling: bool
     requires_workspace_context: bool
-    future_activation_phase: str | None
+    future_activation_phase: str
 
 
 # Declaration order here is the canonical, deterministic enumeration order used by
 # every public accessor below.
-#
-# ``future_activation_phase`` provenance (P6-CAP-3). Every entry once read "4B", which
-# only the feedback entry's records support:
-# * ``docs/phase-4b-plan.md`` is titled "Opportunity Feedback Internal Canary
-#   Activation"; its 4B-B canary was never executed and now needs its own separate
-#   authorization (``docs/project-phase-6-plan.md`` §10.3), but Phase 4B remains the
-#   phase whose plan names that activation.
-# * The same plan's §15 lists "scheduling activation" and "RSS activation" among the
-#   non-goals of all of Phase 4B, and no later plan record schedules either (RSS is
-#   blocked on a connector-policy/legal decision). Both are therefore ``None``.
-# ``test_capability_registry.py`` cross-checks these values against that plan.
 _POLICIES: tuple[CapabilityPolicy, ...] = (
     CapabilityPolicy(
         capability=Capability.OPPORTUNITY_FEEDBACK,
@@ -116,7 +101,7 @@ _POLICIES: tuple[CapabilityPolicy, ...] = (
         workspace_disableable=True,
         subject_to_safety_ceiling=True,
         requires_workspace_context=True,
-        future_activation_phase=None,
+        future_activation_phase="4B",
     ),
     CapabilityPolicy(
         capability=Capability.CONNECTOR_RSS,
@@ -130,7 +115,7 @@ _POLICIES: tuple[CapabilityPolicy, ...] = (
         workspace_disableable=True,
         subject_to_safety_ceiling=True,
         requires_workspace_context=True,
-        future_activation_phase=None,
+        future_activation_phase="4B",
     ),
 )
 

@@ -9,25 +9,13 @@ Since Phase 3B, :func:`get_connector` consults the connector registry
 (``app.connectors``): when a live connector is enabled *and* its policy permits
 the request scope, that connector is used; otherwise this falls back to the
 sandbox ``FixtureConnector``, so default behaviour is unchanged.
-
-Since P6-CAP-1, "enabled" is the capability resolver's per-workspace decision
-(:func:`resolve_rss_capability`), never the raw ``connector_rss_enabled`` flag.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Protocol
 
-from sqlalchemy.orm import Session
-
-from app.capabilities.registry import Capability
-from app.capabilities.resolver import CapabilityResolution, resolve_capability
-from app.core.config import get_settings
-from app.core.logging import get_logger, log_event
 from app.scouting_requests.fixtures import FixtureSignal, fixtures_for_market
-
-logger = get_logger("signalnest.scouting.connectors")
 
 
 class Connector(Protocol):
@@ -64,82 +52,60 @@ class FixtureConnector:
         return results
 
 
-def resolve_rss_capability(
-    db: Session, *, organization_id: str, workspace_id: str
-) -> CapabilityResolution:
-    """The one place RSS availability is decided for a workspace (P6-CAP-1).
+def _rss_enabled_for(db, *, organization_id: str, workspace_id: str) -> bool:
+    """P6-CAP-1: the one RSS enforcement decision — the capability resolver's.
 
-    Goes through the deny-biased resolver, so the safety ceiling and a workspace
-    *disable* override apply; RSS is not ``workspace_enableable``, so an enable
-    override resolves to the secure default and never turns it on. The operator
-    console's effective view resolves the same ``(capability, workspace)`` pair with
-    the same function, so what it reports is what the pipeline selects.
-
-    A dependency failure is logged and re-raised — the run fails and is retried —
-    never coerced into a decision either way.
+    Safety ceiling → workspace override → global flag → secure default, so a workspace
+    *disable* override (or the ceiling) turns RSS off for that workspace. RSS is not
+    ``workspace_enableable``, so an enable override resolves to the secure default and
+    never turns it on. The operator console's effective view resolves the same pair
+    with the same function. A resolver failure propagates (the run fails and is
+    retried); it is never coerced into a decision.
     """
-    try:
-        return resolve_capability(
-            session=db,
-            settings=get_settings(),
-            capability=Capability.CONNECTOR_RSS,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-        )
-    except Exception:
-        log_event(
-            logger,
-            "connector_rss_gate_failed",
-            level=logging.ERROR,
-            outcome="error",
-            capability=Capability.CONNECTOR_RSS.value,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-        )
-        raise
+    from app.capabilities.registry import Capability
+    from app.capabilities.resolver import resolve_capability
+    from app.core.config import get_settings
+
+    return resolve_capability(
+        session=db,
+        settings=get_settings(),
+        capability=Capability.CONNECTOR_RSS,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+    ).effective_enabled
 
 
 def get_connector(
     *,
-    db: Session | None = None,
-    organization_id: str | None = None,
-    workspace_id: str | None = None,
     source_types: list[str] | None = None,
     market: str | None = None,
+    db=None,
+    organization_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> Connector:
     """Resolve the connector for a request scope.
 
-    Returns a live connector when its capability resolves enabled for the request's
-    workspace and its policy permits the scope; otherwise the sandbox
-    :class:`FixtureConnector`. Without a session *and* a full tenant scope there is
-    no workspace to resolve a capability for, so the answer is the fixture
-    connector — deny-biased, never the raw global flag. Called with no arguments
-    (the legacy signature) it therefore always returns the fixture connector.
-    """
-    if db is None or organization_id is None or workspace_id is None:
-        return FixtureConnector()
+    Returns a live connector when one is enabled and its policy permits the
+    scope; otherwise the sandbox :class:`FixtureConnector`. Called with no
+    arguments (the legacy signature) it always returns the fixture connector.
 
+    "Enabled" is :func:`_rss_enabled_for` for the request's workspace (P6-CAP-1).
+    Without a session and a full tenant scope there is no workspace to decide for,
+    so RSS counts as disabled — deny-biased, never the raw global flag.
+    """
     from app.connectors.registry import resolve_connector
 
-    rss = resolve_rss_capability(
-        db, organization_id=organization_id, workspace_id=workspace_id
+    rss_enabled = (
+        db is not None
+        and organization_id is not None
+        and workspace_id is not None
+        and _rss_enabled_for(
+            db, organization_id=organization_id, workspace_id=workspace_id
+        )
     )
     live = resolve_connector(
         source_types=tuple(source_types or ()),
         market=market,
-        rss=rss,
+        rss_enabled=rss_enabled,
     )
-    if rss.effective_enabled:
-        # Only an enable is logged per run: the dark default would otherwise log on
-        # every scout run without saying anything new.
-        log_event(
-            logger,
-            "connector_rss_gate_decided",
-            outcome="allowed",
-            capability=Capability.CONNECTOR_RSS.value,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-            decided_by=rss.decided_by.value,
-            selected=live is not None,
-        )
     return live or FixtureConnector()

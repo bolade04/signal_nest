@@ -81,7 +81,7 @@ override still differ by policy:
   turning the global flag off no longer stops it — clear the override (or record a
   disable override) as well.
 * ``connector_rss`` — **live resolver-backed selection** since P6-CAP-1
-  (:func:`app.scouting_requests.connectors.resolve_rss_capability`). Not
+  (:func:`app.scouting_requests.connectors._rss_enabled_for`). Not
   ``workspace_enableable``: an ``enabled=True`` override is refused 422 here and would
   resolve to the secure default anyway, so only the global flag can turn RSS on; a
   disable override turns it off for one workspace.
@@ -140,9 +140,8 @@ class CapabilityRegistryItemOut(BaseModel):
     A secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` — the
     typed capability, its human-safe label, the bound global-flag attribute name
     (non-secret, internal; included for operator explainability), whether an override
-    may enable/disable it per workspace, and the descriptive future-activation phase
-    (``None`` when no plan record names one — P6-CAP-3). Carries no credential, URL,
-    callable, or mutable registry object.
+    may enable/disable it per workspace, and the documentation-only future-activation
+    phase. Carries no credential, URL, callable, or mutable registry object.
     """
 
     capability: Capability
@@ -150,7 +149,7 @@ class CapabilityRegistryItemOut(BaseModel):
     global_flag_attr: str
     workspace_enableable: bool
     workspace_disableable: bool
-    future_activation_phase: str | None
+    future_activation_phase: str
 
 
 class CapabilityRegistryOut(BaseModel):

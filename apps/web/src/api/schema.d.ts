@@ -2195,14 +2195,13 @@ export interface components {
          *     A secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` — the
          *     typed capability, its human-safe label, the bound global-flag attribute name
          *     (non-secret, internal; included for operator explainability), whether an override
-         *     may enable/disable it per workspace, and the descriptive future-activation phase
-         *     (``None`` when no plan record names one — P6-CAP-3). Carries no credential, URL,
-         *     callable, or mutable registry object.
+         *     may enable/disable it per workspace, and the documentation-only future-activation
+         *     phase. Carries no credential, URL, callable, or mutable registry object.
          */
         CapabilityRegistryItemOut: {
             capability: components["schemas"]["Capability"];
             /** Future Activation Phase */
-            future_activation_phase: string | null;
+            future_activation_phase: string;
             /** Global Flag Attr */
             global_flag_attr: string;
             /** Label */

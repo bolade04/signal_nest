@@ -1,6 +1,5 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
-import type { CapabilityRegistryItem } from '@/api/types';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -277,7 +276,7 @@ const capabilityRegistryItems = [
     global_flag_attr: 'scout_scheduling_enabled',
     workspace_enableable: true,
     workspace_disableable: true,
-    future_activation_phase: null,
+    future_activation_phase: '4B',
   },
   {
     capability: 'connector_rss',
@@ -285,11 +284,9 @@ const capabilityRegistryItems = [
     global_flag_attr: 'connector_rss_enabled',
     workspace_enableable: false,
     workspace_disableable: true,
-    future_activation_phase: null,
+    future_activation_phase: '4B',
   },
-  // Checked against the generated contract so the mirror cannot drift from the real
-  // response model (e.g. a phase the registry no longer claims — P6-CAP-3).
-] as const satisfies readonly CapabilityRegistryItem[];
+] as const;
 
 interface OverrideRow {
   id: string;

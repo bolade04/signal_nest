@@ -1321,11 +1321,12 @@ _ALLOWED_CONSUMER_REL = "system/internal_capabilities_routes.py"
 _FEEDBACK_GATE_REL = "feedback/routes.py"
 #: The scout-scheduling and RSS live gates — sanctioned by P6-CAP-1 to consume ONLY the
 #: resolver, relative to ``app/``. Each capability has one decision call site
-#: (``schedules.resolve_scheduling_capability`` / ``connectors.resolve_rss_capability``);
-#: the route module and the connector registry import only the resolver's result type
-#: (``CapabilityResolution``) to accept that decision.
+#: (``schedules.resolve_scheduling_capability`` / ``connectors._rss_enabled_for``); the
+#: schedule route module imports only the resolver's result type
+#: (``CapabilityResolution``) to accept that decision. The connector registry takes the
+#: decision as a plain boolean and imports neither control-plane module.
 _SCHEDULING_GATE_RELS = ("scouting_requests/schedules.py", "scouting_requests/routes.py")
-_RSS_GATE_RELS = ("scouting_requests/connectors.py", "connectors/registry.py")
+_RSS_GATE_RELS = ("scouting_requests/connectors.py",)
 #: Sanctioned production consumers of the capability control plane, each mapped to the
 #: exact control-plane modules it may import. The operator router (4A-C.4) may consume
 #: both the service and the resolver; the opportunity-feedback gate (4B-A) and the
