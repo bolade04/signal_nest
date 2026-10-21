@@ -83,6 +83,29 @@ exposes `8000` and declares a `HEALTHCHECK` against `GET /health` (liveness only
 - **Liveness vs readiness.** `GET /health` is liveness (process is up). Readiness is
   the operator/probe surface (`app/system/probes.py`) that actively verifies
   backends; wire your orchestrator's readiness probe to that, not to `/health`.
+- **Request rate limiting (P6-PLAT-3).** `RATE_LIMIT_BACKEND=redis` counts requests
+  per resolved client address in the shared Redis (`REDIS_URL`), so the limit (240
+  requests per 60-second window) holds across every API replica; production refuses
+  the per-process `memory` counter. The worker validates the same settings, so a
+  production worker needs `RATE_LIMIT_BACKEND=redis` and `REDIS_URL` too.
+  `RATE_LIMIT_REDIS_FAILURE_MODE` decides what happens while Redis cannot answer:
+  - `local` (default): the API keeps limiting with the process's own bounded counter
+    (the per-replica limit) and logs `rate_limit.shared_store_unavailable` (exception
+    class only) once per 5-second retry interval. It also counts
+    `dependency_operation_total{dependency="redis",operation="rate_limit",outcome="degraded"}`.
+  - `deny`: every request except `/health` gets `503 rate_limit_unavailable` until
+    Redis answers. `/health` is limited per process instead, so health checks do not
+    turn the outage into a task-replacement loop. The `rate_limit` readiness probe
+    then blocks readiness.
+
+  *Rationale.* Allowing every request while Redis is down ("fail open") is not
+  offered: load alone can make Redis unavailable to the limiter (connection-pool
+  waits time out under a flood), so a fail-open limiter would switch itself off
+  during the credential-stuffing flood it exists to slow down. `local` never does
+  worse than the per-process limit enforced before this change, and the API stays
+  available. `deny` trades availability for strictness. Either way, Redis is retried
+  only once per interval, so an outage costs one timeout per interval, not one per
+  request.
 
 ## Graceful lifecycle
 
@@ -94,7 +117,7 @@ run the migration actor.
 **API shutdown** on `SIGTERM`: record the shutdown metric, then run the shared
 bounded, idempotent sequence (`app/core/lifecycle.py`) — flush metrics, flush traces
 under `TRACING_SHUTDOWN_FLUSH_SECONDS`, close the Redis cache/notifier clients, and
-dispose the database pool. Every step is best-effort; a slow exporter or unreachable
+dispose the database pool; the API then closes the rate limiter's Redis client. Every step is best-effort; a slow exporter or unreachable
 backend can never block exit.
 
 **Worker shutdown:** the first `SIGTERM` stops claiming and lets in-flight jobs

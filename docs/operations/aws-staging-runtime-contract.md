@@ -186,7 +186,11 @@ creates no role or policy.**
 - **Managed PostgreSQL** (RDS), **private access only**, **encryption at rest and in
   transit**, a **dedicated staging database**, **no customer data**.
 - **pgvector** extension enabled (production-shaped mode requires a persistent vector
-  backend — `config.py`).
+  backend — `config.py`). *(2026-10-20, `P6-PLAT-1`: no code uses the extension, and
+  `vector_backend=pgvector` is now refused at startup in every environment until a
+  pgvector path is implemented. Staging runs the default `bruteforce`, and the composed
+  root omits `VECTOR_BACKEND`. Whether to enable the extension at all is the open
+  P6-PLAT-1 operator decision.)*
 - **Migrations** run as a **controlled one-time ECS task** using the **approved image**
   (`python -m app.db.migrate`); replicas never migrate (`docs/operations/deployment.md`,
   `docs/operations/migrations.md`).
@@ -207,7 +211,14 @@ creates no role or policy.**
   `CACHE_BACKEND=redis`/`QUEUE_BACKEND=redis` **requires** a reachable Redis/Valkey
   (ElastiCache). SIGNALNEST_STAGING therefore treats **ElastiCache as mandatory** for a
   faithful production-like profile. If a future documented profile runs without Redis, that
-  must be justified against the validator, not by weakening it.
+  must be justified against the validator, not by weakening it. *(2026-10-20,
+  `P6-PLAT-2`/`P6-PLAT-3`: the validator no longer rejects `QUEUE_BACKEND=inprocess`.
+  `queue_backend` only selects the optional job wake-up, and the durable queue is the
+  database job store. Redis stays mandatory for production through
+  `CACHE_BACKEND=redis` and the shared request rate limiter
+  (`RATE_LIMIT_BACKEND=redis`, which production now requires). To use the shared
+  limiter, staging must set `RATE_LIMIT_BACKEND=redis`; without it, staging counts
+  per process, and readiness reports that as `degraded`.)*
 - **Private access only**; encryption/auth per the selected ElastiCache engine.
 - **Worker** starts, registers in the worker registry, and heartbeats; readiness treats
   worker presence as informational unless `require_worker_fleet=true` (`probes.py`).
