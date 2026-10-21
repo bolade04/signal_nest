@@ -140,25 +140,29 @@ jobs:
           fi
           python3 scripts/release_plan.py rollback-target --history release/ledger-history.json \
             --running release/running-before.json --out release/rollback-plan.json
-          python3 -c "import json;p=json.load(open('release/rollback-plan.json'));print('ok: restoring', p['target']['source_commit'], 'from', p['rolled_back_from']['source_commit'])"
+          python3 -c "import json;p=json.load(open('release/rollback-plan.json'));print('ok: restoring', p['target']['commits'], 'from', p['rolled_back_from']['commits'])"
 
       - name: Refuse a target below the AUTH4 rollback floor (offline)
         run: |
-          target="$(python3 -c "import json;print(json.load(open('release/rollback-plan.json'))['target']['source_commit'])")"
-          if ! git cat-file -e "${target}^{commit}" 2>/dev/null; then
-            echo "::error::The rollback target commit is not in main's history. Refusing." >&2
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "${ROLLBACK_FLOOR}" "${target}"; then
-            echo "::error::The rollback target is below the recorded AUTH4 rollback floor. Refusing (an emergency pre-AUTH4 restore is a separate incident procedure)." >&2
-            exit 1
-          fi
-          echo "ok: the rollback target contains the rollback floor"
+          # Per workload: the recorded predecessor may have had the two services on different
+          # commits; EVERY restored image must contain the floor.
+          for workload in api worker; do
+            target="$(python3 -c "import json,sys;print(json.load(open('release/rollback-plan.json'))['target']['commits'][sys.argv[1]])" "${workload}")"
+            if ! git cat-file -e "${target}^{commit}" 2>/dev/null; then
+              echo "::error::The ${workload} rollback target commit is not in main's history. Refusing." >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "${ROLLBACK_FLOOR}" "${target}"; then
+              echo "::error::The ${workload} rollback target is below the recorded AUTH4 rollback floor. Refusing (an emergency pre-AUTH4 restore is a separate incident procedure)." >&2
+              exit 1
+            fi
+          done
+          echo "ok: every rollback target contains the rollback floor"
 
       - name: Confirm the prior images still exist under their commit tag
         run: |
-          commit="$(python3 -c "import json;print(json.load(open('release/rollback-plan.json'))['target']['source_commit'])")"
           for workload in api worker; do
+            commit="$(python3 -c "import json,sys;print(json.load(open('release/rollback-plan.json'))['target']['commits'][sys.argv[1]])" "${workload}")"
             digest="$(python3 -c "import json,sys;print(json.load(open('release/rollback-plan.json'))['target']['images'][sys.argv[1]])" "${workload}")"
             aws ecr describe-images --repository-name "${NAME_PREFIX}/${workload}" \
               --image-ids imageDigest="${digest}" > "release/target-${workload}-described.json"
@@ -175,8 +179,8 @@ jobs:
         env:
           RUN_ID: ${{ github.run_id }}
         run: |
-          target_commit="$(python3 -c "import json;print(json.load(open('release/rollback-plan.json'))['target']['source_commit'])")"
           for family in api worker; do
+            target_commit="$(python3 -c "import json,sys;print(json.load(open('release/rollback-plan.json'))['target']['commits'][sys.argv[1]])" "${family}")"
             echo "[" > "release/candidates-${family}.json"
             first=yes
             for arn in $(aws ecs list-task-definitions --family-prefix "${NAME_PREFIX}-${family}" \

@@ -16,8 +16,9 @@ name: Staging deploy
 #
 # ORDER (docs/operations/deployment.md, "Rolling deployment"):
 #   1. refuse: off main; below the recorded AUTH4_ROLLBACK_FLOOR; a service mid-deployment,
-#      at desired 0, or with circuit-breaker rollback off (the AUTH4 cutover is unfinished);
-#      a target image that was never published or whose push scan reports CRITICAL;
+#      at desired 0, with circuit-breaker rollback off (the AUTH4 cutover is unfinished) or
+#      with tasks on mixed digests; a target image that was never published or whose push
+#      scan reports CRITICAL (the two services MAY run different commits — recorded as such);
 #   2. run the single migration actor (the migration template + the new worker digest) and
 #      require exit 0 plus its `migrate.upgrade_verify.done` event — replicas never migrate;
 #   3. move both services, wait for stability, and verify that every running task reports
@@ -190,11 +191,11 @@ jobs:
             python3 scripts/release_plan.py image-commit --described "release/running-${workload}-described.json" \
               --repository "${NAME_PREFIX}/${workload}" > "release/running-${workload}-commit.txt"
           done
-          if [ "$(cat release/running-api-commit.txt)" != "$(cat release/running-worker-commit.txt)" ]; then
-            echo "::error::The api and worker services run images of different commits; the running release is ambiguous." >&2
-            exit 1
-          fi
-          echo "ok: the running release is one commit on both services"
+          # Recorded per workload: a previous deployment can have ended with the circuit breaker
+          # rolling one service back and not the other. That state is recorded as it is (and
+          # stays restorable by digest); refusing it would leave no workflow able to recover.
+          python3 -c "import json;json.dump({w: open(f'release/running-{w}-commit.txt').read().strip() for w in ('api','worker')}, open('release/running-commits.json','w'))"
+          echo "ok: the running release's commits recorded per workload"
 
       - name: Read the release ledger
         run: |
@@ -347,7 +348,7 @@ jobs:
           json.dump(target, open("release/target.json", "w"))
           PY
           python3 scripts/release_plan.py ledger-deploy --history release/ledger-history.json \
-            --running release/running-before.json --running-commit "$(cat release/running-api-commit.txt)" \
+            --running release/running-before.json --running-commits release/running-commits.json \
             --target release/target.json --run-id "${RUN_ID}" \
             --recorded-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --out release/ledger-record.json
           aws ssm put-parameter --name "${LEDGER_PARAMETER}" --type String --overwrite \

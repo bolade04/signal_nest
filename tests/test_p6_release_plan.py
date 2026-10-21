@@ -106,8 +106,14 @@ def ledger(*records) -> dict:
 
 def record(kind, commit, api, worker, previous=None) -> dict:
     return {"schema": rp.LEDGER_SCHEMA, "kind": kind, "source_commit": commit,
+            "commits": {"api": commit, "worker": commit},
             "images": {"api": api, "worker": worker}, "task_definitions": {},
             "previous": previous}
+
+
+def summary(commit, api, worker) -> dict:
+    return {"source_commit": commit, "commits": {"api": commit, "worker": commit},
+            "images": {"api": api, "worker": worker}}
 
 
 # ----------------------------------------------------------------------------------- SPA
@@ -361,26 +367,48 @@ RUNNING = {"images": {"api": D_API, "worker": D_WRK}, "task_definitions": {}}
 
 def test_deploy_records_what_was_actually_running():
     records = rp.ledger_records(ledger(record("genesis", C1, "", "")))
-    out = rp.ledger_deploy(records, RUNNING, C1, TARGET, "11", "2026-10-20T00:00:00Z")
-    assert out["previous"] == {"source_commit": C1, "images": {"api": D_API, "worker": D_WRK}}
+    out = rp.ledger_deploy(records, RUNNING, {"api": C1, "worker": C1}, TARGET, "11",
+                           "2026-10-20T00:00:00Z")
+    assert out["previous"] == summary(C1, D_API, D_WRK)
+    assert out["commits"] == {"api": C2, "worker": C2}
     assert out["images"] == TARGET["images"] and out["ledger_drift_before"] is False
 
 
 def test_deploy_notes_ledger_drift_after_a_window_reopen():
     records = rp.ledger_records(ledger(record("deploy", C3, D_API2, D_WRK2)))
-    out = rp.ledger_deploy(records, RUNNING, C1, TARGET, "11", "t")
+    out = rp.ledger_deploy(records, RUNNING, {"api": C1, "worker": C1}, TARGET, "11", "t")
     assert out["ledger_drift_before"] is True
     assert out["previous"]["images"] == RUNNING["images"]  # truth, not stale history
 
 
+def test_a_half_rolled_back_deploy_is_recorded_per_workload_and_stays_restorable():
+    # The breaker rolled the api back to C1 while the worker reached C2: no single commit
+    # runs. The next deploy must record that state, and a rollback must restore it exactly.
+    mixed_running = {"images": {"api": D_API, "worker": D_WRK2}, "task_definitions": {}}
+    records = rp.ledger_records(ledger(record("deploy", C1, D_API, D_WRK)))
+    out = rp.ledger_deploy(records, mixed_running, {"api": C1, "worker": C2},
+                           {**TARGET, "source_commit": C3}, "12", "t")
+    assert out["previous"]["source_commit"] is None
+    assert out["previous"]["commits"] == {"api": C1, "worker": C2}
+    after = rp.ledger_records(ledger(record("deploy", C1, D_API, D_WRK), out))
+    plan = rp.rollback_target(after, {"images": TARGET["images"]})
+    assert plan["target"]["commits"] == {"api": C1, "worker": C2}
+    assert plan["target"]["images"] == {"api": D_API, "worker": D_WRK2}
+    rolled = rp.ledger_rollback(plan, {"api": "a:1", "worker": "w:1"}, "13", "t")
+    assert rolled["commits"] == {"api": C1, "worker": C2} and rolled["source_commit"] is None
+
+
+def test_deploy_refuses_an_unresolved_running_commit():
+    with pytest.raises(rp.ReleaseError, match="one 40-hex commit per workload"):
+        rp.ledger_deploy([], RUNNING, {"api": C1, "worker": "unknown"}, TARGET, "1", "t")
+
+
 def test_rollback_targets_the_recorded_predecessor_and_keeps_lineage():
-    first = record("deploy", C1, D_API, D_WRK, previous={"source_commit": C3,
-                                                           "images": {"api": D_OLD, "worker": D_OLD}})
-    second = record("deploy", C2, D_API2, D_WRK2,
-                    previous={"source_commit": C1, "images": {"api": D_API, "worker": D_WRK}})
+    first = record("deploy", C1, D_API, D_WRK, previous=summary(C3, D_OLD, D_OLD))
+    second = record("deploy", C2, D_API2, D_WRK2, previous=summary(C1, D_API, D_WRK))
     records = rp.ledger_records(ledger(first, second))
     plan = rp.rollback_target(records, {"images": {"api": D_API2, "worker": D_WRK2}})
-    assert plan["target"] == {"source_commit": C1, "images": {"api": D_API, "worker": D_WRK}}
+    assert plan["target"] == summary(C1, D_API, D_WRK)
     assert plan["target_previous"]["source_commit"] == C3
     rolled = rp.ledger_rollback(plan, {"api": "a:9", "worker": "w:9"}, "12", "t")
     # A second rollback from here goes to C3, not back to C2.

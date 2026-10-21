@@ -454,11 +454,25 @@ def ledger_records(history: dict) -> list[dict]:
     return records
 
 
+def _commits(commits: dict) -> dict:
+    if set(commits) != set(WORKLOADS) or not all(SHA1_RE.match(commits[w] or "") for w in WORKLOADS):
+        raise ReleaseError("a release must name one 40-hex commit per workload (api, worker)")
+    return {w: commits[w] for w in WORKLOADS}
+
+
 def _summary(record: dict) -> dict:
-    return {"source_commit": record["source_commit"], "images": dict(record["images"])}
+    """What a rollback needs to restore one release: a commit and a digest per workload.
+
+    Per-workload, because a deployment can end with the two services on different commits
+    (the circuit breaker rolls one back and not the other). Recording that state truthfully
+    keeps it recoverable; refusing to record it would deadlock both workflows.
+    """
+    commits = _commits(record["commits"])
+    single = commits["api"] if commits["api"] == commits["worker"] else None
+    return {"source_commit": single, "commits": commits, "images": dict(record["images"])}
 
 
-def ledger_deploy(records: list[dict], running: dict, running_commit: str, target: dict,
+def ledger_deploy(records: list[dict], running: dict, running_commits: dict, target: dict,
                   run_id: str, recorded_utc: str) -> dict:
     """The ledger record a deploy writes. `previous` is what was ACTUALLY running.
 
@@ -466,16 +480,18 @@ def ledger_deploy(records: list[dict], running: dict, running_commit: str, targe
     reopen, OpenTofu re-creates the services from the tfvars digests, which may predate the
     last recorded release. The record notes that drift instead of trusting stale history.
     """
-    if not SHA1_RE.match(running_commit):
-        raise ReleaseError("the running release's commit could not be resolved")
+    previous = _summary({"commits": running_commits, "images": running["images"]})
     latest = records[-1] if records else None
     drift = bool(latest and latest.get("kind") != "genesis"
                  and latest["images"] != running["images"])
+    if not SHA1_RE.match(target.get("source_commit") or ""):
+        raise ReleaseError("a deploy targets exactly one 40-hex commit")
+    commit = target["source_commit"]
     return {
         "schema": LEDGER_SCHEMA, "kind": "deploy",
-        "source_commit": target["source_commit"], "images": dict(target["images"]),
-        "task_definitions": dict(target["task_definitions"]),
-        "previous": {"source_commit": running_commit, "images": dict(running["images"])},
+        "source_commit": commit, "commits": {w: commit for w in WORKLOADS},
+        "images": dict(target["images"]), "task_definitions": dict(target["task_definitions"]),
+        "previous": previous,
         "ledger_drift_before": drift, "run_id": str(run_id), "recorded_utc": recorded_utc,
     }
 
@@ -509,9 +525,11 @@ def rollback_target(records: list[dict], running: dict) -> dict:
 
 
 def ledger_rollback(plan: dict, task_definitions: dict, run_id: str, recorded_utc: str) -> dict:
+    target = plan["target"]
     return {
         "schema": LEDGER_SCHEMA, "kind": "rollback",
-        "source_commit": plan["target"]["source_commit"], "images": dict(plan["target"]["images"]),
+        "source_commit": target["source_commit"], "commits": _commits(target["commits"]),
+        "images": dict(target["images"]),
         "task_definitions": dict(task_definitions), "previous": plan["target_previous"],
         "rolled_back_from": plan["rolled_back_from"], "run_id": str(run_id),
         "recorded_utc": recorded_utc,
@@ -654,7 +672,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("ledger-deploy")
     p.add_argument("--history", required=True)
     p.add_argument("--running", required=True)
-    p.add_argument("--running-commit", required=True)
+    p.add_argument("--running-commits", required=True)
     p.add_argument("--target", required=True)
     p.add_argument("--run-id", required=True)
     p.add_argument("--recorded-utc", required=True)
@@ -706,7 +724,7 @@ def main(argv: list[str] | None = None) -> int:
             _dump(resolve_target(_load(args.described), args.repository, args.commit), args.out)
         elif args.command == "ledger-deploy":
             record = ledger_deploy(ledger_records(_load(args.history)), _load(args.running),
-                                   args.running_commit, _load(args.target), args.run_id,
+                                   _load(args.running_commits), _load(args.target), args.run_id,
                                    args.recorded_utc)
             _dump(record, args.out)
         elif args.command == "rollback-target":
