@@ -74,7 +74,11 @@ exposes `8000` and declares a `HEALTHCHECK` against `GET /health` (liveness only
   Settings). Provide configuration via environment variables / mounted secrets;
   never bake them into the image. Production (`ENVIRONMENT=production`,
   `APP_MODE=full`) is validated at startup and fails fast on a local backend,
-  a weak `SECRET_KEY`, or a missing production dependency.
+  a weak `SECRET_KEY`, or a missing production dependency. *(2026-10-20, `P6-PLAT-1`:
+  production currently refuses to start with every `VECTOR_BACKEND` value. `bruteforce`
+  is refused as local-only, and `pgvector` is refused because no pgvector path is
+  implemented. This holds until the P6-PLAT-1 operator decision is implemented; staging
+  is unaffected.)*
 - **Signals reach the process directly.** Both images use exec-form commands so the
   application is PID 1 and receives `SIGTERM` directly, driving the graceful
   lifecycle below.
@@ -106,6 +110,18 @@ exposes `8000` and declares a `HEALTHCHECK` against `GET /health` (liveness only
   available. `deny` trades availability for strictness. Either way, Redis is retried
   only once per interval, so an outage costs one timeout per interval, not one per
   request.
+
+  *Windowed Redis and no auth token.* Staging Redis exists only while a staging
+  window is open (`docs/operations/staging-window.md`). A closed window also removes
+  the ALB and refuses `deploy_workload`, so no API traffic arrives then. If an API
+  task does run while its Redis endpoint is gone, every limiter call fails to connect
+  within `REDIS_OPERATION_TIMEOUT_SECONDS`, and the configured failure mode applies:
+  `local` limits per process, and `deny` answers 503 except `/health`. The limiter
+  retries Redis every 5 seconds and resumes on the shared counter once it answers;
+  counts made while Redis was absent are not carried over. Redis has no auth token yet
+  (`P6-INF-18`, deferred to Phase 7), so the counters are protected only by network
+  reachability (security groups). Anything that can reach Redis can reset or
+  inflate a client's count.
 
 ## Graceful lifecycle
 

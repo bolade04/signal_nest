@@ -192,17 +192,23 @@ on; they do not revise the notes above, which describe the code they name. Nothi
 
 - **Queue (`P6-PLAT-2`).** The legacy adapter `apps/api/app/infra/queue.py` (`RedisQueue`, `InProcessQueue`,
   its job registry) and the pipeline's legacy `run_scout_request` entry are removed. Scout runs are durable
-  `scout_request.execute` jobs in the database job store, claimed by the worker. `queue_backend` now selects
-  only the store's optional wake-up transport: `inprocess` = none (workers poll), `redis` = a publish-only
-  wake-up (no worker subscribes in this build). Production no longer requires `queue_backend=redis`. The
-  `queue` readiness probe reports `healthy` for polling only and `degraded` for a reachable Redis wake-up,
-  never `healthy`.
+  `scout_request.execute` jobs in the database job store, claimed by the worker, which polls it. No
+  wake-up transport is selected: the Redis wake-up publisher (`RedisJobNotifier`) had no subscriber (the
+  worker never calls `wait_for_job`), so `build_job_notifier()` always returns the null notifier and an
+  enqueue records no Redis span or `redis_notify_total` sample. `queue_backend` selects nothing; `redis` is
+  still accepted because the staging task environment sets it. Production no longer requires
+  `queue_backend=redis`. The `queue` readiness entry is neutral (`healthy`, "jobs queue in the database
+  job store; workers poll it") for either value, and the runtime report marks neither value as needing
+  Redis. Re-enabling a wake-up means wiring the worker's idle wait to `RedisJobNotifier.wait_for_job` and the
+  publisher in one change.
 - **Vector search (`P6-PLAT-1`).** `build_index()` honours `vector_backend`: `bruteforce` builds the
   in-process index; any other value raises `VectorBackendUnavailableError`. The pipeline's per-run dedupe
   goes through it. While the build fact `PGVECTOR_IMPLEMENTED` is false, `vector_backend=pgvector` is refused
-  at startup in every environment. Production also refuses `bruteforce` (unchanged), so production accepts
-  no `vector_backend` until the operator's P6-PLAT-1 decision is implemented. The `vector` probe builds the
-  configured index (`healthy` for brute force; `not_configured` for an unimplemented backend).
+  at startup in every environment. Production also refuses `bruteforce` (unchanged). **So
+  `ENVIRONMENT=production` refuses to start with every `vector_backend` value until the operator's P6-PLAT-1
+  decision is implemented.** Nothing in CI or staging starts with `ENVIRONMENT=production` (CI runs `test`,
+  the staging task environments are `staging`). The `vector` probe builds the configured index (`healthy` for
+  brute force; `not_configured` for an unimplemented backend).
 - **Rate limiting (`P6-PLAT-3`).** `rate_limit_backend` selects the counter store. `memory` is a bounded,
   per-process fixed-window counter (at most 10,000 clients; closed windows dropped first, then the oldest
   open one). `redis` is a counter shared by every replica: one `MULTI`/`EXEC` per request of

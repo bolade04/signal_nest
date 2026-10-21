@@ -16,7 +16,7 @@ from app.core.config import Settings
 from app.core.runtime import build_runtime_report
 from app.jobs.context import ExecutionContext, scope_matches
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope, unwrap, wrap
-from app.tests._platform_support import TEST_SIGNING_KEY, pgvector_build
+from app.tests._platform_support import pgvector_build
 
 
 # --- Configuration: explicit rejection, no silent production fallback -----------
@@ -32,7 +32,7 @@ def test_production_rejects_mock_llm() -> None:
             app_mode="full",
             environment="production",
             database_url="postgresql://u:p@localhost/db",
-            secret_key=TEST_SIGNING_KEY,
+            secret_key="a-real-secret",
             llm_provider="mock",
         )
     assert "mock LLM provider is not allowed" in str(exc.value)
@@ -61,7 +61,7 @@ def test_production_rejects_dev_fallback() -> None:
             app_mode="full",
             environment="production",
             database_url="postgresql://u:p@localhost/db",
-            secret_key=TEST_SIGNING_KEY,
+            secret_key="a-real-secret",
             llm_provider="openai",
             llm_api_key="sk-test",
             llm_allow_dev_fallback=True,
@@ -77,7 +77,7 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
         app_mode="full",
         environment="production",
         database_url="postgresql://u:p@localhost/db",
-        secret_key=TEST_SIGNING_KEY,
+        secret_key="a-real-secret",
         queue_backend="redis",
         cache_backend="redis",
         redis_url="redis://localhost:6379/0",
@@ -160,7 +160,7 @@ def test_production_default_local_stack_is_rejected_wholesale() -> None:
     # A production environment left on the local defaults fails during Settings
     # construction, naming every offending capability (no silent fallback).
     with pytest.raises(ValidationError) as exc:
-        Settings(_env_file=None, environment="production", secret_key=TEST_SIGNING_KEY,
+        Settings(_env_file=None, environment="production", secret_key="a-real-secret",
                  llm_provider="openai", llm_api_key="sk-test")
     message = str(exc.value)
     for fragment in ("app_mode=full", "PostgreSQL", "cache", "storage", "vector", "rate-limit"):
@@ -243,10 +243,9 @@ def test_unconfigured_production_backends_are_flagged_not_healthy() -> None:
         )
         report = build_runtime_report(settings)
     unconfigured = {c.name for c in report.unconfigured}
-    # The worker registry coordinates over the queue transport, so selecting Redis
-    # without a redis_url leaves both the queue and the fleet coordination
-    # unconfigured.
-    assert unconfigured == {"queue", "storage", "vector", "worker_registry"}
+    # queue_backend=redis selects no transport (P6-PLAT-2), so a missing redis_url
+    # leaves neither the queue nor the fleet coordination unconfigured.
+    assert unconfigured == {"storage", "vector"}
     assert report.all_configured is False
     assert report.is_local_mode is False
 

@@ -49,7 +49,7 @@ from app.infra.mail import (
     SesMailSender,
     send_mail,
 )
-from app.tests._platform_support import TEST_SIGNING_KEY, pgvector_build
+from app.tests._platform_support import pgvector_build
 
 REGION = "us-east-1"
 ENDPOINT = f"https://email.{REGION}.amazonaws.com"
@@ -431,11 +431,7 @@ def _settings(environment: str, **overrides) -> Settings:
     """Mail fields always passed explicitly, so ambient MAIL_* variables cannot decide."""
     kwargs: dict = {"_env_file": None, "environment": environment, **_MAIL_UNSET}
     if environment in ("staging", "production"):
-        kwargs |= {
-            "secret_key": TEST_SIGNING_KEY,
-            "llm_provider": "openai",
-            "llm_api_key": "k" * 20,
-        }
+        kwargs |= {"secret_key": "x" * 64, "llm_provider": "openai", "llm_api_key": "k" * 20}
         kwargs |= _VALID_LIVE_MAIL
     if environment == "production":
         kwargs |= _PRODUCTION_STACK

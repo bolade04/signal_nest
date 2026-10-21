@@ -1,4 +1,4 @@
-"""Test support for the P6 platform-service rules (P6-PLAT-1 / P6-PLAT-3 / P6-PLAT-11)."""
+"""Test support for the P6 platform-service rules (P6-PLAT-1)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ from contextlib import contextmanager
 from unittest import mock
 
 from app.core import config
-
-#: An inert signing key that satisfies the staging/production floor (>= 32 bytes,
-#: >= 5 distinct characters). Test-only; it signs nothing outside a test process.
-TEST_SIGNING_KEY = "unit-test-signing-key-0123456789-not-a-secret"
 
 
 @contextmanager

@@ -213,8 +213,8 @@ creates no role or policy.**
   faithful production-like profile. If a future documented profile runs without Redis, that
   must be justified against the validator, not by weakening it. *(2026-10-20,
   `P6-PLAT-2`/`P6-PLAT-3`: the validator no longer rejects `QUEUE_BACKEND=inprocess`.
-  `queue_backend` only selects the optional job wake-up, and the durable queue is the
-  database job store. Redis stays mandatory for production through
+  `queue_backend` selects nothing, because no worker subscribed to the Redis wake-up and
+  it is no longer published. The durable queue is the database job store. Redis stays mandatory for production through
   `CACHE_BACKEND=redis` and the shared request rate limiter
   (`RATE_LIMIT_BACKEND=redis`, which production now requires). To use the shared
   limiter, staging must set `RATE_LIMIT_BACKEND=redis`; without it, staging counts

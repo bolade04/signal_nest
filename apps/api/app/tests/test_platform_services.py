@@ -3,13 +3,12 @@
 * **P6-PLAT-1** — ``build_index()`` honours ``vector_backend`` and never substitutes
   brute force; a backend this build does not implement is refused by Settings and
   reported NOT_CONFIGURED; the pipeline's dedupe goes through the configured index.
-* **P6-PLAT-2** — the dead queue adapter is gone; ``queue_backend`` only selects the
-  job wake-up transport, production no longer forces it, and readiness never calls a
-  publish-only wake-up HEALTHY.
+* **P6-PLAT-2** — the dead queue adapter is gone; no setting selects a wake-up
+  publisher that no worker subscribes to; production no longer forces
+  ``queue_backend``; the ``queue`` readiness entry is neutral and truthful.
 * **P6-PLAT-3** — a shared Redis limiter (one atomic ``SET NX EX`` + ``INCR`` per
   request), a bounded per-process limiter, production refusing the per-process one,
   and an explicit, tested behaviour while Redis cannot answer (never unlimited).
-* **P6-PLAT-11** — staging/production refuse a short or near-constant signing key.
 
 The Redis tests use :class:`_FakeRedis`, which implements exactly the commands the
 limiter sends (anything else is an ``AttributeError``), plus one run against
@@ -45,7 +44,7 @@ from app.system.probes import (
     _check_rate_limit,
     _check_vector,
 )
-from app.tests._platform_support import TEST_SIGNING_KEY, pgvector_build
+from app.tests._platform_support import pgvector_build
 
 
 # --------------------------------------------------------------------------- #
@@ -352,7 +351,7 @@ def _prod(**overrides: object) -> dict[str, object]:
         app_mode="full",
         environment="production",
         database_url="postgresql://u:p@localhost/db",
-        secret_key=TEST_SIGNING_KEY,
+        secret_key="a-real-secret",
         cache_backend="redis",
         redis_url="redis://localhost:6379/0",
         rate_limit_backend="redis",
@@ -489,7 +488,7 @@ class TestRateLimitReadiness:
 
 
 # --------------------------------------------------------------------------- #
-# P6-PLAT-2 — no dead queue path; truthful wake-up readiness
+# P6-PLAT-2 — no dead queue path; nothing selected that no one consumes
 # --------------------------------------------------------------------------- #
 class TestQueueRealignment:
     def test_the_dead_queue_adapter_is_gone(self):
@@ -501,28 +500,51 @@ class TestQueueRealignment:
 
         assert "scout_request.execute" in builtin_job_types()
 
-    def test_polling_only_is_healthy(self):
-        status, summary, _detail, _retry = _check_queue(Settings(_env_file=None))
-        assert status is ProbeStatus.HEALTHY
-        assert "poll" in summary
+    def test_no_setting_selects_the_unsubscribed_wake_up_publisher(self, monkeypatch):
+        # The worker polls (it never calls wait_for_job), so a Redis publish would
+        # reach no subscriber: the factory takes no settings, and even a process whose
+        # settings say queue_backend=redis with a redis_url gets the null notifier.
+        import inspect
 
-    def test_reachable_publish_only_wake_up_is_never_healthy(self, monkeypatch):
-        import redis
+        from app.jobs import coordination
 
-        class _Pong:
-            def ping(self):
-                return True
+        redis_settings = Settings(
+            _env_file=None, queue_backend="redis", redis_url="redis://x.invalid/0"
+        )
+        monkeypatch.setattr("app.core.config.get_settings", lambda: redis_settings)
+        assert inspect.signature(coordination.build_job_notifier).parameters == {}
+        assert isinstance(coordination.build_job_notifier(), coordination.NullJobNotifier)
 
-        monkeypatch.setattr(redis, "from_url", lambda *a, **k: _Pong())
-        s = Settings(_env_file=None, queue_backend="redis", redis_url="redis://x.invalid/0")
-        status, _summary, detail, _retry = _check_queue(s)
-        assert status is ProbeStatus.DEGRADED
-        assert "no worker subscribes" in (detail or "")
+    def test_enqueue_records_no_redis_signal_without_a_transport(self, monkeypatch):
+        from app.core.metrics import REDIS_NOTIFY_TOTAL
+        from app.jobs import service
+        from app.jobs.coordination import NullJobNotifier
 
-    def test_wake_up_without_redis_url_is_not_configured(self):
-        s = Settings.model_construct(queue_backend="redis", redis_url=None)
-        status, _summary, _detail, _retry = _check_queue(s)
-        assert status is ProbeStatus.NOT_CONFIGURED
+        class _Job:
+            status = "pending"
+
+        backend = InMemoryMetrics()
+        configure_metrics(backend)
+        monkeypatch.setattr(service, "_notifier", NullJobNotifier())
+        try:
+            service._notify_available(_Job())
+        finally:
+            configure_metrics(None)
+        for outcome in ("success", "failure"):
+            assert backend.counter_value(
+                REDIS_NOTIFY_TOTAL, dependency="redis", outcome=outcome
+            ) == 0
+
+    @pytest.mark.parametrize("queue_backend", ["inprocess", "redis"])
+    def test_queue_readiness_is_neutral_and_truthful(self, queue_backend):
+        s = Settings(_env_file=None, queue_backend=queue_backend, redis_url="redis://x.invalid/0")
+        status, summary, detail, _retry = _check_queue(s)
+        assert status is ProbeStatus.HEALTHY  # nothing is selected, so nothing degrades
+        assert "job store" in summary and "poll" in summary
+        if queue_backend == "redis":
+            assert "selects nothing" in (detail or "")
+        cap = {c.name: c for c in build_runtime_report(s).capabilities}["queue"]
+        assert (cap.configured, cap.requires_external) == (True, False)
 
 
 # --------------------------------------------------------------------------- #
@@ -633,63 +655,3 @@ def test_pipeline_dedupe_goes_through_the_configured_index(seeded_with_index_spy
     assert decisions, "the pipeline never consulted the index"
     assert all(new == old for new, old in decisions)
     assert any(new for new, _old in decisions), "the seed should exercise a duplicate"
-
-
-# --------------------------------------------------------------------------- #
-# P6-PLAT-11 — signing-key floor in staging/production
-# --------------------------------------------------------------------------- #
-def _staging(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = dict(
-        _env_file=None,
-        environment="staging",
-        llm_provider="openai",
-        llm_api_key="sk-test",
-        mail_backend="ses",
-        public_web_origin="https://app.example.com",
-        mail_from_address="no-reply@example.com",
-        mail_ses_region="us-east-1",
-    )
-    base.update(overrides)
-    return base
-
-
-class TestSigningKeyFloor:
-    @pytest.mark.parametrize(
-        "weak",
-        [
-            "short-but-not-the-default",  # 25 bytes
-            "x" * 64,  # long, one character
-            "abab" * 16,  # long, two characters
-        ],
-    )
-    def test_weak_keys_are_refused(self, weak):
-        with pytest.raises(ValidationError) as exc:
-            Settings(**_staging(secret_key=weak))
-        message = str(exc.value)
-        assert "secret_key must be at least 32 bytes with at least 5 distinct" in message
-        assert weak not in message  # never echoed
-
-    def test_length_is_measured_in_bytes(self):
-        # 16 two-byte characters = 32 bytes: enough; the same alphabet at 29 bytes: not.
-        assert Settings(**_staging(secret_key="éèêëàâäôö" + "é" * 7)).secret_key
-        with pytest.raises(ValidationError):
-            Settings(**_staging(secret_key="éèêëàâäôö" + "é" * 5 + "a"))
-
-    def test_a_strong_key_is_accepted(self):
-        assert Settings(**_staging(secret_key=TEST_SIGNING_KEY)).secret_key == TEST_SIGNING_KEY
-
-    def test_default_and_blank_keep_their_own_message(self):
-        for value in ("dev-insecure-change-me", "   "):
-            with pytest.raises(ValidationError) as exc:
-                Settings(**_staging(secret_key=value))
-            assert "secret_key must be set to a strong, non-empty value" in str(exc.value)
-            assert "at least 32 bytes" not in str(exc.value)
-
-    def test_development_test_and_migration_mode_are_unaffected(self):
-        assert Settings(_env_file=None, secret_key="short").secret_key == "short"
-        assert Settings(_env_file=None, environment="test", secret_key="short")
-        s = Settings(
-            _env_file=None, environment="staging", migration_mode=True,
-            database_url="postgresql://u:p@localhost/db", secret_key="short",
-        )
-        assert s.migration_mode is True

@@ -27,17 +27,20 @@ from app.core import config as _config
 from app.core.config import Settings, get_settings
 
 # Backends that run with zero external dependencies (the default local mode).
+# ``queue_backend=redis`` is listed as local because it selects no transport in this
+# build (P6-PLAT-2): nothing reaches Redis through it.
 _LOCAL_BACKENDS = {
     "database": {"sqlite"},
-    "queue": {"inprocess"},
+    "queue": {"inprocess", "redis"},
     "durable_queue": {"local"},
     "cache": {"memory"},
     "vector": {"bruteforce"},
     "storage": {"local"},
     "llm": {"mock"},
-    "worker_registry": {"inprocess"},
+    "worker_registry": {"inprocess", "redis"},
     "rate_limit": {"memory"},
 }
+_QUEUE_REDIS_UNUSED = "queue_backend=redis selects nothing in this build (workers poll)"
 
 
 @dataclass(frozen=True)
@@ -140,11 +143,13 @@ def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
         # SQLite is always ready; a non-sqlite URL is considered configured by
         # virtue of being set (credentials themselves are never surfaced here).
         _status("database", database_backend, configured=True),
+        # queue_backend selects no transport in this build (P6-PLAT-2): either value is
+        # configured and needs nothing external; jobs live in the database job store.
         _status(
             "queue",
             s.queue_backend,
-            configured=s.queue_backend != "redis" or s.redis_url is not None,
-            detail=None if s.queue_backend != "redis" or s.redis_url else "redis_url is not set",
+            configured=True,
+            detail=_QUEUE_REDIS_UNUSED if s.queue_backend == "redis" else None,
         ),
         # Durable job execution store. Only the local SQLite-backed backend is
         # implemented; it is always available once the schema is migrated.
@@ -178,19 +183,15 @@ def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
                 else None
             ),
         ),
-        # Worker fleet coordination. The registry itself lives in the primary
-        # database (always available once migrated); the capability's backend
-        # reflects the wake-up transport the fleet coordinates over — in-process
-        # locally, Redis in full mode (which requires a redis_url to be usable).
+        # Worker fleet coordination. The registry lives in the primary database
+        # (always available once migrated) and workers poll the job store; the
+        # capability's backend names the configured queue_backend, which selects no
+        # transport in this build (P6-PLAT-2).
         _status(
             "worker_registry",
             s.queue_backend,
-            configured=s.queue_backend != "redis" or s.redis_url is not None,
-            detail=(
-                "redis_url is not set"
-                if s.queue_backend == "redis" and not s.redis_url
-                else None
-            ),
+            configured=True,
+            detail=_QUEUE_REDIS_UNUSED if s.queue_backend == "redis" else None,
         ),
         # Request rate limiting (P6-PLAT-3): per process in memory, or shared in Redis.
         _status(

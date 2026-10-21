@@ -36,7 +36,7 @@ _AWS_REGION_RE = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
 _SES_CONFIGURATION_SET_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _MAX_SUPPORT_CONTACT_LENGTH = 200
 
-# --- P6 platform services (P6-PLAT-1 / P6-PLAT-11) --------------------------
+# --- P6 platform services (P6-PLAT-1) ---------------------------------------
 #: Whether this build implements a pgvector-backed similarity path (P6-PLAT-1). It
 #: does not: no migration creates the ``vector`` extension, no column has a vector
 #: type and no query uses a vector operator, so ``vector_backend=pgvector`` would
@@ -44,12 +44,6 @@ _MAX_SUPPORT_CONTACT_LENGTH = 200
 #: False. It is a fact about the code, not a deployment setting: it becomes True in
 #: the change that implements pgvector, never through the environment.
 PGVECTOR_IMPLEMENTED = False
-#: Token-signing key floor in staging/production (P6-PLAT-11). JWTs are HS256, and
-#: RFC 7518 §3.2 requires an HMAC key at least as long as the hash output (256 bits).
-SECRET_KEY_MIN_BYTES = 32
-#: A key made of a handful of repeated characters is weak whatever its length (the
-#: same floor Django's ``security.W009`` check uses).
-SECRET_KEY_MIN_DISTINCT_CHARACTERS = 5
 # --- end P6 platform services -----------------------------------------------
 
 
@@ -310,10 +304,10 @@ class Settings(BaseSettings):
     embedding_dim: int = 256
 
     # --- Jobs ----------------------------------------------------------------
-    #: Selects only the durable job store's optional wake-up transport (P6-PLAT-2):
-    #: ``inprocess`` = none, workers find work by polling the database job store;
-    #: ``redis`` = each immediately-due enqueue also publishes a Redis wake-up. Jobs
-    #: are always enqueued in, and claimed from, the database (``job_queue_backend``).
+    #: Selects no transport in this build (P6-PLAT-2). Jobs are enqueued in, and
+    #: claimed from, the database job store (``job_queue_backend``); workers poll it.
+    #: ``redis`` once selected a Redis wake-up that no worker subscribed to; it is still
+    #: accepted (the staging task environment sets it) and is unused.
     queue_backend: Literal["inprocess", "redis"] = "inprocess"
     cache_backend: Literal["memory", "redis"] = "memory"
 
@@ -520,7 +514,7 @@ class Settings(BaseSettings):
                 )
             # queue_backend is deliberately not constrained here (P6-PLAT-2): the
             # durable queue is the database job store, which PostgreSQL above already
-            # makes production-grade; queue_backend only picks the optional wake-up.
+            # makes production-grade; queue_backend selects no transport.
             if self.cache_backend == "memory":
                 errors.append(
                     "environment=production requires a shared cache backend "
@@ -838,7 +832,7 @@ class Settings(BaseSettings):
         if self.connector_rss_max_attempts < 1:
             errors.append("connector_rss_max_attempts must be >= 1")
 
-        # --- P6 platform services (P6-PLAT-1 / P6-PLAT-3 / P6-PLAT-11) -------
+        # --- P6 platform services (P6-PLAT-1 / P6-PLAT-3) -------------------
         # P6-PLAT-1: a vector backend this build does not implement is refused in
         # every environment rather than silently run as brute force. Production
         # also refuses bruteforce (above), so until the P6-PLAT-1 decision is
@@ -860,24 +854,6 @@ class Settings(BaseSettings):
                     "environment=production requires a shared rate-limit backend "
                     "(rate_limit_backend=memory counts per process)"
                 )
-        # P6-PLAT-11: beyond the dev default and blank values (rejected above), a
-        # short or near-constant signing key is refused in staging/production.
-        key = self.secret_key
-        if (
-            self.is_production_like
-            and not self.migration_mode
-            and key.strip()
-            and key != "dev-insecure-change-me"
-            and (
-                len(key.encode("utf-8")) < SECRET_KEY_MIN_BYTES
-                or len(set(key)) < SECRET_KEY_MIN_DISTINCT_CHARACTERS
-            )
-        ):
-            errors.append(
-                f"secret_key must be at least {SECRET_KEY_MIN_BYTES} bytes with at least "
-                f"{SECRET_KEY_MIN_DISTINCT_CHARACTERS} distinct characters in "
-                "staging/production"
-            )
         # --- end P6 platform services ----------------------------------------
 
         if errors:

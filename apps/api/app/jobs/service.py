@@ -32,7 +32,7 @@ from app.core.tracing import JOB_ENQUEUE, REDIS_NOTIFY, inject_context, start_sp
 from app.jobs import handlers as _handlers  # noqa: F401 — registers handlers on import
 from app.jobs.context import ExecutionContext
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope
-from app.jobs.coordination import JobNotifier, build_job_notifier
+from app.jobs.coordination import JobNotifier, NullJobNotifier, build_job_notifier
 from app.jobs.models import Job
 from app.jobs.registry import is_known_job_type
 from app.jobs.status import ENQUEUED_STATUSES, JobErrorCode, JobExecutionError, JobStatus, JobType
@@ -78,6 +78,11 @@ def _notify_available(job: Job) -> None:
     """
     if JobStatus(job.status) not in ENQUEUED_STATUSES or job.status == JobStatus.SCHEDULED.value:
         return
+    notifier = _get_notifier()
+    if isinstance(notifier, NullJobNotifier):
+        # No wake-up transport is selected (P6-PLAT-2): nothing is published, so no
+        # Redis span or metric is recorded for a call that never reaches Redis.
+        return
     metrics = get_metrics()
     # A child span for the wake-up so a coordination degradation is visible in the
     # trace separately from the (already-durable) enqueue, and never fails it.
@@ -85,7 +90,7 @@ def _notify_available(job: Job) -> None:
         REDIS_NOTIFY, kind="producer", attributes={"component": "jobs", "dependency": "redis"}
     ) as span:
         try:
-            _get_notifier().notify_job_available()
+            notifier.notify_job_available()
             metrics.increment(REDIS_NOTIFY_TOTAL, dependency="redis", outcome="success")
             span.set_attribute("outcome", "success")
         except RedisNotifyFailedError:

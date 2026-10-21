@@ -164,25 +164,19 @@ def _check_database(_settings: Settings) -> tuple[ProbeStatus, str, str | None, 
 
 
 def _check_queue(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
-    # ``queue_backend`` selects only the durable job store's optional wake-up
-    # transport (P6-PLAT-2). Work is enqueued in, and claimed from, the database job
-    # store, which the ``durable_queue`` probe verifies.
-    if settings.queue_backend == "redis":
-        status, summary, detail, retryable = _ping_redis(settings, "queue")
-        if status is not ProbeStatus.HEALTHY:
-            return (status, summary, detail, retryable)
-        # Reachable, but no worker subscribes to the wake-up channel in this build
-        # (workers poll), so the transport cannot do its job: never HEALTHY.
-        return (
-            ProbeStatus.DEGRADED,
-            "job wake-up transport reachable; workers poll the job store",
-            "no worker subscribes to the wake-up channel (publish only)",
-            False,
-        )
+    # Jobs are enqueued in, and claimed from, the database job store, which the
+    # ``durable_queue`` probe verifies; workers find work by polling it. No wake-up
+    # transport is selected in this build (P6-PLAT-2), so there is nothing else to
+    # probe and nothing degraded: ``queue_backend=redis`` is accepted and unused.
+    detail = (
+        "queue_backend=redis selects nothing in this build (no worker subscribes)"
+        if settings.queue_backend == "redis"
+        else None
+    )
     return (
         ProbeStatus.HEALTHY,
-        "no wake-up transport; workers poll the job store",
-        None,
+        "jobs queue in the database job store; workers poll it",
+        detail,
         False,
     )
 

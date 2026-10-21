@@ -41,7 +41,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
 from app.db import seed as seed_mod
-from app.tests._platform_support import TEST_SIGNING_KEY, pgvector_build
+from app.tests._platform_support import pgvector_build
 
 # A DSN whose every component is an unmistakable sentinel. If any of these
 # substrings reaches an error message, a log or stderr, the refusal is leaking
@@ -59,7 +59,7 @@ SENTINEL_PARTS = (SENTINEL_USER, SENTINEL_PASSWORD, SENTINEL_HOST, SENTINEL_DB)
 # staging/production Settings refuse to construct without these; they are inert
 # test values and carry no meaning beyond satisfying the validators.
 _PRODUCTION_LIKE_REQUIRED: dict[str, Any] = {
-    "secret_key": TEST_SIGNING_KEY,
+    "secret_key": "x" * 64,
     "llm_provider": "openai",
     "llm_api_key": "k" * 20,
     "mail_backend": "ses",
