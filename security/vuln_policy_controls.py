@@ -59,7 +59,8 @@ LOCKS_ARGS = ["--kind", "filesystem", "--artifact", ".",
               "--expect-target", "package-lock.json", "--expect-target", "apps/api/requirements-runtime.txt",
               "--expect-target", "apps/api/requirements-dev.txt", "--expect-target", "scripts/requirements-gate.txt",
               "--expect-target", "scripts/requirements-gate-hashes.txt", "--expect-target", "security/requirements-semgrep.txt",
-              "--expect-target", "apps/revision-reader/requirements-dev.txt"]
+              "--expect-target", "apps/revision-reader/requirements-dev.txt",
+              "--expect-target", "apps/revision-reader/requirements-toolcache-pip.txt"]
 API_IMAGE_ARGS = ["--kind", "image", "--artifact", "signalnest-api:ci", "--min-lang-packages", "40"]
 READER_IMAGE_ARGS = ["--kind", "image", "--artifact", "signalnest-revision-reader:ci", "--min-lang-packages", "1"]
 READER_TOOLING_ARGS = ["--kind", "tooling", "--artifact", ".reader-venv", "--env-root", ".reader-venv", "--min-lang-packages", "15"]
