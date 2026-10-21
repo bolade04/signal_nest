@@ -5,5 +5,5 @@
 #   setuptools - the build backend (pyproject.toml [build-system]); the editable install runs with
 #                --no-build-isolation so no unpinned build dependency is fetched
 # Both pins equal the reader tooling lock's (security/test_tooling_locks.py keeps them equal).
-pip==26.2.1
+pip==26.2.2
 setuptools==84.0.0
