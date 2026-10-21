@@ -385,9 +385,17 @@ class Cases(unittest.TestCase):
         results = self.run_all()
         self.assertEqual(set(results), set(ctl.CASES))
         self.assertEqual([n for n, ok in results.items() if not ok], [])
+        # D7 (label-only): every case keeps its expected outcome and exit behaviour; the summary records the gate's own verdict, so a
+        # case meant to fail closed still shows a FAIL and one meant to pass, report or exclude still shows a PASS
+        verdicts = {"violation": "FAIL (policy violation)", "incomplete": "FAIL (scanner execution incomplete)",
+                    "malformed": "FAIL (report missing or malformed)", "pass": "PASS", "reported": "PASS", "excluded": "PASS"}
+        exits = {"violation": 3, "incomplete": 4, "malformed": 2, "pass": 0, "reported": 0, "excluded": 0}
         for name, case in ctl.CASES.items():
             text = (self.dirs[case[0]] / f"{ctl.SUMMARY_PREFIX}{name}.summary.txt").read_text()
             self.assertTrue(text.rstrip().endswith(gate.RESULT_CONTROL_OK), name)
+            self.assertIn(f"gate verdict on the case: {verdicts[case[3]]}\n", text, name)
+            self.assertIn(f"; gate exit {exits[case[3]]}; ", text, name)
+            self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("RESULT:")), 1, name)
 
     def test_under_the_superseded_policy_exactly_the_pass_through_cases_fail(self):
         real = gate.load_policy

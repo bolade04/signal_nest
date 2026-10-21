@@ -15,7 +15,7 @@ the reports directory and exits with a code that keeps the three failure classes
        the workflow claims: wrong artifact, empty population, scanner errors, an SBOM that
        describes a different image than the vulnerability report, missing coverage.
     5  usage error.
-    6  a negative control did not behave as intended (see --expect-fail).
+    6  a control did not behave as intended (see --expect-fail).
 
 Nothing here invokes a scanner, reads the network, or imports anything outside the
 standard library. The policy values were ADOPTED for merge-path enforcement by the operator
@@ -74,7 +74,10 @@ path each resolves to on PATH at staging time, and its sha256) and scanned with 
 named binary the gate requires: the staged copy and the file it resolved to on PATH to hash to the pinned release digest
 (security/scanner-binaries.json); exactly one gobinary result for it, listing the pinned main module at the
 pinned version and the Go standard library with a version. A binary Trivy could not analyse is an incomplete
-analysis, never a clean one. Findings are evaluated at the tooling scope. What the analysis does NOT establish
+analysis, never a clean one. Findings are evaluated at the policy's `binary_scope`, which records the bounded operator
+decision of 2026-10-21 (development/tooling scope for these CI executables while they are not shipped or run as application
+runtime components; see the policy's _operator_decisions): CRITICAL fails at any scope, and the value decides only HIGH.
+What the analysis does NOT establish
 is printed in the summary: code outside the module graph recorded in the binary's build information, modules
 changed without a version change, and vulnerabilities absent from Trivy's database.
 
@@ -115,8 +118,13 @@ RESULT_PASS = "RESULT: PASS"
 RESULT_POLICY = "RESULT: FAIL (policy violation)"
 RESULT_INCOMPLETE = "RESULT: FAIL (scanner execution incomplete)"
 RESULT_REPORT = "RESULT: FAIL (report missing or malformed)"
-RESULT_CONTROL_OK = "RESULT: NEGATIVE CONTROL DETECTED (policy violation raised as intended)"
-RESULT_CONTROL_BAD = "RESULT: NEGATIVE CONTROL FAILED"
+# A control's own result line (negative controls with --expect-fail, and the report-mutation cases of
+# security/vuln_policy_controls.py, whose stated outcome may also be a pass, a listed finding or a fail-closed analysis).
+# Until 2026-10-21 these read "NEGATIVE CONTROL DETECTED (policy violation raised as intended)" / "NEGATIVE CONTROL FAILED"
+# for every control, although only the violation cases raise a violation (D7, a label-only correction: the decision, the
+# exit codes and what completeness requires are unchanged). The summary above the line states the intended outcome.
+RESULT_CONTROL_OK = "RESULT: CONTROL BEHAVED AS INTENDED (the outcome stated for it was observed)"
+RESULT_CONTROL_BAD = "RESULT: CONTROL FAILED (the outcome stated for it was not observed)"
 
 # Trivy reports a plain directory as "filesystem" and a directory that is a git repository root
 # (the CI checkout) as "repository"; both are filesystem scans of the checked-out tree.
@@ -232,10 +240,10 @@ def vuln_policy(policy: dict) -> dict:
     for name, val in (("runtime_targets", runtime), ("development_targets", development)):
         _require(isinstance(val, list) and all(isinstance(x, str) and x for x in val), f"policy: vulnerabilities.{name} must be a list of paths", ReportError)
     _require(not set(runtime) & set(development), "policy: a target is declared both runtime and development", ReportError)
-    for name in ("npm_dev_scope", "tooling_scope"):
+    for name in ("npm_dev_scope", "tooling_scope", "binary_scope"):
         _require(vp.get(name) in VULN_SCOPES, f"policy: vulnerabilities.{name} must be one of {VULN_SCOPES}", ReportError)
     return {"rules": out_rules, "report": set(report), "runtime": set(runtime), "development": set(development),
-            "npm_dev_scope": vp["npm_dev_scope"], "tooling_scope": vp["tooling_scope"]}
+            "npm_dev_scope": vp["npm_dev_scope"], "tooling_scope": vp["tooling_scope"], "binary_scope": vp["binary_scope"]}
 
 
 def _norm_dist(name: str) -> str:
@@ -584,6 +592,8 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
                          f"Go standard library {std[0]}, {len(pkgs)} modules")
         lines.append("not established by this analysis: code outside the module graph recorded in the binaries' build information, modules changed "
                      "without a version change, vulnerabilities absent from Trivy's database, and the binaries' build provenance beyond the release digest")
+        lines.append(f"scope: findings are evaluated at the policy's binary_scope ({vp['binary_scope']}; operator decision of 2026-10-21, bounded to "
+                     "CI executables that are not shipped or run as application runtime components)")
     else:
         by_target = {r.get("Target"): r for r in results}
         for target in expect_targets:
@@ -601,7 +611,9 @@ def evaluate_vuln(report: object, policy: dict, *, kind: str, artifact: str,
     def scope_of(target: str, pkg: dict) -> str:
         if kind == "image":
             return "image"
-        if kind in ("tooling", "binary"):
+        if kind == "binary":
+            return vp["binary_scope"]
+        if kind == "tooling":
             return vp["tooling_scope"]
         if target in control_target_scopes:
             return control_target_scopes[target]
@@ -1732,7 +1744,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("complete"); common(c, report=False)
     c.add_argument("--expect-pass", action="append", help="a summary that must end in PASS")
-    c.add_argument("--expect-control", action="append", help="a summary that must end in NEGATIVE CONTROL DETECTED")
+    c.add_argument("--expect-control", action="append", help="a control summary that must end in its success line (CONTROL BEHAVED AS INTENDED)")
     return p
 
 

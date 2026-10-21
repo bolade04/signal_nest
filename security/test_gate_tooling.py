@@ -369,13 +369,13 @@ class BinaryCase(unittest.TestCase):
             pkgs.append({"Name": "stdlib", "Version": stdlib, "Relationship": "direct", "Identifier": {"UID": f"{name}-std"}})
         return {"Target": name, "Class": "lang-pkgs", "Type": "gobinary", "Packages": pkgs, "Vulnerabilities": list(vulns)}
 
-    def run_gate(self, results, job="j"):
+    def run_gate(self, results, job="j", policy=POLICY):
         rep = {"SchemaVersion": 2, "ArtifactName": str(self.stage), "ArtifactType": "filesystem", "Results": results}
         files = {}
         for name, doc in (("r", rep), ("pins", self.pins), ("manifest", self.manifest)):
             files[name] = self.dir / f"{name}.json"
             files[name].write_text(json.dumps(doc), encoding="utf-8")
-        code = gate.main(["--policy", str(POLICY), "--reports-dir", str(self.dir), "vuln", str(files["r"]), "--name", "b",
+        code = gate.main(["--policy", str(policy), "--reports-dir", str(self.dir), "vuln", str(files["r"]), "--name", "b",
                           "--kind", "binary", "--artifact", str(self.stage), "--binary-job", job,
                           "--binary-pins", str(files["pins"]), "--binary-manifest", str(files["manifest"])])
         return code, (self.dir / "b.summary.txt").read_text(encoding="utf-8")
@@ -417,14 +417,22 @@ class BinaryCase(unittest.TestCase):
         code, text = self.run_gate([self.result("trivy"), self.result("tofu")])
         self.assertEqual(code, gate.EXIT_INCOMPLETE); self.assertIn("staging manifest does not record tofu", text)
 
-    def test_findings_are_evaluated_at_the_tooling_scope(self):
+    def test_findings_are_evaluated_at_the_policys_binary_scope(self):
+        # binary_scope = development records the operator's bounded decision of 2026-10-21 (policy _operator_decisions): CRITICAL
+        # fails at any scope and a HIGH is reported. The key alone, not tooling_scope, decides the binaries' scope.
         crit = {"VulnerabilityID": "C-GO", "PkgName": "stdlib", "InstalledVersion": "v1.26.5", "Severity": "CRITICAL", "Status": "affected",
                 "PkgIdentifier": {"UID": "tofu-std"}}
         code, text = self.run_gate([self.result("trivy"), self.result("tofu", vulns=[crit])])
         self.assertEqual(code, gate.EXIT_POLICY); self.assertIn("VIOLATION C-GO stdlib v1.26.5 -> no fix [CRITICAL] scope=development", text)
+        self.assertIn("scope: findings are evaluated at the policy's binary_scope (development;", text)
         high = dict(crit, VulnerabilityID="H-GO", Severity="HIGH", FixedVersion="v1.26.6", Status="fixed")
         code, text = self.run_gate([self.result("trivy"), self.result("tofu", vulns=[high])])
         self.assertEqual(code, gate.EXIT_OK); self.assertIn("REPORTED  H-GO", text)
+        doc = json.loads(POLICY.read_text())
+        doc["vulnerabilities"]["binary_scope"] = "runtime"          # the key, not the tooling scope, decides the binaries' scope
+        runtime = self.dir / "policy-runtime.json"; runtime.write_text(json.dumps(doc), encoding="utf-8")
+        code, text = self.run_gate([self.result("trivy"), self.result("tofu", vulns=[high])], policy=runtime)
+        self.assertEqual(code, gate.EXIT_POLICY); self.assertIn("VIOLATION H-GO stdlib v1.26.5 -> v1.26.6 [HIGH] scope=runtime", text)
 
     def test_the_job_must_be_named_in_the_pins_and_the_options_belong_to_the_binary_kind(self):
         code, _ = self.run_gate([self.result("trivy"), self.result("tofu")], job="other")

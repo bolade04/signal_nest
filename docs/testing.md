@@ -268,8 +268,9 @@ dependencies, the three built images, IaC misconfiguration, CycloneDX SBOMs) and
 thresholds in `security/policy.json` *(ADOPTED for merge-path enforcement by the operator order
 of 2026-10-19: a Trivy-selected CRITICAL fails in every covered population with or without a fix; the jobs' installed tooling
 environments are scanned as installed)*. *(Since 2026-10-20, P6-CI-6 coverage gaps: Frontend quality, Backend
-quality, Migrations and API contract and Integration smoke also scan the environments they install
-(`apps/api/.venv`, and `.locktools` in Backend quality) as installed, with the packages their pip vendors,
+quality, Migrations and API contract and Integration smoke also scan ~~the environments they install~~ the Python
+virtualenvs they install *(corrected 2026-10-21: their other installs, `node_modules` and the Playwright browser, are
+not scanned as installed)* (`apps/api/.venv`, and `.locktools` in Backend quality) as installed, with the packages their pip vendors,
 every context analyses the Trivy binary on its PATH, and Revision reader also the OpenTofu binary.)* Reports, SBOMs, identity records and gate summaries
 are uploaded as the `security-reports-*` artifacts (30 days). Coverage, declared exclusions,
 the baseline findings on `main` and the failure behaviour are documented in

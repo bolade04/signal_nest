@@ -10,7 +10,11 @@ takes ONE real report that THIS CI run produced (copied; never edited in place),
 change — an injected finding, a removed scanned package or an altered installed inventory — and runs
 the real gate (security/gate.py, the same CLI and the same arguments as the gate steps in
 .github/workflows/ci.yml) on the copy. Each case states its expected outcome, and its control summary
-ends in NEGATIVE CONTROL DETECTED only when the gate produced exactly that outcome:
+ends in the control-success line (gate.RESULT_CONTROL_OK, "CONTROL BEHAVED AS INTENDED") only when the gate produced
+exactly that outcome, and otherwise in gate.RESULT_CONTROL_BAD; the summary also records the gate's own verdict on the case.
+Only the violation cases raise a policy violation: the others PASS (baseline, excluded, reported) or FAIL closed as
+incomplete or malformed, as intended. (Until 2026-10-21 every summary ended in "NEGATIVE CONTROL DETECTED (policy violation
+raised as intended)"; that label-only correction is D7, and the outcomes, exit codes and completeness are unchanged.)
 
     violation        exit 3 and a VIOLATION line naming the injected finding
     excluded         exit 0 and an EXCLUDED line naming it (HIGH without a fix: listed, not failing)
@@ -512,11 +516,13 @@ def check(group: str, reports_dir: pathlib.Path) -> list[tuple[str, bool]]:
         code = gate.main(argv)
         text = (out_dir / f"probe-{name}.summary.txt").read_text(encoding="utf-8")
         ok = _verdict(expect, token, code, text)
+        verdict = ([line for line in text.splitlines() if line.startswith("RESULT: ")] or ["RESULT: (none)"])[-1][len("RESULT: "):]
         summary = [f"SECURITY GATE CONTROL {SUMMARY_PREFIX}{name} (vulnerability policy, group {group})",
                    f"base report: {REPORTS[key][0]}; change: {change[0]}{' ' + '/'.join(str(x) for x in change[2:]) if change[0] == 'inject' else ''}"
                    + (f" {'/'.join(str(x) for x in change[1:])}" if change[0] != 'inject' and len(change) > 1 else ""),
                    f"case report: {rep} sha256 {hashlib.sha256(rep.read_bytes()).hexdigest()}",
                    f"expected: {expect}" + (f" carrying {token!r}" if token else "") + f"; gate exit {code}; gate summary probe-{name}.summary.txt",
+                   f"gate verdict on the case: {verdict}",
                    gate.RESULT_CONTROL_OK if ok else gate.RESULT_CONTROL_BAD]
         (reports_dir / f"{SUMMARY_PREFIX}{name}.summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
         results.append((name, ok))

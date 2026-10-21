@@ -17,7 +17,7 @@ analysis service is involved; the publish workflows (`staging-publish.yml`,
 
 | Category | Tool | Job | Population analysed | Report |
 |---|---|---|---|---|
-| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `scripts/requirements-gate-hashes.txt`, `security/requirements-semgrep.txt`, `apps/revision-reader/requirements-dev.txt` | `trivy-locks-vuln.json` |
+| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `apps/api/requirements-bootstrap.txt` and `apps/api/requirements-locktools.txt` (since 2026-10-20), `scripts/requirements-gate.txt`, `scripts/requirements-gate-hashes.txt`, `security/requirements-semgrep.txt`, `apps/revision-reader/requirements-dev.txt` | `trivy-locks-vuln.json` |
 | Vulnerabilities, installed tooling (2026-10-19; extended 2026-10-20) | Trivy 0.76.0 `rootfs`, reconciled against the environment's own `pip inspect` (and, for the hash-locked API environments, against their locks) | Container build and security; Revision reader; since 2026-10-20 Frontend quality, Backend quality, Migrations and API contract, Integration smoke | `.security-venv` (Semgrep and its hash-locked set, plus the interpreter's bundled pip); `.reader-venv` (the hash-locked reader tooling set); the reader job's interpreter prefix (`pythonLocation`: its pip and the Gate 4N PyYAML); `apps/api/.venv` in each of the four API jobs (the bootstrap and dev locks plus the editable project); `.locktools` in Backend quality (its lock) — each as installed, inventoried again before completeness | `trivy-*-tooling-*-vuln.json`, `trivy-api-venv-vuln.json`, `trivy-locktools-vuln.json`, `*-installed*.json` |
 | Vulnerabilities, packages an installed pip vendors (2026-10-20) | Trivy 0.76.0 `fs` over the pins each installed pip declares in `pip/_vendor/vendor.txt`, staged by `stage_inputs.py` | every job above, for each environment it scans as installed | the vendored packages of every installed pip of those environments (they carry no dist-info, so the `rootfs` scan sees them only when pip ships an SBOM of them) | `trivy-vendored-pins-vuln.json` |
 | Vulnerabilities, scanner and tool binaries (2026-10-20) | Trivy 0.76.0 `rootfs` Go binary analysis of copies of the binaries resolved on PATH, bound to pinned release digests (`scanner-binaries.json`) | every job (Trivy); Revision reader also OpenTofu | the `trivy` and `tofu` executables the jobs run: their Go module graph and Go standard library version | `trivy-scanner-binaries-vuln.json`, `scanner-binaries-manifest.json` |
@@ -31,7 +31,8 @@ fails the job itself. Each gate writes `security-reports/<name>.summary.txt`; a 
 `complete` step refuses to pass unless every expected summary exists with the expected
 verdict, and digests every file into `security-reports/MANIFEST.txt`. The whole directory is
 uploaded as a workflow artifact (`security-reports-container-build`,
-`security-reports-revision-reader`) with 30-day retention, on success and on failure.
+`security-reports-revision-reader`; *since 2026-10-20 also `security-reports-frontend`, `-backend`, `-migrations` and
+`-integration`*) with 30-day retention, on success and on failure.
 
 ### What is NOT covered (declared exclusions)
 
@@ -110,6 +111,25 @@ uploaded as a workflow artifact (`security-reports-container-build`,
     LOW, resolved or proof of safety. A missing or unrecognized severity, a malformed report, an
     unknown scope and an incomplete analysis continue to fail closed. A finding later classified
     CRITICAL falls under the unconditional CRITICAL rule. `test_gate.py` pins each case.
+- **Scope of the Trivy and OpenTofu executables — operator decision of 2026-10-21 (bounded).** "I adopt
+  development/tooling scope for the Trivy and OpenTofu executables used as CI tools in this tranche, provided you verify
+  that these classified artifacts are not shipped or executed as application runtime components." This is a new, dated
+  decision. The order of 2026-10-19 did not explicitly settle it, and the coverage-gap tranche's sentence that placed the
+  binaries in the adopted scope text was that tranche's reading. The condition was verified on 2026-10-21 with no
+  discrepancy: no Dockerfile or task definition installs, copies or runs either executable; Trivy runs only on the CI
+  runners, and OpenTofu only in Revision reader's IaC contract steps, never against real state. `policy.json` records it
+  under `_operator_decisions` (the limbs verbatim) and enforces it as `vulnerabilities.binary_scope = development`; a
+  missing or unrecognised value fails the policy closed (exit 2). Its limbs:
+  - Trivy-selected CRITICAL findings continue to fail regardless of fix availability.
+  - Development/tooling HIGH findings remain reported under the existing adopted severity rules.
+  - OpenTofu's 28 reported HIGH findings remain unresolved findings, listed with their identities, affected versions,
+    available fixes and limitations under "Coverage-gap tranche", repair 4, with the accountable owner.
+  - It is not a finding-specific exception, a remediation claim or a declaration that the tools are safe.
+  - It authorizes no AWS execution, IAM change, deployment or provider activation.
+  - A component shipped or used at runtime keeps its image/runtime treatment. Vendored packages inherit the scope of
+    the environment that contains them; there is no universal tooling exemption. The installed CI tooling environments
+    are development scope; vendored or bundled code inside a shipped image is runtime content, and today it is not
+    analysed (see the populations table: decision D4b).
 - **Lock targets and report shape.** Every lock target Trivy reports must be
   declared runtime or development in the policy; an undeclared target is an incomplete
   analysis (exit 4), and a finding without a recognised severity is a malformed report
@@ -380,7 +400,14 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   on 32 mutated copies in the container job and 18 in the reader job *(44 and 35 since 2026-10-20,
   plus 20 in each of Frontend quality, Migrations and API contract and Integration smoke and 31 in
   Backend quality: 170 in all)*, each listed by
-  `--expect-control control-vulnpol-*` in its job's completeness step. The cases cover:
+  `--expect-control control-vulnpol-*` in its job's completeness step. *(Label corrected 2026-10-21, decision D7,
+  label-only: these are 170 policy/control cases, not 170 detected policy violations. In run 39514455981 the gate's own
+  verdicts were 49 policy violations, 85 incomplete analyses, 1 malformed report and 35 passes — 17 baselines, 14 findings
+  reported, 4 findings excluded — each the case's stated outcome. Every control summary nevertheless ended in "NEGATIVE
+  CONTROL DETECTED (policy violation raised as intended)". The success line is now "CONTROL BEHAVED AS INTENDED (the
+  outcome stated for it was observed)", and each summary also records the gate's own verdict on the case, so a case meant
+  to fail closed shows its FAIL. The cases, their expected outcomes, the exit codes and what completeness requires are
+  unchanged.)* The cases cover:
   - CRITICAL with and without a fix in images, runtime locks, npm runtime and development
     packages, the security-tool lock, the reader tooling lock, both installed tooling venvs and
     the reader job's interpreter prefix;
@@ -463,7 +490,9 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
 - **Measured in CI (exact-head run 39337491390 on `f3fb4d59`; gate summary 2026-10-20T00:06Z):** the
   reader job's interpreter prefix (`pythonLocation`, `/opt/hostedtoolcache/Python/3.12.15/x64`) held 2
   installed distributions (pip 26.2.1 and PyYAML 6.0.3) and 21 scanned language packages,
-  vendored copies included. Under the adopted tooling policy its gate `REPORTED` 4 HIGH findings
+  vendored copies included *(2026-10-21: true of that pip, 26.2.1, which ships an SBOM of its vendored packages; a pip
+  without one, such as 25.0.1 or 25.1.1, contributes none of them to such a scan — see repair 3 under "Coverage-gap
+  tranche")*. Under the adopted tooling policy its gate `REPORTED` 4 HIGH findings
   (development scope: reported, not failing): `GHSA-6v7p-g79w-8964` (msgpack 1.1.2),
   `CVE-2025-47273` (setuptools 70.3.0), and `CVE-2026-97687` and `CVE-2026-97689` (urllib3
   2.7.0). Package versions and findings change from run to run: each run's
@@ -521,8 +550,12 @@ or runner-provided population that no merge-path scan covers:
 The fresh closure assessment of the merged closure work found populations that a required context
 installs or executes but that no scan analysed. The operator order of 2026-10-20 directs four repairs,
 made here. No vulnerability exclusion is added, and nothing here decides whether P6-CI-6 is closable.
-`policy.json` changes only by declaring the scope of the two new lock targets and by stating that the
-existing tooling scope applies to the scanner and tool binaries and to vendored packages.
+`policy.json` changes only by declaring the scope of the two new lock targets ~~and by stating that the
+existing tooling scope applies to the scanner and tool binaries and to vendored packages~~. *(Corrected 2026-10-21: the
+existing, adopted tooling scope names installed environments, not executables, so that sentence was this tranche's
+reading, and it sat inside the adopted text. The binaries' scope is now the operator's bounded decision of 2026-10-21
+(see "Policy" above), recorded apart from the adopted text and enforced as `binary_scope`. Vendored packages take the
+scope of the environment that contains them.)*
 
 1. **`.locktools` is scanned as installed.** Backend quality installs its lock toolchain from the
    hash lock `apps/api/requirements-locktools.txt` (pip 25.1.1, pip-tools 7.5.2 and every transitive
@@ -537,8 +570,13 @@ existing tooling scope applies to the scanner and tool binaries and to vendored 
 2. **The API venvs' bootstrap pip and build tooling.** In Frontend quality, Backend quality,
    Migrations and API contract and Integration smoke, the unpinned `pip install --upgrade pip` is
    replaced by `apps/api/requirements-bootstrap.txt` (pip 26.2.1 and setuptools 84.0.0, the reader
-   tooling lock's pins and hashes), and `-e apps/api` runs with `--no-build-isolation`. Every hash-locked
-   install in every job now carries `--only-binary :all:`: a locked dependency built from an sdist would have
+   tooling lock's pins and hashes), and `-e apps/api` runs with `--no-build-isolation`. ~~Every hash-locked
+   install in every job now carries `--only-binary :all:`~~ *(corrected 2026-10-21: every hash-locked install that a
+   `ci.yml` `run:` step performs carries it. The builder stage of `apps/api/Dockerfile`, which Container build and
+   security's image builds run, does not: it runs an unpinned `pip install --upgrade pip`, then
+   `pip install --require-hashes -r requirements-runtime.txt` without `--only-binary` or `--isolated`, then
+   `pip install --no-deps .` with build isolation; the reader Dockerfile's builder installs unhashed. Both builder stages
+   are decision D1 and are not scanned; only the final images are)*: a locked dependency built from an sdist would have
    its build requirements fetched unpinned and unhashed, run, and deleted, where no inventory or scan sees them
    (round-3 finding A3R-1, reproduced); every current pin has a Linux cp312 wheel, so the flag changes nothing
    today and makes such a lock line fail its install. Because pip applies option lines in a requirements file
@@ -547,7 +585,8 @@ existing tooling scope applies to the scanner and tool binaries and to vendored 
    also used by `--locked-by`); a `--no-binary` continuation, `--only-binary=:none:`, `-c`, an index line or a
    URL requirement in a lock fails the security self-tests (round-4 finding A4R-1, reproduced). Every hash-locked
    install also runs `pip install --isolated`, so no `PIP_*` variable or user pip configuration (a constraint file
-   naming `--no-binary`, for example) applies, and every venv is created with `--clear`. The API project's build
+   naming `--no-binary`, for example) applies, and every venv is created with `--clear` *(2026-10-21: in the `ci.yml`
+   `run:` steps, as above; not in the API builder stage)*. The API project's build
    backend is pinned by a test to `setuptools.build_meta`, with no in-tree backend, no `setup.py`/`setup.cfg`, no
    `cmdclass` and no `dynamic` fields, and no tracked top-level `pip`, `venv`, `ensurepip` or `piptools` module may
    shadow what the installs run with `python -m`. Each job scans
@@ -584,7 +623,8 @@ existing tooling scope applies to the scanner and tool binaries and to vendored 
    `stage_inputs.py vendored` writes each installed pip's own `pip/_vendor/vendor.txt` pins to a staged
    requirements list, a Trivy `fs` scan analyses it, and the tooling gate re-reads `vendor.txt` from
    the environment and requires exactly those pins in that scan. Their findings are evaluated at the
-   tooling scope. A pip without a readable vendor list, or with no vendored-pin scan, is an incomplete
+   tooling scope *(2026-10-21: that is the scope of the installed CI tooling environment they sit in; vendored packages
+   take their containing environment's scope and get no tooling exemption of their own)*. A pip without a readable vendor list, or with no vendored-pin scan, is an incomplete
    analysis. A real-scanner control (`control-vendored-pins`, every job) stages an inert
    environment whose pip vendors PyYAML 5.3.1, which exists nowhere else, and must fail on
    CVE-2020-14343 in the vendored-pin target. **Final images:** the API Dockerfile's runtime stage now
@@ -594,7 +634,10 @@ existing tooling scope applies to the scanner and tool binaries and to vendored 
    launcher remains under `/usr/local`, `/opt/venv` or `/app`, or if either interpreter can import pip;
    the publish workflow builds the same Dockerfile, so it runs there too. The image gate also fails on
    any pip its scan lists. The reader image's distroless base carries neither.
-4. **The Trivy and OpenTofu binaries.** `stage_inputs.py binaries` copies the `trivy` (every job,
+4. **The Trivy and OpenTofu binaries.** *(2026-10-21: their vulnerability analysis is an operator requirement of the order of
+   2026-10-20 — "Include vulnerability analysis of the actual Trivy and OpenTofu binaries as an explicit requirement of this
+   new order" — not a finding about what an earlier source required. Their scope is the operator's bounded decision of
+   2026-10-21; see "Policy" above.)* `stage_inputs.py binaries` copies the `trivy` (every job,
    since every job now runs Trivy) and `tofu` (Revision reader) executables the jobs resolve on PATH and records
    the path each resolved to and its sha256. Trivy `rootfs` analyses the copies as Go binaries, and the binary
    gate requires:
@@ -616,14 +659,108 @@ existing tooling scope applies to the scanner and tool binaries and to vendored 
    What it does not establish: code outside that module graph, modules changed without a version
    change, vulnerabilities absent from Trivy's database, and build provenance beyond the release digest.
 
+   **OpenTofu's unresolved HIGH findings (open; recorded 2026-10-21).** At `binary_scope = development` the binary gate
+   REPORTS them and does not fail on them; that is the operator's decision of 2026-10-21, which states it is not an
+   exception, a remediation claim or a declaration that the tool is safe. Measured in exact-head run 39514455981 (PR #233
+   head `2d6e4724`) on OpenTofu v1.12.5 (Go standard library v1.26.5, 253 modules), as Trivy 0.76.0 selected them with its
+   database of that run: 28 HIGH, each with a published fix (also 30 MEDIUM, 6 LOW and 1 UNKNOWN, `GO-2026-5932` in
+   `golang.org/x/crypto` v0.52.0, no fix). Trivy v0.76.0 has no HIGH; its one UNKNOWN is the same advisory in
+   `golang.org/x/crypto` v0.57.0.
+   - **Accountable:** the repository owner (operator order of 2026-10-21, continuation 02, section 8).
+   - **Working follow-up:** the coordinator's CI-6 and IAM lanes.
+   - **Visibility:** every Revision reader run lists each finding as `REPORTED` in its `scanner-binaries` gate summary, so
+     they stay open and visible until they are resolved there.
+   - **Limitations:** the analysis covers only the module graph and Go version recorded in the binary's build information
+     (see "What it does not establish" above). A fixed version applies to the module named, not to the OpenTofu release;
+     the set changes with Trivy's database. None of them is resolved by this record.
+
+   | Advisory | Module | Installed | Fixed in |
+   |---|---|---|---|
+   | `CVE-2026-39883` | `go.opentelemetry.io/otel/sdk` | v1.42.0 | 1.43.0 |
+   | `CVE-2026-56854` | `golang.org/x/crypto` | v0.52.0 | 0.55.0 |
+   | `CVE-2026-56864` | `golang.org/x/mod` | v0.35.0 | 0.40.0 |
+   | `CVE-2026-56865` | `golang.org/x/mod` | v0.35.0 | 0.40.0 |
+   | `CVE-2026-25681` | `golang.org/x/net` | v0.54.0 | 0.55.0 |
+   | `CVE-2026-27136` | `golang.org/x/net` | v0.54.0 | 0.55.0 |
+   | `CVE-2026-39821` | `golang.org/x/net` | v0.54.0 | 0.55.0 |
+   | `CVE-2026-46600` | `golang.org/x/net` | v0.54.0 | 0.56.0 |
+   | `CVE-2026-78669` | `golang.org/x/net` | v0.54.0 | 0.60.0 |
+   | `CVE-2026-56851` | `golang.org/x/text` | v0.37.0 | 0.41.0 |
+   | `CVE-2026-56852` | `golang.org/x/text` | v0.37.0 | 0.39.0 |
+   | `CVE-2026-84304` | `google.golang.org/grpc` | v1.79.3 | 1.83.1 |
+   | `CVE-2026-84445` | `google.golang.org/grpc` | v1.79.3 | 1.82.2, 1.83.2, 1.84.0-dev.0.20260825144003-d5a41119e0e3, 1.85.0-dev.0.20260825072537-93e31b48545e |
+   | `GHSA-hrxh-6v49-42gf` | `google.golang.org/grpc` | v1.79.3 | 1.82.1 |
+   | `CVE-2026-50151` | `oras.land/oras-go/v2` | v2.6.0 | 2.6.1 |
+   | `CVE-2026-50163` | `oras.land/oras-go/v2` | v2.6.0 | 2.6.2 |
+   | `CVE-2026-85731` | `oras.land/oras-go/v2` | v2.6.0 | 2.6.2 |
+   | `CVE-2026-33818` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-39821` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-46600` | `stdlib` | v1.26.5 | 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-56853` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-56858` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-56859` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-56860` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-56862` | `stdlib` | v1.26.5 | 1.25.13, 1.26.6, 1.27.0-rc.3 |
+   | `CVE-2026-78667` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
+   | `CVE-2026-78669` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
+   | `CVE-2026-97031` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
+
 **Population floors, re-derived from measured inventories** (local measurements on macOS builds of
 the same locks, which carry no environment markers; the pull request's exact-head CI run is the
 measurement of record). The floors are set somewhat below the measured counts, as the closure
 tranche's were (60 of 67, 15 of 17, 40 of 48: 83 to 90 %; here 52 of 58 and 7 of 8), so that a routine
 dependency removal does not trip them while an empty or truncated inventory does. For the two
 hash-locked environments the binding check is the exact reconciliation against their locks; the floor
-only guards the inventory before that check. Every floor has a control that truncates the population
-one below it and must fail.
+only guards the inventory before that check. ~~Every floor has a control that truncates the population
+one below it and must fail.~~ *(Corrected 2026-10-21; the account below replaces that sentence.)*
+
+**Which floors have a control, and what else protects population and identity** *(2026-10-21)*:
+- **Dedicated truncation controls.** A case in `vuln_policy_controls.py` keeps one entry fewer than the floor in a copy of
+  the job's real inventory or report, and the gate must fail it as incomplete. These floors have one:
+  - `api-venv` 52, separately in each of the four API jobs;
+  - `locktools` 7;
+  - `security-tooling-venv` 60;
+  - `reader-tooling-venv` 15;
+  - `reader-tooling-syspy` 2;
+  - the API image's 40 language packages;
+  - the reader image's 1.
+
+  The cases run on the first inventory. The `-final` gates use the same floor and code path over the final inventory and
+  are not exercised separately.
+- **API and worker images: shared code path, worker not exercised separately.** They have two gate steps, each over its
+  own report, with the same floor (40) and the same code path, the image kind of `gate.py vuln`. Every case for these two
+  images — truncation, an installer present, the planted CRITICAL findings — runs on the API report only.
+- **SBOM floors: no dedicated truncation control.** These floors have none:
+  - `sbom-image-api` 100 and `sbom-image-worker` 100 (134 package components each in run 39514455981);
+  - `sbom-locks` 500 (764);
+  - `sbom-image-reader` 10 (41).
+
+  What protects them:
+  - the gate's floor check itself, which counts only `library`, `application` and `framework` components, so padding
+    with `file` entries does not count (`test_gate.py`: too few components, padded filesystem and image SBOMs);
+  - an image SBOM must carry the same `ImageID` as the same job's vulnerability report, and must carry no conflicting
+    identity values;
+  - the described component must be the built artifact;
+  - the positive control `control-sbom`: the inert lock's real Trivy SBOM must PASS the gate. That shows the gate reads a
+    real CycloneDX document; it does not test truncation;
+  - completeness requires every SBOM summary to PASS.
+- **Vendored-pin scans have no floor.** Exact equality with each installed pip's `vendor.txt` is required, and the
+  `*-vendored-pin-not-scanned` cases drop one pin and must fail.
+- **Identity and completeness across all gates.**
+  - Every report must describe the claimed artifact (name and type).
+  - An image report must carry its image id and at least one OS package.
+  - Every expected lock target must be present, populated and of declared scope.
+  - Every installed distribution must sit in the scan at its own metadata path.
+  - The hash-locked environments must equal their locks and stay read-only; the final inventories are gated.
+  - The real-scanner controls (`control-vuln`, `control-tooling-rootfs`, `control-vendored-pins`) show that Trivy still
+    finds a known CRITICAL.
+  - The completeness step requires every expected summary, each with exactly one `RESULT` line and the expected verdict,
+    and digests the directory.
+- **Requirement check.** No existing requirement demands a dedicated control for each unchanged floor, so none was added:
+  - The operator order of 2026-10-20 requires controls for a *changed* floor: "Any changed population floor must be
+    re-derived from measured before/after inventories and independently reviewed, with controls proving that truncation
+    still fails". The two changed floors, `api-venv` and `locktools`, have them.
+  - The adopted SBOM requirement (order of 2026-10-19, retained) is a non-empty package-component population.
 
 | Gate | Floor | Before | After | Truncation control |
 |---|---|---|---|---|
@@ -632,12 +769,15 @@ one below it and must fail.
 | `security-tooling-venv` | 60 (unchanged) | 67 | 67 | `security-tooling-truncated-inventory` |
 | `reader-tooling-venv` | 15 (unchanged) | 17 | 17 | `reader-tooling-truncated-inventory` |
 | `reader-tooling-syspy` | 2 (unchanged) | 2 | 2 | `reader-syspy-truncated-inventory` |
-| `image-api-vuln`, `image-worker-vuln` | 40 language packages (unchanged) | 48 | 47 expected (pip removed) | `api-image-truncated-lang-packages` |
+| `image-api-vuln`, `image-worker-vuln` | 40 language packages (unchanged) | 48 | 47 expected (pip removed) *(47 each, run 39514455981)* | `api-image-truncated-lang-packages` *(2026-10-21: on the API report only; the worker gate shares the code path and is not exercised separately)* |
 | `image-reader-vuln` | 1 (unchanged) | 3 | 3 | `reader-image-truncated-lang-packages` |
-| vendored-pin scans | none: exactly the pins of `vendor.txt` | — | 18 (pip 26.2.1), 20 (pip 25.1.1) | `*-vendored-pin-not-scanned` |
+| vendored-pin scans | none: exactly the pins of `vendor.txt` | — | 18 (pip 26.2.1), 20 (pip 25.1.1)*; 18 (pip 25.0.1, `.security-venv`), run 39514455981* | `*-vendored-pin-not-scanned` |
+| `sbom-image-api`, `sbom-image-worker`, `sbom-locks`, `sbom-image-reader` *(row added 2026-10-21)* | 100, 100, 500, 10 package components (unchanged) | — | 134, 134, 764, 41 (run 39514455981) | **none** (see above) |
 
 **Populations after this tranche.** The decision packet named below is evidence, not a tracked file;
-"unresolved" means an operator decision is pending and nothing here decides it.
+"unresolved" means an operator decision is pending and nothing here decides it. *(2026-10-21: "D1"–"D8" and "D4b" name
+the rows of the operator decision table of that date, kept in the coordination evidence `P6-programme-closeout-01`; a
+population marked uncovered there is not covered by any merge-path scan.)*
 
 | Population | Jobs | State |
 |---|---|---|
@@ -649,13 +789,14 @@ one below it and must fail.
 | OpenTofu provider binaries (`hashicorp/aws` in the module caches) | Revision reader | **not analysed**; the provider lock verifies the download (one platform's checksums). Not named by the order; reported |
 | The interpreter prefix's **installed distributions** (`pythonLocation`) | Revision reader | scanned as installed (pip and the Gate 4N PyYAML) with pip's vendored packages |
 | The same, in the other five jobs | all but Revision reader | **not scanned**. No repository `run:` step installs into it; `actions/setup-python` with `cache: pip` runs its pip to locate the cache, and the jobs run stdlib-only security scripts with the interpreter and create venvs from it |
-| **Interpreter binaries and standard library**: CPython, including its bundled ensurepip wheel, which seeds each `python -m venv` and whose pip performs that venv's first, hash-checked install; Node.js | all jobs | **not analysed**; unresolved (decision packet, interpreter binaries). The bundled pip's own vendored packages are analysed only where such a pip stays installed (`.security-venv`) |
+| **Interpreter binaries and standard library**: CPython, including its bundled ensurepip wheel, which seeds each `python -m venv` and whose pip performs that venv's first, hash-checked install; Node.js; *(2026-10-21)* the runner image's own `python3`, which Container build and security's self-test step runs before that job's Python set-up step | all jobs | **not analysed**; unresolved (decision packet, interpreter binaries). The bundled pip's own vendored packages are analysed only where such a pip stays installed (`.security-venv`) |
 | `node_modules` from `npm ci` | Frontend quality; Migrations and API contract | integrity-checked against the scanned `package-lock.json`; not scanned as installed |
 | Playwright Chromium and its `--with-deps` OS packages | Frontend quality | unresolved (decision packet) |
 | `postgres:16` service, BuildKit image | Backend quality, Migrations and API contract; Container build and security | unresolved (decision packet) |
 | Docker builder stages (the API builder's unpinned pip upgrade and build isolation; the reader builder) | Container build and security; Revision reader | unresolved (decision packet); only final images are scanned |
 | GitHub Actions code | all jobs | unresolved (decision packet); tag pinning belongs to `P6-CI-9` |
-| **Native libraries bundled inside wheels**, without dist-info: `psycopg-binary` 3.3.6 carries 15 shared libraries in `psycopg_binary.libs/`, among them OpenSSL 3.5.8 (`libssl`, `libcrypto`), libpq 5.18, Kerberos, OpenLDAP and SASL; `numpy` 2.5.3 carries OpenBLAS, libgfortran and libquadmath (measured in the Linux wheels of the locks); both are runtime pins | API venvs; API and worker images; the reader image's `psycopg-binary` 3.2.3 (same class, not measured) | **not analysed**: an installed-environment or image scan identifies the wheel by its own name and version only; under the adopted source the bundled libraries have no Trivy selection (decision packet D4 readings apply). Compiled extensions also carry third-party code linked in: marker strings of libuv (`uvloop`), libyaml (PyYAML's `_yaml`) and llhttp (`httptools`) are in their Linux extension modules (static linkage inferred, as these wheels carry no `.libs/`), and Rust crate graphs are named in embedded cargo registry paths: `bcrypt` 9, `pydantic-core` 26 and `watchfiles` 9 distinct crates (runtime pins, so in the images), `ruff` 100 (dev) (measured, lower bounds; Trivy reports nothing for these objects) |
+| **Native libraries bundled inside wheels**, without dist-info: `psycopg-binary` 3.3.6 carries 15 shared libraries in `psycopg_binary.libs/`, among them OpenSSL 3.5.8 (`libssl`, `libcrypto`), libpq 5.18, Kerberos, OpenLDAP and SASL; `numpy` 2.5.3 carries OpenBLAS, libgfortran and libquadmath (measured in the Linux wheels of the locks); both are runtime pins | API venvs; API and worker images; the reader image's `psycopg-binary` 3.2.3 (same class, not measured) | **not analysed**: an installed-environment or image scan identifies the wheel by its own name and version only; under the adopted source the bundled libraries have no Trivy selection (decision packet D4 readings apply). Compiled extensions also carry third-party code linked in: marker strings of libuv (`uvloop`), libyaml (PyYAML's `_yaml`) and llhttp (`httptools`) are in their Linux extension modules (static linkage inferred, as these wheels carry no `.libs/`), and Rust crate graphs are named in embedded cargo registry paths: `bcrypt` 9, `pydantic-core` 26 and `watchfiles` 9 distinct crates (runtime pins, so in the images), `ruff` 100 (dev) (measured, lower bounds; Trivy reports nothing for these objects). *(2026-10-21: these are measured instances, not an enumeration; compiled code inside any other wheel of a scanned environment is the same class and was not inventoried. In the shipped images they are runtime content, **uncovered pending operator decision D4b**: no merge-path scan identifies them, and nothing here claims they are covered.)* |
+| *(Row added 2026-10-21)* **The API and worker images' own CPython 3.12**: `python:3.12-slim`'s interpreter under `/usr/local`, built from source rather than installed as a Debian package | API and worker images (shipped) | **not identified, uncovered pending operator decision D4b**: the image scan lists 87 Debian packages and 47 Python packages and no entry for the interpreter (run 39514455981), so no CVE in it can be matched. The reader image's `python3.13` is a Debian package and is identified |
 | Other vendored code without dist-info: `botocore/vendored` (`six`, a `requests` shim) and the C sources `httptools` compiles in | API venvs; API and worker images | not analysed by name and version (found locally in the API venv); reported |
 
 *(Also corrected: the "Running locally" example below took the inventory with `pip inspect --local`,
@@ -680,6 +821,12 @@ which the closure tranche had already ruled out; it now matches CI.)*
 - Negative controls (`security/controls/`) run the real scanners over inert fixtures and pass
   only when the gate raises a policy violation (`--expect-fail`); a clean result, a crash or
   an incomplete analysis fails the control (exit 6).
+- A control that behaved as intended ends in `RESULT: CONTROL BEHAVED AS INTENDED (the outcome stated for it was
+  observed)`, and one that did not ends in `RESULT: CONTROL FAILED (...)`. *(2026-10-21, D7, label-only: until then these
+  read `NEGATIVE CONTROL DETECTED (policy violation raised as intended)` and `NEGATIVE CONTROL FAILED` for every control,
+  including the report-mutation cases meant to pass, to list a finding or to fail closed.)* The summary states the
+  intended outcome, and for a report-mutation case also the gate's own verdict on it. `complete --expect-control` requires
+  the success line.
 - The completeness step fails if any expected summary is missing or does not carry the
   expected verdict, so an analysis that silently did not run cannot pass. The workflow has
   no path filters and the gate steps carry no conditions other than `if: always()`.
