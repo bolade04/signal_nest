@@ -4048,7 +4048,9 @@
                 "enum": [
                   "model",
                   "degraded",
-                  "rule_based"
+                  "rule_based",
+                  "withheld",
+                  "budget_limited"
                 ],
                 "type": "string"
               },

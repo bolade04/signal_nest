@@ -3294,7 +3294,7 @@ export interface components {
             /** Decision */
             decision: string;
             /** Explanation Source */
-            explanation_source: ("model" | "degraded" | "rule_based") | null;
+            explanation_source: ("model" | "degraded" | "rule_based" | "withheld" | "budget_limited") | null;
             /** Id */
             id: string;
             /** Inside Scout Area */

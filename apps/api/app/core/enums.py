@@ -175,15 +175,21 @@ class ExplanationSource(StrEnum):
     """Where an opportunity's explanation text came from (P6-LLM-5).
 
     ``model``: validated output of the configured LLM provider (in local/demo mode
-    that is the deterministic mock). ``degraded``: the provider failed and fixed
-    placeholder copy was stored instead. ``rule_based``: below the relevance action
-    floor; deterministic copy, no model consulted. A NULL column predates the marker
-    and means "not recorded" - it is never backfilled by guessing.
+    that is the deterministic mock), screened before persistence. ``degraded``: the
+    provider failed and fixed placeholder copy was stored instead. ``rule_based``:
+    below the relevance action floor; deterministic copy, no model consulted.
+    ``withheld``: the model replied but its text failed output screening (P6-LLM-3)
+    and fixed copy was stored instead. ``budget_limited``: no model call was made
+    because the run's call cap or the workspace's monthly budget was reached
+    (P6-LLM-4). A NULL column predates the marker and means "not recorded" - it is
+    never backfilled by guessing.
     """
 
     MODEL = "model"
     DEGRADED = "degraded"
     RULE_BASED = "rule_based"
+    WITHHELD = "withheld"
+    BUDGET_LIMITED = "budget_limited"
 
 
 class ClaimRisk(StrEnum):

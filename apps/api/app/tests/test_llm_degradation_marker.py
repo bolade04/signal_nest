@@ -81,9 +81,9 @@ def _overloaded() -> httpx.Response:
 
 def _task(request: httpx.Request) -> str:
     content = json.loads(request.content)["messages"][0]["content"]
-    if content.startswith("You are SignalNest's signal classifier"):
+    if content.startswith("Classify the public post"):
         return "classify_signal"
-    if content.startswith("You are SignalNest's explanation engine"):
+    if content.startswith("Explain a market opportunity"):
         return "explain_opportunity"
     raise AssertionError(f"unexpected prompt: {content[:60]!r}")
 

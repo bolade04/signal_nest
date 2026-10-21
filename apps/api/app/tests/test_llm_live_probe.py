@@ -51,7 +51,7 @@ class FakeProvider:
             )
         if body["max_tokens"] == 4 and self.truncate:
             return _message(CLASSIFIED, stop_reason="max_tokens")
-        if "explanation engine" in body["messages"][0]["content"]:
+        if body["messages"][0]["content"].startswith("Explain a market opportunity"):
             return _message(EXPLAINED)
         return _message(CLASSIFIED)
 

@@ -230,7 +230,7 @@ const ROWS: Row[] = [
   },
   {
     id: 'C03 Opportunity status actions (x4)',
-    site: 'OpportunityDetail.tsx:155',
+    site: 'OpportunityDetail.tsx:156',
     policy: EDITOR,
     route: '/opportunities/opp-loc-dallas-0',
     ready: (s) => s.findByRole('heading', { name: /dallas customers want faster delivery 1/i }),

@@ -21,6 +21,7 @@ from app.core.errors import CapabilityUnavailableError, NotFoundError, Validatio
 from app.core.logging import trace_id_ctx
 from app.db.session import get_db
 from app.jobs.service import enqueue_scout_request
+from app.llm.metering import ensure_run_allowed
 from app.locations.models import BusinessLocation
 from app.scouting_requests import schedules as schedule_service
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
@@ -270,6 +271,9 @@ def run_scout_request_endpoint(
         raise ValidationDomainError("Request is already queued or running.")
     if observed == ScoutRequestStatus.PAUSED.value:
         raise ValidationDomainError("Resume the request before running it.")
+    # P6-LLM-4: a workspace whose monthly AI budget is spent is refused here (HTTP 429,
+    # ``llm_budget_exhausted``) before any state changes or work is enqueued.
+    ensure_run_allowed(db, get_settings(), request.workspace_id)
 
     # Atomic claim of the run: only the caller that flips the observed status to
     # QUEUED proceeds to enqueue; a lost race is reported rather than duplicated.

@@ -80,8 +80,10 @@ from app.tests._auth2_support import (
 API_DIR = Path(__file__).resolve().parents[2]
 PREV = "a452ee007cc2"
 HEAD = "87198ab57b59"
-#: The code head, one additive revision later (P6-LLM-5 opportunity explanation source).
-CODE_HEAD = "6ad2ff77f691"
+#: One additive revision later (P6-LLM-5 opportunity explanation source); the code head
+#: one further (P6-LLM-4 usage ledger).
+EXPLANATION = "6ad2ff77f691"
+CODE_HEAD = "47028898175f"
 UNAUTHORIZED = (401, "unauthorized", "Invalid or expired token.")
 ORGANIZATIONS = f"{API}/organizations"
 LIFETIME = timedelta(minutes=720)
@@ -643,7 +645,8 @@ class TestMigration:
 
         script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
         assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-        assert script.get_revision(CODE_HEAD).down_revision == HEAD
+        assert script.get_revision(CODE_HEAD).down_revision == EXPLANATION
+        assert script.get_revision(EXPLANATION).down_revision == HEAD
         revision = script.get_revision(HEAD)
         assert revision.down_revision == PREV
         assert Path(revision.path).name.endswith("_add_auth_sessions.py")
