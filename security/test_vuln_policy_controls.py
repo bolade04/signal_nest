@@ -54,7 +54,7 @@ PASS_THROUGH = {
 SITE = "lib/python3.12/site-packages"
 PIP_TARGETS = ["apps/api/requirements-runtime.txt", "apps/api/requirements-dev.txt", "scripts/requirements-gate.txt",
                "scripts/requirements-gate-hashes.txt", "security/requirements-semgrep.txt",
-               "apps/revision-reader/requirements-dev.txt"]
+               "apps/revision-reader/requirements-dev.txt", "apps/revision-reader/requirements-toolcache-pip.txt"]
 
 
 def job_text(text: str, job: str) -> str:
