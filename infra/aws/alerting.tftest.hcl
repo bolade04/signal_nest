@@ -37,7 +37,7 @@ mock_provider "aws" {
   }
   mock_data "aws_elb_service_account" {
     defaults = {
-      arn = "arn:aws:iam::127311923021:root"
+      arn = "arn:aws:iam::111122223333:root"
     }
   }
   mock_resource "aws_kms_key" {
