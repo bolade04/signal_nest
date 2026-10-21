@@ -26,8 +26,8 @@ from typing import Final
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-# Importing the pipeline module registers the ``run_scout_request`` job and gives
-# us direct access to the synchronous runner used below.
+# The pipeline's synchronous runner (``app.jobs.pipeline._run``) is imported below
+# and called directly; the seed never goes through the durable job store.
 from app.brands.models import Brand, BusinessProfile
 from app.campaign_context.models import (
     AudienceProfile,

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.core import config as _config
 from app.core.config import Settings, get_settings
 
 # Backends that run with zero external dependencies (the default local mode).
@@ -35,6 +36,7 @@ _LOCAL_BACKENDS = {
     "storage": {"local"},
     "llm": {"mock"},
     "worker_registry": {"inprocess"},
+    "rate_limit": {"memory"},
 }
 
 
@@ -119,6 +121,16 @@ def _status(
     )
 
 
+def _vector_detail(s: Settings) -> str | None:
+    if s.vector_backend != "pgvector":
+        return None
+    if not _config.PGVECTOR_IMPLEMENTED:
+        return "pgvector is not implemented in this build"
+    if s.is_sqlite:
+        return "pgvector requires a PostgreSQL database"
+    return None
+
+
 def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
     """Derive the runtime capability report from settings (no secrets, no I/O)."""
     s = settings or get_settings()
@@ -146,12 +158,9 @@ def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
         _status(
             "vector",
             s.vector_backend,
-            configured=s.vector_backend != "pgvector" or not s.is_sqlite,
-            detail=(
-                "pgvector requires a PostgreSQL database"
-                if s.vector_backend == "pgvector" and s.is_sqlite
-                else None
-            ),
+            configured=s.vector_backend != "pgvector"
+            or (_config.PGVECTOR_IMPLEMENTED and not s.is_sqlite),
+            detail=_vector_detail(s),
         ),
         _status(
             "storage",
@@ -180,6 +189,17 @@ def build_runtime_report(settings: Settings | None = None) -> RuntimeReport:
             detail=(
                 "redis_url is not set"
                 if s.queue_backend == "redis" and not s.redis_url
+                else None
+            ),
+        ),
+        # Request rate limiting (P6-PLAT-3): per process in memory, or shared in Redis.
+        _status(
+            "rate_limit",
+            s.rate_limit_backend,
+            configured=s.rate_limit_backend != "redis" or s.redis_url is not None,
+            detail=(
+                "redis_url is not set"
+                if s.rate_limit_backend == "redis" and not s.redis_url
                 else None
             ),
         ),

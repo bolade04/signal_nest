@@ -16,6 +16,7 @@ from app.core.config import Settings
 from app.core.runtime import build_runtime_report
 from app.jobs.context import ExecutionContext, scope_matches
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope, unwrap, wrap
+from app.tests._platform_support import TEST_SIGNING_KEY, pgvector_build
 
 
 # --- Configuration: explicit rejection, no silent production fallback -----------
@@ -31,7 +32,7 @@ def test_production_rejects_mock_llm() -> None:
             app_mode="full",
             environment="production",
             database_url="postgresql://u:p@localhost/db",
-            secret_key="a-real-secret",
+            secret_key=TEST_SIGNING_KEY,
             llm_provider="mock",
         )
     assert "mock LLM provider is not allowed" in str(exc.value)
@@ -60,7 +61,7 @@ def test_production_rejects_dev_fallback() -> None:
             app_mode="full",
             environment="production",
             database_url="postgresql://u:p@localhost/db",
-            secret_key="a-real-secret",
+            secret_key=TEST_SIGNING_KEY,
             llm_provider="openai",
             llm_api_key="sk-test",
             llm_allow_dev_fallback=True,
@@ -76,12 +77,15 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
         app_mode="full",
         environment="production",
         database_url="postgresql://u:p@localhost/db",
-        secret_key="a-real-secret",
+        secret_key=TEST_SIGNING_KEY,
         queue_backend="redis",
         cache_backend="redis",
         redis_url="redis://localhost:6379/0",
+        rate_limit_backend="redis",
         storage_backend="s3",
         s3_bucket="prod-bucket",
+        # Accepted only by a build that implements pgvector (P6-PLAT-1): tests that need
+        # an accepted production config construct it under ``pgvector_build()``.
         vector_backend="pgvector",
         llm_provider="openai",
         llm_api_key="sk-test",
@@ -96,9 +100,21 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
 
 
 def test_production_full_config_is_accepted() -> None:
-    settings = Settings(**_prod_kwargs())
+    with pgvector_build():
+        settings = Settings(**_prod_kwargs())
     assert settings.is_production is True
     assert settings.app_mode == "full"
+
+
+def test_this_build_accepts_no_production_vector_backend() -> None:
+    # P6-PLAT-1: bruteforce is refused in production and pgvector is not implemented,
+    # so production cannot start on this build until the operator decision lands.
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(vector_backend="pgvector"))
+    assert "vector_backend=pgvector is not implemented in this build" in str(exc.value)
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(vector_backend="bruteforce"))
+    assert "persistent vector backend" in str(exc.value)
 
 
 def test_production_rejects_local_app_mode() -> None:
@@ -113,10 +129,13 @@ def test_production_rejects_sqlite() -> None:
     assert "environment=production requires a PostgreSQL database" in str(exc.value)
 
 
-def test_production_rejects_inprocess_queue() -> None:
-    with pytest.raises(ValidationError) as exc:
-        Settings(**_prod_kwargs(queue_backend="inprocess"))
-    assert "durable queue backend" in str(exc.value)
+def test_production_accepts_either_wake_up_transport() -> None:
+    # P6-PLAT-2: queue_backend selects only the optional job wake-up; the durable
+    # queue is the database job store, so production no longer forces Redis here.
+    for queue_backend in ("inprocess", "redis"):
+        with pgvector_build():
+            settings = Settings(**_prod_kwargs(queue_backend=queue_backend))
+        assert settings.queue_backend == queue_backend
 
 
 def test_production_rejects_memory_cache() -> None:
@@ -141,11 +160,12 @@ def test_production_default_local_stack_is_rejected_wholesale() -> None:
     # A production environment left on the local defaults fails during Settings
     # construction, naming every offending capability (no silent fallback).
     with pytest.raises(ValidationError) as exc:
-        Settings(_env_file=None, environment="production", secret_key="a-real-secret",
+        Settings(_env_file=None, environment="production", secret_key=TEST_SIGNING_KEY,
                  llm_provider="openai", llm_api_key="sk-test")
     message = str(exc.value)
-    for fragment in ("app_mode=full", "PostgreSQL", "queue", "cache", "storage", "vector"):
+    for fragment in ("app_mode=full", "PostgreSQL", "cache", "storage", "vector", "rate-limit"):
         assert fragment in message
+    assert "queue" not in message  # P6-PLAT-2: no production queue_backend rule
 
 
 def test_s3_storage_requires_bucket_in_production() -> None:
@@ -209,17 +229,19 @@ def test_local_defaults_are_fully_local_and_configured() -> None:
         "storage",
         "llm",
         "worker_registry",
+        "rate_limit",
     }
 
 
 def test_unconfigured_production_backends_are_flagged_not_healthy() -> None:
-    settings = Settings(
-        _env_file=None,
-        queue_backend="redis",  # no redis_url
-        storage_backend="s3",  # no bucket
-        vector_backend="pgvector",  # sqlite db
-    )
-    report = build_runtime_report(settings)
+    with pgvector_build():
+        settings = Settings(
+            _env_file=None,
+            queue_backend="redis",  # no redis_url
+            storage_backend="s3",  # no bucket
+            vector_backend="pgvector",  # sqlite db
+        )
+        report = build_runtime_report(settings)
     unconfigured = {c.name for c in report.unconfigured}
     # The worker registry coordinates over the queue transport, so selecting Redis
     # without a redis_url leaves both the queue and the fleet coordination

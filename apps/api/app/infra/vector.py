@@ -1,9 +1,12 @@
 """Vector search adapter.
 
-Default: brute-force cosine similarity over an in-memory numpy index (zero deps).
-Full mode: pgvector-backed similarity. The deterministic embedding function is a
-lightweight hashing embedder so semantic dedup/clustering works offline without a
-model download; real deployments swap in an embedding provider.
+Similarity is brute-force cosine over an in-memory numpy index (zero deps); the
+pipeline builds one per scout run for its dedupe step. ``vector_backend=pgvector``
+names a database-backed path this build does not implement (P6-PLAT-1): settings
+refuse it, and :func:`build_index` raises rather than quietly substituting brute
+force. The deterministic embedding function is a lightweight hashing embedder so
+dedup/clustering works offline without a model download; real deployments swap in
+an embedding provider.
 """
 
 from __future__ import annotations
@@ -14,9 +17,13 @@ from typing import Protocol
 
 import numpy as np
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+class VectorBackendUnavailableError(RuntimeError):
+    """The configured vector backend has no implementation in this build."""
 
 
 def embed_text(text: str, dim: int | None = None) -> list[float]:
@@ -57,6 +64,17 @@ class BruteForceIndex:
         return scored[:top_k]
 
 
-def build_index() -> VectorIndex:
-    # pgvector index is created per-query in full mode; local mode uses brute force.
-    return BruteForceIndex()
+def build_index(settings: Settings | None = None) -> VectorIndex:
+    """Build an empty index for the configured ``vector_backend``.
+
+    Only ``bruteforce`` exists. Any other backend raises
+    :class:`VectorBackendUnavailableError` - it is never silently replaced by brute
+    force, which is what made a ``pgvector`` setting indistinguishable from the
+    default (P6-PLAT-1).
+    """
+    settings = settings or get_settings()
+    if settings.vector_backend == "bruteforce":
+        return BruteForceIndex()
+    raise VectorBackendUnavailableError(
+        f"vector_backend={settings.vector_backend} is not implemented in this build"
+    )

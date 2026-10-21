@@ -41,6 +41,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
 from app.db import seed as seed_mod
+from app.tests._platform_support import TEST_SIGNING_KEY, pgvector_build
 
 # A DSN whose every component is an unmistakable sentinel. If any of these
 # substrings reaches an error message, a log or stderr, the refusal is leaking
@@ -58,7 +59,7 @@ SENTINEL_PARTS = (SENTINEL_USER, SENTINEL_PASSWORD, SENTINEL_HOST, SENTINEL_DB)
 # staging/production Settings refuse to construct without these; they are inert
 # test values and carry no meaning beyond satisfying the validators.
 _PRODUCTION_LIKE_REQUIRED: dict[str, Any] = {
-    "secret_key": "x" * 64,
+    "secret_key": TEST_SIGNING_KEY,
     "llm_provider": "openai",
     "llm_api_key": "k" * 20,
     "mail_backend": "ses",
@@ -78,14 +79,17 @@ def _settings(environment: str, database_url: str, **extra: Any) -> Settings:
             "queue_backend": "redis",
             "cache_backend": "redis",
             "vector_backend": "pgvector",
+            "rate_limit_backend": "redis",
             "storage_backend": "s3",
             "redis_url": "redis://unused.invalid:6379/0",
             "s3_bucket": "unused",
             **extra,
         }
-    return Settings(
-        _env_file=None, environment=environment, database_url=database_url, **extra
-    )
+    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
+    with pgvector_build():
+        return Settings(
+            _env_file=None, environment=environment, database_url=database_url, **extra
+        )
 
 
 def _sqlite_factory(tmp_path) -> sessionmaker:
