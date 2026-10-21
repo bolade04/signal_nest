@@ -156,9 +156,9 @@ base = "host=localhost dbname=postgres user=postgres connect_timeout=5"
 with psycopg.connect(f"{base} port=55432 sslmode=require") as c:
     pg = c.pgconn
     assert pg.ssl_in_use, "no TLS under sslmode=require"
-    assert c.execute("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetchone()[0] is True
-    attrs = {k: pg.ssl_attribute(k.encode()) for k in ("library", "protocol", "cipher")}
-    out.append(f"sslmode=require against the TLS server: connected, ssl_in_use=True, server pg_stat_ssl.ssl=true, {attrs}")
+    ssl, version, cipher, bits = c.execute("select ssl, version, cipher, bits from pg_stat_ssl where pid = pg_backend_pid()").fetchone()
+    assert ssl is True, "the server reports the session as not TLS"
+    out.append(f"sslmode=require against the TLS server: connected, client ssl_in_use=True, server pg_stat_ssl: ssl={ssl} version={version} cipher={cipher} bits={bits}")
 with psycopg.connect(f"{base} port=55432 sslmode=verify-full sslrootcert=/tmp/tls/ca.pem") as c:
     assert c.pgconn.ssl_in_use
     out.append("sslmode=verify-full with the issuing CA: connected")
