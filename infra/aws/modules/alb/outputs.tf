@@ -42,3 +42,23 @@ output "api_alias_record_name" {
   description = "Name of the API Route 53 alias record (api_fqdn) while the window is open; null while closed (the record does not exist then)."
   value       = one(aws_route53_record.api[*].name)
 }
+
+# CloudWatch dimension values for the ALB alarms owned by `observability` (P6-INF-6). Like
+# every windowed output they are null while the window is closed. `alb_enabled` echoes the
+# window input so the consumer can size its alarms with a value KNOWN AT PLAN TIME: the
+# suffixes of a load balancer being created in the same apply are unknown until apply, and
+# a `count` cannot depend on them.
+output "alb_arn_suffix" {
+  description = "ARN suffix of the ALB (app/<name>/<id>): the LoadBalancer dimension of AWS/ApplicationELB metrics. Null while the window is closed; a new value every window (the ALB is re-created)."
+  value       = one(aws_lb.this[*].arn_suffix)
+}
+
+output "api_target_group_arn_suffix" {
+  description = "ARN suffix of the API target group (targetgroup/<name>/<id>): the TargetGroup dimension of AWS/ApplicationELB metrics. Null while the window is closed."
+  value       = one(aws_lb_target_group.api[*].arn_suffix)
+}
+
+output "alb_enabled" {
+  description = "Whether the windowed ALB resources exist in this configuration (echo of the enabled input; known at plan time)."
+  value       = var.enabled
+}

@@ -28,6 +28,8 @@
 #   iam -> ecs (execution + api/worker/migration task-role ARNs)
 #   alb -> ecs (alb_security_group_id, api_target_group_arn)
 #   ecs -> observability (log groups + service names)   [observability is a sink]
+#   alb -> observability (ALB/target-group arn_suffix + the window echo, P6-INF-6;
+#                    NOT in the original §26.12 graph — observability stays a sink)
 #   network, data_sql, secrets, ecs(cluster id only) -> revision_reader
 #       [Gate 4J; consumes NOTHING gated by deploy_workload, so the reader can run
 #        before the workload plan it exists to gate — see the module header]
@@ -47,6 +49,15 @@
 # (bruteforce) applies until the deferred pgvector bootstrap is separately
 # authorized. The migration workload is pinned to non-Redis backends (§26.3).
 locals {
+  # P6-INF-5: the API and worker write CloudWatch EMF metrics to their log streams under this
+  # namespace (METRICS_NAMESPACE below), and the observability alarms read the same value.
+  # SERVICE_NAME is pinned per workload because it is the `service` dimension of every metric.
+  app_metrics_namespace = "${local.name_prefix}/app"
+  app_service_names = {
+    api    = "signalnest-api"
+    worker = "signalnest-worker"
+  }
+
   workload_env_common = {
     ENVIRONMENT                  = "staging"
     APP_MODE                     = "full"
@@ -71,10 +82,18 @@ locals {
     # lower(): web_fqdn validation lower-cases before matching, but browsers send the
     # Origin host lower-cased and Starlette compares origins exactly.
     PUBLIC_WEB_ORIGIN = "https://${lower(var.web_fqdn)}"
+    # Application metrics (P6-INF-5): CloudWatch Embedded Metric Format on stdout, which the
+    # awslogs driver already ships to the workload log group — no new resource, no grant.
+    METRICS_ENABLED   = "true"
+    METRICS_EXPORTER  = "emf"
+    METRICS_NAMESPACE = local.app_metrics_namespace
   }
   workload_env_redis = merge(local.workload_env_common, {
     QUEUE_BACKEND = "redis"
     CACHE_BACKEND = "redis"
+  })
+  workload_env_worker = merge(local.workload_env_redis, {
+    SERVICE_NAME = local.app_service_names.worker
   })
   # API-only (§25 rate-limiting-behind-proxy resolution): uvicorn trusts proxy
   # headers exclusively from in-VPC peers, so `request.client` becomes the
@@ -85,6 +104,7 @@ locals {
   # degenerates to the leftmost (client-forgeable) entry when every host is
   # trusted. The worker/migration workloads serve no HTTP and never set it.
   workload_env_api = merge(local.workload_env_redis, {
+    SERVICE_NAME        = local.app_service_names.api
     FORWARDED_ALLOW_IPS = var.vpc_cidr
     # Browser CORS (6B-4C): the SPA (CloudFront, web_fqdn) and the API (ALB) are
     # different origins, so the API must name the SPA origin exactly — one
@@ -149,6 +169,8 @@ module "alb" {
   # Windowed: the load balancer, listener, target group and API alias record exist
   # only inside an open window; the ALB security group and the log bucket persist.
   enabled = var.staging_window_active
+  # P6-INF-13: retention of the persistent log bucket (operator value, required).
+  log_retention_days = var.alb_log_retention_days
 }
 
 # Four EMPTY Secrets Manager containers + one customer-managed KMS key/alias.
@@ -261,7 +283,7 @@ module "ecs" {
   migration_task_role_arn = module.iam.migration_task_role_arn
   secret_arns             = module.secrets.secret_arns
   api_environment         = local.workload_env_api
-  worker_environment      = local.workload_env_redis
+  worker_environment      = local.workload_env_worker
   migration_environment   = local.workload_env_migration
 
   # P6-AUTH-4 one-way cutover controls (variables.tf); the defaults are the baseline.
@@ -283,6 +305,24 @@ module "observability" {
   worker_service_name = module.ecs.worker_service_name
   alarm_thresholds    = var.alarm_thresholds
   sns_topic_arn       = var.sns_topic_arn
+
+  # P6-INF-4: the alarm topic's human destination (operator value, required at the root).
+  alarm_notification_email = var.alarm_notification_email
+  # P6-INF-6: the ALB alarms follow the alb module's window (its echo is known at plan
+  # time; the suffixes of an ALB created in the same apply are not). Only these three
+  # alarms are windowed — no window input reaches this module, and its trail, buckets,
+  # keys and other alarms persist across windows.
+  alb_alarms_enabled          = module.alb.alb_enabled
+  alb_arn_suffix              = module.alb.alb_arn_suffix
+  api_target_group_arn_suffix = module.alb.api_target_group_arn_suffix
+  # P6-INF-5: the API's EMF metrics, as the ecs environment above stamps them.
+  app_metrics = {
+    namespace   = local.app_metrics_namespace
+    service     = local.app_service_names.api
+    environment = var.environment
+  }
+  # P6-INF-13: audit-trail retention (operator value, required).
+  audit_log_retention_days = var.audit_log_retention_days
 }
 
 # One monthly AWS Budget with fixed 50/75/90/100% ACTUAL notifications (§15).

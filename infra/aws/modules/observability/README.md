@@ -74,6 +74,31 @@ the `alb` module exposes no `arn_suffix` outputs and changing `alb` is outside
 this tranche (a later, separately authorized `alb` output addition is required
 first).
 
+### 3a. Alerting and retention additions (2026-10-20, P6-INF-4/-5/-6/-13; branch `feat/p6-alerting-iac-01`, not merged, nothing applied)
+`alerting.tf` adds: the **alerts key** (`aws_kms_key.alerts` + `alias/<name_prefix>/alerts`;
+P6-CI-6 key shape; policy = account-root delegation + `kms:Decrypt`/`kms:GenerateDataKey*` for
+`cloudwatch.amazonaws.com`, the statement AWS documents for alarms publishing to an encrypted
+topic); the **alarm topic** `<name_prefix>-alarms` (SSE with that key; policy = account root +
+`SNS:Publish` for `cloudwatch.amazonaws.com` bound by `aws:SourceArn` to this account's
+`alarm:<name_prefix>-*` and by `aws:SourceAccount`); **one e-mail subscription** to
+`alarm_notification_email` (operator value; PendingConfirmation until the recipient confirms —
+a live human act); **three ALB alarms** (`alb-elb-5xx`, `alb-target-5xx`, `alb-unhealthy-hosts`),
+created only while `alb_alarms_enabled` (the root wires the alb module's window echo) and
+dimensioned by the alb module's `arn_suffix` outputs; **two application-metric alarms**
+(`api-5xx-ratio`, metric math over the EMF `http_requests_total` series, and `api-p95-latency`)
+when `app_metrics` is set. `main.tf` now sends **every** alarm's ALARM and OK actions to the topic
+(plus the optional extra `sns_topic_arn`) and adds the audit bucket's **lifecycle rule**
+(`audit_log_retention_days`; current and noncurrent versions; expired delete markers removed).
+New inputs (all defaulting to "create nothing" at module level; the staging root requires the
+address and the retention): `alarm_notification_email`, `alb_alarms_enabled`, `alb_arn_suffix`,
+`api_target_group_arn_suffix`, `app_metrics`, `audit_log_retention_days`, and three optional
+`alarm_thresholds` fields (`api_5xx_percent`, `api_p95_latency_ms`, `alb_5xx_count_per_period`,
+each required by a precondition on the alarm that uses it). New outputs: `alarm_topic_arn`,
+`alarm_subscription_count`; `alarm_arns` includes the new alarms. Offline proof:
+`infra/aws/alerting.tftest.hcl` (mocked). The §3/§5 inventories below describe `main.tf` as
+merged before this addition; the "Not created" list's "no SNS topic" and "no ALB-dimension
+alarms" no longer hold on this branch.
+
 ## 4. Inputs / outputs (exactly the planned pinned interface)
 Inputs: `log_group_names` + `log_group_arns` (maps, from `ecs` — §26.15 pins),
 `api_service_name` + `worker_service_name` (from `ecs`), `alarm_thresholds`

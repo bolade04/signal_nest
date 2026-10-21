@@ -482,7 +482,7 @@ variable "mail_from_address" {
 }
 
 variable "alarm_thresholds" {
-  description = "Caller-supplied observability alarm thresholds (passed through to the observability module; the plan documents alarm CATEGORIES, not values — §14). Supplied via a git-ignored *.tfvars."
+  description = "Caller-supplied observability alarm thresholds (passed through to the observability module; the plan documents alarm CATEGORIES, not values — §14). The three P6-INF-5/-6 fields are REQUIRED here: api_5xx_percent and api_p95_latency_ms have documented STARTING values in docs/operations/alerts.md §1/§2 (2 % warn / 5 % page; 1000 ms), which are not calibrated; alb_5xx_count_per_period has none. Supplied via a git-ignored *.tfvars."
   type = object({
     ecs_cpu_high_percent          = number
     ecs_memory_high_percent       = number
@@ -492,11 +492,51 @@ variable "alarm_thresholds" {
     rds_freeable_memory_low_bytes = number
     redis_cpu_high_percent        = number
     redis_memory_high_percent     = number
+    api_5xx_percent               = number
+    api_p95_latency_ms            = number
+    alb_5xx_count_per_period      = number
   })
 }
 
+# P6-INF-4: the human destination of every alarm. REQUIRED with no default — the Phase 6
+# observability exit bar is "no closeout while alarms notify []", so a plan that would
+# leave the topic without a subscriber is refused here rather than discovered later.
+variable "alarm_notification_email" {
+  description = "E-mail address subscribed to the alarm topic (passed to the observability module). Operator value via a git-ignored *.tfvars; no real address is committed. The subscription stays PendingConfirmation until the recipient clicks AWS's confirmation link — a live human act (docs/operations/alerts.md, Delivery)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alarm_notification_email))
+    error_message = "alarm_notification_email must be a plausible email address (local@domain.tld)."
+  }
+}
+
+# P6-INF-13: retention of the two telemetry buckets. REQUIRED with no default: both are
+# retention decisions (the audit trail; ALB logs carry client IP addresses) that belong to
+# the operator's retention schedule (the privacy lane's open decision), never to a value
+# the IaC assumes. Whole days, 1-3650; a deleted or overwritten version is kept as long again.
+variable "audit_log_retention_days" {
+  description = "Days the CloudTrail audit bucket keeps each log/digest object (observability module). Operator retention decision; no default."
+  type        = number
+
+  validation {
+    condition     = var.audit_log_retention_days == floor(var.audit_log_retention_days) && var.audit_log_retention_days >= 1 && var.audit_log_retention_days <= 3650
+    error_message = "audit_log_retention_days must be a whole number of days between 1 and 3650."
+  }
+}
+
+variable "alb_log_retention_days" {
+  description = "Days the private ALB log bucket keeps each access/connection log object (alb module). ALB logs carry client IP addresses; operator retention decision; no default."
+  type        = number
+
+  validation {
+    condition     = var.alb_log_retention_days == floor(var.alb_log_retention_days) && var.alb_log_retention_days >= 1 && var.alb_log_retention_days <= 3650
+    error_message = "alb_log_retention_days must be a whole number of days between 1 and 3650."
+  }
+}
+
 variable "sns_topic_arn" {
-  description = "Optional pre-existing SNS topic ARN for observability alarm actions (CONSUMED, never created; null means alarms have no actions). Supplied via a git-ignored *.tfvars when used; no real ARN is committed."
+  description = "Optional ADDITIONAL pre-existing SNS topic ARN for observability alarm actions (CONSUMED, never created). Every alarm already notifies the observability module's own topic (P6-INF-4); null adds nothing. Supplied via a git-ignored *.tfvars when used; no real ARN is committed."
   type        = string
   default     = null
   nullable    = true

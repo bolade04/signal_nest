@@ -15,8 +15,9 @@
 # (ecs default), DBInstanceIdentifier "<name_prefix>-postgres" (data_sql local
 # db_instance_id), CacheClusterId "<name_prefix>-redis-001" (data_cache
 # replication_group_id + single-node "-001" member naming). §26.12's graph gains
-# no new edge. ALB-dimension alarms (5xx/unhealthy-host) are DEFERRED: the alb
-# module exposes no arn_suffix outputs, and changing alb is outside this tranche.
+# no new edge. ALB-dimension alarms (5xx/unhealthy-host) were DEFERRED here because
+# the alb module exposed no arn_suffix outputs; P6-INF-6 added them (alerting.tf), fed
+# by the alb module's suffix outputs and window echo (one new alb -> observability edge).
 #
 # ERROR-RATE evidence: the application emits one JSON object per record with
 # `"severity": record.levelname` (apps/api/app/core/logging.py:65), so the
@@ -40,10 +41,10 @@
 # OWNED HERE (aws_kms_key.audit), whose policy grants CloudTrail only the two
 # statements AWS documents (GenerateDataKey* and DescribeKey), both bound to THIS
 # trail by aws:SourceArn. Reading delivered log files needs kms:Decrypt on the key
-# through the reader's own IAM policy (the key keeps the account's IAM delegation). Alarm/OK actions use the optional caller-supplied
-# `sns_topic_arn` only — no SNS topic, dashboard, composite alarm, or anomaly
-# detector is created (none is documented). Nothing here is provisioned,
-# deployed, or live; offline-validated HCL only.
+# through the reader's own IAM policy (the key keeps the account's IAM delegation). Alarm/OK
+# actions: every alarm notifies the module-owned SNS topic of alerting.tf (P6-INF-4), plus
+# the optional caller-supplied `sns_topic_arn`; no composite alarm or anomaly detector is
+# created. Nothing here is provisioned, deployed, or live; offline-validated HCL only.
 #
 # No `provider "aws"` block; `versions.tf` declares only the provider SOURCE per
 # the sibling convention. Tagging is the root provider's `default_tags`; this
@@ -57,7 +58,8 @@ locals {
   metric_namespace = "${var.name_prefix}/logs"
   workloads        = toset(["api", "worker", "migration"])
 
-  alarm_actions = var.sns_topic_arn == null ? [] : [var.sns_topic_arn]
+  # P6-INF-4: the module-owned topic always; an extra pre-existing topic if supplied.
+  alarm_actions = concat([aws_sns_topic.alarms.arn], var.sns_topic_arn == null ? [] : [var.sns_topic_arn])
 
   # Shared cadence: 5-minute periods; sustained (3-datapoint) breaches for
   # utilization/saturation, single-period for error counts.
@@ -317,6 +319,53 @@ resource "aws_s3_bucket_versioning" "audit" {
   versioning_configuration {
     status = "Enabled"
   }
+}
+
+# Retention (P6-INF-13). The audit bucket is versioned: expiring a current log object adds a
+# delete marker, and the noncurrent rule removes the old version — and any version a principal
+# deleted or overwrote — after the SAME number of days, so a deleted log stays recoverable for
+# the whole retention period (worst-case lifetime: twice the input). The duration is the
+# operator's retention decision (root input audit_log_retention_days, coupled to the privacy
+# lane's retention schedule); null creates no rule (today's unbounded behaviour). Lifecycle
+# expiry is performed by S3 itself: it needs no KMS grant and no principal's s3:DeleteObject.
+# It does not make the trail tamper-proof — any principal with s3:PutLifecycleConfiguration on
+# this bucket can shorten it, which is why that action stays in the W0 deny list.
+resource "aws_s3_bucket_lifecycle_configuration" "audit" {
+  count = var.audit_log_retention_days == null ? 0 : 1
+
+  bucket = aws_s3_bucket.audit.id
+
+  rule {
+    id     = "expire-audit-logs"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = var.audit_log_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.audit_log_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  rule {
+    id     = "remove-expired-delete-markers"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.audit]
 }
 
 # CloudTrail-service-only writes + TLS-only access. The service principal is

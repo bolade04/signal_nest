@@ -133,3 +133,20 @@ variable "enabled" {
   type        = bool
   default     = true
 }
+
+# --- Log-bucket retention (P6-INF-13) ---------------------------------------------------
+# ALB access and connection logs carry client IP addresses (personal data), so how long they
+# are kept is the operator's retention decision (the privacy lane's schedule), never a value
+# this module assumes. Null (the module default, today's behaviour) creates no lifecycle
+# rule; the staging root makes the input REQUIRED, so a root plan always states a duration.
+variable "log_retention_days" {
+  description = "Days the private ALB log bucket keeps a delivered access/connection log object before it expires; a deleted or overwritten (noncurrent) version is kept for the same number of days, so the longest an object can survive is twice this. Null = no lifecycle rule (unbounded growth); the staging root requires a value."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.log_retention_days == null || (try(var.log_retention_days == floor(var.log_retention_days), false) && try(var.log_retention_days >= 1 && var.log_retention_days <= 3650, false))
+    error_message = "log_retention_days must be null or a whole number of days between 1 and 3650."
+  }
+}

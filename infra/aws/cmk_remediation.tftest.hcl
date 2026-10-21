@@ -55,6 +55,13 @@ mock_provider "aws" {
       bucket_regional_domain_name = "signalnest-staging-mock-bucket.s3.us-east-1.amazonaws.com"
     }
   }
+  # P6-INF-4 (mock only, no assertion changed): the observability module's alarms now name its
+  # alarm topic in their actions, which the provider validates as an ARN.
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-1:111122223333:signalnest-staging-alarms"
+    }
+  }
 }
 
 # --- D1: SPA origin bucket (modules/edge) ----------------------------------------------

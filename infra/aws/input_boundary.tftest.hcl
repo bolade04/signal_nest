@@ -81,6 +81,12 @@ mock_provider "aws" {
       hosted_zone_id = "ZSYNTHCLOUDFRONT0000"
     }
   }
+  # P6-INF-4: every alarm's actions name the alarm topic, and the provider validates them as ARNs.
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:us-east-1:111122223333:signalnest-staging-alarms"
+    }
+  }
 }
 
 # The revision reader composes under the aliased provider (providers.tf); it must be mocked
@@ -147,7 +153,13 @@ variables {
     rds_freeable_memory_low_bytes = 100000000
     redis_cpu_high_percent        = 80
     redis_memory_high_percent     = 80
+    api_5xx_percent               = 5
+    api_p95_latency_ms            = 1000
+    alb_5xx_count_per_period      = 10
   }
+  alarm_notification_email     = "alerts@example.com"
+  audit_log_retention_days     = 365
+  alb_log_retention_days       = 90
   staging_window_active        = true
   mail_sending_identity_domain = "mail.synthetic.example.com"
   mail_from_address            = "no-reply@mail.synthetic.example.com"

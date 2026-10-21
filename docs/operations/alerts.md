@@ -14,6 +14,36 @@ action**, and the **backing metric/endpoint**.
 Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
 [incident_response.md](./incident_response.md).
 
+## Delivery and the alarms implemented in IaC (P6-INF-4/-5/-6; branch `feat/p6-alerting-iac-01`, not merged, nothing applied)
+
+- **Destination.** Every CloudWatch alarm of `infra/aws/modules/observability` notifies one
+  module-owned SNS topic (`<prefix>-alarms`, encrypted with the module's alerts key) on ALARM
+  **and** OK. The human destination is one e-mail subscription; its address is the REQUIRED
+  root input `alarm_notification_email`, supplied only through a git-ignored `*.tfvars` (never
+  committed). **AWS creates it as `PendingConfirmation` and delivers nothing until the
+  recipient clicks the confirmation link AWS e-mails** — a live human act no apply performs;
+  an unconfirmed subscription lapses after three days and the next plan re-creates it. Verify
+  with a read of the topic's subscriptions (`sns list-subscriptions-by-topic`: a real ARN, not
+  `PendingConfirmation`).
+- **§1 API 5xx error ratio** → alarm `<prefix>-api-5xx-ratio`: `100 * FILL(5xx, 0) / all` over
+  one 5-minute period, `>` `alarm_thresholds.api_5xx_percent` (this document's starting point:
+  2 % warn, 5 % page — one threshold per alarm; the operator picks it). Missing data (no
+  requests) is not breaching.
+- **§2 API latency p95** → alarm `<prefix>-api-p95-latency`: p95 of `http_request_duration_ms`
+  over two consecutive 5-minute periods, `>` `alarm_thresholds.api_p95_latency_ms` (starting
+  point 1000).
+- Both read the CloudWatch EMF metrics the API writes to its log stream (P6-INF-5,
+  `apps/api/app/core/metrics_emf.py`; namespace `<prefix>/app`, dimensions `service`,
+  `environment` and, for the 5xx series, `outcome` + `status_class`). The restart-churn
+  `service_startups_total` and the job metrics are exported the same way but have no alarm yet.
+- **Load balancer (P6-INF-6)**, only while a staging window is open: `<prefix>-alb-elb-5xx`
+  and `<prefix>-alb-target-5xx` (sum per 5 minutes ≥ `alarm_thresholds.alb_5xx_count_per_period`)
+  and `<prefix>-alb-unhealthy-hosts` (any unhealthy API target for 3 consecutive minutes).
+  Gap: with the single API task gone and no traffic, no ALB alarm fires (the ECS service
+  alarms' missing-data rule does).
+- Not covered by this tranche: alerts §3–§20 other than the above, and the CloudTrail
+  detection gap (`P6-INF-16`).
+
 ## API availability
 
 ### 1. API 5xx error ratio high

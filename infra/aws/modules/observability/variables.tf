@@ -65,6 +65,11 @@ variable "alarm_thresholds" {
     rds_freeable_memory_low_bytes = number
     redis_cpu_high_percent        = number
     redis_memory_high_percent     = number
+    # P6-INF-5 / P6-INF-6 (optional here so existing callers keep their shape; the staging
+    # root requires all three). Required by a precondition on each alarm that uses them.
+    api_5xx_percent          = optional(number)
+    api_p95_latency_ms       = optional(number)
+    alb_5xx_count_per_period = optional(number)
   })
 
   validation {
@@ -88,10 +93,19 @@ variable "alarm_thresholds" {
     ])
     error_message = "log_error_count_per_period, rds_free_storage_low_bytes, and rds_freeable_memory_low_bytes must be positive."
   }
+
+  validation {
+    condition = alltrue([
+      try(var.alarm_thresholds.api_5xx_percent == null || (var.alarm_thresholds.api_5xx_percent > 0 && var.alarm_thresholds.api_5xx_percent <= 100), false),
+      try(var.alarm_thresholds.api_p95_latency_ms == null || var.alarm_thresholds.api_p95_latency_ms > 0, false),
+      try(var.alarm_thresholds.alb_5xx_count_per_period == null || var.alarm_thresholds.alb_5xx_count_per_period >= 1, false),
+    ])
+    error_message = "api_5xx_percent must be greater than 0 and at most 100, api_p95_latency_ms positive, and alb_5xx_count_per_period at least 1 (each may be null only where its alarm is not created)."
+  }
 }
 
 variable "sns_topic_arn" {
-  description = "Optional pre-existing SNS topic ARN for alarm and OK actions. This module never creates a notification destination; null means alarms have no actions (state changes remain visible in CloudWatch)."
+  description = "Optional ADDITIONAL pre-existing SNS topic ARN for alarm and OK actions. Every alarm always notifies the module-owned topic (alerting.tf, P6-INF-4); null adds nothing."
   type        = string
   default     = null
   nullable    = true
@@ -99,5 +113,67 @@ variable "sns_topic_arn" {
   validation {
     condition     = var.sns_topic_arn == null || can(regex("^arn:[^:]+:sns:", var.sns_topic_arn))
     error_message = "sns_topic_arn must be null or an SNS topic ARN (arn:<partition>:sns:...)."
+  }
+}
+
+# --- P6-INF-4 / -5 / -6 / -13 ------------------------------------------------------------
+
+variable "alarm_notification_email" {
+  description = "E-mail address subscribed to the alarm topic (the human destination, P6-INF-4). An OPERATOR VALUE supplied through a git-ignored *.tfvars; never committed. AWS holds the subscription as PendingConfirmation until the recipient confirms it (a live human act). Null = no subscription (the staging root requires an address)."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.alarm_notification_email == null || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alarm_notification_email))
+    error_message = "alarm_notification_email must be null or a plausible email address (local@domain.tld)."
+  }
+}
+
+variable "alb_alarms_enabled" {
+  description = "Create the three ALB alarms (P6-INF-6). The root wires the alb module's `alb_enabled` output (its window input), which is known at plan time; the alarms then exist exactly while the windowed load balancer does."
+  type        = bool
+  default     = false
+}
+
+variable "alb_arn_suffix" {
+  description = "LoadBalancer dimension value (the alb module's `alb_arn_suffix` output). Required while alb_alarms_enabled is true; null while the window is closed."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "api_target_group_arn_suffix" {
+  description = "TargetGroup dimension value (the alb module's `api_target_group_arn_suffix` output). Required while alb_alarms_enabled is true; null while the window is closed."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "app_metrics" {
+  description = "Where the API's CloudWatch EMF metrics land (P6-INF-5): the namespace and the `service`/`environment` dimension values the application stamps (METRICS_NAMESPACE, SERVICE_NAME, ENVIRONMENT of the API task). Null = no application-metric alarms."
+  type = object({
+    namespace   = string
+    service     = string
+    environment = string
+  })
+  default  = null
+  nullable = true
+
+  validation {
+    condition     = var.app_metrics == null || try(can(regex("^[A-Za-z0-9._/#:-]{1,255}$", var.app_metrics.namespace)) && !startswith(var.app_metrics.namespace, "AWS/"), false)
+    error_message = "app_metrics.namespace must be a custom CloudWatch namespace: 1-255 of letters, digits and . - _ / # :, not starting with AWS/ (the application applies the same rule)."
+  }
+}
+
+variable "audit_log_retention_days" {
+  description = "Days the audit bucket keeps a delivered CloudTrail log or digest object before it expires; a deleted or overwritten (noncurrent) version is kept for the same number of days (worst-case lifetime: twice this). The operator's retention decision (coupled to the privacy lane's retention schedule); null = no lifecycle rule. The staging root requires a value."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.audit_log_retention_days == null || (try(var.audit_log_retention_days == floor(var.audit_log_retention_days), false) && try(var.audit_log_retention_days >= 1 && var.audit_log_retention_days <= 3650, false))
+    error_message = "audit_log_retention_days must be null or a whole number of days between 1 and 3650."
   }
 }

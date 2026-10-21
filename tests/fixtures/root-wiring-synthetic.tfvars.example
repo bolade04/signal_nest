@@ -32,7 +32,15 @@ alarm_thresholds = {
   rds_freeable_memory_low_bytes = 100000000
   redis_cpu_high_percent        = 80
   redis_memory_high_percent     = 80
+  api_5xx_percent               = 5
+  api_p95_latency_ms            = 1000
+  alb_5xx_count_per_period      = 10
 }
+
+# P6-INF-4 / P6-INF-13: required root inputs. Synthetic documentation values only.
+alarm_notification_email = "alerts@example.com"
+audit_log_retention_days = 365
+alb_log_retention_days   = 90
 
 # Staging window (REQUIRED root input, no default). true keeps the positive-control
 # plan's resource set identical to the always-on composition it has always planned;

@@ -65,9 +65,15 @@ phase        = "4B-C"
 #   rds_freeable_memory_low_bytes = <positive-bytes>
 #   redis_cpu_high_percent        = <1-100>
 #   redis_memory_high_percent     = <1-100>
+#   api_5xx_percent               = <0-100>          # alerts.md §1 starting point: 2 (warn) / 5 (page) — uncalibrated
+#   api_p95_latency_ms            = <positive-ms>    # alerts.md §2 starting point: 1000 — uncalibrated
+#   alb_5xx_count_per_period      = <count-per-5-min>
 # }
-# sns_topic_arn             = null                          # or "arn:aws:sns:<region>:<account>:<topic>"
+# sns_topic_arn             = null                          # optional EXTRA topic; the module-owned alarm topic is always notified
 # budget_notification_email = "<ops-alias@example.com>"
+# alarm_notification_email  = "<on-call-address@example.com>"  # REQUIRED (P6-INF-4); AWS sends a confirmation link the recipient must click
+# audit_log_retention_days  = <whole-days>   # REQUIRED (P6-INF-13); operator retention decision for the CloudTrail audit bucket
+# alb_log_retention_days    = <whole-days>   # REQUIRED (P6-INF-13); ALB logs carry client IP addresses — operator retention decision
 
 # --- Monthly AWS Budget limit (USD) --------------------------------------------------
 # 20 = the operator's CURRENT limit, USD 20 TOTAL per month (recorded 2026-09-30), which

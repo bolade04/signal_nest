@@ -194,6 +194,21 @@ output "log_group_names" {
   value       = module.ecs.log_group_names
 }
 
+output "alarm_topic_arn" {
+  description = "ARN of the alarm notification topic every observability alarm notifies (P6-INF-4). Its e-mail subscription stays PendingConfirmation until the recipient confirms (live human act)."
+  value       = module.observability.alarm_topic_arn
+}
+
+output "alarm_names" {
+  description = "Keys of every observability alarm in this configuration (the ALB alarms appear only while the window is open; P6-INF-6). Names only — the operator's E4 checklist reads them."
+  value       = sort(keys(module.observability.alarm_arns))
+}
+
+output "app_metrics_namespace" {
+  description = "CloudWatch namespace of the application's EMF metrics (P6-INF-5); configuration echo."
+  value       = local.app_metrics_namespace
+}
+
 output "trail_arn" {
   description = "ARN of the CloudTrail audit trail (from the observability module)."
   value       = module.observability.trail_arn

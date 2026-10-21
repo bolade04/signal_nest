@@ -165,6 +165,50 @@ resource "aws_s3_bucket_versioning" "alb_logs" {
   }
 }
 
+# Retention (P6-INF-13): the bucket is versioned, so expiring a current object only adds a
+# delete marker; the noncurrent rule then removes the old version (and any version a principal
+# deleted or overwrote) after the same number of days, and the expired delete markers are
+# cleaned up. ELB log delivery does not use multipart uploads; the abort rule mirrors the
+# SPA bucket's hygiene rule. The duration is the operator's (var.log_retention_days); with no
+# duration (null) no rule exists. Not windowed: the bucket and its logs persist across windows.
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
+  count = var.log_retention_days == null ? 0 : 1
+
+  bucket = aws_s3_bucket.alb_logs.id
+
+  rule {
+    id     = "expire-alb-logs"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = var.log_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.log_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  rule {
+    id     = "remove-expired-delete-markers"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.alb_logs]
+}
+
 # ELB-log-delivery-only writes + TLS-only access. The configured region
 # (us-east-1) predates August 2022, so ALB logs are delivered by the REGIONAL
 # ELB SERVICE ACCOUNT root principal — not the `logdelivery.elasticloadbalancing`
