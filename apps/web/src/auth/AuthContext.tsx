@@ -61,6 +61,12 @@ interface AuthContextValue {
    * bounded). Clears locally on 204 or 401 only; on any other failure nothing changes.
    */
   signOutEverywhere: () => Promise<SignOutEverywhereOutcome>;
+  /**
+   * True once the server has refused this browser's session (a 401 while it was stored)
+   * and until the next sign-in; any other clear resets it (P6-UI-013). ProtectedRoute
+   * hands it to `/sign-in` as a notice.
+   */
+  sessionEnded: boolean;
   /** Path the user was trying to reach before being bounced to sign-in. */
   intendedPath: string | null;
   setIntendedPath: (path: string | null) => void;
@@ -85,6 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserOut | null>(null);
   const [memberships, setMemberships] = useState<MembershipOut[]>([]);
   const [status, setStatus] = useState<AuthContextValue['status']>(token ? 'loading' : 'unauthenticated');
+  const [sessionEnded, setSessionEnded] = useState(false);
   const intendedPathRef = useRef<string | null>(null);
   const [intendedPath, setIntendedPathState] = useState<string | null>(null);
   // Session re-reads in flight (refreshSession). A sign-out aborts them: once the server
@@ -103,6 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(session.user);
     setMemberships(session.memberships);
     setStatus('authenticated');
+    setSessionEnded(false);
   }, []);
 
   const clearLocalSession = useCallback(() => {
@@ -112,6 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setMemberships([]);
     setStatus('unauthenticated');
+    setSessionEnded(false);
     queryClient.clear();
   }, [queryClient]);
 
@@ -180,10 +189,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Register the 401 handler once so any expired-token response clears the session.
-  // Local only: the refused request already shows the server session has ended.
+  // Local only: the refused request already shows the server session has ended, and
+  // sign-in will say so (P6-UI-013). A sign-out that meets this 401 clears again after
+  // it, which resets the flag: a session the user ended is not reported as ended.
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      if (localStorage.getItem(TOKEN_KEY)) clearLocalSession();
+      if (!localStorage.getItem(TOKEN_KEY)) return;
+      clearLocalSession();
+      setSessionEnded(true);
     });
     return () => setUnauthorizedHandler(null);
   }, [clearLocalSession]);
@@ -276,6 +289,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       endSessionAfterCredentialChange,
       signOut,
       signOutEverywhere,
+      sessionEnded,
       intendedPath,
       setIntendedPath,
     }),
@@ -293,6 +307,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       endSessionAfterCredentialChange,
       signOut,
       signOutEverywhere,
+      sessionEnded,
       intendedPath,
       setIntendedPath,
     ],
