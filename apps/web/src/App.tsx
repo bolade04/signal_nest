@@ -18,7 +18,7 @@ import { OpportunitiesPage } from '@/pages/Opportunities';
 import { OpportunityDetailPage } from '@/pages/OpportunityDetail';
 import { OperationsPage } from '@/pages/operations/Operations';
 import { SettingsPage } from '@/pages/Settings';
-import { NotFoundPage } from '@/pages/NotFound';
+import { NotFoundLayout, NotFoundPage } from '@/pages/NotFound';
 
 export function App() {
   return (
@@ -46,8 +46,11 @@ export function App() {
           <Route element={<RequireOperator />}>
             <Route path="operations" element={<OperationsPage />} />
           </Route>
-          <Route path="*" element={<NotFoundPage />} />
         </Route>
+      </Route>
+      {/* Outside ProtectedRoute: an unknown path is a 404 signed in or out (P6-UI-024). */}
+      <Route element={<NotFoundLayout />}>
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );

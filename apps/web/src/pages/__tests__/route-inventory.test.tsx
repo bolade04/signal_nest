@@ -150,10 +150,14 @@ describe('route inventory (plan §5A.3)', () => {
     expect(routerLocation(screen)).toBe('/');
   });
 
-  it('sends an unknown path to sign-in when signed out', async () => {
+  // Changed on purpose by P6-UI-024 (after the react-router 7 migration): this case used
+  // to pin the redirect to sign-in that the row removes.
+  it('renders the not-found page at an unknown path when signed out, without the shell', async () => {
     const screen = renderApp(app, { route: '/no-such-page', authed: false });
-    expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument();
-    expect(routerLocation(screen)).toBe('/sign-in');
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe('/no-such-page');
+    expect(screen.queryByRole('heading', { level: 1, name: 'Sign in' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).not.toBeInTheDocument();
   });
 
   it('navigates by sidebar link, card link and history back', async () => {
@@ -187,11 +191,6 @@ describe('route inventory (plan §5A.3)', () => {
  */
 describe('sign-in returns only to app paths (PR #234 F1)', () => {
   it.each([
-    ['//evil.example', '/evil.example', 'Page not found'],
-    ['/\\evil.example', '/evil.example', 'Page not found'],
-    ['/\t/evil.example', '/evil.example', 'Page not found'],
-    ['/%5Cevil.example', '/%5Cevil.example', 'Page not found'],
-    ['/%2F%2Fevil.example', '/%2F%2Fevil.example', 'Page not found'],
     ['/settings?next=//evil.example', '/settings?next=//evil.example', 'Settings'],
     ['/settings?from=deep-link', '/settings?from=deep-link', 'Settings'],
   ])('%j signed out lands on %j after sign-in', async (path, landing, heading) => {
@@ -204,20 +203,42 @@ describe('sign-in returns only to app paths (PR #234 F1)', () => {
     expect(routerLocation(screen)).toBe(landing);
   });
 
+  // Since P6-UI-024 an unknown path signed out is a 404 at that address rather than a
+  // redirect to sign-in, so these paths are never stored as the intended path at all.
+  // The F1 guarantee still holds and is what these cases pin: signing in from there
+  // lands inside the app (on the overview), never on another origin.
   it.each([
-    ['//evil.example', '/evil.example'],
-    ['/%5Cevil.example', '/%5Cevil.example'],
-    ['/%2F%2Fevil.example', '/%2F%2Fevil.example'],
-  ])('%j under the production router lands on %j after sign-in', async (path, landing) => {
-    // The address bar holds the path on this origin, as a browser does for <app>//evil.example.
-    const screen = renderProductionApp(app, `${window.location.origin}${path}`);
-    expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument();
-
-    await screen.user.click(screen.getByRole('button', { name: /use demo account/i }));
+    ['//evil.example'],
+    ['/\\evil.example'],
+    ['/\t/evil.example'],
+    ['/%5Cevil.example'],
+    ['/%2F%2Fevil.example'],
+  ])('%j signed out shows the 404, and signing in from it lands on the overview', async (path) => {
+    const screen = renderApp(app, { route: path, authed: false });
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
-    expect(routerLocation(screen)).toBe(landing);
-    expect(window.location.origin + window.location.pathname).toBe(`${window.location.origin}${landing}`);
+    expect(screen.queryByRole('heading', { level: 1, name: 'Sign in' })).not.toBeInTheDocument();
+
+    await screen.user.click(screen.getByRole('link', { name: /^sign in$/i }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument();
+    await screen.user.click(screen.getByRole('button', { name: /use demo account/i }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe('/');
   });
+
+  it.each([['//evil.example'], ['/%5Cevil.example'], ['/%2F%2Fevil.example']])(
+    '%j under the production router shows the 404, and signing in from it lands on the overview',
+    async (path) => {
+      // The address bar holds the path on this origin, as a browser does for <app>//evil.example.
+      const screen = renderProductionApp(app, `${window.location.origin}${path}`);
+      expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+
+      await screen.user.click(screen.getByRole('link', { name: /^sign in$/i }));
+      await screen.user.click(await screen.findByRole('button', { name: /use demo account/i }));
+      expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+      expect(routerLocation(screen)).toBe('/');
+      expect(window.location.origin + window.location.pathname).toBe(`${window.location.origin}/`);
+    },
+  );
 
   it('stores only an app path, whichever producer sets it (ProtectedRoute, sign-out)', async () => {
     function Producer() {
