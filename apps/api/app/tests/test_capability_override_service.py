@@ -1319,13 +1319,22 @@ _ALLOWED_CONSUMER_REL = "system/internal_capabilities_routes.py"
 #: The opportunity-feedback live gate — sanctioned by Phase 4B-A to consume ONLY the
 #: resolver (never the service), relative to ``app/``.
 _FEEDBACK_GATE_REL = "feedback/routes.py"
+#: The scout-scheduling and RSS live gates — sanctioned by P6-CAP-1 to consume ONLY the
+#: resolver, relative to ``app/``. Each capability has one decision call site
+#: (``schedules.resolve_scheduling_capability`` / ``connectors.resolve_rss_capability``);
+#: the route module and the connector registry import only the resolver's result type
+#: (``CapabilityResolution``) to accept that decision.
+_SCHEDULING_GATE_RELS = ("scouting_requests/schedules.py", "scouting_requests/routes.py")
+_RSS_GATE_RELS = ("scouting_requests/connectors.py", "connectors/registry.py")
 #: Sanctioned production consumers of the capability control plane, each mapped to the
 #: exact control-plane modules it may import. The operator router (4A-C.4) may consume
-#: both the service and the resolver; the opportunity-feedback gate (4B-A) may consume
-#: only the resolver. Every other production module must consume neither.
+#: both the service and the resolver; the opportunity-feedback gate (4B-A) and the
+#: scheduling and RSS gates (P6-CAP-1) may consume only the resolver. Every other
+#: production module must consume neither.
 _SANCTIONED_CONSUMERS = {
     _ALLOWED_CONSUMER_REL: frozenset(_CONTROL_PLANE_MODULES),
     _FEEDBACK_GATE_REL: frozenset({_RESOLVER_MODULE}),
+    **{rel: frozenset({_RESOLVER_MODULE}) for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS},
 }
 
 
@@ -1386,16 +1395,17 @@ def test_only_sanctioned_modules_consume_the_service_or_resolver() -> None:
     """The capability control plane has a closed allow-list of production consumers
     (§26, #22).
 
-    Reframed across 4A-C.4 → 4B-A from the 4A-C.3.6 absolute prohibition. 4A-C.4 added
-    the operator router as the first sanctioned consumer of the resolver (4A-C.4.2) and
-    the service (4A-C.4.3+); 4B-A adds the opportunity-feedback gate as a second consumer
-    of the **resolver only**. This guard parses every production module under ``app/`` and
+    Reframed across 4A-C.4 → 4B-A → P6-CAP-1 from the 4A-C.3.6 absolute prohibition.
+    4A-C.4 added the operator router as the first sanctioned consumer of the resolver
+    (4A-C.4.2) and the service (4A-C.4.3+); 4B-A adds the opportunity-feedback gate as a
+    consumer of the **resolver only**; P6-CAP-1 adds the scheduling and RSS gates, also
+    **resolver only**. This guard parses every production module under ``app/`` and
     asserts each module's control-plane imports (``app.capabilities.service`` /
     ``app.capabilities.resolver``, via absolute *or* relative import) stay within the exact
-    set sanctioned for that module: the operator router may import both; the feedback gate
-    may import only the resolver (importing the service would fail here); every OTHER
-    production module — every remaining live gate / worker / scheduler / connector — must
-    import neither, so no capability can be re-armed off the audited surface.
+    set sanctioned for that module: the operator router may import both; the gates may
+    import only the resolver (importing the service would fail here); every OTHER
+    production module must import neither, so no capability can be re-armed off the
+    audited surface.
     """
     offenders = {}
     for path in _production_modules():
@@ -1455,3 +1465,11 @@ def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None
     feedback_imports = _control_plane_imports(feedback_path, feedback_tree)
     assert _RESOLVER_MODULE in feedback_imports
     assert _SERVICE_MODULE not in feedback_imports
+    # The P6-CAP-1 entries are grounded and narrow the same way: each genuinely imports
+    # the resolver and none imports the service.
+    for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS:
+        path = _APP_DIR / rel
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imports = _control_plane_imports(path, tree)
+        assert _RESOLVER_MODULE in imports, rel
+        assert _SERVICE_MODULE not in imports, rel

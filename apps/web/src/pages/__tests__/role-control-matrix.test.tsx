@@ -462,20 +462,13 @@ const SWITCH_PAGES: SwitchPage[] = [
     controls: [/run now/i, /^pause$/i, /^cancel$/i],
   },
   {
-    // The schedule controls exist only while scheduling is live, so it is switched on here.
+    // The schedule controls exist only while scheduling is live for the workspace, so
+    // its workspace-effective lookup (P6-UI-006) is switched on here.
     page: 'Scout request detail — schedule (scheduling enabled)',
     route: '/scout-requests/scout-loc-dallas',
     handlers: [
       SCHEDULE_404,
-      http.get(P('/system/capabilities'), () =>
-        HttpResponse.json({
-          app_mode: 'local',
-          environment: 'development',
-          is_local_mode: true,
-          all_configured: true,
-          features: { opportunity_feedback_enabled: false, scout_scheduling_enabled: true, connector_rss_enabled: false },
-        }),
-      ),
+      http.get(P('/workspaces/:workspaceId/scheduling-capability'), () => HttpResponse.json({ enabled: true })),
     ],
     ready: async (s) => {
       await s.findByRole('heading', { name: 'Dallas demand scan' });
@@ -874,7 +867,7 @@ const RETRY_ROWS: RetryRow[] = [
     recovered: (s) => s.findByText(/^running$/i),
   },
   {
-    site: 'SchedulePanel.tsx:92',
+    site: 'SchedulePanel.tsx:100',
     route: '/scout-requests/scout-loc-dallas',
     fails: '/workspaces/:ws/scout-requests/:id/schedule',
     handlers: [SCHEDULE_404],

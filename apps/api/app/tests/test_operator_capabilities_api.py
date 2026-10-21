@@ -231,10 +231,19 @@ class TestDarkState:
         assert settings.opportunity_feedback_enabled is False
 
     def test_registry_read_only_reports_future_activation_phase(self, h):
-        # Every capability is still dark: the registry only documents the *future*
-        # activation phase; it activates nothing now.
-        for item in h.get(REGISTRY_PATH).json()["items"]:
-            assert item["future_activation_phase"]
+        # Every capability is still dark: the registry only describes the *future*
+        # activation phase; it activates nothing now. Only feedback has a plan record
+        # naming its activation phase; scheduling and RSS report null rather than a
+        # phase whose plan excludes them (P6-CAP-3).
+        by_cap = {
+            i["capability"]: i["future_activation_phase"]
+            for i in h.get(REGISTRY_PATH).json()["items"]
+        }
+        assert by_cap == {
+            "opportunity_feedback": "4B",
+            "scout_scheduling": None,
+            "connector_rss": None,
+        }
 
     def test_router_imports_the_resolver_as_the_sanctioned_consumer(self):
         # 4A-C.4.2 makes the operator router the FIRST sanctioned production consumer

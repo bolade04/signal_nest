@@ -62,24 +62,32 @@ workspace to a non-enumerating 404 — never revealing whether the workspace exi
 Because all three global flags stay ``False``, every capability resolves disabled via
 ``global_configuration`` unless an honored per-workspace override is present.
 
-**Which capabilities have a live gate.** This is the fact these routes turn on, and it
-is NOT uniform across the three:
+**Which capabilities have a live gate.** This is the fact these routes turn on. Since
+P6-CAP-1 all three enforce through the resolver, so what the effective route reports for
+a workspace is what that workspace's endpoints and worker do — but the consequences of an
+override still differ by policy:
 
-* ``opportunity_feedback`` — **has a live resolver-backed gate** since Phase 4B-A
+* ``opportunity_feedback`` — **live resolver-backed gate** since Phase 4B-A
   (:func:`app.feedback.routes._resolve_feedback_capability`, shared by the enforcement
-  gate and the customer reflection). An honored enable override therefore makes the
-  customer feedback endpoints **serve for that workspace** while the global flag stays
-  ``False``. Recording such an override IS an activation for that workspace.
-* ``scout_scheduling`` — ``workspace_enableable=True``, so an override can be recorded
-  and this surface will report ``effective_enabled=true`` — but schedule enforcement
-  reads the RAW global flag (:mod:`app.scouting_requests.routes`), so the mutations
-  still answer 503. Here the override changes what this surface REPORTS, not what the
-  endpoints DO.
-* ``connector_rss`` — not ``workspace_enableable``; an ``enabled=True`` override is
-  refused 422, and enforcement reads the raw flag.
+  gate and the customer reflection). An honored enable override makes the customer
+  feedback endpoints **serve for that workspace** while the global flag stays ``False``.
+  Recording such an override IS an activation for that workspace.
+* ``scout_scheduling`` — **live resolver-backed gate** since P6-CAP-1
+  (:func:`app.scouting_requests.schedules.resolve_scheduling_capability`, shared by the
+  schedule mutation gate, the customer reflection, tick seeding and the tick itself).
+  ``workspace_enableable=True``, so an honored enable override makes schedule mutations
+  **serve** and ticks **fan out scouting runs** for that workspace while the global flag
+  stays ``False``. Recording such an override IS an activation for that workspace, and
+  turning the global flag off no longer stops it — clear the override (or record a
+  disable override) as well.
+* ``connector_rss`` — **live resolver-backed selection** since P6-CAP-1
+  (:func:`app.scouting_requests.connectors.resolve_rss_capability`). Not
+  ``workspace_enableable``: an ``enabled=True`` override is refused 422 here and would
+  resolve to the secure default anyway, so only the global flag can turn RSS on; a
+  disable override turns it off for one workspace.
 
-So "recording intent is not activation" holds for scheduling and RSS and is **false for
-feedback**. Do not generalise in either direction.
+So "recording intent is not activation" is **false for feedback and scheduling** and
+holds only for RSS enables (which cannot be recorded). Do not generalise.
 
 Every route requires an authenticated operator (``require_operator``: 401 anonymous,
 403 non-operator) and returns only bounded, secret-free governance metadata. The
@@ -132,8 +140,9 @@ class CapabilityRegistryItemOut(BaseModel):
     A secret-free view of :class:`app.capabilities.registry.CapabilityPolicy` — the
     typed capability, its human-safe label, the bound global-flag attribute name
     (non-secret, internal; included for operator explainability), whether an override
-    may enable/disable it per workspace, and the documentation-only future-activation
-    phase. Carries no credential, URL, callable, or mutable registry object.
+    may enable/disable it per workspace, and the descriptive future-activation phase
+    (``None`` when no plan record names one — P6-CAP-3). Carries no credential, URL,
+    callable, or mutable registry object.
     """
 
     capability: Capability
@@ -141,7 +150,7 @@ class CapabilityRegistryItemOut(BaseModel):
     global_flag_attr: str
     workspace_enableable: bool
     workspace_disableable: bool
-    future_activation_phase: str
+    future_activation_phase: str | None
 
 
 class CapabilityRegistryOut(BaseModel):
@@ -338,11 +347,11 @@ def internal_capability_effective(
     every capability resolves disabled via ``global_configuration`` — the surface is
     dark. A persisted enable on a ``workspace_enableable`` capability would show
     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
-    while ``global_flag`` stays ``False``. No GLOBAL flag is changed — but whether a live
-    gate consumes that decision depends on the capability: ``opportunity_feedback`` has one
-    (Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``
-    and ``connector_rss`` do not, so their enforcement still reads the raw flag. For those
-    two this surface can report ``effective_enabled=true`` while the endpoints still 503.
+    while ``global_flag`` stays ``False``. No GLOBAL flag is changed, and every capability's
+    live enforcement consumes this same decision: ``opportunity_feedback`` since Phase
+    4B-A, ``scout_scheduling`` (schedule mutations, tick seeding and the tick itself) and
+    ``connector_rss`` (connector selection) since P6-CAP-1. What this surface reports for
+    a workspace is therefore what that workspace's endpoints and worker do (P6-UI-006).
     """
     _validate_effective_scope(db, organization_id=organization_id, workspace_id=workspace_id)
     settings = get_settings()

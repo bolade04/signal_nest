@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
+import type { CapabilityRegistryItem } from '@/api/types';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -276,7 +277,7 @@ const capabilityRegistryItems = [
     global_flag_attr: 'scout_scheduling_enabled',
     workspace_enableable: true,
     workspace_disableable: true,
-    future_activation_phase: '4B',
+    future_activation_phase: null,
   },
   {
     capability: 'connector_rss',
@@ -284,9 +285,11 @@ const capabilityRegistryItems = [
     global_flag_attr: 'connector_rss_enabled',
     workspace_enableable: false,
     workspace_disableable: true,
-    future_activation_phase: '4B',
+    future_activation_phase: null,
   },
-] as const;
+  // Checked against the generated contract so the mirror cannot drift from the real
+  // response model (e.g. a phase the registry no longer claims — P6-CAP-3).
+] as const satisfies readonly CapabilityRegistryItem[];
 
 interface OverrideRow {
   id: string;
@@ -1119,6 +1122,11 @@ export const handlers = [
   // here, but a dark-state assertion must prove it settled rather than rely on
   // an unstubbed request throwing.
   http.get(P('/workspaces/:workspaceId/feedback-capability'), () =>
+    HttpResponse.json({ enabled: false }),
+  ),
+  // Workspace-effective scheduling availability (P6-UI-006). Dark by default for the
+  // same reason, with the same trade-off, as the feedback handler above.
+  http.get(P('/workspaces/:workspaceId/scheduling-capability'), () =>
     HttpResponse.json({ enabled: false }),
   ),
 

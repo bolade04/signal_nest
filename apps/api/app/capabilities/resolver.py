@@ -27,17 +27,22 @@ Deny-biased posture (Phase 4A-C.2 plan §8.9, §8.14, §8.18):
   ``except``-to-disabled; the safety comes from the precedence *shape*. A failed
   lookup aborts (a 5xx for a future caller) rather than defaulting to enabled.
 
-**Consumption, as of Phase 6U-1H** (this paragraph described 4A-C, when the
-resolver shipped unconsumed; that has not been true since 4B-A):
+**Consumption, as of P6-CAP-1** (this paragraph described 4A-C, when the resolver
+shipped unconsumed; that has not been true since 4B-A). Every registered capability's
+enforcement now goes through this resolver, each via one per-capability helper that the
+enforcement point and its reflection share:
 
-* ``opportunity_feedback`` — LIVE. :mod:`app.feedback.routes` calls this resolver
-  through a single shared helper used by both the enforcement gate and the
-  customer-facing reflection. An honored enable override therefore makes that
-  workspace's feedback endpoints serve while ``opportunity_feedback_enabled``
-  stays ``False``.
-* ``scout_scheduling`` and ``connector_rss`` — NOT consumed here. Their gates read
-  their raw global flags directly, so a recorded override changes what the
-  operator surface reports, not what those endpoints do.
+* ``opportunity_feedback`` — LIVE since 4B-A (:mod:`app.feedback.routes`). An honored
+  enable override makes that workspace's feedback endpoints serve while
+  ``opportunity_feedback_enabled`` stays ``False``.
+* ``scout_scheduling`` — LIVE since P6-CAP-1
+  (:func:`app.scouting_requests.schedules.resolve_scheduling_capability`): schedule
+  mutations, tick seeding and the tick's own gate. An honored enable override makes
+  that workspace's schedules run while ``scout_scheduling_enabled`` stays ``False``.
+* ``connector_rss`` — LIVE since P6-CAP-1
+  (:func:`app.scouting_requests.connectors.resolve_rss_capability`): live connector
+  selection. Not ``workspace_enableable``, so only the global flag can enable it; a
+  disable override (or the ceiling) turns it off for a workspace.
 
 With all three global flags ``False`` and no override row, every capability still
 resolves **disabled** via the global-configuration rule.

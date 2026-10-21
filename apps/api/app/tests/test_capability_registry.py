@@ -5,12 +5,14 @@ precedence, no persistence and no gate here. What is covered: the closed
 ``Capability`` value set and its exact binding to the global feature flags, the
 frozen/immutable policy metadata, deterministic enumeration, strict string
 conversion, the sorted persisted-value list the migration derives its check
-constraint from, and the RSS non-enableable governance policy.
+constraint from, the RSS non-enableable governance policy, and (P6-CAP-3) that each
+``future_activation_phase`` agrees with the plan record it claims.
 """
 
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
@@ -115,8 +117,76 @@ def test_every_capability_is_ceiling_subject_and_workspace_scoped() -> None:
         policy = get_policy(capability)
         assert policy.subject_to_safety_ceiling is True
         assert policy.requires_workspace_context is True
-        assert policy.future_activation_phase == "4B"
         assert policy.label and not policy.label.startswith(" ")
+
+
+# --------------------------------------------------------------------------- #
+# P6-CAP-3 — future_activation_phase must agree with the plan record it names
+#
+# Every entry once read "4B" and a blanket ``== "4B"`` assertion enforced it, so the
+# test suite pinned a value the Phase 4B plan contradicts for two of the three
+# capabilities. These tests check the values against that plan instead of against a
+# copy of themselves.
+# --------------------------------------------------------------------------- #
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+#: Phase -> the plan document that governs it. A capability may claim a phase only if
+#: that phase's plan is listed here and names the capability in its title.
+_PHASE_PLANS = {"4B": _REPO_ROOT / "docs" / "phase-4b-plan.md"}
+
+#: The Phase 4B plan's §15 non-goal that excludes each capability's activation from
+#: all of Phase 4B. Such a capability may never claim "4B".
+_EXCLUDED_FROM_4B = {
+    Capability.SCOUT_SCHEDULING: "scheduling activation",
+    Capability.CONNECTOR_RSS: "RSS activation",
+}
+
+
+def _section(text: str, heading: str) -> str:
+    """The body of the ``## <heading>`` section, up to the next ``## `` heading."""
+    lines = text.splitlines()
+    start = lines.index(heading) + 1
+    end = next(
+        (i for i in range(start, len(lines)) if lines[i].startswith("## ")), len(lines)
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_future_activation_phase_values_are_the_recorded_ones() -> None:
+    assert {c: get_policy(c).future_activation_phase for c in iter_capabilities()} == {
+        Capability.OPPORTUNITY_FEEDBACK: "4B",
+        Capability.SCOUT_SCHEDULING: None,
+        Capability.CONNECTOR_RSS: None,
+    }
+
+
+def test_a_claimed_phase_is_one_whose_plan_names_the_capability() -> None:
+    for capability in iter_capabilities():
+        policy = get_policy(capability)
+        phase = policy.future_activation_phase
+        if phase is None:
+            continue
+        assert phase in _PHASE_PLANS, (
+            f"{capability.value} claims Phase {phase!r}, which has no governing plan "
+            "record registered in _PHASE_PLANS; add the record or clear the claim"
+        )
+        title = _PHASE_PLANS[phase].read_text(encoding="utf-8").splitlines()[0]
+        assert policy.label in title, (
+            f"{capability.value} claims Phase {phase}, but that plan's title "
+            f"({title!r}) does not name {policy.label!r}"
+        )
+
+
+def test_no_capability_claims_phase_4b_when_that_plan_excludes_it() -> None:
+    plan = _PHASE_PLANS["4B"].read_text(encoding="utf-8")
+    non_goals = _section(plan, "## 15. Non-goals")
+    for capability, non_goal in _EXCLUDED_FROM_4B.items():
+        # The record still excludes it — if the plan is ever amended, this fails and
+        # the registry value must be revisited rather than silently kept.
+        assert any(
+            line.startswith(f"- {non_goal}") for line in non_goals.splitlines()
+        ), non_goal
+        assert get_policy(capability).future_activation_phase != "4B", capability.value
 
 
 def test_capability_from_value_is_strict() -> None:

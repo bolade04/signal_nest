@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
 import { queryKeys } from '@/api/queryKeys';
 import { useAuth } from '@/auth/AuthContext';
+import type { ScoutScheduleOut } from '@/api/types';
 import { formatDateTime } from '@/lib/utils';
 import { SchedulePanel } from '@/pages/scouts/SchedulePanel';
 import { server } from '@/test/server';
@@ -32,7 +33,9 @@ function asRole(role: string) {
 }
 
 function scheduleRow(overrides: Record<string, unknown> = {}) {
-  return {
+  // `satisfies` pins the base row to the generated response model, so a field the
+  // API adds or renames fails type-check here instead of passing silently.
+  const base = {
     id: 'sched-1',
     scout_request_id: REQ,
     location_id: 'loc-dallas',
@@ -41,20 +44,29 @@ function scheduleRow(overrides: Record<string, unknown> = {}) {
     enabled: true,
     next_run_at: '2026-07-18T09:00:00Z',
     last_tick_at: '2026-07-17T09:00:00Z',
+    last_tick_failed_at: null,
     created_at: '2026-07-17T08:00:00Z',
     updated_at: '2026-07-17T09:00:00Z',
-    ...overrides,
-  };
+  } satisfies ScoutScheduleOut;
+  return { ...base, ...overrides };
 }
 
 const notFound = () => HttpResponse.json({ error: { code: 'not_found', message: 'no schedule' } }, { status: 404 });
 
+// The panel's gate: the workspace-effective decision (P6-UI-006), never the
+// raw-global runtime summary.
+const SCHEDULING_CAPABILITY = P(`/workspaces/${WS}/scheduling-capability`);
 const CAPABILITIES = P('/system/capabilities');
 
-// Default handlers report every capability dark, mirroring the server defaults.
-// A test that needs scheduling live opts in here; the dark path is therefore
-// what renders unless a test explicitly asks for the enabled one.
+// The default handler reports scheduling dark for every workspace, mirroring the
+// server default. A test that needs scheduling live opts in here; the dark path is
+// therefore what renders unless a test explicitly asks for the enabled one.
 function enableScheduling(enabled = true) {
+  server.use(http.get(SCHEDULING_CAPABILITY, () => HttpResponse.json({ enabled })));
+}
+
+/** A runtime summary whose RAW global scheduling flag is `rawFlag`. */
+function rawGlobalFlag(rawFlag: boolean) {
   server.use(
     http.get(CAPABILITIES, () =>
       HttpResponse.json({
@@ -64,7 +76,7 @@ function enableScheduling(enabled = true) {
         all_configured: true,
         features: {
           opportunity_feedback_enabled: false,
-          scout_scheduling_enabled: enabled,
+          scout_scheduling_enabled: rawFlag,
           connector_rss_enabled: false,
         },
       }),
@@ -84,12 +96,12 @@ function AuthProbe() {
 }
 
 /** Test-only probe exposing cache invalidation from inside the provider tree. */
-let invalidateSummary: () => void = () => {};
+let invalidateCapability: () => void = () => {};
 function CacheProbe() {
   const qc = useQueryClient();
   useEffect(() => {
-    const fn = () => qc.invalidateQueries({ queryKey: queryKeys.runtimeSummary });
-    invalidateSummary = fn;
+    const fn = () => qc.invalidateQueries({ queryKey: queryKeys.schedulingCapability(WS) });
+    invalidateCapability = fn;
     // Without a cleanup the binding outlives the test, and a later caller would
     // invalidate a dead QueryClient while the live one never refetches — a
     // failure that surfaces only as an unexplained timeout. The identity check
@@ -98,13 +110,13 @@ function CacheProbe() {
     // Known limit: this assumes a single mounted probe, which is all any test
     // uses. With two mounted at once, the second unmounting still retires a
     // binding the first is relying on — unfixable while the handle is a module
-    // global, since `invalidateSummary` would have no correct client to target.
+    // global, since `invalidateCapability` would have no correct client to target.
     // If a test ever needs two, return a per-probe handle from `render()`
     // instead of generalising this now.
     return () => {
-      if (invalidateSummary === fn) {
-        invalidateSummary = () => {
-          throw new Error('invalidateSummary called outside a mounted CacheProbe');
+      if (invalidateCapability === fn) {
+        invalidateCapability = () => {
+          throw new Error('invalidateCapability called outside a mounted CacheProbe');
         };
       }
     };
@@ -389,29 +401,19 @@ describe('SchedulePanel — scheduling capability dark', () => {
   });
 
   it('does not expose mutation controls while the capability state is still unknown', async () => {
-    // A deep link to this route resolves the schedule GET before the runtime
-    // summary, so the flag is briefly undefined. Unknown must render as dark.
+    // A deep link to this route resolves the schedule GET before the capability
+    // lookup, so the answer is briefly unknown. Unknown must render as dark.
     server.use(
-      http.get(CAPABILITIES, async () => {
+      http.get(SCHEDULING_CAPABILITY, async () => {
         await new Promise((resolve) => setTimeout(resolve, 80));
-        return HttpResponse.json({
-          app_mode: 'local',
-          environment: 'development',
-          is_local_mode: true,
-          all_configured: true,
-          features: {
-            opportunity_feedback_enabled: false,
-            scout_scheduling_enabled: true,
-            connector_rss_enabled: false,
-          },
-        });
+        return HttpResponse.json({ enabled: true });
       }),
       http.get(SCHEDULE, notFound),
     );
     const screen = render();
 
     await screen.findByText(/scheduling is not available yet/i);
-    // Before the summary resolves the flag is undefined — that must read as dark.
+    // Before the lookup resolves the answer is unknown — that must read as dark.
     expect(screen.queryByRole('button', { name: /schedule daily/i })).not.toBeInTheDocument();
     // Once it resolves enabled, the affordance appears.
     expect(await screen.findByRole('button', { name: /schedule daily/i })).toBeInTheDocument();
@@ -433,11 +435,12 @@ describe('SchedulePanel — capability transitions', () => {
     await screen.user.click(await screen.findByRole('button', { name: /delete/i }));
     expect(await screen.findByRole('button', { name: /delete schedule/i })).toBeInTheDocument();
 
-    // 2. Capability goes dark. `staleTime` means the summary will not refetch on
+    // 2. Capability goes dark. `staleTime` means the lookup will not refetch on
     //    its own, so the cache is invalidated explicitly — this models a
-    //    long-lived session that re-reads the summary after the server changed.
+    //    long-lived session that re-reads it after the server changed (the
+    //    operator console invalidates exactly this key on an override change).
     enableScheduling(false);
-    invalidateSummary();
+    invalidateCapability();
     await screen.findByText(/scheduling is not available yet/i);
     // Awaited, not asserted synchronously: the dialog unmounts through a portal,
     // so a bare query here races the unmount and can report 0 while the dialog
@@ -448,7 +451,7 @@ describe('SchedulePanel — capability transitions', () => {
     // 3. Capability returns: the confirmation must NOT reappear on its own. A
     //    destructive dialog that reopens without a user action is the defect.
     enableScheduling(true);
-    invalidateSummary();
+    invalidateCapability();
     // Wait for the panel to actually come back before judging the dialog:
     // asserting absence mid-refetch would pass for the wrong reason.
     expect(await screen.findByText('Active', {}, { timeout: 4000 })).toBeInTheDocument();
@@ -461,18 +464,10 @@ describe('SchedulePanel — capability transitions', () => {
     expect(await screen.findByRole('button', { name: /^delete$/i })).toBeInTheDocument();
   });
 
-  it('treats a summary that omits the scheduling key as dark', async () => {
+  it('treats a capability answer that omits the enabled key as dark', async () => {
     server.use(
-      http.get(CAPABILITIES, () =>
-        HttpResponse.json({
-          app_mode: 'local',
-          environment: 'development',
-          is_local_mode: true,
-          all_configured: true,
-          // Key absent entirely — must not read as enabled.
-          features: { opportunity_feedback_enabled: false },
-        }),
-      ),
+      // Key absent entirely — must not read as enabled.
+      http.get(SCHEDULING_CAPABILITY, () => HttpResponse.json({})),
       http.get(SCHEDULE, notFound),
     );
     const screen = render();
@@ -485,15 +480,7 @@ describe('SchedulePanel — capability transitions', () => {
     // `=== true` and a truthy check diverge only here. A string "true" from a
     // mis-serialised backend must read as dark, not as permission to mutate.
     server.use(
-      http.get(CAPABILITIES, () =>
-        HttpResponse.json({
-          app_mode: 'local',
-          environment: 'development',
-          is_local_mode: true,
-          all_configured: true,
-          features: { scout_scheduling_enabled: 'true', opportunity_feedback_enabled: false },
-        }),
-      ),
+      http.get(SCHEDULING_CAPABILITY, () => HttpResponse.json({ enabled: 'true' })),
       http.get(SCHEDULE, notFound),
     );
     const screen = render();
@@ -503,11 +490,11 @@ describe('SchedulePanel — capability transitions', () => {
   });
 
   it('treats a failed capability lookup as dark, not as enabled', async () => {
-    // The summary is a separate request from the schedule itself. If it fails,
+    // The lookup is a separate request from the schedule itself. If it fails,
     // the capability is unknown — and unknown must not present mutation
     // controls the server would refuse.
     server.use(
-      http.get(CAPABILITIES, () =>
+      http.get(SCHEDULING_CAPABILITY, () =>
         HttpResponse.json({ error: { code: 'server_error', message: 'boom' } }, { status: 500 }),
       ),
       http.get(SCHEDULE, notFound),
@@ -516,5 +503,116 @@ describe('SchedulePanel — capability transitions', () => {
 
     expect(await screen.findByText(/scheduling is not available yet/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /schedule daily/i })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * P6-UI-006 — the panel reflects the SAME per-workspace decision the schedule
+ * mutation gate enforces (P6-CAP-1), not the raw global flag. Before the fix the
+ * panel read `features.scout_scheduling_enabled` from the runtime summary, so a
+ * workspace override and the panel disagreed in both directions.
+ */
+describe('SchedulePanel — workspace-effective scheduling (P6-UI-006)', () => {
+  it('offers controls when the workspace resolves enabled though the global flag is off', async () => {
+    rawGlobalFlag(false); // global off …
+    enableScheduling(true); // … but an override enables this workspace
+    server.use(http.get(SCHEDULE, notFound));
+    const screen = render();
+
+    expect(await screen.findByRole('button', { name: /schedule daily/i })).toBeInTheDocument();
+    expect(screen.queryByText(/scheduling is not available yet/i)).not.toBeInTheDocument();
+  });
+
+  it('withholds controls when the workspace resolves disabled though the global flag is on', async () => {
+    rawGlobalFlag(true); // global on …
+    enableScheduling(false); // … but a disable override (or the ceiling) applies here
+    server.use(http.get(SCHEDULE, () => HttpResponse.json(scheduleRow())));
+    const screen = render();
+
+    expect(await screen.findByText(/scheduling is not available yet/i)).toBeInTheDocument();
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    for (const name of [/pause/i, /activate/i, /delete/i]) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+  });
+
+  it('asks about its own workspace and never consults the raw-global runtime summary', async () => {
+    const asked: string[] = [];
+    let summaryRead = false;
+    server.use(
+      http.get(P('/workspaces/:workspaceId/scheduling-capability'), ({ params }) => {
+        asked.push(String(params.workspaceId));
+        return HttpResponse.json({ enabled: true });
+      }),
+      http.get(CAPABILITIES, () => {
+        summaryRead = true;
+        return HttpResponse.json({});
+      }),
+      http.get(SCHEDULE, notFound),
+    );
+    const screen = render();
+
+    await screen.findByRole('button', { name: /schedule daily/i });
+    expect(asked).toEqual([WS]);
+    expect(summaryRead).toBe(false);
+  });
+});
+
+/**
+ * P6-PLAT-6 — a failed scheduled tick is visible instead of silent.
+ */
+describe('SchedulePanel — tick failure visibility (P6-PLAT-6)', () => {
+  it('reports a stalled schedule as a failure with an Activate restart', async () => {
+    enableScheduling();
+    server.use(
+      http.get(SCHEDULE, () =>
+        HttpResponse.json(
+          scheduleRow({ state: 'stalled', last_tick_failed_at: '2026-07-18T09:05:00Z' }),
+        ),
+      ),
+    );
+    const screen = render();
+
+    expect(await screen.findByText('Stalled')).toBeInTheDocument();
+    expect(screen.getByText(/recurring runs stopped/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /activate/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause/i })).not.toBeInTheDocument();
+    // A stall must never read as "not started yet".
+    expect(screen.queryByText(/has not been activated yet/i)).not.toBeInTheDocument();
+  });
+
+  it('notes a lost occurrence on a schedule that kept running', async () => {
+    enableScheduling();
+    server.use(
+      http.get(SCHEDULE, () =>
+        HttpResponse.json(scheduleRow({ last_tick_failed_at: '2026-07-18T09:05:00Z' })),
+      ),
+    );
+    const screen = render();
+
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    expect(screen.getByText(/a scheduled run attempt failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/recurring runs continue/i)).toBeInTheDocument();
+  });
+
+  it('shows no failure note for a healthy schedule', async () => {
+    enableScheduling();
+    server.use(http.get(SCHEDULE, () => HttpResponse.json(scheduleRow())));
+    const screen = render();
+
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    expect(screen.queryByText(/a scheduled run attempt failed/i)).not.toBeInTheDocument();
+  });
+
+  it('does not claim runs continue while scheduling is dark', async () => {
+    server.use(
+      http.get(SCHEDULE, () =>
+        HttpResponse.json(scheduleRow({ last_tick_failed_at: '2026-07-18T09:05:00Z' })),
+      ),
+    );
+    const screen = render();
+
+    await screen.findByText(/scheduling is not available yet/i);
+    expect(screen.queryByText(/recurring runs continue/i)).not.toBeInTheDocument();
   });
 });

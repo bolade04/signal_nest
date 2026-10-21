@@ -62,6 +62,7 @@ import type {
   ScoutRunResult,
   ScoutScheduleCreate,
   ScoutScheduleOut,
+  SchedulingCapability,
   SessionOut,
   SourcePrefIn,
   TelemetryStatus,
@@ -351,9 +352,20 @@ export const runScoutRequest = (workspaceId: string, requestId: string) =>
 
 // ---- Scout schedules (SB-C; dark-deployed recurrence) ----
 // The read is available to any member even while the feature is dark; mutations
-// require an editor role and answer 503 (capability_unavailable) while disabled.
+// require an editor role and answer 503 (capability_unavailable) while scheduling
+// resolves disabled FOR THAT WORKSPACE (P6-CAP-1: the capability resolver, in which a
+// workspace override outranks the global flag).
 const schedulePath = (workspaceId: string, requestId: string) =>
   `/workspaces/${workspaceId}/scout-requests/${requestId}/schedule`;
+
+// Workspace-effective scheduling availability (P6-UI-006), decided by the same
+// resolver call the schedule mutation gate enforces with. Member-gated like the
+// schedule read, and deliberately NOT capability-gated: it answers 200
+// {enabled:false} while dark rather than 503.
+export const getSchedulingCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<SchedulingCapability>(`/workspaces/${workspaceId}/scheduling-capability`, {
+    signal,
+  });
 
 export const getScoutSchedule = (workspaceId: string, requestId: string, signal?: AbortSignal) =>
   apiRequest<ScoutScheduleOut>(schedulePath(workspaceId, requestId), { signal });

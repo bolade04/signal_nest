@@ -21,6 +21,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.capabilities.registry import Capability
+from app.capabilities.resolver import CapabilityResolution, decide_capability
 from app.connectors.base import (
     ConnectorSignal,
     FailureKind,
@@ -39,6 +41,16 @@ from app.core.config import Settings
 
 def _settings(**overrides) -> Settings:
     return Settings(_env_file=None, **overrides)
+
+
+def _rss(enabled: bool) -> CapabilityResolution:
+    """A resolver decision for RSS as the pipeline would pass it (no override)."""
+    return decide_capability(
+        capability=Capability.CONNECTOR_RSS,
+        workspace_id="ws-test",
+        global_flag=enabled,
+        override_value=None,
+    )
 
 
 class _FakeClock:
@@ -379,7 +391,8 @@ def test_registry_returns_none_when_disabled() -> None:
     resolved = resolve_connector(
         source_types=("rss_news",),
         market="Dallas, TX",
-        settings=_settings(connector_rss_enabled=False),
+        rss=_rss(False),
+        settings=_settings(),
     )
     assert resolved is None
 
@@ -390,9 +403,53 @@ def test_registry_builds_rss_when_enabled_and_permitted() -> None:
     resolved = resolve_connector(
         source_types=("rss_news",),
         market="Dallas, TX",
-        settings=_settings(connector_rss_enabled=True),
+        rss=_rss(True),
+        settings=_settings(),
     )
     assert isinstance(resolved, RssNewsConnector)
+
+
+def test_registry_ignores_the_raw_global_flag(monkeypatch) -> None:
+    """P6-CAP-1: the resolver's decision switches RSS, never the raw setting.
+
+    Both directions: a true flag cannot enable a disabled resolution (e.g. a workspace
+    disable override), and a false flag cannot disable an enabled one.
+    """
+    from app.connectors.registry import resolve_connector
+
+    assert (
+        resolve_connector(
+            source_types=("rss_news",),
+            market="Dallas, TX",
+            rss=_rss(False),
+            settings=_settings(connector_rss_enabled=True),
+        )
+        is None
+    )
+    assert isinstance(
+        resolve_connector(
+            source_types=("rss_news",),
+            market="Dallas, TX",
+            rss=_rss(True),
+            settings=_settings(connector_rss_enabled=False),
+        ),
+        RssNewsConnector,
+    )
+
+
+def test_registry_refuses_another_capabilitys_resolution() -> None:
+    from app.connectors.registry import resolve_connector
+
+    scheduling = decide_capability(
+        capability=Capability.SCOUT_SCHEDULING,
+        workspace_id="ws-test",
+        global_flag=True,
+        override_value=None,
+    )
+    with pytest.raises(ValueError, match="connector_rss"):
+        resolve_connector(
+            source_types=("rss_news",), market="Dallas, TX", rss=scheduling
+        )
 
 
 def test_registry_respects_source_type_and_jurisdiction() -> None:
@@ -403,7 +460,8 @@ def test_registry_respects_source_type_and_jurisdiction() -> None:
         resolve_connector(
             source_types=("reddit",),
             market="Dallas, TX",
-            settings=_settings(connector_rss_enabled=True),
+            rss=_rss(True),
+            settings=_settings(),
         )
         is None
     )
@@ -412,10 +470,8 @@ def test_registry_respects_source_type_and_jurisdiction() -> None:
         resolve_connector(
             source_types=("rss_news",),
             market="London, UK",
-            settings=_settings(
-                connector_rss_enabled=True,
-                connector_rss_markets=["Dallas, TX"],
-            ),
+            rss=_rss(True),
+            settings=_settings(connector_rss_markets=["Dallas, TX"]),
         )
         is None
     )
@@ -428,16 +484,17 @@ def test_get_connector_defaults_to_fixture_connector() -> None:
     assert isinstance(conn, FixtureConnector)
 
 
-def test_get_connector_uses_live_connector_when_enabled(monkeypatch) -> None:
-    import app.connectors.registry as registry
+def test_get_connector_without_tenant_scope_never_reads_the_raw_flag(monkeypatch) -> None:
+    """No session/tenant scope means no workspace to resolve for: fixture, even with
+    the global flag on (deny-biased; the live path is covered with a real resolver in
+    ``test_capability_enforcement.py``)."""
+    import app.scouting_requests.connectors as connectors_mod
 
     monkeypatch.setattr(
-        registry, "get_settings", lambda: _settings(connector_rss_enabled=True)
+        connectors_mod, "get_settings", lambda: _settings(connector_rss_enabled=True)
     )
-    from app.scouting_requests.connectors import get_connector
-
-    conn = get_connector(source_types=["rss_news"], market="Dallas, TX")
-    assert isinstance(conn, RssNewsConnector)
+    conn = connectors_mod.get_connector(source_types=["rss_news"], market="Dallas, TX")
+    assert isinstance(conn, connectors_mod.FixtureConnector)
 
 
 # --------------------------------------------------------------------------- #

@@ -387,7 +387,7 @@ class TestOverview:
         sched = body["schedules"]
         assert sched["total"] == 3
         assert sched["state_counts"] == {
-            "active": 1, "activation_required": 1, "paused": 1
+            "active": 1, "activation_required": 1, "paused": 1, "stalled": 0
         }
 
     def test_secret_free(self, h):
