@@ -221,7 +221,7 @@ def _declared_w0_kms_keys(graph) -> set:
 
 
 def test_every_declared_kms_key_is_the_covered_secrets_cmk_or_a_recorded_pending_key(graph):
-    # P6-INF-4 (branch feat/p6-alerting-iac-01, 2026-10-20): the observability alerts key that
+    # P6-INF-4 (2026-10-20): the observability alerts key that
     # encrypts the alarm topic joins the pending set on the same terms as the P6-CI-6 keys.
     pending = {("edge", "spa"), ("observability", "audit"), ("observability", "alerts")}
     assert _declared_w0_kms_keys(graph) == {("secrets", "secrets")} | pending, (

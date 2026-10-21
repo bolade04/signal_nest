@@ -59,7 +59,7 @@ staging values.
 `alb_arn`, `alb_dns_name`, `alb_canonical_hosted_zone_id`, `https_listener_arn`,
 `api_target_group_arn`, `alb_security_group_id`, `api_alias_record_name` (null
 while the window is closed, like every other windowed output).
-*(2026-10-20, P6-INF-6/-13, branch `feat/p6-alerting-iac-01`, not merged.)* `alb_arn_suffix` and
+*(2026-10-20, P6-INF-6/-13; a repository change, not applied.)* `alb_arn_suffix` and
 `api_target_group_arn_suffix` (the CloudWatch `LoadBalancer`/`TargetGroup` dimension values the
 `observability` ALB alarms use; null while closed) and `alb_enabled` (echo of `enabled`, known at
 plan time — a `count` cannot depend on the suffixes of an ALB created in the same apply). New

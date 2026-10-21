@@ -14,7 +14,7 @@ action**, and the **backing metric/endpoint**.
 Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
 [incident_response.md](./incident_response.md).
 
-## Delivery and the alarms implemented in IaC (P6-INF-4/-5/-6; branch `feat/p6-alerting-iac-01`, not merged, nothing applied)
+## Delivery and the alarms implemented in IaC (P6-INF-4/-5/-6; repository change 2026-10-20, nothing applied)
 
 - **Destination.** Every CloudWatch alarm of `infra/aws/modules/observability` notifies one
   module-owned SNS topic (`<prefix>-alarms`, encrypted with the module's alerts key) on ALARM

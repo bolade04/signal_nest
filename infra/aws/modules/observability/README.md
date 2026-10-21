@@ -74,7 +74,7 @@ the `alb` module exposes no `arn_suffix` outputs and changing `alb` is outside
 this tranche (a later, separately authorized `alb` output addition is required
 first).
 
-### 3a. Alerting and retention additions (2026-10-20, P6-INF-4/-5/-6/-13; branch `feat/p6-alerting-iac-01`, not merged, nothing applied)
+### 3a. Alerting and retention additions (2026-10-20, P6-INF-4/-5/-6/-13; a repository change, nothing applied)
 `alerting.tf` adds: the **alerts key** (`aws_kms_key.alerts` + `alias/<name_prefix>/alerts`;
 P6-CI-6 key shape; policy = account-root delegation + `kms:Decrypt`/`kms:GenerateDataKey*` for
 `cloudwatch.amazonaws.com`, the statement AWS documents for alarms publishing to an encrypted
