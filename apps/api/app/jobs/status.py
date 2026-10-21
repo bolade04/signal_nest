@@ -155,6 +155,10 @@ class JobType(StrEnum):
     #: scout-request execution and always enqueues its own successor tick while the
     #: schedule stays enabled. Never runs the scouting pipeline itself.
     SCOUT_SCHEDULE_TICK = "scout_schedule.tick"
+    #: Retention purge (P6-PRIV-1): one bounded batch of one workspace retention class
+    #: inside the job's own workspace; a full batch enqueues its successor. Refuses a
+    #: class whose duration is not configured (``app.privacy.retention``).
+    RETENTION_PURGE = "retention.purge"
 
 
 class JobErrorCode(StrEnum):

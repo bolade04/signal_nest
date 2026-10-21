@@ -4,6 +4,72 @@
  */
 
 export interface paths {
+    "/api/v1/account/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete My Account
+         * @description Delete the signed-in account and everything that is only its own.
+         *
+         *     A wrong current password is 422 ``current_password_incorrect`` and changes nothing.
+         *     The only OWNER of an organization that has other members is refused with 409
+         *     ``account_deletion_sole_owner``. Organizations in which the account is the only
+         *     member are deleted with it. On success every token of the account stops working,
+         *     because the account no longer exists.
+         */
+        post: operations["delete_my_account_api_v1_account_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/deletion-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Account Deletion
+         * @description What deleting the signed-in account would do to each of its organizations.
+         */
+        get: operations["preview_account_deletion_api_v1_account_deletion_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export My Account
+         * @description Download everything stored about the signed-in account (portability).
+         */
+        get: operations["export_my_account_api_v1_account_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/email-verification/confirm": {
         parameters: {
             query?: never;
@@ -749,6 +815,50 @@ export interface paths {
         };
         /** List Organizations */
         get: operations["list_organizations_api_v1_organizations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{organization_id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Organization
+         * @description Delete the organization, every workspace and everything in them. Exactly OWNER.
+         *
+         *     The current password and the organization's exact name are required. Every member
+         *     loses access; members' accounts are not deleted. Refused with 409
+         *     ``organization_jobs_active`` while one of its jobs is claimed or running.
+         */
+        post: operations["delete_organization_api_v1_organizations__organization_id__delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{organization_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Organization
+         * @description Download every exported table of the organization (portability). Exactly OWNER.
+         */
+        get: operations["export_organization_api_v1_organizations__organization_id__export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1803,6 +1913,97 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccountDeletionOut
+         * @description The deletion receipt. The account no longer exists when this is returned.
+         */
+        AccountDeletionOut: {
+            counts: components["schemas"]["ErasureCountsOut"];
+            /** Deleted Organizations */
+            deleted_organizations: components["schemas"]["DeletedOrganizationOut"][];
+            /** Organizations */
+            organizations: components["schemas"]["MembershipImpactOut"][];
+            /** User Id */
+            user_id: string;
+            verification: components["schemas"]["ErasureVerificationOut"];
+        };
+        /**
+         * AccountDeletionPreviewOut
+         * @description Read-only: whether the account can be deleted now, and what that would do.
+         */
+        AccountDeletionPreviewOut: {
+            /** Can Delete */
+            can_delete: boolean;
+            /** Organizations */
+            organizations: components["schemas"]["MembershipImpactOut"][];
+        };
+        /**
+         * AccountDeletionRequest
+         * @description Delete the signed-in account. Re-authenticated: the current password is required.
+         *
+         *     The account is the caller's own and is never taken from the body. Unknown fields are
+         *     rejected.
+         */
+        AccountDeletionRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "DELETE";
+            /** Current Password */
+            current_password: string;
+        };
+        /**
+         * AccountExportOut
+         * @description Everything stored about the signed-in account (schema version 1).
+         */
+        AccountExportOut: {
+            /** Audit Events Performed */
+            audit_events_performed: {
+                [key: string]: unknown;
+            }[];
+            /** Capability Overrides Set */
+            capability_overrides_set: {
+                [key: string]: unknown;
+            }[];
+            /** Email Verification Requests */
+            email_verification_requests: {
+                [key: string]: unknown;
+            }[];
+            /** Feedback Submitted */
+            feedback_submitted: {
+                [key: string]: unknown;
+            }[];
+            /** Generated At */
+            generated_at: string;
+            /** Invitations Received */
+            invitations_received: {
+                [key: string]: unknown;
+            }[];
+            /** Invitations Sent */
+            invitations_sent: {
+                [key: string]: unknown;
+            }[];
+            /** Memberships */
+            memberships: {
+                [key: string]: unknown;
+            }[];
+            /** Password Reset Requests */
+            password_reset_requests: {
+                [key: string]: unknown;
+            }[];
+            /** Profile */
+            profile: {
+                [key: string]: unknown;
+            };
+            /** Schema Version */
+            schema_version: number;
+            /** Sessions */
+            sessions: {
+                [key: string]: unknown;
+            }[];
+            subject: components["schemas"]["ExportSubjectOut"];
+        };
         /** AudienceIn */
         AudienceIn: {
             /** Demographics */
@@ -2266,6 +2467,14 @@ export interface components {
          * @enum {string}
          */
         DecisionSource: "safety_ceiling" | "workspace_override" | "global_configuration" | "secure_default";
+        /** DeletedOrganizationOut */
+        DeletedOrganizationOut: {
+            /** Organization Id */
+            organization_id: string;
+            verification: components["schemas"]["ErasureVerificationOut"];
+            /** Workspace Ids */
+            workspace_ids: string[];
+        };
         /**
          * EmailVerificationConfirmRequest
          * @description A verification token, carried in the body and never in a URL.
@@ -2285,6 +2494,85 @@ export interface components {
          *     caller. Unknown fields are rejected.
          */
         EmailVerificationRequest: Record<string, never>;
+        /** ErasureCountsOut */
+        ErasureCountsOut: {
+            /** Anonymised */
+            anonymised: {
+                [key: string]: number;
+            };
+            /** Deleted */
+            deleted: {
+                [key: string]: number;
+            };
+            /** Nulled */
+            nulled: {
+                [key: string]: number;
+            };
+        };
+        /** ErasureFindingOut */
+        ErasureFindingOut: {
+            /** Column */
+            column: string;
+            /** Rows */
+            rows: number;
+            /** Table */
+            table: string;
+        };
+        /**
+         * ErasureVerificationOut
+         * @description The independent verification report (``app.privacy.verification``).
+         *
+         *     ``verified`` is true only when no row references the subject and no text or JSON
+         *     value contains its identifiers. It is computed from the live schema, not from audit
+         *     records and not from the deletion's own bookkeeping.
+         */
+        ErasureVerificationOut: {
+            /** Content Columns Checked */
+            content_columns_checked: number;
+            /** Content Findings */
+            content_findings: components["schemas"]["ErasureFindingOut"][];
+            /** Email Sha256 */
+            email_sha256: string | null;
+            /** Generated At */
+            generated_at: string;
+            /** Reference Columns Checked */
+            reference_columns_checked: number;
+            /** Reference Findings */
+            reference_findings: components["schemas"]["ErasureFindingOut"][];
+            /** Retained Anonymised */
+            retained_anonymised: components["schemas"]["ErasureFindingOut"][];
+            /** Subject Id */
+            subject_id: string | null;
+            /** Subject Type */
+            subject_type: string;
+            /** Tables Checked */
+            tables_checked: number;
+            /** Verified */
+            verified: boolean;
+        };
+        /** ExportSubjectOut */
+        ExportSubjectOut: {
+            /** Organization Id */
+            organization_id?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "account" | "organization";
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** ExportedTableOut */
+        ExportedTableOut: {
+            /** Row Count */
+            row_count: number;
+            /** Rows */
+            rows: {
+                [key: string]: unknown;
+            }[];
+            /** Truncated */
+            truncated: boolean;
+        };
         /**
          * FeatureFlagsOut
          * @description Coarse, read-only product-capability booleans.
@@ -2990,7 +3278,7 @@ export interface components {
          *     error), so an unknown/renamed type can never silently no-op.
          * @enum {string}
          */
-        JobType: "scout_request.execute" | "scout_schedule.tick";
+        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge";
         /** JobsOverviewOut */
         JobsOverviewOut: {
             /** Dead Letter Count */
@@ -3111,6 +3399,25 @@ export interface components {
         /** MemberRoleUpdate */
         MemberRoleUpdate: {
             role: components["schemas"]["Role"];
+        };
+        /**
+         * MembershipImpactOut
+         * @description What deleting the account does to one of its organizations.
+         */
+        MembershipImpactOut: {
+            /** Member Count */
+            member_count: number;
+            /** Organization Id */
+            organization_id: string;
+            /** Organization Name */
+            organization_name: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "membership_removed" | "organization_deleted" | "blocked_sole_owner";
+            /** Role */
+            role: string;
         };
         /** MembershipOut */
         MembershipOut: {
@@ -3353,6 +3660,51 @@ export interface components {
         OpportunityStatusUpdate: {
             /** Status */
             status: string;
+        };
+        /**
+         * OrganizationDeletionOut
+         * @description The deletion receipt. Keep ``workspace_ids``: verification after the fact needs them.
+         */
+        OrganizationDeletionOut: {
+            counts: components["schemas"]["ErasureCountsOut"];
+            /** Organization Id */
+            organization_id: string;
+            verification: components["schemas"]["ErasureVerificationOut"];
+            /** Workspace Ids */
+            workspace_ids: string[];
+        };
+        /**
+         * OrganizationDeletionRequest
+         * @description Delete an organization. Re-authenticated, and its name typed exactly to confirm.
+         */
+        OrganizationDeletionRequest: {
+            /** Confirm Organization Name */
+            confirm_organization_name: string;
+            /** Current Password */
+            current_password: string;
+        };
+        /**
+         * OrganizationExportOut
+         * @description Every exported table of the organization (schema version 1).
+         */
+        OrganizationExportOut: {
+            /** Generated At */
+            generated_at: string;
+            /** Members */
+            members: {
+                [key: string]: unknown;
+            }[];
+            /** Not Exported */
+            not_exported: string[];
+            /** Row Cap Per Table */
+            row_cap_per_table: number;
+            /** Schema Version */
+            schema_version: number;
+            subject: components["schemas"]["ExportSubjectOut"];
+            /** Tables */
+            tables: {
+                [key: string]: components["schemas"]["ExportedTableOut"];
+            };
         };
         /**
          * OrganizationMemberOut
@@ -4051,6 +4403,103 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    delete_my_account_api_v1_account_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDeletionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_account_deletion_api_v1_account_deletion_preview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDeletionPreviewOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_my_account_api_v1_account_export_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_email_verification_api_v1_auth_email_verification_confirm_post: {
         parameters: {
             query?: never;
@@ -5096,6 +5545,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrganizationOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_organization_api_v1_organizations__organization_id__delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationDeletionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_organization_api_v1_organizations__organization_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationExportOut"];
                 };
             };
             /** @description Validation Error */

@@ -743,7 +743,9 @@ class TestOpenApiContract:
             if method in {"get", "post", "put", "delete", "patch"}
         )
         # 105 -> 106 (P6-UI-017): POST /auth/password/change, pinned below in OPERATIONS.
-        assert count == 106
+        # 106 -> 111 (P6-PRIV-1): account export, deletion preview and deletion; organization
+        # export and deletion. None is a token-bearing account-mail operation of this module.
+        assert count == 111
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

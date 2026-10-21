@@ -103,6 +103,27 @@ def execute_schedule_tick(ctx: HandlerContext) -> dict[str, Any]:
     )
 
 
+@register_handler(JobType.RETENTION_PURGE)
+def execute_retention_purge(ctx: HandlerContext) -> dict[str, Any]:
+    """Purge one bounded batch of one workspace retention class (P6-PRIV-1).
+
+    All validation, the policy re-check and the successor link live in
+    :func:`app.privacy.retention.run_purge_job`; the deletion is confined to the
+    workspace of the context rebuilt from the durable job row. Returns counts only.
+    """
+    # Deferred import: the privacy package imports the enqueue service, which imports
+    # this module to register handlers.
+    from app.privacy.retention import run_purge_job
+
+    return run_purge_job(
+        ctx.db,
+        context=ctx.context,
+        payload=ctx.payload,
+        now=ctx.now,
+        is_cancelled=ctx.is_cancelled,
+    )
+
+
 #: The in-flight states a scout request occupies only while a run is expected to
 #: make progress. A final job failure means no run is coming, so a request left in
 #: one of these is stranded: ``POST .../run`` rejects it with "already queued or
@@ -155,6 +176,7 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
 
 
 __all__ = [
+    "execute_retention_purge",
     "execute_schedule_tick",
     "execute_scout_request",
     "settle_failed_scout_request",

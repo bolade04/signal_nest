@@ -34,6 +34,7 @@ import { roleLabels } from '@/lib/labels';
 import { canCreateWorkspace, useActorRole } from '@/lib/roles';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { ChangePasswordDialog } from './settings/ChangePasswordDialog';
+import { AccountDataControls, OrganizationDataControls } from './settings/DataPrivacy';
 import { OrganizationMembers } from './settings/OrganizationMembers';
 
 const wsSchema = z.object({ name: z.string().min(1, 'Workspace name is required') });
@@ -111,6 +112,8 @@ export function SettingsPage() {
               <span className="text-muted-foreground">Email</span>
               <span className="font-medium">{user?.email}</span>
             </div>
+            {/* Export and deletion of the signed-in account (P6-PRIV-1). */}
+            {user ? <AccountDataControls email={user.email} /> : null}
           </CardContent>
         </Card>
 
@@ -272,6 +275,17 @@ export function SettingsPage() {
       {activeOrganization ? (
         <div className="mt-6">
           <OrganizationMembers
+            key={activeOrganization.id}
+            organizationId={activeOrganization.id}
+            organizationName={activeOrganization.name}
+          />
+        </div>
+      ) : null}
+
+      {/* Exactly the organization's owner: export and deletion (P6-PRIV-1). */}
+      {activeOrganization ? (
+        <div className="mt-6">
+          <OrganizationDataControls
             key={activeOrganization.id}
             organizationId={activeOrganization.id}
             organizationName={activeOrganization.name}
