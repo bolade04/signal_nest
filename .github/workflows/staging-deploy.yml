@@ -96,7 +96,8 @@ jobs:
             exit 1
           fi
           [[ "${ROLLBACK_FLOOR}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::DEPLOY_ROLLBACK_FLOOR_COMMIT must be a 40-character commit SHA." >&2; exit 1; }
-          [[ "${SUBNET_IDS}" =~ ^subnet-[0-9a-f]+(,subnet-[0-9a-f]+)*$ ]] || { echo "::error::PRIVATE_SUBNET_IDS must be a comma-separated list of subnet ids." >&2; exit 1; }
+          python3 -c 'import os, re, sys; sys.exit(0 if re.fullmatch(r"subnet-[0-9a-f]+(,subnet-[0-9a-f]+)*", os.environ["SUBNET_IDS"]) else 1)' \
+            || { echo "::error::PRIVATE_SUBNET_IDS must be a comma-separated list of subnet ids." >&2; exit 1; }
           [[ "${MIGRATION_SG}" =~ ^sg-[0-9a-f]+$ ]] || { echo "::error::MIGRATION_SECURITY_GROUP_ID must be one security group id." >&2; exit 1; }
           [[ "${LEDGER_PARAMETER}" =~ ^/[a-z0-9-]+/release/ledger$ ]] || { echo "::error::RELEASE_LEDGER_PARAMETER must be /<prefix>/release/ledger." >&2; exit 1; }
 
