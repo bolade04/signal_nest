@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/auth/AuthContext';
+import { toAppPath } from '@/auth/intended-path';
 import { signOutNoticeCopy } from '@/auth/sign-out';
 import { PASSWORD_CHANGED_NOTICE, PASSWORD_RESET_NOTICE } from './account-token';
 import { AuthLayout } from './AuthLayout';
@@ -43,14 +44,14 @@ export function SignInPage() {
 
   useEffect(() => {
     if (status === 'authenticated') {
-      const target = intendedPath ?? '/';
+      const target = toAppPath(intendedPath) ?? '/';
       setIntendedPath(null);
       navigate(target, { replace: true });
     }
   }, [status, intendedPath, setIntendedPath, navigate]);
 
   if (status === 'authenticated') {
-    return <Navigate to={intendedPath ?? '/'} replace />;
+    return <Navigate to={toAppPath(intendedPath) ?? '/'} replace />;
   }
 
   const submit = async (values: FormValues) => {

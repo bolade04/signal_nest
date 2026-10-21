@@ -1,11 +1,12 @@
 import { within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { useLocation } from 'react-router-dom';
+import { useAuth } from '@/auth/AuthContext';
 import { describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
 import { server } from '@/test/server';
-import { renderApp } from '@/test/utils';
+import { renderApp, renderProductionApp } from '@/test/utils';
 
 /**
  * The route inventory of docs/project-phase-6-plan.md §5A.3 — 16 declared routes and the
@@ -176,4 +177,71 @@ describe('route inventory (plan §5A.3)', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Opportunities' })).toBeInTheDocument();
     expect(routerLocation(screen)).toBe('/opportunities');
   });
+});
+
+/**
+ * PR #234 F1: the intended path is whatever the address bar held. React Router 7 throws
+ * "External navigation is not allowed" from `<Navigate>` when a path resolves to another
+ * origin, which blanked the page after sign-in on `//evil.example`. Every such link must
+ * land inside the app after sign-in, and a normal deep link must still return to itself.
+ */
+describe('sign-in returns only to app paths (PR #234 F1)', () => {
+  it.each([
+    ['//evil.example', '/evil.example', 'Page not found'],
+    ['/\\evil.example', '/evil.example', 'Page not found'],
+    ['/\t/evil.example', '/evil.example', 'Page not found'],
+    ['/%5Cevil.example', '/%5Cevil.example', 'Page not found'],
+    ['/%2F%2Fevil.example', '/%2F%2Fevil.example', 'Page not found'],
+    ['/settings?next=//evil.example', '/settings?next=//evil.example', 'Settings'],
+    ['/settings?from=deep-link', '/settings?from=deep-link', 'Settings'],
+  ])('%j signed out lands on %j after sign-in', async (path, landing, heading) => {
+    const screen = renderApp(app, { route: path, authed: false });
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe('/sign-in');
+
+    await screen.user.click(screen.getByRole('button', { name: /use demo account/i }));
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe(landing);
+  });
+
+  it.each([
+    ['//evil.example', '/evil.example'],
+    ['/%5Cevil.example', '/%5Cevil.example'],
+    ['/%2F%2Fevil.example', '/%2F%2Fevil.example'],
+  ])('%j under the production router lands on %j after sign-in', async (path, landing) => {
+    // The address bar holds the path on this origin, as a browser does for <app>//evil.example.
+    const screen = renderProductionApp(app, `${window.location.origin}${path}`);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument();
+
+    await screen.user.click(screen.getByRole('button', { name: /use demo account/i }));
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe(landing);
+    expect(window.location.origin + window.location.pathname).toBe(`${window.location.origin}${landing}`);
+  });
+
+  it('stores only an app path, whichever producer sets it (ProtectedRoute, sign-out)', async () => {
+    function Producer() {
+      const { intendedPath, setIntendedPath } = useAuth();
+      return (
+        <>
+          <button type="button" onClick={() => setIntendedPath('//evil.example/x?y=//z')}>
+            store
+          </button>
+          <output data-testid="stored">{String(intendedPath)}</output>
+        </>
+      );
+    }
+    const screen = renderApp(<Producer />, { authed: false });
+    await screen.user.click(screen.getByRole('button', { name: 'store' }));
+    expect(screen.getByTestId('stored').textContent).toBe('/evil.example/x?y=//z');
+  });
+
+  it.each([['//evil.example'], ['/%5Cevil.example'], ['/%2F%2Fevil.example']])(
+    '%j signed in renders the not-found page inside the shell',
+    async (path) => {
+      const screen = renderApp(app, { route: path });
+      expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+      expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
+    },
+  );
 });
