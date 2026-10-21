@@ -78,6 +78,8 @@ from app.core.middleware import RateLimitMiddleware
 from app.db.models import Base
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
+from app.geography.geocoder import get_geocoding_service
+from app.infra.cache import tenant_cache_key
 from app.jobs.models import Job
 from app.jobs.status import JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -790,9 +792,27 @@ class TestLocations:
         a, b = pov.a, pov.b
         own = pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": a.ws_id})
         assert own.status_code == 200, own.text
-        _assert_membership_403(
-            pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": b.ws_id})
+        assert (own.json()["provider"], own.json()["country_code"]) == ("fixture", "US")
+        # P6-DATA-3: answers are cached per tenant. A foreign workspace is refused before
+        # any lookup, so neither a resolvable nor an unresolvable query caches anything.
+        before = _geocode_cache_keys()
+        for query in ("Dallas", "Atlantis"):
+            _assert_membership_403(
+                pov.send("POST", "/geocode", {"query": query}, params={"workspace_id": b.ws_id})
+            )
+        assert _geocode_cache_keys() == before
+        unresolvable = pov.send(
+            "POST", "/geocode", {"query": "Atlantis"}, params={"workspace_id": a.ws_id}
         )
+        assert _error(unresolvable)[:2] == (422, "location_unresolvable"), unresolvable.text
+        added = _geocode_cache_keys() - before
+        mine = tenant_cache_key(a.org_id, a.ws_id, "geocode") + ":"
+        assert added and all(key.startswith(mine) for key in added), added
+
+
+def _geocode_cache_keys() -> set[str]:
+    """Keys the geocoding service has cached (its cache is the in-memory one in tests)."""
+    return {key for key in get_geocoding_service()._cache._store if ":geocode:" in key}
 
 
 # --------------------------------------------------------------------------- #
