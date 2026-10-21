@@ -12,8 +12,8 @@ analysis service is involved; the publish workflows (`staging-publish.yml`,
 
 | Category | Tool | Job | Population analysed | Report |
 |---|---|---|---|---|
-| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `scripts/requirements-gate-hashes.txt`, `security/requirements-semgrep.txt`, `apps/revision-reader/requirements-dev.txt` | `trivy-locks-vuln.json` |
-| Vulnerabilities, installed tooling (2026-10-19) | Trivy 0.76.0 `rootfs`, reconciled against the environment's own `pip inspect` | Container build and security; Revision reader | `.security-venv` (Semgrep and its hash-locked set, plus the interpreter's bundled pip); `.reader-venv` (the hash-locked reader tooling set); the reader job's interpreter prefix (`pythonLocation`: its pip and the Gate 4N PyYAML) — each as installed, inventoried again before completeness | `trivy-*-tooling-*-vuln.json`, `*-tooling-*-installed*.json` |
+| Vulnerabilities, locked dependencies | Trivy 0.76.0 (`aquasecurity/trivy-action@v0.36.0`, `trivy-config: security/trivy.yaml`) | Container build and security | `package-lock.json` (runtime and development npm packages), `apps/api/requirements-runtime.txt`, `apps/api/requirements-dev.txt`, `scripts/requirements-gate.txt`, `scripts/requirements-gate-hashes.txt`, `security/requirements-semgrep.txt`, `apps/revision-reader/requirements-dev.txt`, `apps/revision-reader/requirements-toolcache-pip.txt` (2026-10-21) | `trivy-locks-vuln.json` |
+| Vulnerabilities, installed tooling (2026-10-19) | Trivy 0.76.0 `rootfs`, reconciled against the environment's own `pip inspect` | Container build and security; Revision reader | `.security-venv` (Semgrep and its hash-locked set, plus the interpreter's bundled pip); `.reader-venv` (the hash-locked reader tooling set); the reader job's interpreter prefix (`pythonLocation`: ~~its pip~~ the locked pip of `apps/revision-reader/requirements-toolcache-pip.txt`, installed over the toolcache's bundled one since 2026-10-21, and the Gate 4N PyYAML) — each as installed, inventoried again before completeness | `trivy-*-tooling-*-vuln.json`, `*-tooling-*-installed*.json` |
 | Vulnerabilities, built images | Trivy 0.76.0 | Container build and security; Revision reader | OS packages and installed Python packages of `signalnest-api:ci`, `signalnest-worker:ci`, `signalnest-revision-reader:ci` as built in that run | `trivy-image-*-vuln.json` |
 | SAST | Semgrep 1.181.0 (hash-locked install, `security/requirements-semgrep.txt`) with registry rulesets `p/python`, `p/typescript`, `p/javascript`, `p/react`, `p/security-audit` | Container build and security | `apps/`, `scripts/`, `security/` minus `.semgrepignore` (tests, e2e, generated and vendored paths) and `security/controls` | `semgrep.json`, `semgrep-rules-provenance.json` |
 | IaC / configuration | Trivy 0.76.0 misconfiguration checks | Container build and security | `infra/aws` OpenTofu root and modules, `infra/aws/bootstrap`, both Dockerfiles (13 targets, 246 checks at the baseline) | `trivy-config.json` |
@@ -339,7 +339,13 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   performs the first hashed install and is then replaced by the locked pip. The system
   interpreter's Gate 4N PyYAML comes from `scripts/requirements-gate-hashes.txt`, compiled
   from the unchanged contract `scripts/requirements-gate.txt` (same pin, `--require-hashes
-  --no-deps`). The venv's own `pip install -r scripts/requirements-gate.txt` line (pinned by
+  --no-deps`). *(2026-10-21, GHSA-6q48-6c7w-9gw2: before that install, the prefix's own pip is
+  installed from `apps/revision-reader/requirements-toolcache-pip.txt` — pip alone, at the reader
+  lock's pin and hashes, `--isolated --require-hashes --only-binary :all: --no-deps` — over the
+  toolcache's bundled pip, which vendors a certifi bundle of its own that no repository file
+  controlled; the bundled pip performs that one install and is replaced. `test_tooling_locks.py`
+  keeps the pin equal to the reader lock's, the lock pip-only, and the install exactly once and
+  ahead of the Gate 4N PyYAML install and the first prefix inventory.)* The venv's own `pip install -r scripts/requirements-gate.txt` line (pinned by
   Gate 4N-I28BH-E2) is kept and is already satisfied. It runs unhashed, so it is a no-op only
   while every PyYAML pin agrees. `test_tooling_locks.py` fails if they ever differ. It also
   fails if:
@@ -445,8 +451,14 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   the next bullet.)* CI on the pull request is the measurement of record.
 - **Measured in CI (exact-head run 39337491390 on `f3fb4d59`; gate summary 2026-10-20T00:06Z):** the
   reader job's interpreter prefix (`pythonLocation`, `/opt/hostedtoolcache/Python/3.12.15/x64`) held 2
-  installed distributions (pip 26.2.1 and PyYAML 6.0.3) and 21 scanned language packages,
-  vendored copies included. Under the adopted tooling policy its gate `REPORTED` 4 HIGH findings
+  installed distributions (~~pip 26.2.1~~ and PyYAML 6.0.3) and 21 scanned language packages,
+  vendored copies included. *(2026-10-21, GHSA-6q48-6c7w-9gw2 — certifi < 2026.10.19, CRITICAL,
+  published 2026-10-20: the toolcache's pip 26.2.1 vendors certifi 2026.6.17, so this gate failed on
+  every run after Trivy's database carried the advisory, and nothing in the repository controlled that
+  pip. The prefix's pip is now installed first from `apps/revision-reader/requirements-toolcache-pip.txt`
+  (pip 26.2.2, which vendors certifi 2026.10.19), so the prefix still holds 2 installed distributions,
+  pip 26.2.2 and PyYAML 6.0.3; the first run on that change is its measurement of record.)*
+  Under the adopted tooling policy its gate `REPORTED` 4 HIGH findings
   (development scope: reported, not failing): `GHSA-6v7p-g79w-8964` (msgpack 1.1.2),
   `CVE-2025-47273` (setuptools 70.3.0), and `CVE-2026-97687` and `CVE-2026-97689` (urllib3
   2.7.0). Package versions and findings change from run to run: each run's
@@ -469,7 +481,9 @@ or runner-provided population that no merge-path scan covers:
 - `node_modules` from `npm ci` is integrity-checked against the scanned `package-lock.json`,
   but is not scanned as installed.
 - The interpreters and runtimes come from the runner and the setup actions: toolcache Python
-  and Node, each venv's bundled bootstrap pip, the Container build job's system interpreter
+  and Node, each venv's bundled bootstrap pip (the reader job's toolcache pip is replaced from
+  `apps/revision-reader/requirements-toolcache-pip.txt` since 2026-10-21, after performing that one
+  hash-checked install), the Container build job's system interpreter
   (stdlib-only scripts, not scanned) and the Trivy binary that `trivy-action` downloads.
   The OpenTofu binary and providers rely on the provider lock (one platform's checksums).
   GitHub Actions code is pinned by tag, not by digest (`P6-CI-9`).
@@ -541,4 +555,6 @@ Gate 4N hash lock are regenerated the same way, from their own directories:
 `pip-compile --generate-hashes --allow-unsafe --strip-extras --extra dev --output-file
 requirements-dev.txt pyproject.toml requirements-dev.in` (in `apps/revision-reader/`) and
 `pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file
-requirements-gate-hashes.txt requirements-gate.txt` (in `scripts/`).
+requirements-gate-hashes.txt requirements-gate.txt` (in `scripts/`), and `pip-compile
+--generate-hashes --allow-unsafe --strip-extras --output-file requirements-toolcache-pip.txt
+requirements-toolcache-pip.in` (in `apps/revision-reader/`, 2026-10-21).
