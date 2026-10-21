@@ -2,8 +2,10 @@ import { apiRequest } from './client';
 import type {
   FeedbackCapability,
   AudienceIn,
+  AudiencePatch,
   BrandOut,
   BrandVoiceIn,
+  BrandVoicePatch,
   Capability,
   CapabilityEffectiveList,
   CapabilityOverrideMutation,
@@ -14,9 +16,13 @@ import type {
   BusinessProfileBase,
   BusinessProfileOut,
   CampaignIn,
+  CampaignPatch,
   ChannelPrefIn,
+  ChannelPrefPatch,
   ClaimIn,
+  ClaimPatch,
   CompetitorIn,
+  CompetitorPatch,
   ContextRow,
   EmailVerificationConfirmRequest,
   EmailVerificationRequest,
@@ -41,6 +47,7 @@ import type {
   LoginRequest,
   MemberRoleUpdate,
   OfferIn,
+  OfferPatch,
   OnboardingRequest,
   OnboardingResult,
   OperationalOverview,
@@ -53,6 +60,7 @@ import type {
   PasswordResetConfirmRequest,
   PasswordResetRequest,
   ProductIn,
+  ProductPatch,
   RegisterRequest,
   RuntimeCapabilities,
   RuntimeSummary,
@@ -64,6 +72,7 @@ import type {
   ScoutScheduleOut,
   SessionOut,
   SourcePrefIn,
+  SourcePrefPatch,
   TelemetryStatus,
   WorkspaceCreate,
   WorkspaceOut,
@@ -278,6 +287,31 @@ export const createContext = (workspaceId: string, kind: ContextKind, body: Cont
 
 export const deleteContext = (workspaceId: string, kind: ContextKind, itemId: string) =>
   apiRequest<void>(`/workspaces/${workspaceId}/${kind}/${itemId}`, { method: 'DELETE' });
+
+/** Each collection's PATCH body (P6-PLAT-9), so a field key is checked per collection. */
+export interface ContextPatchByKind {
+  products: ProductPatch;
+  audiences: AudiencePatch;
+  competitors: CompetitorPatch;
+  'brand-voice': BrandVoicePatch;
+  offers: OfferPatch;
+  claims: ClaimPatch;
+  'source-preferences': SourcePrefPatch;
+  'channel-preferences': ChannelPrefPatch;
+  campaigns: CampaignPatch;
+}
+
+/** Change only the fields sent; the row keeps its id (P6-PLAT-9). */
+export const updateContext = <K extends ContextKind>(
+  workspaceId: string,
+  kind: K,
+  itemId: string,
+  body: ContextPatchByKind[K],
+) =>
+  apiRequest<ContextRow>(`/workspaces/${workspaceId}/${kind}/${itemId}`, {
+    method: 'PATCH',
+    body,
+  });
 
 // ---- Locations & geo ----
 export const listLocations = (workspaceId: string, signal?: AbortSignal) =>

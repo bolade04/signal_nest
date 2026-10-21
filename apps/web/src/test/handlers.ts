@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
+import type { ContextKind, ContextPatchByKind } from '@/api/endpoints';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -795,6 +796,85 @@ async function tenantGate({ request, params }: { request: Request; params: Recor
   }
   return undefined;
 }
+
+// ---- Campaign context rows (P6-PLAT-9) ----------------------------------------
+//
+// A stored row is every column of the model: the tenant columns plus exactly the keys of
+// the collection's PATCH schema (which has the create schema's keys). Typing the defaults
+// `Required<...Patch>` makes a missing or invented key a compile error, so this fixture
+// cannot quietly drift from the contract the way an untyped one could.
+const CONTEXT_ROW_DEFAULTS: { [K in ContextKind]: Required<ContextPatchByKind[K]> } = {
+  products: {
+    name: '',
+    description: null,
+    audience: null,
+    pain_points: [],
+    use_cases: [],
+    competitors: [],
+    keywords: [],
+    exclusion_rules: [],
+    relevance_weight: 1,
+    claims_rules: {},
+  },
+  audiences: { label: '', description: null, demographics: {}, motivations: [], objections: [], keywords: [] },
+  competitors: { name: '', website: null, known_weaknesses: [], notes: null },
+  'brand-voice': { tone: [], personality: [], do_use: [], avoid: [], example_copy: null },
+  offers: {
+    name: '',
+    product_service: null,
+    discount_amount: null,
+    percentage_discount: null,
+    sale_price: null,
+    regular_price: null,
+    promo_code: null,
+    start_date: null,
+    end_date: null,
+    eligible_location_ids: [],
+    terms: null,
+    required_disclaimer: null,
+    cta: null,
+    landing_url: null,
+    is_active: true,
+  },
+  claims: { text: '', kind: 'approved', category: null, risk_level: 'low', notes: null },
+  'source-preferences': { source_type: 'manual', enabled: true, config: {} },
+  'channel-preferences': { channel: '', enabled: true, weekly_volume: null },
+  campaigns: { name: '', goal: null, mode: 'per_location', location_ids: [], status: 'active' },
+};
+/** `Field(min_length=1)` in the create schemas, which PATCH keeps. */
+const CONTEXT_MIN_LENGTH = new Set(['name', 'label', 'text']);
+const CONTEXT_KINDS = Object.keys(CONTEXT_ROW_DEFAULTS) as ContextKind[];
+type StoredContextRow = Record<string, unknown> & { id: string };
+const contextRows = Object.fromEntries(CONTEXT_KINDS.map((k) => [k, []])) as unknown as Record<
+  ContextKind,
+  StoredContextRow[]
+>;
+
+function asContextKind(value: unknown): ContextKind | null {
+  return CONTEXT_KINDS.find((k) => k === value) ?? null;
+}
+
+export const contextModel = {
+  reset(): void {
+    for (const k of CONTEXT_KINDS) contextRows[k] = [];
+  },
+  /** Store a full row (defaults overlaid with `fields`) and return it. */
+  seed<K extends ContextKind>(kind: K, id: string, fields: ContextPatchByKind[K]): StoredContextRow {
+    const row: StoredContextRow = {
+      id,
+      organization_id: org.id,
+      workspace_id: workspace.id,
+      brand_id: brand.id,
+      created_at: '2026-06-01T00:00:00Z',
+      updated_at: '2026-06-01T00:00:00Z',
+      ...CONTEXT_ROW_DEFAULTS[kind],
+      ...fields,
+    };
+    contextRows[kind].push(row);
+    return row;
+  },
+  rows: (kind: ContextKind): readonly StoredContextRow[] => contextRows[kind],
+};
 
 /** Test-facing control surface for the model. */
 export const orgModel = {
@@ -1713,12 +1793,42 @@ export const handlers = [
     ),
   ),
 
-  // ---- Campaign context (all kinds return an empty list by default) ----
+  // ---- Campaign context (each kind is empty unless a test seeds contextModel) ----
   // Registered LAST so the specific single-segment routes above (locations,
   // scout-requests, opportunities) take precedence over this greedy :kind match.
   http.get(P('/workspaces/:ws/:kind'), ({ params }) => {
-    const kinds = ['products', 'audiences', 'competitors', 'brand-voice', 'offers', 'claims', 'source-preferences', 'channel-preferences', 'campaigns'];
-    if (kinds.includes(String(params.kind))) return HttpResponse.json([]);
+    const kind = asContextKind(params.kind);
+    if (kind) return HttpResponse.json(contextRows[kind]);
     return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+  }),
+  // P6-PLAT-9: PATCH changes only the fields sent (apps/api/app/campaign_context/routes.py).
+  http.patch(P('/workspaces/:ws/:kind/:id'), async ({ request, params }) => {
+    const kind = asContextKind(params.kind);
+    if (!kind) return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+    const user = userOf(request);
+    const orgId = workspaceOrganization(String(params.ws));
+    const role = orgId && user ? membershipOf(orgId, user.id)?.role : undefined;
+    if (role && !['owner', 'admin', 'marketer'].includes(role)) {
+      return modelError(403, 'permission_denied', `Role '${role}' is not permitted for this action.`);
+    }
+    const body = await readJson(request);
+    const defaults = CONTEXT_ROW_DEFAULTS[kind] as Record<string, unknown>;
+    for (const [key, value] of Object.entries(body)) {
+      // The API ignores an unknown key (pydantic's default), which would hide a client
+      // sending a misspelt one; the model records it so a test fails instead.
+      if (!(key in defaults)) {
+        model.violations.push(`PATCH /${kind} sent unknown key ${key}`);
+        continue;
+      }
+      const nullable = defaults[key] === null;
+      if ((value === null && !nullable) || (value === '' && CONTEXT_MIN_LENGTH.has(key))) {
+        return modelError(422, 'validation_error', 'Request validation failed');
+      }
+    }
+    const row = contextRows[kind].find((r) => r.id === params.id);
+    if (!row) return modelError(404, 'not_found', 'Item not found in this workspace.');
+    for (const [key, value] of Object.entries(body)) if (key in defaults) row[key] = value;
+    row.updated_at = '2026-07-01T00:00:00Z';
+    return HttpResponse.json(row);
   }),
 ];

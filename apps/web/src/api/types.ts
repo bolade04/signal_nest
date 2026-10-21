@@ -104,6 +104,18 @@ export type CampaignIn = S['CampaignIn'];
 export type SourcePrefIn = S['SourcePrefIn'];
 export type ChannelPrefIn = S['ChannelPrefIn'];
 
+// P6-PLAT-9 partial-update bodies: the create schema's fields, every one optional. An
+// omitted field is left unchanged; `null` clears a nullable one.
+export type ProductPatch = S['ProductPatch'];
+export type AudiencePatch = S['AudiencePatch'];
+export type CompetitorPatch = S['CompetitorPatch'];
+export type BrandVoicePatch = S['BrandVoicePatch'];
+export type OfferPatch = S['OfferPatch'];
+export type ClaimPatch = S['ClaimPatch'];
+export type CampaignPatch = S['CampaignPatch'];
+export type SourcePrefPatch = S['SourcePrefPatch'];
+export type ChannelPrefPatch = S['ChannelPrefPatch'];
+
 export type FeedbackCapability = S['FeedbackCapabilityOut'];
 
 export type RuntimeSummary = S['RuntimeSummaryOut'];

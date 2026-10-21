@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Boxes, Plus, Trash2 } from 'lucide-react';
+import { Boxes, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import * as api from '@/api/endpoints';
-import type { ContextInput, ContextKind } from '@/api/endpoints';
+import type { ContextInput, ContextKind, ContextPatchByKind } from '@/api/endpoints';
 import { ApiError } from '@/api/client';
 import { queryKeys } from '@/api/queryKeys';
 import type { ContextRow } from '@/api/types';
@@ -42,8 +42,7 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 type FieldType = 'text' | 'textarea' | 'tags' | 'number' | 'boolean' | 'select';
 
-interface FieldDef {
-  key: string;
+interface FieldDefBase {
   label: string;
   type: FieldType;
   required?: boolean;
@@ -54,15 +53,29 @@ interface FieldDef {
   colSpan?: boolean;
 }
 
-interface KindConfig {
-  kind: ContextKind;
+/** A field of collection `K`: its key must be a key of that collection's PATCH schema. */
+type FieldDef<K extends ContextKind> = FieldDefBase & {
+  key: Extract<keyof ContextPatchByKind[K], string>;
+};
+type AnyFieldDef = FieldDefBase & { key: string };
+
+interface KindConfigOf<K extends ContextKind> {
+  kind: K;
   tab: string;
   singular: string;
   blurb: string;
-  fields: FieldDef[];
+  fields: FieldDef<K>[];
   title: (row: ContextRow) => string;
   subtitle?: (row: ContextRow) => string | null;
 }
+type KindConfig = Omit<KindConfigOf<ContextKind>, 'fields'> & { fields: AnyFieldDef[] };
+
+/**
+ * Checks each kind's field keys against its generated PATCH schema (which has the same
+ * keys as the create schema), so a misspelt key fails to compile instead of being sent
+ * and silently ignored by the API.
+ */
+const defineKind = <K extends ContextKind>(config: KindConfigOf<K>): KindConfig => config;
 
 const str = (v: unknown): string | null =>
   typeof v === 'string' && v.trim() ? v : null;
@@ -78,7 +91,7 @@ const campaignModeOptions = {
 };
 
 const KINDS: KindConfig[] = [
-  {
+  defineKind({
     kind: 'products',
     tab: 'Products & services',
     singular: 'product',
@@ -93,8 +106,8 @@ const KINDS: KindConfig[] = [
       { key: 'pain_points', label: 'Pain points solved', type: 'tags', colSpan: true },
       { key: 'use_cases', label: 'Use cases', type: 'tags', colSpan: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'audiences',
     tab: 'Audiences',
     singular: 'audience',
@@ -108,8 +121,8 @@ const KINDS: KindConfig[] = [
       { key: 'objections', label: 'Objections', type: 'tags', colSpan: true },
       { key: 'keywords', label: 'Keywords', type: 'tags', colSpan: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'competitors',
     tab: 'Competitors',
     singular: 'competitor',
@@ -122,8 +135,8 @@ const KINDS: KindConfig[] = [
       { key: 'known_weaknesses', label: 'Known weaknesses', type: 'tags', colSpan: true },
       { key: 'notes', label: 'Notes', type: 'textarea', colSpan: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'brand-voice',
     tab: 'Brand voice',
     singular: 'voice profile',
@@ -137,8 +150,8 @@ const KINDS: KindConfig[] = [
       { key: 'avoid', label: 'Words to avoid', type: 'tags', colSpan: true },
       { key: 'example_copy', label: 'Example copy', type: 'textarea', colSpan: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'offers',
     tab: 'Offers',
     singular: 'offer',
@@ -153,8 +166,8 @@ const KINDS: KindConfig[] = [
       { key: 'terms', label: 'Terms', type: 'textarea', colSpan: true },
       { key: 'required_disclaimer', label: 'Required disclaimer', type: 'textarea', colSpan: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'claims',
     tab: 'Claims library',
     singular: 'claim',
@@ -172,8 +185,8 @@ const KINDS: KindConfig[] = [
       { key: 'category', label: 'Category', type: 'text' },
       { key: 'notes', label: 'Notes', type: 'textarea', colSpan: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'campaigns',
     tab: 'Campaigns',
     singular: 'campaign',
@@ -188,8 +201,8 @@ const KINDS: KindConfig[] = [
       { key: 'goal', label: 'Goal', type: 'text' },
       { key: 'mode', label: 'Location mode', type: 'select', options: campaignModeOptions, defaultValue: 'per_location' },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'source-preferences',
     tab: 'Sources',
     singular: 'source preference',
@@ -203,8 +216,8 @@ const KINDS: KindConfig[] = [
       { key: 'source_type', label: 'Source', type: 'select', required: true, options: sourceTypeLabels },
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
-  },
-  {
+  }),
+  defineKind({
     kind: 'channel-preferences',
     tab: 'Channels',
     singular: 'channel preference',
@@ -216,12 +229,12 @@ const KINDS: KindConfig[] = [
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
       { key: 'weekly_volume', label: 'Weekly volume', type: 'number' },
     ],
-  },
+  }),
 ];
 
-// ---- Generic create dialog ----------------------------------------------------
+// ---- Generic create / edit dialog ---------------------------------------------
 
-function buildDefaults(fields: FieldDef[]): Record<string, unknown> {
+function buildDefaults(fields: AnyFieldDef[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of fields) {
     if (f.defaultValue !== undefined) out[f.key] = f.defaultValue;
@@ -233,38 +246,90 @@ function buildDefaults(fields: FieldDef[]): Record<string, unknown> {
   return out;
 }
 
+/** The form as seeded from a stored row, in the same shapes the controls produce. */
+function buildFromRow(fields: AnyFieldDef[], row: ContextRow): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of fields) {
+    const v = row[f.key];
+    if (f.type === 'tags') out[f.key] = arr(v);
+    else if (f.type === 'boolean') out[f.key] = v !== false;
+    else if (f.type === 'number') out[f.key] = typeof v === 'number' ? v : null;
+    else out[f.key] = typeof v === 'string' ? v : '';
+  }
+  return out;
+}
+
+/** A form value as the API stores it: an empty optional text field is `null`. */
+function stored(f: AnyFieldDef, v: unknown): unknown {
+  return f.type !== 'tags' && typeof v === 'string' && v.trim() === '' ? null : v;
+}
+
+/**
+ * The PATCH body (P6-PLAT-9): only the fields this form shows AND the user changed.
+ * Anything the form does not show — an offer's eligible locations, a product's claims
+ * rules — is never sent, so it is never overwritten.
+ */
+function changedFields(fields: AnyFieldDef[], seed: Record<string, unknown>, form: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+  for (const f of fields) {
+    const before = stored(f, seed[f.key]);
+    const after = stored(f, form[f.key]);
+    if (JSON.stringify(before) !== JSON.stringify(after)) out[f.key] = after;
+  }
+  return out;
+}
+
 function ContextDialog({
   workspaceId,
   config,
   open,
   onOpenChange,
+  editing,
 }: {
   workspaceId: string;
   config: KindConfig;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The stored row to edit; null to add a new one. */
+  editing: ContextRow | null;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [form, setForm] = useState<Record<string, unknown>>(() => buildDefaults(config.fields));
+  const seedFor = () => (editing ? buildFromRow(config.fields, editing) : buildDefaults(config.fields));
+  const [seed, setSeed] = useState<Record<string, unknown>>(seedFor);
+  const [form, setForm] = useState<Record<string, unknown>>(seed);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset the form whenever the dialog opens for a (possibly different) kind.
-  const dialogKey = `${config.kind}:${open}`;
+  // Reset the form whenever the dialog opens for a (possibly different) kind or row.
+  const dialogKey = `${config.kind}:${open}:${editing?.id ?? 'new'}`;
   const [seenKey, setSeenKey] = useState(dialogKey);
   if (dialogKey !== seenKey) {
     setSeenKey(dialogKey);
     if (open) {
-      setForm(buildDefaults(config.fields));
+      const next = seedFor();
+      setSeed(next);
+      setForm(next);
       setError(null);
     }
   }
 
-  const create = useMutation({
-    mutationFn: () => api.createContext(workspaceId, config.kind, sanitize(form) as ContextInput),
+  const changes = editing ? changedFields(config.fields, seed, form) : {};
+  const save = useMutation({
+    mutationFn: () =>
+      editing
+        ? api.updateContext(
+            workspaceId,
+            config.kind,
+            editing.id,
+            changes as ContextPatchByKind[typeof config.kind],
+          )
+        : api.createContext(workspaceId, config.kind, sanitize(form) as ContextInput),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.context(workspaceId, config.kind) });
-      toast({ title: `${titleCase(config.singular)} added`, intent: 'success' });
+      toast({
+        title: `${titleCase(config.singular)} ${editing ? 'updated' : 'added'}`,
+        intent: 'success',
+      });
       onOpenChange(false);
     },
     onError: (err) =>
@@ -275,6 +340,8 @@ function ContextDialog({
   const missingRequired = requiredField
     ? isEmpty(form[requiredField.key])
     : false;
+  const unchanged = Boolean(editing) && Object.keys(changes).length === 0;
+  const action = editing ? 'Save changes' : `Add ${config.singular}`;
 
   const set = (key: string, value: unknown) => setForm((f) => ({ ...f, [key]: value }));
 
@@ -282,7 +349,9 @@ function ContextDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Add {config.singular}</DialogTitle>
+          <DialogTitle>
+            {editing ? 'Edit' : 'Add'} {config.singular}
+          </DialogTitle>
         </DialogHeader>
 
         {error ? (
@@ -306,11 +375,11 @@ function ContextDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={save.isPending}>
             Cancel
           </Button>
-          <Button onClick={() => create.mutate()} disabled={create.isPending || missingRequired}>
-            Add {config.singular}
+          <Button onClick={() => save.mutate()} disabled={save.isPending || missingRequired || unchanged}>
+            {action}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -319,7 +388,7 @@ function ContextDialog({
 }
 
 function renderControl(
-  f: FieldDef,
+  f: AnyFieldDef,
   id: string,
   value: unknown,
   onChange: (v: unknown) => void,
@@ -394,18 +463,29 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { organizationId } = useWorkspace();
-  // Adding and removing context are editor actions (EDITORS gate); every member
+  // Adding, editing and removing context are editor actions (EDITORS gate); every member
   // keeps the list. An unresolved role is denied until it resolves.
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<ContextRow | null>(null);
   const [toDelete, setToDelete] = useState<ContextRow | null>(null);
 
-  // Drop latched add/remove intents when the role gate closes, so neither
+  // Drop latched add/edit/remove intents when the role gate closes, so no
   // dialog can spring back open by itself if the gate later reopens.
   if (!canEdit && (dialogOpen || toDelete)) {
     setDialogOpen(false);
+    setEditing(null);
     setToDelete(null);
   }
+
+  const openAdd = () => {
+    setEditing(null);
+    setDialogOpen(true);
+  };
+  const openEdit = (row: ContextRow) => {
+    setEditing(row);
+    setDialogOpen(true);
+  };
 
   const query = useQuery({
     queryKey: queryKeys.context(workspaceId, config.kind),
@@ -433,7 +513,7 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-2xl text-sm text-muted-foreground">{config.blurb}</p>
         {canEdit ? (
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="shrink-0">
+          <Button size="sm" onClick={openAdd} className="shrink-0">
             <Plus className="size-4" /> Add {config.singular}
           </Button>
         ) : null}
@@ -457,15 +537,25 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
                     ) : null}
                   </div>
                   {canEdit ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove ${config.singular}`}
-                      onClick={() => setToDelete(row)}
-                      disabled={remove.isPending}
-                    >
-                      <Trash2 className="size-4 text-muted-foreground" />
-                    </Button>
+                    <div className="flex shrink-0 gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Edit ${config.singular}`}
+                        onClick={() => openEdit(row)}
+                      >
+                        <Pencil className="size-4 text-muted-foreground" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove ${config.singular}`}
+                        onClick={() => setToDelete(row)}
+                        disabled={remove.isPending}
+                      >
+                        <Trash2 className="size-4 text-muted-foreground" />
+                      </Button>
+                    </div>
                   ) : null}
                 </CardContent>
               </Card>
@@ -479,7 +569,7 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
           description={config.blurb}
           action={
             canEdit ? (
-              <Button onClick={() => setDialogOpen(true)}>
+              <Button onClick={openAdd}>
                 <Plus className="size-4" /> Add {config.singular}
               </Button>
             ) : undefined
@@ -494,6 +584,7 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
             config={config}
             open={dialogOpen}
             onOpenChange={setDialogOpen}
+            editing={editing}
           />
 
           <ConfirmDialog
