@@ -179,7 +179,12 @@ concern; every row's disposition is **non-secret configuration**.
 
 **LLM (non-secret):** `llm_provider` (`LLM_PROVIDER`, staging=`openai`|`anthropic`),
 `llm_model` (`LLM_MODEL`), `llm_timeout_seconds` (`LLM_TIMEOUT_SECONDS`),
-`llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`).
+`llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`),
+`llm_max_output_tokens` (`LLM_MAX_OUTPUT_TOKENS`), `llm_retry_after_cap_seconds`
+(`LLM_RETRY_AFTER_CAP_SECONDS`), `llm_max_untrusted_chars` (`LLM_MAX_UNTRUSTED_CHARS`),
+`llm_max_calls_per_run` (`LLM_MAX_CALLS_PER_RUN`), `llm_workspace_monthly_budget_usd`
+(`LLM_WORKSPACE_MONTHLY_BUDGET_USD`), `llm_prices_usd_per_mtok`
+(`LLM_PRICES_USD_PER_MTOK`, JSON), `llm_price_source` (`LLM_PRICE_SOURCE`).
 
 **Readiness probes:** `readiness_probe_timeout_seconds`
 (`READINESS_PROBE_TIMEOUT_SECONDS`), `readiness_total_timeout_seconds`

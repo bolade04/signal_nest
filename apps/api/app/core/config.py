@@ -396,6 +396,46 @@ class Settings(BaseSettings):
     llm_mock_seed: str = "signalnest-dev"
     llm_allow_dev_fallback: bool = False
 
+    # --- LLM reliability (P6-LLM-1) ------------------------------------------
+    #: Upper bound on generated tokens per call (Anthropic ``max_tokens``, OpenAI
+    #: ``max_completion_tokens``). A reply that stops at the bound is treated as
+    #: truncated (malformed), never parsed as a partial answer.
+    llm_max_output_tokens: int = 1024
+    #: Longest provider ``retry-after`` the service honours before its next
+    #: attempt; a longer hint is clamped so one call's wall-clock stays bounded.
+    llm_retry_after_cap_seconds: float = 10.0
+
+    # --- LLM safety and cost (P6-LLM-2, P6-LLM-4) ----------------------------
+    #: Longest value (characters, after sanitizing) interpolated into a prompt as
+    #: one untrusted data block; longer values are cut with a "[truncated]" marker.
+    llm_max_untrusted_chars: int = 4000
+    #: Provider attempts (retries included) allowed in ONE scout run.
+    llm_max_calls_per_run: int = 100
+    #: Model spend allowed per workspace per calendar month (UTC), in USD. Runs are
+    #: refused once it is spent; inside a run, an attempt whose worst case would
+    #: cross it is not made. The mock provider costs nothing.
+    llm_workspace_monthly_budget_usd: float = 5.0
+    #: USD per million [input, output] tokens per model id. A model missing here is
+    #: charged the table's highest rates (an unknown model never looks free).
+    llm_prices_usd_per_mtok: dict[str, list[float]] = Field(
+        default_factory=lambda: {
+            "claude-haiku-4-5": [1.0, 5.0],
+            "claude-sonnet-4-6": [3.0, 15.0],
+            "claude-sonnet-5": [2.0, 10.0],
+            "claude-opus-4-6": [5.0, 25.0],
+            "claude-opus-4-7": [5.0, 25.0],
+            "claude-opus-4-8": [5.0, 25.0],
+            "claude-opus-5": [5.0, 25.0],
+            "claude-fable-5-1": [10.0, 50.0],
+        }
+    )
+    #: Where the default price table came from and when; not a live verification.
+    llm_price_source: str = (
+        "Anthropic first-party list prices from the claude-api reference bundled with "
+        "Claude Code (model table cached 2026-06-24), read 2026-10-20; not verified "
+        "against the live pricing page. No OpenAI prices are listed."
+    )
+
     # --- Readiness probes ----------------------------------------------------
     #: Wall-clock budget for a single readiness probe. Bounded so a hung backend
     #: cannot stall the readiness endpoint. Must be > 0 and <= the total budget.
@@ -586,6 +626,32 @@ class Settings(BaseSettings):
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")
+
+        # LLM call bounds (P6-LLM-1): one call costs at most
+        # (llm_max_retries + 1) x llm_timeout_seconds plus clamped backoff.
+        if not 0 <= self.llm_max_retries <= 5:
+            errors.append("llm_max_retries must be between 0 and 5")
+        if not 1 <= self.llm_timeout_seconds <= 120:
+            errors.append("llm_timeout_seconds must be between 1 and 120")
+        if not 1 <= self.llm_max_output_tokens <= 16000:
+            errors.append("llm_max_output_tokens must be between 1 and 16000")
+        if not 0 <= self.llm_retry_after_cap_seconds <= 60:
+            errors.append("llm_retry_after_cap_seconds must be between 0 and 60")
+        # LLM safety and cost bounds (P6-LLM-2, P6-LLM-4).
+        if not 200 <= self.llm_max_untrusted_chars <= 50000:
+            errors.append("llm_max_untrusted_chars must be between 200 and 50000")
+        if not 1 <= self.llm_max_calls_per_run <= 10000:
+            errors.append("llm_max_calls_per_run must be between 1 and 10000")
+        if not 0 <= self.llm_workspace_monthly_budget_usd <= 100000:
+            errors.append("llm_workspace_monthly_budget_usd must be between 0 and 100000")
+        if not self.llm_prices_usd_per_mtok or any(
+            len(p) != 2 or not all(0 <= x < 10000 for x in p)
+            for p in self.llm_prices_usd_per_mtok.values()
+        ):
+            errors.append(
+                "llm_prices_usd_per_mtok must map each model to [input, output] USD per "
+                "million tokens, each >= 0"
+            )
 
         # A non-positive lifetime would mint invitations that are already expired
         # when created; reject it at construction.

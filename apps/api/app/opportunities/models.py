@@ -62,6 +62,8 @@ class Opportunity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     urgency: Mapped[str | None] = mapped_column(String(40))
     commercial_value: Mapped[str | None] = mapped_column(String(40))
     source_summary: Mapped[list] = mapped_column(JSON, default=list)
+    # ExplanationSource value (P6-LLM-5); NULL on rows created before the marker.
+    explanation_source: Mapped[str | None] = mapped_column(String(32))
 
     status: Mapped[str] = mapped_column(String(40), default=OpportunityStatus.NEW.value)
     is_simulated: Mapped[bool] = mapped_column(Boolean, default=True)

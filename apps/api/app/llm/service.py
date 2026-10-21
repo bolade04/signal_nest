@@ -3,15 +3,31 @@
 Callers use ``llm_service.run(task, inputs)`` and receive a validated Pydantic model.
 The service never silently falls back from a real provider to mock unless
 ``LLM_ALLOW_DEV_FALLBACK`` is explicitly enabled (and never in staging/production).
+
+Retries are bounded: at most ``llm_max_retries + 1`` attempts, and only for transient
+failures (timeout, 429, 5xx/overloaded, connection). Between attempts the service
+waits ``min(0.1 * 2**attempt, 2.0)`` seconds, or the provider's ``retry-after``
+clamped to ``llm_retry_after_cap_seconds``; it never waits after the last attempt.
+Permanent failures (rejected request, refusal, malformed or schema-invalid output)
+are not retried, so a bad reply is never paid for twice.
+
+With a :class:`~app.llm.metering.LLMMeter` (P6-LLM-4) every attempt is first checked
+against the run cap and the workspace budget - a disallowed attempt is not made and
+:class:`~app.llm.metering.LLMBudgetExceededError` propagates (never to the dev
+fallback) - and then charged: a reply by its reported usage (even one that later
+fails schema validation), a timeout by its worst case, a refused HTTP call nothing.
+The meter's opaque tenant reference is sent to the provider.
 """
 
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ValidationError
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import get_logger, trace_id_ctx
 from app.llm.base import (
     LLMError,
@@ -21,14 +37,21 @@ from app.llm.base import (
     LLMRequest,
     LLMResponse,
     LLMTimeoutError,
+    LLMUnavailableError,
 )
+from app.llm.metering import cost_usd
 from app.llm.mock import MockLLMProvider
-from app.llm.prompts import get_prompt
+from app.llm.prompts import SYSTEM_PROMPT, get_prompt, render_prompt
 from app.llm.schemas import TASK_SCHEMAS
+
+if TYPE_CHECKING:
+    from app.llm.metering import LLMMeter
 
 logger = get_logger("signalnest.llm")
 
-_TRANSIENT = (LLMTimeoutError, LLMRateLimitError)
+_TRANSIENT = (LLMTimeoutError, LLMRateLimitError, LLMUnavailableError)
+_BACKOFF_BASE_SECONDS = 0.1
+_BACKOFF_CAP_SECONDS = 2.0
 
 
 def _build_provider() -> LLMProvider:
@@ -44,43 +67,121 @@ def _build_provider() -> LLMProvider:
     return AnthropicProvider(s.llm_api_key, s.llm_model or "", s.llm_timeout_seconds)
 
 
+def _backoff_seconds(attempt: int, exc: Exception, retry_after_cap: float) -> float:
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is not None:
+        return min(retry_after, retry_after_cap)
+    return min(_BACKOFF_BASE_SECONDS * 2**attempt, _BACKOFF_CAP_SECONDS)
+
+
 class LLMService:
-    def __init__(self, provider: LLMProvider | None = None):
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        settings: Settings | None = None,
+    ):
         self._provider = provider or _build_provider()
+        self._sleep = sleep
+        self._settings = settings
 
     @property
     def provider_name(self) -> str:
         return self._provider.name
 
-    def run(self, task: str, inputs: dict) -> tuple[BaseModel, LLMResponse]:
-        settings = get_settings()
+    def run(
+        self, task: str, inputs: dict, *, meter: LLMMeter | None = None
+    ) -> tuple[BaseModel, LLMResponse]:
+        settings = self._settings or get_settings()
         prompt = get_prompt(task)
         request = LLMRequest(
             task=task,
             inputs=inputs,
             seed=settings.llm_mock_seed,
             temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_output_tokens,
+            tenant_ref=meter.tenant_ref if meter is not None else None,
+            max_untrusted_chars=settings.llm_max_untrusted_chars,
         )
+        provider_name = self._provider.name
+        model = getattr(self._provider, "model", "") or ""
+        prompt_chars = 0
+        if meter is not None:
+            rendered = render_prompt(task, inputs, settings.llm_max_untrusted_chars)
+            prompt_chars = len(SYSTEM_PROMPT) + len(rendered)
 
+        def charge(response: LLMResponse | None = None, error: Exception | None = None):
+            if meter is not None:
+                meter.after_attempt(
+                    task=task,
+                    provider=provider_name,
+                    model=model,
+                    prompt_chars=prompt_chars,
+                    max_tokens=request.max_tokens,
+                    response=response,
+                    error=error,
+                )
+
+        attempts = settings.llm_max_retries + 1
         last_error: Exception | None = None
-        for attempt in range(settings.llm_max_retries + 1):
+        for attempt in range(attempts):
+            if meter is not None:
+                meter.before_attempt(provider_name, model, prompt_chars, request.max_tokens)
             try:
                 response = self._provider.generate(request, prompt.name, prompt.version)
-                response.trace_id = trace_id_ctx.get()
-                validated = self._validate(task, response)
-                self._log(response, attempt)
-                return validated, response
             except _TRANSIENT as exc:
+                charge(error=exc)
                 last_error = exc
-                backoff = min(2**attempt * 0.1, 2.0)
+                if attempt + 1 >= attempts:
+                    break
+                backoff = _backoff_seconds(attempt, exc, settings.llm_retry_after_cap_seconds)
                 logger.warning(
                     "llm.retry",
-                    extra={"extra_fields": {"task": task, "attempt": attempt, "error": str(exc)}},
+                    extra={
+                        "extra_fields": {
+                            "task": task,
+                            "attempt": attempt,
+                            "error_class": type(exc).__name__,
+                            "error": str(exc),
+                            "backoff_s": backoff,
+                        }
+                    },
                 )
-                time.sleep(backoff)
+                self._sleep(backoff)
+                continue
             except LLMError as exc:
+                charge(error=exc)
                 last_error = exc
                 break
+            response.usage.estimated_cost_usd = cost_usd(
+                settings,
+                provider_name,
+                model,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
+            charge(response=response)
+            response.trace_id = trace_id_ctx.get()
+            try:
+                validated = self._validate(task, response)
+            except LLMMalformedError as exc:
+                last_error = exc
+                break
+            self._log(response, attempt)
+            return validated, response
+
+        logger.warning(
+            "llm.failed",
+            extra={
+                "extra_fields": {
+                    "task": task,
+                    "provider": self._provider.name,
+                    "error_class": type(last_error).__name__,
+                    "error": str(last_error),
+                }
+            },
+        )
 
         # Explicit dev-only fallback (never enabled in staging/production by config validation).
         if settings.llm_allow_dev_fallback and not isinstance(self._provider, MockLLMProvider):
