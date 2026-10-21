@@ -137,6 +137,7 @@ ITEM_404 = "Item not found in this workspace."
 SCOUT_404 = "Scout request not found in this workspace."
 OPP_404 = "Opportunity not found in this workspace."
 JOB_404 = "Job not found in this workspace."
+LOCATION_404 = "Location not found in this workspace."
 SCHEDULING_DARK = "Scout scheduling is not available yet."
 FEEDBACK_DARK = "Opportunity feedback is not available yet."
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
@@ -178,9 +179,10 @@ _CONTEXT = (
 _W = "/workspaces/{workspace_id}"
 _O = "/organizations/{organization_id}"
 
-#: The explicit policy table. 44 role-gated rows (39 that existed before 6B-3A + 5 new
-#: OWNER/ADMIN routes), 25 membership-only rows (24 workspace + 1 new organization route),
-#: and the 2 GET routes whose membership check is inside the handler.
+#: The explicit policy table. 46 role-gated rows (39 that existed before 6B-3A + 5 new
+#: OWNER/ADMIN routes + the location deactivate/reactivate pair of P6-UI-023), 25
+#: membership-only rows (24 workspace + 1 new organization route), and the 2 GET routes
+#: whose membership check is inside the handler.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -206,6 +208,18 @@ E7_POLICY: tuple[Policy, ...] = (
         EDITORS,
         RANK_FLOOR,
         _body_422(),
+    ),
+    # P6-UI-023: no body; an admitted role reaches the handler's 404 for the sentinel id.
+    *(
+        _row(
+            "POST",
+            f"{_W}/locations/{{location_id}}/{verb}",
+            "workspace",
+            EDITORS,
+            RANK_FLOOR,
+            _handler_404(LOCATION_404),
+        )
+        for verb in ("deactivate", "reactivate")
     ),
     _row("POST", f"{_W}/scout-requests", "workspace", EDITORS, RANK_FLOOR, _body_422()),
     _row(
@@ -521,7 +535,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 44,
+            "role_gated": 46,
             MEMBER_WS: 24,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -532,7 +546,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            RANK_FLOOR: 37,
+            RANK_FLOOR: 39,
             WS_EXACT: 1,
             ORG_EXACT: 6,
             MEMBER_WS: 24,
@@ -552,7 +566,9 @@ class TestPolicyTableCompleteness:
         assert served == published
         # 105 -> 106 (P6-UI-017): the one new operation is POST /auth/password/change, an
         # AUTHENTICATED_ONLY route; the equality above proves no other route came or went.
-        assert len(served) == 106
+        # 106 -> 108 (P6-UI-023): POST .../locations/{location_id}/deactivate and
+        # .../reactivate, each a RANK_FLOOR row above.
+        assert len(served) == 108
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -560,7 +576,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 71
+        assert len(rows) == 73
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

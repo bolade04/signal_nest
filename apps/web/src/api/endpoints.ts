@@ -1,4 +1,4 @@
-import { apiRequest } from './client';
+import { apiRequest, apiRequestPage } from './client';
 import type {
   FeedbackCapability,
   AudienceIn,
@@ -292,6 +292,17 @@ export const updateLocation = (workspaceId: string, locationId: string, body: Lo
     body,
   });
 
+// P6-UI-023: a location is retired, never deleted, so its history keeps its market.
+export const deactivateLocation = (workspaceId: string, locationId: string) =>
+  apiRequest<LocationOut>(`/workspaces/${workspaceId}/locations/${locationId}/deactivate`, {
+    method: 'POST',
+  });
+
+export const reactivateLocation = (workspaceId: string, locationId: string) =>
+  apiRequest<LocationOut>(`/workspaces/${workspaceId}/locations/${locationId}/reactivate`, {
+    method: 'POST',
+  });
+
 export const getGeoCoverage = (workspaceId: string, locationId: string, signal?: AbortSignal) =>
   apiRequest<GeoCoverageOut>(
     `/workspaces/${workspaceId}/locations/${locationId}/geo-coverage`,
@@ -405,6 +416,18 @@ export const listOpportunities = (
 ) =>
   apiRequest<OpportunityCard[]>(`/workspaces/${workspaceId}/opportunities`, {
     query: { ...filters },
+    signal,
+  });
+
+/** One page of the feed (P6-PLAT-12). `total` is the whole filtered count, not the page. */
+export const listOpportunityPage = (
+  workspaceId: string,
+  filters: OpportunityFilters,
+  cursor: string | null,
+  signal?: AbortSignal,
+) =>
+  apiRequestPage<OpportunityCard>(`/workspaces/${workspaceId}/opportunities`, {
+    query: { ...filters, cursor },
     signal,
   });
 

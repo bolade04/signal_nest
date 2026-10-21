@@ -786,6 +786,26 @@ class TestLocations:
         own = pov.send("GET", _ws_path(world, a, f"/locations/{a.location_id}/geo-coverage"))
         assert own.status_code == 200 and own.json()["radius_miles"] == 25
 
+    def test_deactivate_and_reactivate_with_foreign_location_id_404_unchanged(
+        self, world: World, pov: Pov
+    ):
+        a, b = pov.a, pov.b
+        before = world.row(BusinessLocation, b.location_id)
+        for verb in ("deactivate", "reactivate"):
+            r = pov.send("POST", _ws_path(world, a, f"/locations/{b.location_id}/{verb}"))
+            _assert_404(r, "Location not found in this workspace.")
+            _assert_membership_403(
+                pov.send("POST", _ws_path(world, b, f"/locations/{b.location_id}/{verb}"))
+            )
+        assert world.row(BusinessLocation, b.location_id) == before
+        # Positive: A retires and restores a location of its own (not the shared fixture one).
+        mine = pov.send("POST", _ws_path(world, a, "/locations"), {"name": f"Pop-up {a.key}"})
+        mine_id = mine.json()["id"]
+        off = pov.send("POST", _ws_path(world, a, f"/locations/{mine_id}/deactivate"))
+        assert off.status_code == 200 and off.json()["is_active"] is False
+        on = pov.send("POST", _ws_path(world, a, f"/locations/{mine_id}/reactivate"))
+        assert on.status_code == 200 and on.json()["is_active"] is True
+
     def test_geocode_workspace_id_in_query(self, world: World, pov: Pov):
         a, b = pov.a, pov.b
         own = pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": a.ws_id})
@@ -1164,6 +1184,12 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("PUT", f"{W}/locations/{{location_id}}/geo-coverage"): (
         "TestLocations::test_geo_coverage_with_foreign_location_id_404_unchanged",
     ),
+    **{
+        ("POST", f"{W}/locations/{{location_id}}/{verb}"): (
+            "TestLocations::test_deactivate_and_reactivate_with_foreign_location_id_404_unchanged",
+        )
+        for verb in ("deactivate", "reactivate")
+    },
     ("POST", "/geocode"): ("TestLocations::test_geocode_workspace_id_in_query",),
     ("GET", f"{W}/scout-requests"): (
         "TestScoutRequests::test_list_own_only_and_foreign_location_filter_is_empty",
@@ -1310,7 +1336,9 @@ class TestCoverageCompleteness:
         covered = {(m, f"{API}{p}") for m, p in COVERAGE}
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
-        assert len(served) == 71
+        # 71 -> 73 (P6-UI-023): location deactivate and reactivate; the equalities above
+        # prove no other operation came or went.
+        assert len(served) == 73
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

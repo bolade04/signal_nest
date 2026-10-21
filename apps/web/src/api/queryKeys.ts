@@ -53,6 +53,10 @@ export const queryKeys = {
 
   opportunities: (workspaceId: string, filters: OpportunityFilters) =>
     ['workspaces', workspaceId, 'opportunities', filters] as const,
+  // The paged feed (an infinite query) under the same prefix, so every invalidation of
+  // a workspace's opportunities reaches it; its own segment keeps its cache shape apart.
+  opportunityFeed: (workspaceId: string, filters: OpportunityFilters) =>
+    ['workspaces', workspaceId, 'opportunities', 'feed', filters] as const,
   opportunity: (workspaceId: string, opportunityId: string) =>
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId] as const,
   opportunityIntelligence: (workspaceId: string, opportunityId: string) =>
