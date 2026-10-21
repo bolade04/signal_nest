@@ -67,54 +67,6 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def check_real_data(client: httpx.Client, ws: str, auth: dict, runs: list) -> None:
-    """P6-CI-11: assert the replayed live-connector market end to end over HTTP."""
-    live = [r for r in runs if (r.get("coverage") or {}).get("reason") == "live_sources"]
-    if not live:
-        fail("no scout run reports covered/live_sources (was the replay seed run?)")
-    for run in live:
-        rows = client.get(
-            f"{API}/workspaces/{ws}/opportunities",
-            params={"location_id": run["location_id"]},
-            headers=auth,
-        ).json()
-        if not rows:
-            fail(f"live-source market {run['resolved_market']} returned no opportunities")
-        simulated = 0
-        for row in rows:
-            if row["location_id"] != run["location_id"]:
-                fail(f"live-source feed leaked opportunity {row['id']} across locations")
-            detail = client.get(
-                f"{API}/workspaces/{ws}/opportunities/{row['id']}", headers=auth
-            ).json()
-            for entry in detail.get("observed_evidence") or []:
-                if entry.get("source_type") != "rss_news" or not entry.get("source_key"):
-                    fail(f"opportunity {row['id']} has evidence without a source key")
-            simulated += 1 if row["is_simulated"] else 0
-        if REAL_DATA_MODE == "required" and simulated:
-            fail(
-                f"{run['resolved_market']}: {simulated} of {len(rows)} live-source "
-                "opportunities are simulated (synthetic capture corpus) - real data required"
-            )
-        kind = "simulated (synthetic captures)" if simulated else "real"
-        ok(
-            f"{run['resolved_market']}: {len(rows)} live-connector opportunity(ies), "
-            f"all in-location with source provenance; data is {kind}"
-        )
-    uncovered = [r for r in runs if (r.get("coverage") or {}).get("status") == "not_covered"]
-    if not uncovered:
-        fail("no scout run reports not_covered (the replay seed adds one)")
-    for run in uncovered:
-        rows = client.get(
-            f"{API}/workspaces/{ws}/opportunities",
-            params={"location_id": run["location_id"]},
-            headers=auth,
-        ).json()
-        if rows:
-            fail(f"not-covered market {run['resolved_market']} returned opportunities")
-        ok(f"{run['resolved_market']}: not_covered stated, no opportunities")
-
-
 def main() -> int:
     print(f"SignalNest HTTP smoke test -> {BASE_URL}")
     client = httpx.Client(timeout=15.0)
@@ -226,12 +178,54 @@ def main() -> int:
     ok("every demo city's run states its source coverage")
 
     # 10. Real data through the live connector (P6-CI-11), when enabled ------
-    if REAL_DATA_MODE in ("replay", "required"):
-        check_real_data(client, ws, auth, runs)
-    elif REAL_DATA_MODE:
+    if REAL_DATA_MODE and REAL_DATA_MODE not in ("replay", "required"):
         fail(f"SMOKE_REAL_DATA must be 'replay' or 'required', got {REAL_DATA_MODE!r}")
-    else:
+    if not REAL_DATA_MODE:
         print("  NOTE  SMOKE_REAL_DATA unset: real-data phase not run (fixture smoke only)")
+    live = [r for r in runs if (r.get("coverage") or {}).get("reason") == "live_sources"]
+    uncovered = [r for r in runs if (r.get("coverage") or {}).get("status") == "not_covered"]
+    if REAL_DATA_MODE and not live:
+        fail("no scout run reports covered/live_sources (was the replay seed run?)")
+    if REAL_DATA_MODE and not uncovered:
+        fail("no scout run reports not_covered (the replay seed adds one)")
+    for run in live if REAL_DATA_MODE else []:
+        rows = client.get(
+            f"{API}/workspaces/{ws}/opportunities",
+            params={"location_id": run["location_id"]},
+            headers=auth,
+        ).json()
+        if not rows:
+            fail(f"live-source market {run['resolved_market']} returned no opportunities")
+        simulated = 0
+        for row in rows:
+            if row["location_id"] != run["location_id"]:
+                fail(f"live-source feed leaked opportunity {row['id']} across locations")
+            detail = client.get(
+                f"{API}/workspaces/{ws}/opportunities/{row['id']}", headers=auth
+            ).json()
+            for entry in detail.get("observed_evidence") or []:
+                if entry.get("source_type") != "rss_news" or not entry.get("source_key"):
+                    fail(f"opportunity {row['id']} has evidence without a source key")
+            simulated += 1 if row["is_simulated"] else 0
+        if REAL_DATA_MODE == "required" and simulated:
+            fail(
+                f"{run['resolved_market']}: {simulated} of {len(rows)} live-source "
+                "opportunities are simulated (synthetic capture corpus) - real data required"
+            )
+        kind = "simulated (synthetic captures)" if simulated else "real"
+        ok(
+            f"{run['resolved_market']}: {len(rows)} live-connector opportunity(ies), "
+            f"all in-location with source provenance; data is {kind}"
+        )
+    for run in uncovered if REAL_DATA_MODE else []:
+        rows = client.get(
+            f"{API}/workspaces/{ws}/opportunities",
+            params={"location_id": run["location_id"]},
+            headers=auth,
+        ).json()
+        if rows:
+            fail(f"not-covered market {run['resolved_market']} returned opportunities")
+        ok(f"{run['resolved_market']}: not_covered stated, no opportunities")
 
     # 11. OpenAPI endpoint ---------------------------------------------------
     r = client.get(f"{API}/openapi.json")
