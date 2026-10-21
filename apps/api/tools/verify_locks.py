@@ -1,6 +1,6 @@
 """Verify the committed API dependency locks (P6-PLAT-4) against ``pyproject.toml``.
 
-Run from ``apps/api`` with the pinned lock toolchain (pip 25.1.1, pip-tools 7.5.2)::
+Run from ``apps/api`` with the pinned lock toolchain (pip 26.2.2, pip-tools 7.6.2; CERT-2, 2026-10-21)::
 
     ../../.locktools/bin/python tools/verify_locks.py
 
@@ -63,7 +63,7 @@ from pip._vendor.packaging.version import InvalidVersion, Version
 
 # The documented lock toolchain (README-deps.md). The existing-pin and hash behaviour this
 # script relies on was measured on exactly these versions; any other version is refused.
-TOOLCHAIN = {"pip": "25.1.1", "pip-tools": "7.5.2"}
+TOOLCHAIN = {"pip": "26.2.2", "pip-tools": "7.6.2"}
 
 RUNTIME = "requirements-runtime.txt"
 DEV = "requirements-dev.txt"

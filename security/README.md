@@ -351,7 +351,7 @@ reader job's installed tooling, which no scan covered. This tranche closes them 
   copies the scan also reports, such as pip's own vendored packages, are evaluated as well.~~
   *(Corrected 2026-10-20: a vendored copy is evaluated only when the scan reports it, and an
   installed-environment scan reports pip's vendored packages only when that pip ships an SBOM of
-  them: pip 26.2.1 does (18 packages); pip 25.0.1 and 25.1.1 do not, so the vendored packages of the
+  them: pip 26.2.1 does (18 packages), as does pip 26.2.2 (18, certifi 2026.10.19 among them; CERT-2); pip 25.0.1 and 25.1.1 do not, so the vendored packages of the
   `.security-venv` and `.locktools` pips and of the base image pip 25.0.1 were not analysed. Since the
   coverage-gap tranche every installed pip's own vendor list is analysed by a separate scan.)* Each
   environment is inventoried a second time just before the completeness step, and the
@@ -572,7 +572,8 @@ reading, and it sat inside the adopted text. The binaries' scope is now the oper
 scope of the environment that contains them.)*
 
 1. **`.locktools` is scanned as installed.** Backend quality installs its lock toolchain from the
-   hash lock `apps/api/requirements-locktools.txt` (pip 25.1.1, pip-tools 7.5.2 and every transitive
+   hash lock `apps/api/requirements-locktools.txt` (~~pip 25.1.1, pip-tools 7.5.2~~ pip 26.2.2 and pip-tools 7.6.2
+   since CERT-2, 2026-10-21 — the 7.5.2 toolchain cannot carry a fixed certifi and cannot run under pip 26 — and every transitive
    distribution, `--require-hashes --no-deps`, then `pip check`). It is scanned with Trivy `rootfs`,
    and the tooling gate reconciles it against its own `pip inspect` inventory and against the lock
    (`--locked-by`): installed == the lock's pins, at the locked versions. It is made read-only right
@@ -583,7 +584,7 @@ scope of the environment that contains them.)*
    setuptools, never one fetched unpinned into a temporary build environment.
 2. **The API venvs' bootstrap pip and build tooling.** In Frontend quality, Backend quality,
    Migrations and API contract and Integration smoke, the unpinned `pip install --upgrade pip` is
-   replaced by `apps/api/requirements-bootstrap.txt` (pip 26.2.1 and setuptools 84.0.0, the reader
+   replaced by `apps/api/requirements-bootstrap.txt` (~~pip 26.2.1~~ pip 26.2.2 since 2026-10-21 and setuptools 84.0.0, the reader
    tooling lock's pins and hashes), and `-e apps/api` runs with `--no-build-isolation`. ~~Every hash-locked
    install in every job now carries `--only-binary :all:`~~ *(corrected 2026-10-21: every hash-locked install that a
    `ci.yml` `run:` step performs carries it. The builder stage of `apps/api/Dockerfile`, which Container build and
@@ -633,7 +634,7 @@ scope of the environment that contains them.)*
    hash-locked environments (`.security-venv`, `.reader-venv`, the reader job's interpreter prefix) are not
    made read-only; they are inventoried after the code their jobs run.
 3. **pip's vendored packages.** pip vendors its dependencies without dist-info, so a `rootfs` scan
-   sees them only when pip ships an SBOM of them (26.2.1 does; 25.0.1 and 25.1.1 do not).
+   sees them only when pip ships an SBOM of them (26.2.1 and 26.2.2 do; 25.0.1 and 25.1.1 do not).
    `stage_inputs.py vendored` writes each installed pip's own `pip/_vendor/vendor.txt` pins to a staged
    requirements list, a Trivy `fs` scan analyses it, and the tooling gate re-reads `vendor.txt` from
    the environment and requires exactly those pins in that scan. Their findings are evaluated at the
@@ -778,14 +779,14 @@ one below it and must fail.~~ *(Corrected 2026-10-21; the account below replaces
 
 | Gate | Floor | Before | After | Truncation control |
 |---|---|---|---|---|
-| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, pip 26.2.1, setuptools 84.0.0, the project) | `<job>-api-venv-truncated-inventory` |
+| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, ~~pip 26.2.1~~ pip 26.2.2 since CERT-2 — 58 measured locally from the bootstrap and dev locks on 2026-10-21 — setuptools 84.0.0, the project) | `<job>-api-venv-truncated-inventory` |
 | `locktools`, `locktools-final` | 7 (new) | no gate; 8 installed, transitive versions floating | 8, all from the lock | `backend-locktools-truncated-inventory` |
 | `security-tooling-venv` | 60 (unchanged) | 67 | 67 | `security-tooling-truncated-inventory` |
 | `reader-tooling-venv` | 15 (unchanged) | 17 | 17 | `reader-tooling-truncated-inventory` |
 | `reader-tooling-syspy` | 2 (unchanged) | 2 | 2 | `reader-syspy-truncated-inventory` |
 | `image-api-vuln`, `image-worker-vuln` | 40 language packages (unchanged) | 48 | 47 expected (pip removed) *(47 each, run 39514455981)* | `api-image-truncated-lang-packages` *(2026-10-21: on the API report only; the worker gate shares the code path and is not exercised separately)* |
 | `image-reader-vuln` | 1 (unchanged) | 3 | 3 | `reader-image-truncated-lang-packages` |
-| vendored-pin scans | none: exactly the pins of `vendor.txt` | — | 18 (pip 26.2.1), 20 (pip 25.1.1)*; 18 (pip 25.0.1, `.security-venv`), run 39514455981* | `*-vendored-pin-not-scanned` |
+| vendored-pin scans | none: exactly the pins of `vendor.txt` | — | ~~18 (pip 26.2.1), 20 (pip 25.1.1)*~~ 18 (pip 26.2.2, `apps/api/.venv` and `.locktools` alike since CERT-2, 2026-10-21, measured locally from the locks: certifi 2026.10.19 among them); 18 (pip 25.0.1, `.security-venv`), run 39514455981* | `*-vendored-pin-not-scanned` |
 | `sbom-image-api`, `sbom-image-worker`, `sbom-locks`, `sbom-image-reader` *(row added 2026-10-21)* | 100, 100, 500, 10 package components (unchanged) | — | 134, 134, 764, 41 (run 39514455981) | **none** (see above) |
 
 **Populations after this tranche.** The decision packet named below is evidence, not a tracked file;
@@ -874,8 +875,8 @@ python3 security/iac_exception_controls.py check security-reports/control-iac-ex
 ```
 
 `security/requirements-semgrep.txt` is regenerated like the API locks
-(`pip-compile --generate-hashes --no-strip-extras security/requirements-semgrep.in`, pip
-25.1.1 / pip-tools 7.5.2); a manual edit breaks the hashes. The reader tooling lock and the
+(`pip-compile --generate-hashes --no-strip-extras security/requirements-semgrep.in`, ~~pip
+25.1.1 / pip-tools 7.5.2~~ pip 26.2.2 / pip-tools 7.6.2 since CERT-2, 2026-10-21); a manual edit breaks the hashes. The reader tooling lock and the
 Gate 4N hash lock are regenerated the same way, from their own directories:
 `pip-compile --generate-hashes --allow-unsafe --strip-extras --extra dev --output-file
 requirements-dev.txt pyproject.toml requirements-dev.in` (in `apps/revision-reader/`) and

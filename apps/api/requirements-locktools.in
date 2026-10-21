@@ -1,10 +1,11 @@
 # API LOCK-TOOLCHAIN inputs (P6-CI-6 coverage gaps): what job "Backend quality" installs into .locktools,
 # the venv that runs tools/verify_locks.py. requirements-locktools.txt is compiled from this file, with
 # hashes and every transitive dependency (--allow-unsafe keeps pip and setuptools in it). Never edited by hand.
-#   pip, pip-tools - the documented lock toolchain (README-deps.md); pip stays on 25.x because pip-tools
-#                    7.5.2 imports a pip-internal symbol pip 26 removed
+#   pip, pip-tools - the documented lock toolchain (README-deps.md). CERT-2 (operator order 2026-10-21): pip 26.2.2
+#                    (the first pip whose vendored certifi is 2026.10.19, GHSA-6q48-6c7w-9gw2) with pip-tools 7.6.2;
+#                    pip-tools 7.5.2 imports a pip-internal symbol pip 26 removed, so it cannot run under this pip
 # setuptools arrives as a pip-tools dependency. pip-tools reads pyproject.toml's static metadata, so no build
 # backend runs; verify_locks.py also passes --no-build-isolation, so one that ever has to run comes from this
 # lock instead of an unpinned build-isolation fetch.
-pip==25.1.1
-pip-tools==7.5.2
+pip==26.2.2
+pip-tools==7.6.2

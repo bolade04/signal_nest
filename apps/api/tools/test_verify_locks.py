@@ -301,7 +301,7 @@ class VerifyLocksTests(unittest.TestCase):
         proc = subprocess.run([sys.executable, "-c", code, str(HERE), str(self.project)],
                               capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-        self.assertIn("TOOLCHAIN MISMATCH: pip 25.1.1 (required 0.0.0)", proc.stdout)
+        self.assertIn("TOOLCHAIN MISMATCH: pip 26.2.2 (required 0.0.0)", proc.stdout)
 
     # ------------------------------------------------------------------ configuration isolation
     def test_project_pip_tools_config_cannot_turn_verification_into_an_upgrade(self) -> None:

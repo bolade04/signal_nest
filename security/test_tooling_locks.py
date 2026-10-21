@@ -220,8 +220,8 @@ class ToolingLocks(unittest.TestCase):
 
     def test_the_lock_toolchain_lock_holds_the_documented_toolchain(self):
         tools = lock_entries(API_LOCKTOOLS_LOCK)
-        documented = {"pip": "25.1.1", "pip-tools": "7.5.2"}           # README-deps.md and tools/verify_locks.py TOOLCHAIN
-        self.assertIn('TOOLCHAIN = {"pip": "25.1.1", "pip-tools": "7.5.2"}', (ROOT / "apps" / "api" / "tools" / "verify_locks.py").read_text(encoding="utf-8"))
+        documented = {"pip": "26.2.2", "pip-tools": "7.6.2"}           # README-deps.md and tools/verify_locks.py TOOLCHAIN (CERT-2)
+        self.assertIn('TOOLCHAIN = {"pip": "26.2.2", "pip-tools": "7.6.2"}', (ROOT / "apps" / "api" / "tools" / "verify_locks.py").read_text(encoding="utf-8"))
         for name, version in documented.items():
             self.assertEqual(tools[name][0], version)
         self.assertEqual(pins(ROOT / "apps" / "api" / "requirements-locktools.in"), documented)
@@ -231,6 +231,7 @@ class ToolingLocks(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn("pip install --upgrade pip", text)
         self.assertNotIn('"pip==25.1.1" "pip-tools==7.5.2"', text)
+        self.assertNotIn('"pip==26.2.2" "pip-tools==7.6.2"', text)
         self.assertNotIn("--no-deps -e apps/api\n", text)
         for job in ("frontend-quality", "backend-quality", "migration-and-contract", "integration-smoke"):
             with self.subTest(job):
