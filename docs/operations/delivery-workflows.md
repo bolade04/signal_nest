@@ -45,7 +45,7 @@ push-scan CRITICAL finding refuses the release.
 
 **Deploy order:** floor check (the commit must contain `DEPLOY_ROLLBACK_FLOOR_COMMIT`, i.e.
 `AUTH4_ROLLBACK_FLOOR`) → resolve digests → read the running release (refuses a deployment in
-progress, desired count 0, circuit-breaker rollback off, mixed digests or mixed commits) →
+progress, desired count 0, circuit-breaker rollback off, or tasks on mixed digests) →
 render and register → run the migration actor (worker digest, no override) and require exit
 0 and one `migrate.upgrade_verify.done` event → update both services → `services-stable` →
 every running task must report the target digest on the registered revision → append the
@@ -54,14 +54,16 @@ headers, a 404 with headers). A failed smoke fails the run and leaves the releas
 separately approved rollback.
 
 **Ledger.** One SSM String parameter `/<prefix>/release/ledger` whose version history is the
-release record: each version names the release (commit, both digests, revisions) and
-`previous` — what was *actually running* before, read from ECS, never from the ledger. It
+release record: each version names the release (a commit per workload, both digests,
+revisions) and `previous` — what was *actually running* before, read from ECS, never from
+the ledger. Per workload, because a deployment can end with the circuit breaker rolling one
+service back and not the other; that state is recorded as it is and stays restorable. It
 survives window closes; task definitions do not.
 
 **Rollback** (`gh workflow run staging-rollback.yml --ref main`, then approve): target =
 the latest record's `previous`, only if the services run exactly the latest record (else
-refused as ambiguous); the target must contain the floor; the prior digests must still carry
-their commit tag; re-rendered from the *current* templates; never migrates.
+refused as ambiguous); every target commit must contain the floor; the prior digests must
+still carry their commit tags; re-rendered from the *current* templates; never migrates.
 
 ## 3. Records (E2)
 
