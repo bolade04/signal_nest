@@ -1,11 +1,11 @@
-"""Resolve which connector serves a scout request.
+"""Resolve the sandbox RSS connector for a scout request.
 
-The registry maps a request scope (enabled source types + market) to a concrete
-:class:`SourceConnector` when policy permits, or ``None`` when no live connector
-applies (the caller then falls back to the sandbox fixture connector). Live
-connectors are **off by default**: a source runs only when its config flag is on
-and its jurisdiction policy admits the request, so default behaviour is
-byte-identical to the pre-Phase-3B fixture path.
+The registry maps a request scope (enabled source types + market) to the sandbox
+:class:`RssNewsConnector` when ``connector_rss_enabled`` and its policy permit it,
+or ``None`` (the caller then falls back to the fixture library). The sandbox reads
+bundled sample feeds and never the network; live feeds are selected by
+:mod:`app.connectors.live` through
+:func:`app.scouting_requests.connectors.fetch_signals`.
 """
 
 from __future__ import annotations

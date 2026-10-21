@@ -413,6 +413,32 @@ class Settings(BaseSettings):
     #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
     connector_rss_max_attempts: int = 3
 
+    # --- Live RSS egress (P6-DATA-1 / P6-DATA-4) — dark by default -----------
+    #: Master switch for live network egress to approved feeds
+    #: (``app.connectors.sources.APPROVED_SOURCES``, which ships empty). Turning it
+    #: on needs the operator's first-source decision and terms sign-off (P6-D03, X1).
+    connector_rss_live_enabled: bool = False
+    #: Emergency stop: overrides every other live-egress setting.
+    connector_rss_kill_switch: bool = False
+    #: Public https page identifying the fetcher to publishers; carried in the
+    #: User-Agent. Required whenever live egress is enabled.
+    connector_egress_contact_url: str | None = None
+    connector_egress_connect_timeout_seconds: float = 5.0
+    connector_egress_read_timeout_seconds: float = 10.0
+    #: Overall bound on one feed fetch, redirects included.
+    connector_egress_total_timeout_seconds: float = 20.0
+    connector_egress_max_response_bytes: int = 2 * 1024 * 1024
+    connector_egress_max_redirects: int = 3
+    #: Politeness floor: a source is fetched at most once per interval per process
+    #: (a source record may only raise it).
+    connector_rss_min_fetch_interval_seconds: float = 900.0
+    #: Development/test only: a ``http://127.0.0.1:PORT`` origin serving recorded
+    #: feed captures (``app.connectors.replay``). Refused in staging/production.
+    connector_rss_replay_origin: str | None = None
+    #: Serve the simulated demo fixture library for the four demo markets when no
+    #: live source covers a market. Off ⇒ such a market reports ``not_covered``.
+    connector_fixture_fallback_enabled: bool = True
+
     # --- Scouting schedules (Phase 3B, SB-B) ---------------------------------
     #: Master switch for recurring scouting schedules (dark by default). While
     #: off, schedule ticks are inert no-ops that self-terminate the chain: no
@@ -882,6 +908,41 @@ class Settings(BaseSettings):
                     "(rate_limit_backend=memory counts per process)"
                 )
         # --- end P6 platform services ----------------------------------------
+
+        # Live RSS egress bounds (P6-DATA-1 / P6-DATA-4).
+        for name in (
+            "connector_egress_connect_timeout_seconds",
+            "connector_egress_read_timeout_seconds",
+            "connector_egress_total_timeout_seconds",
+        ):
+            if getattr(self, name) <= 0:
+                errors.append(f"{name} must be greater than 0")
+        # The feed parser refuses anything above 2 MiB, so a larger fetch cap is moot.
+        if not 1 <= self.connector_egress_max_response_bytes <= 2 * 1024 * 1024:
+            errors.append("connector_egress_max_response_bytes must be between 1 and 2 MiB")
+        if not 0 <= self.connector_egress_max_redirects <= 5:
+            errors.append("connector_egress_max_redirects must be between 0 and 5")
+        if self.connector_rss_min_fetch_interval_seconds < 60:
+            errors.append("connector_rss_min_fetch_interval_seconds must be >= 60")
+        if self.connector_rss_replay_origin is not None:
+            from app.connectors.egress import parse_replay_origin
+
+            if self.environment not in ("development", "test"):
+                errors.append(
+                    "connector_rss_replay_origin is allowed only in development or test"
+                )
+            if parse_replay_origin(self.connector_rss_replay_origin) is None:
+                errors.append(
+                    "connector_rss_replay_origin must be http://127.0.0.1:PORT or "
+                    "http://[::1]:PORT"
+                )
+        elif self.connector_rss_live_enabled:
+            contact = urlsplit(self.connector_egress_contact_url or "")
+            if contact.scheme != "https" or not contact.hostname:
+                errors.append(
+                    "connector_rss_live_enabled requires connector_egress_contact_url "
+                    "(an https URL)"
+                )
 
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))

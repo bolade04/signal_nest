@@ -251,10 +251,14 @@ class TestContract:
         without_stats = [i for i in items if i["stats"] is None]
         assert with_stats and without_stats, "fixture exercises both stats states"
         for i in with_stats:
+            # P6-DATA-2 added the optional ``coverage`` object; these synthesised summaries
+            # predate coverage recording, so it is null rather than invented.
             assert set(i["stats"]) == {
-                "scanned", "noise_filtered", "signals_analyzed", "opportunities"
+                "scanned", "noise_filtered", "signals_analyzed", "opportunities", "coverage"
             }
-            assert all(v >= 0 for v in i["stats"].values())
+            assert i["stats"]["coverage"] is None
+            counts = {k: v for k, v in i["stats"].items() if k != "coverage"}
+            assert all(v >= 0 for v in counts.values())
 
     def test_error_code_exposed_summary_never(self, h):
         items = h.get(h.req("dallas")).json()["items"]

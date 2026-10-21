@@ -575,7 +575,7 @@ def test_the_migration_round_trips_on_postgresql():  # T-32p
     with pg_database("sn_a4m") as url:
         _alembic(url, "upgrade", "head")
         catalog = _catalog(url)
-        assert catalog["head"] == unit.HEAD
+        assert catalog["head"] == unit.CODE_HEAD
         assert catalog["columns"] == {
             "id": ("character varying", "NO", None),
             "user_id": ("character varying", "NO", None),
@@ -611,4 +611,4 @@ def test_the_migration_round_trips_on_postgresql():  # T-32p
         _alembic(url, "downgrade", unit.PREV)
         assert _catalog(url) == {}
         _alembic(url, "upgrade", "head")
-        assert _catalog(url)["head"] == unit.HEAD
+        assert _catalog(url)["head"] == unit.CODE_HEAD

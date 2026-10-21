@@ -404,7 +404,7 @@ PUBLIC = {
     ("POST", f"{API}/auth/password-reset/request"),
     ("POST", f"{API}/auth/password-reset/confirm"),
 }
-OPERATOR_ROUTE_COUNT = 17
+OPERATOR_ROUTE_COUNT = 19
 
 
 # --------------------------------------------------------------------------- #
@@ -560,7 +560,9 @@ class TestPolicyTableCompleteness:
         # AUTHENTICATED_ONLY route; the equality above proves no other route came or went.
         # 106 -> 115 (P6-PLAT-9): one PATCH per campaign-context collection, each a RANK_FLOOR
         # row above.
-        assert len(served) == 115
+        # 115 -> 117 (P6-PRIV-4): GET /internal/system/data-sources and POST
+        # /internal/system/data-sources/{source_key}/takedown, both operator-only.
+        assert len(served) == 117
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]

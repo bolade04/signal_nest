@@ -52,15 +52,28 @@ _MARKET_FEEDS: dict[str, tuple[str, str]] = {
 }
 
 
+def _sample_market(market: str | None) -> tuple[str, str] | None:
+    for key, city_slug in _MARKET_FEEDS.items():
+        if market and (key.lower() in market.lower() or market.lower() in key.lower()):
+            return city_slug
+    return None
+
+
+def sample_feed_covers(market: str | None) -> bool:
+    """Whether the sandbox has a feed for ``market`` (the same match the feed uses)."""
+    return _sample_market(market) is not None
+
+
 def sample_feed_for_market(market: str | None) -> bytes:
     """Return the deterministic RSS bytes for ``market``.
 
     An unknown or absent market yields an empty (but well-formed) channel so the
     connector never blends another market's news into an unscoped request.
     """
-    for key, (city, slug) in _MARKET_FEEDS.items():
-        if market and (key.lower() in market.lower() or market.lower() in key.lower()):
-            return _FEED_TEMPLATE.format(city=city, slug=slug, pubdate=_PUBDATE).encode()
+    match = _sample_market(market)
+    if match is not None:
+        city, slug = match
+        return _FEED_TEMPLATE.format(city=city, slug=slug, pubdate=_PUBDATE).encode()
     empty = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<rss version=\"2.0\"><channel><title>No feed</title>"
