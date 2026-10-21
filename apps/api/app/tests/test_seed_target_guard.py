@@ -41,6 +41,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
 from app.db import seed as seed_mod
+from app.privacy.inventory import RetentionClass
 
 # A DSN whose every component is an unmistakable sentinel. If any of these
 # substrings reaches an error message, a log or stderr, the refusal is leaking
@@ -81,6 +82,8 @@ def _settings(environment: str, database_url: str, **extra: Any) -> Settings:
             "storage_backend": "s3",
             "redis_url": "redis://unused.invalid:6379/0",
             "s3_bucket": "unused",
+            # Production requires every retention duration (P6-PRIV-1): inert test values.
+            **{c.setting_name: 30 for c in RetentionClass},
             **extra,
         }
     return Settings(

@@ -1103,7 +1103,89 @@ class TestAuditLogs:
 
 
 # --------------------------------------------------------------------------- #
-# 11. Completeness against the served application
+# 11. Organization export and deletion (P6-PRIV-1; exactly OWNER)
+# --------------------------------------------------------------------------- #
+class TestOrganizationPrivacy:
+    """The full deletion and export contracts live in ``test_privacy_*``; here only isolation.
+
+    Deleting an organization of this module's shared world would destroy it, so the
+    deletion's positive control has two halves: the acting owner, on its OWN organization,
+    reaches the handler (its ``organization_name_mismatch`` refusal is decided after the
+    tenancy gate, and nothing is deleted); and a throwaway organization registered here is
+    deleted for real by its own owner, with a verified receipt.
+    """
+
+    def test_export_own_200_scoped_foreign_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/export")
+        assert own.status_code == 200, own.text
+        body = own.json()
+        assert body["subject"]["organization_id"] == a.org_id
+        text = own.text
+        for foreign in (b.org_id, b.ws_id, b.owner_id, b.marketer_id, b.request_id):
+            assert foreign not in text
+        assert a.ws_id in text and a.request_id in text
+        _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/export"))
+
+    def test_delete_foreign_org_403_and_nothing_deleted(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        before = {
+            model.__tablename__: world.count(model, organization_id=b.org_id)
+            for model in (Workspace, OrganizationMember, OrganizationInvitation, Opportunity,
+                          Job, ScoutRequest, AuditLog)
+        }
+        body = {
+            "current_password": PASSWORD,
+            "confirm_organization_name": f"CI3 organization {b.key}",
+        }
+        r = pov.send("POST", f"/organizations/{b.org_id}/delete", body)
+        _assert_membership_403(r)
+        after = {
+            model.__tablename__: world.count(model, organization_id=b.org_id)
+            for model in (Workspace, OrganizationMember, OrganizationInvitation, Opportunity,
+                          Job, ScoutRequest, AuditLog)
+        }
+        assert after == before and all(before.values())
+        # Positive control, own organization: the handler is reached and refuses the
+        # mismatched name; nothing of A is deleted.
+        own_workspaces = world.count(Workspace, organization_id=a.org_id)
+        own = pov.send(
+            "POST", f"/organizations/{a.org_id}/delete",
+            {"current_password": PASSWORD, "confirm_organization_name": "not the name"},
+        )
+        assert _error(own)[:2] == (422, "organization_name_mismatch"), own.text
+        assert world.count(Workspace, organization_id=a.org_id) == own_workspaces >= 1
+
+    def test_delete_positive_on_a_throwaway_organization(self, world: World, pov: Pov):
+        workspaces = {t.org_id: world.count(Workspace, organization_id=t.org_id)
+                      for t in (world.a, world.b)}
+        _rate_limiter()._hits.clear()
+        reg = world.client.post(
+            f"{API}/auth/register",
+            json={
+                "email": f"ci3-throwaway-{pov.a.key}@example.com",
+                "full_name": "Throwaway owner",
+                "password": PASSWORD,
+                "organization_name": f"CI3 throwaway {pov.a.key}",
+            },
+        )
+        assert reg.status_code == 201, reg.text
+        org_id = reg.json()["memberships"][0]["organization_id"]
+        token = reg.json()["access_token"]
+        name = f"CI3 throwaway {pov.a.key}"
+        r = world.send(
+            "POST", f"{API}/organizations/{org_id}/delete", token,
+            {"current_password": PASSWORD, "confirm_organization_name": name},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["verification"]["verified"] is True
+        # The throwaway owner was never a member of A or B: both are intact.
+        for t in (world.a, world.b):
+            assert world.count(Workspace, organization_id=t.org_id) == workspaces[t.org_id]
+
+
+# --------------------------------------------------------------------------- #
+# 12. Completeness against the served application
 # --------------------------------------------------------------------------- #
 #: Every customer-facing tenant-scoped operation -> the tests in THIS module that prove it.
 _CTX_TESTS = (
@@ -1231,6 +1313,11 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", f"{W}/audit-logs"): (
         "TestAuditLogs::test_own_200_own_organization_rows_only_foreign_403",
     ),
+    ("GET", f"{ORG}/export"): ("TestOrganizationPrivacy::test_export_own_200_scoped_foreign_403",),
+    ("POST", f"{ORG}/delete"): (
+        "TestOrganizationPrivacy::test_delete_foreign_org_403_and_nothing_deleted",
+        "TestOrganizationPrivacy::test_delete_positive_on_a_throwaway_organization",
+    ),
 }
 
 #: Limbs proven in another module whose fixtures own the needed rows (each market there is
@@ -1310,7 +1397,8 @@ class TestCoverageCompleteness:
         covered = {(m, f"{API}{p}") for m, p in COVERAGE}
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
-        assert len(served) == 71
+        # 71 -> 73 (P6-PRIV-1): organization export and organization deletion.
+        assert len(served) == 73
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
