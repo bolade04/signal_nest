@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
 from app.core.enums import (
     DecisionAction,
+    ExplanationSource,
     OpportunityStatus,
     RiskLevel,
     ScoutRequestStatus,
@@ -205,6 +206,9 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         pain_dna = None
         sentiment = None
         audience_label = None
+        # P6-LLM-5: whether this signal's classification is model output or a
+        # provider failure left it unclassified (None = no model call was made).
+        classification_source: str | None = None
         if not is_noise and not is_duplicate:
             signal_input.signal_type = None
             try:
@@ -217,8 +221,15 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
                 sentiment = classified.sentiment
                 audience_label = classified.audience_fit_label
                 signal_input.signal_type = signal_type
-            except LLMError as exc:  # pragma: no cover - mock is deterministic
-                logger.warning("classify_failed", extra={"extra_fields": {"err": str(exc)}})
+                classification_source = ExplanationSource.MODEL.value
+            except LLMError as exc:
+                classification_source = ExplanationSource.DEGRADED.value
+                logger.warning(
+                    "classify_failed",
+                    extra={
+                        "extra_fields": {"error_class": type(exc).__name__, "err": str(exc)}
+                    },
+                )
 
         # Additive Phase 3B Batch 3 annotation: a deterministic, offline intelligence
         # read of this signal (facts vs inference, versioned score, structured
@@ -254,6 +265,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
             is_simulated=True,
             ingest_metadata={
                 "audience_label": audience_label,
+                "classification_source": classification_source,
                 "market": fx.market,
                 "engagement": fx.engagement,
                 "intelligence": intelligence_annotation,
@@ -379,8 +391,10 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             )
         )
 
-        # Explanation (deterministic mock) — only when action is plausible.
-        explanation = _explain(
+        # Explanation — from the model only when action is plausible; the source
+        # marker is persisted so degraded or rule-based copy is never mistaken for
+        # model reasoning (P6-LLM-5).
+        explanation, explanation_source = _explain(
             request, primary, geo, audience_label, safe_positioning, relevance
         )
 
@@ -423,6 +437,7 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             urgency=_urgency(decision),
             commercial_value="high" if signal_input.has_buying_intent else "medium",
             source_summary=sorted({m.source_type for m in members}),
+            explanation_source=explanation_source.value,
             status=OpportunityStatus.NEW.value,
             is_simulated=True,
         )
@@ -573,7 +588,25 @@ def _member_geo_evidence(db, members) -> list[tuple[str, str]]:
     return evidence
 
 
-def _explain(request, primary, geo, audience_label, safe_positioning, relevance) -> dict:
+#: Placeholder stored when the provider fails (P6-LLM-5). It states that no AI
+#: explanation exists rather than imitating one; ``ai_inference`` stays empty.
+DEGRADED_EXPLANATION = {
+    "why_it_matters": (
+        "AI explanation unavailable: the language-model provider did not return a "
+        "usable response for this run. Scores and observed evidence are unaffected."
+    ),
+    "ai_inference": None,
+    "recommended_action": (
+        "Review the observed evidence before acting; no AI recommendation was generated."
+    ),
+    "risk_note": "",
+    "suggested_angles": [],
+}
+
+
+def _explain(
+    request, primary, geo, audience_label, safe_positioning, relevance
+) -> tuple[dict, ExplanationSource]:
     if relevance < RELEVANCE_ACTION_FLOOR:
         return {
             "why_it_matters": "Below the relevance action floor; monitoring only.",
@@ -582,7 +615,7 @@ def _explain(request, primary, geo, audience_label, safe_positioning, relevance)
             "recommended_action": "No action recommended.",
             "risk_note": "",
             "suggested_angles": [],
-        }
+        }, ExplanationSource.RULE_BASED
     try:
         out, _ = llm_service.run(
             "explain_opportunity",
@@ -593,16 +626,13 @@ def _explain(request, primary, geo, audience_label, safe_positioning, relevance)
                 "safe_positioning": safe_positioning,
             },
         )
-        return out.model_dump()
-    except LLMError:  # pragma: no cover
-        return {
-            "why_it_matters": "Signal is relevant to your market.",
-            "who_cares": audience_label,
-            "ai_inference": "Demand appears to be forming.",
-            "recommended_action": "Create brand-safe content addressing this topic.",
-            "risk_note": "",
-            "suggested_angles": [safe_positioning],
-        }
+        return out.model_dump(), ExplanationSource.MODEL
+    except LLMError as exc:
+        logger.warning(
+            "explain_degraded",
+            extra={"extra_fields": {"request": request.id, "error_class": type(exc).__name__}},
+        )
+        return {**DEGRADED_EXPLANATION, "who_cares": audience_label}, ExplanationSource.DEGRADED
 
 
 def _title(primary, market) -> str:

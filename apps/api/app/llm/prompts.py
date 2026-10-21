@@ -18,25 +18,34 @@ class Prompt:
 
 
 PROMPTS: dict[str, Prompt] = {
+    # Template fields must match the input keys the pipeline passes: a field with no
+    # matching input renders empty, which a real provider would silently answer
+    # without context (1.0.0 named ``keywords``/``context``, which no caller sent).
     "classify_signal": Prompt(
         name="classify_signal",
-        version="1.0.0",
+        version="1.1.0",
         template=(
-            "You are SignalNest's signal classifier. Classify the public content into a "
-            "signal_type and pain_point_dna, infer sentiment and a SPECIFIC audience label "
-            "(never 'consumers'). Return strict JSON.\n\nContent:\n{content}\n"
-            "Business keywords: {keywords}\n"
+            "You are SignalNest's signal classifier. Classify the public content. Return "
+            "strict JSON with keys signal_type, pain_point_dna, sentiment "
+            "(positive|neutral|negative), audience_fit_label (a SPECIFIC audience, never "
+            "'consumers'), is_actionable (boolean) and rationale.\n\n"
+            "Content:\n{content}\n"
+            "Target audiences: {audiences}\n"
         ),
     ),
     "explain_opportunity": Prompt(
         name="explain_opportunity",
-        version="1.0.0",
+        version="1.1.0",
         template=(
             "You are SignalNest's explanation engine. Given the opportunity context, produce "
             "why_it_matters, who_cares, ai_inference, recommended_action, risk_note and "
-            "suggested_angles. Separate observed evidence from inference. Do NOT invent "
-            "unsupported product claims or attack competitors. Return strict JSON.\n\n"
-            "Context:\n{context}\n"
+            "suggested_angles (a list of strings). Separate observed evidence from "
+            "inference. Do NOT invent unsupported product claims or attack competitors. "
+            "Return strict JSON.\n\n"
+            "Market: {resolved_market}\n"
+            "Audience: {audience_fit}\n"
+            "Pain point: {pain_point_dna}\n"
+            "Brand-safe positioning: {safe_positioning}\n"
         ),
     ),
     "check_claim_safety": Prompt(
