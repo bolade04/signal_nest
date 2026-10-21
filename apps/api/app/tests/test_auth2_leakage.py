@@ -743,7 +743,8 @@ class TestOpenApiContract:
             if method in {"get", "post", "put", "delete", "patch"}
         )
         # 105 -> 106 (P6-UI-017): POST /auth/password/change, pinned below in OPERATIONS.
-        assert count == 106
+        # 106 -> 107 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability.
+        assert count == 107
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

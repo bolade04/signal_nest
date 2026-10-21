@@ -313,6 +313,9 @@ E7_POLICY: tuple[Policy, ...] = (
         _row("GET", f"{_W}/{c}", "workspace", ALL_ROLES, MEMBER_WS, OK_200)
         for c in ("brands", "locations", "scout-requests", "opportunities", "jobs")
     ),
+    # P6-UI-006: the workspace-effective scheduling reflection is member-gated like the
+    # schedule read it describes (feedback's reflection, above, is editor-gated).
+    _row("GET", f"{_W}/scheduling-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
     _row(
         "GET",
         f"{_W}/business-profile",
@@ -522,7 +525,7 @@ class TestPolicyTableCompleteness:
         }
         assert counts == {
             "role_gated": 44,
-            MEMBER_WS: 24,
+            MEMBER_WS: 25,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -535,7 +538,7 @@ class TestPolicyTableCompleteness:
             RANK_FLOOR: 37,
             WS_EXACT: 1,
             ORG_EXACT: 6,
-            MEMBER_WS: 24,
+            MEMBER_WS: 25,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -552,7 +555,9 @@ class TestPolicyTableCompleteness:
         assert served == published
         # 105 -> 106 (P6-UI-017): the one new operation is POST /auth/password/change, an
         # AUTHENTICATED_ONLY route; the equality above proves no other route came or went.
-        assert len(served) == 106
+        # 106 -> 107 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability, a
+        # membership-only workspace route.
+        assert len(served) == 107
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -560,7 +565,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 71
+        assert len(rows) == 72
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

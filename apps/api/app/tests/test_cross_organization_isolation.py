@@ -941,6 +941,16 @@ class TestScoutSchedules:
         assert world.row(ScoutSchedule, sched_id) == before
         assert world.count(ScoutSchedule, workspace_id=b.ws_id) == 1
 
+    def test_scheduling_capability_own_workspace_only(
+        self, world: World, pov: Pov, scheduling_on
+    ):
+        # P6-UI-006: the workspace-effective reflection answers for the caller's own
+        # workspace and is membership-refused for a foreign one.
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/scheduling-capability"))
+        assert own.status_code == 200 and own.json() == {"enabled": True}
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/scheduling-capability")))
+
     def test_mutations_positive_on_own_request(self, world: World, pov: Pov, scheduling_on):
         a = pov.a
         base = _ws_path(world, a, f"/scout-requests/{a.life_request_id}/schedule")
@@ -1197,6 +1207,9 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         )
         for m, s in (("POST", ""), ("POST", "/pause"), ("POST", "/resume"), ("DELETE", ""))
     },
+    ("GET", f"{W}/scheduling-capability"): (
+        "TestScoutSchedules::test_scheduling_capability_own_workspace_only",
+    ),
     ("GET", f"{W}/opportunities"): (
         "TestOpportunities::test_list_own_only_and_foreign_query_filters_empty",
     ),
@@ -1310,7 +1323,7 @@ class TestCoverageCompleteness:
         covered = {(m, f"{API}{p}") for m, p in COVERAGE}
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
-        assert len(served) == 71
+        assert len(served) == 72
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
