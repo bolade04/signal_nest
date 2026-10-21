@@ -24,7 +24,9 @@ Dallas opportunities are built only from Dallas signals, and so on.
 from __future__ import annotations
 
 import argparse
+import time
 import uuid
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
@@ -648,7 +650,6 @@ def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
             ).id
             for _c, req in requests
         ]
-        others_unfinished = _unfinished_jobs_besides(db, seed_job_ids)
         db.commit()
     except Exception:
         db.rollback()
@@ -657,19 +658,16 @@ def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
         db.close()
 
     # --- Run them on the worker's own execution path (isolated by market) --
-    if others_unfinished:
-        # Draining the queue here would also run someone else's work. Leave the
-        # seed's runs queued for the worker, which processes them like any other.
-        logger.info(
-            "seed.runs_left_queued", extra={"extra_fields": {"other_jobs": others_unfinished}}
-        )
+    if not _execute_seed_runs(seed_job_ids):
+        # Draining the queue here would also run someone else's work. The seed's
+        # runs that had not run yet stay queued for the worker, which processes
+        # them like any other.
+        logger.info("seed.runs_left_queued")
         print(
-            f"Other unfinished jobs are waiting in this database, so the {len(seed_job_ids)} "
-            "seeded scout runs were left queued for the worker (`npm run dev` starts one). "
-            "Use --reset for a self-contained demo."
+            "Other unfinished jobs are waiting in this database, so the seeded scout "
+            "runs that have not finished were left queued for the worker (`npm run dev` "
+            "starts one). Use --reset for a self-contained demo."
         )
-    else:
-        _execute_seed_runs(seed_job_ids)
 
     db = SessionLocal()
     try:
@@ -683,6 +681,17 @@ def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
 
 #: The worker id the seed's own runner claims under; visible only in job internals.
 _SEED_WORKER_ID: Final = "demo-seed"
+
+#: How long the seed waits for runs another worker holds to settle (`npm run dev`
+#: starts a worker that polls every second), and how often it looks meanwhile.
+_SEED_RUNS_WAIT_SECONDS: Final = 60.0
+_SEED_RUNS_POLL_SECONDS: Final = 0.2
+
+_TERMINAL_STATUS_VALUES: Final = frozenset(s.value for s in TERMINAL_STATUSES)
+
+#: A seed run needs nothing more from this process once it is terminal, or waiting
+#: out a retry backoff (the worker retries it later).
+_SETTLED_STATUSES: Final = _TERMINAL_STATUS_VALUES | {JobStatus.RETRY_WAIT.value}
 
 
 class SeedRunError(RuntimeError):
@@ -704,36 +713,81 @@ def _unfinished_jobs_besides(db: Session, job_ids: list[str]) -> int:
     )
 
 
-def _execute_seed_runs(job_ids: list[str]) -> None:
-    """Run the seed's queued jobs exactly as the durable worker process does.
+def _seed_run_state(job_ids: list[str]) -> tuple[dict[str, str], int]:
+    """The seed's runs by status, and how many other jobs are unfinished."""
+    db = SessionLocal()
+    try:
+        statuses = dict(db.execute(select(Job.id, Job.status).where(Job.id.in_(job_ids))).all())
+        return statuses, _unfinished_jobs_besides(db, job_ids)
+    finally:
+        db.close()
+
+
+def _execute_seed_runs(job_ids: list[str]) -> bool:
+    """Run the seed's queued jobs on the durable worker's own execution path.
+
+    Guarded in its own right, as ``_reset`` is: the leading underscore is a
+    convention, not an access control, and this drives a real worker loop (lease
+    recovery and claiming) through whatever ``SessionLocal`` is bound to.
 
     A real :class:`~app.jobs.worker.JobRunner` claims, runs and completes each job in
-    its own transaction, so every run's status, attempt, timestamps, events and
-    result summary are written by the worker's code — none by the seed. Called only
-    when these are the only unfinished jobs in the database, so the runner cannot
-    claim anyone else's work. A run that fails stays recorded on its job, and the
-    seed stops with an error rather than reporting a complete demo.
+    its own transaction, so a run's status, attempt, timestamps, events and result
+    summary are written by the worker's code, none by the seed.
+
+    What is guaranteed, and what is not. ``JobRunner`` cannot claim by job id, so
+    before every claim this re-checks that nothing but the seed's own jobs is
+    unfinished, and stops claiming as soon as anything else is: the seed's runs that
+    have not finished then stay queued for the worker. That narrows, but cannot
+    close, the window in which a job another process enqueues between that check
+    and the claim is claimed here; on the development/test SQLite databases the
+    target guard admits, such a job runs exactly as the worker would run it.
+
+    The outcome is judged by the final state of the seed's own jobs, whichever
+    worker ran them (``npm run dev`` starts one that may take some), waiting up to
+    ``_SEED_RUNS_WAIT_SECONDS`` for runs held elsewhere. Returns True when every run
+    succeeded, and False when claiming stopped for someone else's job while none of
+    the seed's own runs has failed outright; raises :class:`SeedRunError` otherwise,
+    the outcome staying recorded on each job.
     """
+    _require_safe_seed_target()
     # Imported here: the worker module bootstraps the process (handler registry,
     # full ORM metadata), which only this step needs.
     from app.jobs.worker import JobRunner
 
     runner = JobRunner(settings=get_settings(), session_factory=SessionLocal)
-    for _ in job_ids:
-        if not runner.poll_once(worker_id=_SEED_WORKER_ID):
+    deadline = time.monotonic() + _SEED_RUNS_WAIT_SECONDS
+    left_queued = False
+    while True:
+        statuses, others_unfinished = _seed_run_state(job_ids)
+        if all(status in _SETTLED_STATUSES for status in statuses.values()):
             break
-    db = SessionLocal()
-    try:
-        statuses = db.execute(select(Job.status).where(Job.id.in_(job_ids))).scalars().all()
-    finally:
-        db.close()
-    succeeded = sum(1 for status in statuses if status == JobStatus.SUCCEEDED.value)
-    if succeeded != len(job_ids):
-        raise SeedRunError(
-            f"{succeeded} of {len(job_ids)} seeded scout runs succeeded; each job records "
-            "its outcome. Fix the cause, then rebuild with --reset."
-        )
-    logger.info("seed.runs_completed", extra={"extra_fields": {"runs": succeeded}})
+        if others_unfinished:
+            left_queued = True
+            break
+        if runner.poll_once(worker_id=_SEED_WORKER_ID):
+            continue
+        # Nothing claimable: another worker holds what is left.
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_SEED_RUNS_POLL_SECONDS)
+
+    statuses, _ = _seed_run_state(job_ids)
+    succeeded = sum(1 for status in statuses.values() if status == JobStatus.SUCCEEDED.value)
+    if succeeded == len(job_ids):
+        logger.info("seed.runs_completed", extra={"extra_fields": {"runs": succeeded}})
+        return True
+    failed_outright = any(
+        status in _TERMINAL_STATUS_VALUES and status != JobStatus.SUCCEEDED.value
+        for status in statuses.values()
+    )
+    if left_queued and not failed_outright:
+        return False
+    others = Counter(s for s in statuses.values() if s != JobStatus.SUCCEEDED.value)
+    breakdown = ", ".join(f"{n} {status}" for status, n in sorted(others.items()))
+    raise SeedRunError(
+        f"{succeeded} of {len(job_ids)} seeded scout runs succeeded ({breakdown}); "
+        "each job records its outcome."
+    )
 
 
 def _print_summary(db: Session, counts: dict[str, int]) -> None:
@@ -783,7 +837,15 @@ def main() -> None:
             "  npm run migrate        # or: npm run demo:setup (migrate + seed)"
         )
 
-    seed(reset=args.reset)
+    try:
+        seed(reset=args.reset)
+    except SeedRunError as exc:
+        # One line, no traceback: the outcome is recorded on each job.
+        raise SystemExit(
+            f"Demo seed incomplete: {exc} If `npm run dev` or `npm run worker` is running, "
+            "a run may still be finishing there: check Background jobs on the scout "
+            "requests. Otherwise fix the cause, then rebuild with `npm run seed:reset`."
+        ) from None
 
 
 if __name__ == "__main__":
