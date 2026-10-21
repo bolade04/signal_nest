@@ -162,12 +162,14 @@ with psycopg.connect(f"{base} port=55432 sslmode=require") as c:
 with psycopg.connect(f"{base} port=55432 sslmode=verify-full sslrootcert=/tmp/tls/ca.pem") as c:
     assert c.pgconn.ssl_in_use
     out.append("sslmode=verify-full with the issuing CA: connected")
-for label, dsn in (("sslmode=verify-full with a different CA", f"{base} port=55432 sslmode=verify-full sslrootcert=/tmp/tls/other-ca.pem"),
-                   ("sslmode=require against a server offering no TLS", f"{base} port=55433 sslmode=require")):
+for label, dsn, reason in (("sslmode=verify-full with a different CA", f"{base} port=55432 sslmode=verify-full sslrootcert=/tmp/tls/other-ca.pem", "certificate verify failed"),
+                           ("sslmode=require against a server offering no TLS", f"{base} port=55433 sslmode=require", "server does not support SSL")):
     try:
         psycopg.connect(dsn).close()
     except psycopg.OperationalError as e:
-        out.append(f"{label}: refused ({str(e).strip().splitlines()[-1][:120]})")
+        msg = " ".join(str(e).split())
+        assert reason in msg, f"{label}: refused for another reason: {msg}"
+        out.append(f"{label}: refused, reason contains {reason!r}: {msg}")
     else:
         raise SystemExit(f"{label}: unexpectedly connected")
 mapped = sorted({l.split()[-1] for l in pathlib.Path("/proc/self/maps").read_text().splitlines() if len(l.split()) >= 6 and re.search(r"/lib(pq|ssl|crypto)\.so", l.split()[-1])})
