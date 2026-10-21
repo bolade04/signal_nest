@@ -464,7 +464,10 @@
   "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
   "policy_inventory.py::DISCOVERY_ARGS": "SECURITY_CRITICAL_LIST",
   "action_classifier.py::WINDOW_TRANSITION_METADATA": "NON_SECURITY_CONFIGURATION",
-  "allow_model.py::WINDOW_CONTEXT": "TEST_ONLY"
+  "allow_model.py::WINDOW_CONTEXT": "TEST_ONLY",
+  "gen_operator_policies.py::KEY_APPLY_WRITES": "SECURITY_CRITICAL_LIST",
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
+  "action_classifier.py::KEY_APPLY_METADATA": "NON_SECURITY_CONFIGURATION"
  },
  "completeness_consumers": {
   "reviewer_retrieval_state.py::STATES": {
@@ -874,7 +877,10 @@
   "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_DERIVED (derived). Carves the window principal's seven scoped capabilities OUT of its flat deny ceiling (the W0 idiom); adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence; window_transition_closure.scoped_capabilities compared exactly) plus the review pin.",
   "policy_inventory.py::DISCOVERY_ARGS": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_SOURCE (discovery input). Binds a generator's required positional parameters BY NAME to the values discovery renders with; a parameter name absent here is GENERATION_FAILED (fail-closed), and a changed value renders a different document under validation. Review-pinned so a discovery input cannot drift silently; the hostname is the synthetic fixture value.",
   "action_classifier.py::WINDOW_TRANSITION_METADATA": "a fixed configuration value or literal set, not an enforced scope (SOURCE-1 categorisation of the window principal's actions from the Service Authorization Reference access levels; merged into ACTION_METADATA, whose consumer fails closed on UNKNOWN)",
-  "allow_model.py::WINDOW_CONTEXT": "BH-A1b: TEST_ONLY_LOAD_BEARING (eval-context). the in-window evaluation context (clock, region, reviewed boundary) for the window principal's ceiling proof; not a deployed policy source; load-bearing for the proof's determinism only"
+  "allow_model.py::WINDOW_CONTEXT": "BH-A1b: TEST_ONLY_LOAD_BEARING (eval-context). the in-window evaluation context (clock, region, reviewed boundary) for the window principal's ceiling proof; not a deployed policy source; load-bearing for the proof's determinism only",
+  "gen_operator_policies.py::KEY_APPLY_WRITES": "P6-CI-6 key apply (K0-2, 2026-10-21): SECURITY_CRITICAL_SOURCE (allow). The key-apply principal's write surface (the two keys, their rotation and aliases, three bucket encryptions, the trail key, the two task-role policies, the budget, the API alias record CREATE) driving its inline Allow statements; widening is caught by the INDEPENDENT operator-closure-contract section key_apply_closure (compared exactly by tests/test_key_apply_policy.py) plus the review pin.",
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": "P6-CI-6 key apply (K0-2, 2026-10-21): SECURITY_CRITICAL_DERIVED (derived). Carves the key-apply principal's nine scoped capabilities OUT of its flat deny ceiling (the W0/window idiom); adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence; key_apply_closure.scoped_capabilities compared exactly) plus the review pin. kms:PutKeyPolicy is NOT a member (variant A, pending operator decision D-K1-3).",
+  "action_classifier.py::KEY_APPLY_METADATA": "a fixed configuration value or literal set, not an enforced scope (SOURCE-1 categorisation of the key-apply principal's KMS writes from the Service Authorization Reference access levels read 2026-10-21; merged into ACTION_METADATA, whose consumer fails closed on UNKNOWN)"
  },
  "a1a_adjudication": {
   "gen_bootstrap_operator_policy.py::BOUNDARY_ATTACH_ACTIONS": {
@@ -1762,6 +1768,51 @@
    "widen_on_add": true,
    "widen_on_remove": false,
    "note": "P6-W0-TRANSITION (2026-10-02): frozenset of capabilities excluded from the window principal's flat ceiling and re-denied by NotResource fences; the window analogue of W0_SCOPED_CAPABILITIES (minus ecs:RegisterTaskDefinition, plus iam:PutRolePolicy for D5).",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "spec_needed": true,
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::KEY_APPLY_WRITES": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "allow",
+   "generator": "gen_operator_policies.py::key_apply_inline_policy",
+   "emitted": {
+    "effect": "Allow",
+    "sid": "KeyApplyCreateTheTwoKeys+KeyApplyTagOnCreate+KeyApplyEnableRotation+KeyApplyCreateTheTwoAliases+KeyApplyBucketEncryption+KeyApplyTrailKey+KeyApplyTaskRoleInlinePoliciesBounded+KeyApplyBudgetBound+KeyApplyApiAliasCreateOnly+KeyApplyRoute53ChangePoll"
+   },
+   "oracle_family": "AUTHORED_CONTRACT",
+   "expected_authority": "infra/aws/operator-closure-contract.json section key_apply_closure (a separate source gen_operator_policies never reads; compared exactly by tests/test_key_apply_policy.py)",
+   "observed_authority": "emitted write Allow actions of gen_operator_policies.py::key_apply_inline_policy()",
+   "independence": "adding a member widens the key-apply principal's granted privilege; the widening is caught by the INDEPENDENT closure contract section (exact set equality of the grouped write actions) and the review-pin drop-backstop; expected root != the source list",
+   "comparison": "EXACT (union of the grouped write actions == key_apply_closure write groups)",
+   "positive_presence": "INVALID_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-CI-6 key apply (K0-2, 2026-10-21): the separate, expiring principal for the ONE root apply carrying the PR #230 keys; operator decisions D-K1-1\u20264 PENDING (recommended options encoded).",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "effect": "Allow",
+    "spec_needed": true,
+    "independent_ceiling": "infra/aws/operator-closure-contract.json section key_apply_closure",
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": {
+   "cls": "SECURITY_CRITICAL_DERIVED",
+   "kind": "derived",
+   "generator": "gen_operator_policies.py::key_apply_deny_ceiling_policy",
+   "emitted": null,
+   "oracle_family": "PROVENANCE_DERIVATION",
+   "expected_authority": "key_apply_closure.scoped_capabilities (authored) + must_not_contract (the forbidden set the carve is taken from)",
+   "observed_authority": "emitted policy of gen_operator_policies.py::key_apply_effective_policy(): each excepted action in an Allow Sid AND absent from the flat Deny Sid AND re-denied by its NotResource fence",
+   "independence": "carves exceptions OUT of the FORBIDDEN deny (derived from must_not_contract); adding a member REMOVES that action from the flat deny -> widens. Verified by emitted-policy correspondence (tests/test_key_apply_policy.py) and the contract's exact scoped_capabilities comparison",
+   "comparison": "PROVENANCE_CORRESPONDENCE (exception set == contract scoped_capabilities) + EMITTED_POLICY(in Allow AND not in flat Deny AND fenced)",
+   "positive_presence": "CONDITIONALLY_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-CI-6 key apply (K0-2, 2026-10-21): frozenset of capabilities excluded from the key-apply principal's flat ceiling and re-denied by NotResource fences (state object/lock/state CMK as W0; the two task roles; the one trail; the three buckets).",
    "bh_b": {
     "resolver": "emitted_policy",
     "spec_needed": true,

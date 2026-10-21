@@ -3,15 +3,21 @@
   "_note": "A digest pin is honoured only while it cites an ACTIVE record here. Superseding a record instantly REDs every pin that cited it until re-reviewed.",
   "_root_of_trust": "This ledger is the smallest independently-reviewable surface. It pins the canonical digests of the two authored maps (assurance registry + review-pin registry) that decide what is governed and against what baseline; changing either without re-reviewing this file fails closed. Reviewed end-to-end on every change.",
   "governed_files": {
-    "critical-list-contract.json": "sha256:5ae6fd12964ae527d83e0a90f79450b1904e65bd4465665697c087b3e69a2c32",
+    "critical-list-contract.json": "sha256:142739805269d0e9d8487174fce04a3c823d5c23cc6637a0f5f1390ac833c259",
     "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
-    "review-pin-registry.json": "sha256:e475c893ef335fb2bf7e267cfcd6aef374f7c5f9f3a69c3bd59fd5f59f2ee551",
-    "security-assurance-registry.json": "sha256:badc4096801ce68bdfdf01b6c0351e0f33f47e2136d0bbd4ec7348402798aa57",
+    "review-pin-registry.json": "sha256:25564d2628fb09c983e2456b25839de7300010fb783069272e0814299690eb84",
+    "security-assurance-registry.json": "sha256:5e9676fcd8fa99d241c01cae459f254fae06bf7ea394b592843514624a80c18c",
     "site-coverage-function-assurance.json": "sha256:332afc74ad5f6bd5c6a88af9b4925caf702de46b2976f76507dbc9e6a09dd728",
     "site-coverage-matrix.json": "sha256:8572ccd2a571a044931f05e2f82b2751786cae140f83aeef6ba8e3607b33b87e",
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE": {
+        "approver": "P6-CI6-KEY-APPLY-K02-DRAFT-TRANCHE",
+        "established": "2026-10-21",
+        "scope": "P6-CI-6 key-apply principal documents (PKT-K0 K0-2; freeze allowlist AL-2a; repository delivery only \u2014 no permission set, policy, provisioning or AWS change). New gen_operator_policies collections KEY_APPLY_WRITES and KEY_APPLY_SCOPED_CAPABILITIES (the separate, expiring key-apply principal: inline + read-closure + deny-ceiling documents for the ONE root apply carrying the PR #230 keys); expiry_authorization PURPOSES gains key_apply (same 24 h bound). The principal is registered in every per-principal governance analysis as the window principal is: allow_model EXEMPTIONS (its eight forbidden capabilities held scoped), EXTRA_REQUIRED_SOURCES (refresh + state backend + key_apply_closure) and TARGETS; iam_eval ACTION_CONDITION_KEYS gains kms:CreateKey/TagResource/EnableKeyRotation/CreateAlias (Service Authorization Reference, read 2026-10-21); action_classifier KEY_APPLY_METADATA; the deny requirement, triangulation, resource-probe and PutRolePolicy analyses evaluate its effective policy. Bound to the operator-closure-contract section key_apply_closure and tests/test_key_apply_policy.py. The documents encode the RECOMMENDED options of the PENDING operator decisions D-K1-1\u20264 (variant A: no kms:PutKeyPolicy) and are byte-equal to the drafts under independent permissions review (IAM-lane PKT-K1, evidence P6-W1-IAM-01).",
+        "status": "ACTIVE"
+    },
     "REV-2026-10-02-P6-W0-TRANSITION-PERMS": {
         "approver": "P6-W0-TRANSITION-PERMS-D6-REPOSITORY-TRANCHE",
         "established": "2026-10-02",

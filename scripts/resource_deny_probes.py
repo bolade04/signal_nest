@@ -64,12 +64,15 @@ def _policies() -> dict[str, dict]:
         "role_bootstrap_operator": rb.role_bootstrap_policy(EXPIRY),
         # P6-W0-TRANSITION: the window principal's EFFECTIVE policy (inline + both customer managed).
         "window_transition": gen.window_transition_effective_policy(EXPIRY, "api.synthetic.example.com"),
+        # P6-CI-6 K0-2: the key-apply principal's EFFECTIVE policy (inline + both customer managed).
+        "key_apply": gen.key_apply_effective_policy(EXPIRY, "api.synthetic.example.com"),
     }
 
 
 def _ctx(policy_name: str) -> dict:
     return BOUNDARY_CTX if policy_name in (
-        "temporary_operator", "bootstrap_operator", "role_bootstrap_operator", "window_transition") else {}
+        "temporary_operator", "bootstrap_operator", "role_bootstrap_operator", "window_transition",
+        "key_apply") else {}
 
 
 # Every resource-scoped protection, named at the resource it actually protects.
@@ -150,6 +153,32 @@ PROBES = [
      gen.window_resource_arns()["api_task_role"],
      "inline-policy writes outside the ONE api-task role (D5: boundary-conditioned; the probe "
      "context carries the reviewed boundary)"),
+    # --- key-apply principal fences and explicit denies (P6-CI-6 K0-2, 2026-10-21) -------------
+    # The state/lock/CMK/inline-policy/trail fences are moved by the allow-model ceiling proof (their
+    # actions are forbidden capabilities with exemptions). The rows below cover the denies whose actions
+    # are NOT forbidden capabilities. The two CreateKey denies are CONDITIONED, so their rows carry the
+    # request context (the optional sixth element); their over-broad direction (a key of the reviewed
+    # shape stays creatable) is proven by tests/test_key_apply_policy.py with the module's request tags.
+    ("key_apply", "kms:CreateKey", "*", None,
+     "key creation that bypasses the key-policy lockout safety check",
+     {"kms:BypassPolicyLockoutSafetyCheck": "true", "kms:MultiRegion": "false"}),
+    ("key_apply", "kms:CreateKey", "*", None,
+     "multi-Region key creation",
+     {"kms:BypassPolicyLockoutSafetyCheck": "false", "kms:MultiRegion": "true"}),
+    ("key_apply", "kms:EnableKeyRotation", gen.ARN["cmk_state"],
+     gen.key_apply_resource_arns()["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de",
+     "rotation, alias and tag writes on the two EXISTING keys (state, secrets)"),
+    ("key_apply", "kms:CreateAlias",
+     f"arn:aws:kms:{gen.REGION}:{gen.ACCOUNT}:alias/some-other-alias",
+     gen.key_apply_resource_arns()["aliases"][0],
+     "alias creation outside the two declared aliases"),
+    ("key_apply", "s3:PutEncryptionConfiguration", gen.ARN["state_bucket"],
+     gen.key_apply_resource_arns()["buckets"][0],
+     "default-encryption changes outside the three declared buckets"),
+    ("key_apply", "route53:ChangeResourceRecordSets",
+     "arn:aws:route53:::hostedzone/ZSYNTHOTHER0000000000", identity.route53_hosted_zone_arn(),
+     "record changes outside the ONE consumed hosted zone (the record condition keys are proven by "
+     "tests/test_key_apply_policy.py)"),
     # --- temporary operator fences -----------------------------------------------------
     ("temporary_operator", "s3:PutObject", f"{gb.STATE_BUCKET}/other/object",
      gen.ARN["state_object"], "state writes outside the exact state object"),
@@ -192,9 +221,11 @@ PROBES = [
 def run_probes(policies: dict[str, dict] | None = None) -> list[dict]:
     policies = policies or _policies()
     rows = []
-    for policy_name, action, inside, outside, what in PROBES:
+    # An optional sixth element is the request context a CONDITIONED Deny needs to fire (P6-CI-6 K0-2);
+    # it is merged over the principal's context, never in place of it.
+    for policy_name, action, inside, outside, what, *probe_ctx in PROBES:
         policy = policies[policy_name]
-        ctx = _ctx(policy_name)
+        ctx = {**_ctx(policy_name), **(probe_ctx[0] if probe_ctx else {})}
         inside_decision = iam_eval.decide(policy, action, inside, ctx).decision
         row = {"policy": policy_name, "action": action, "protects": what,
                "inside": inside, "inside_decision": inside_decision.name,

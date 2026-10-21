@@ -334,6 +334,86 @@
     "_uncertainties_carried": "Recorded, not resolved (sealed OPERATOR-DECISIONS D8): EC2's answer to a stale DisassociateAddress under a tag-conditioned grant (if UnauthorizedOperation rather than NotFound, the CLOSE fails at its last step with the EIP still allocated; recovery = a re-plan refreshes association_id to empty and the retry skips the call); ElastiCache member-cluster evaluation; the live Name tags of route table/subnets/VPC; a reader task definition in state; the current live W0 after 2026-09-30. Each surfaces fail-closed under the runbook abort rule; window resources carry no data, so a partial OPEN/CLOSE is recoverable by a corrected re-plan.",
     "_provisioning_truth": "A stored permission-set document (PutInlinePolicyToPermissionSet readback) is NOT a provisioned principal: provisioning requires a TERMINAL ProvisionPermissionSet status (SUCCEEDED, never IN_PROGRESS) AND an effective-role-policy read (iam get-role-policy on the reserved role whose canonical digest equals the stored document; the two customer managed policies attached). The 2026-08-17 W0 attempt stored the reviewed document and never reached the role. Nothing in this section authorizes any of those acts."
   },
+    "key_apply_closure": {
+      "_scope": "P6-CI-6 key apply (PKT-K0 K0-2 / freeze allowlist AL-2a, 2026-10-21; repository delivery only). The SEPARATE, EXPIRING key-apply principal that performs the ONE non-targeted root apply carrying the two customer-managed keys added by PR #230 (module.edge aws_kms_key.spa + alias, module.observability aws_kms_key.audit + alias), the three bucket-encryption updates, the CloudTrail kms_key_id update, the two app_s3 task-role policy updates, and the merged-but-never-applied carry-overs that ride the same apply (the #197 API alias record CREATE and the budget 150 -> <= 20 update, the #194 api_ses_send create). Authored from the IAM-lane packet PKT-K1 (§3 static closure, §4 drafts) and the PR #230 permissions-lane record (FREEZE-1 F1, FREEZE-2 R2-2), NOT from the generator: tests compare the generator's key_apply_* output AGAINST this section. The principal's requirement set is refresh_closure + state_backend_closure + THIS section. No reviewed principal (W0, temporary operator, window) holds these writes; this principal exists only for the key apply and is retired immediately after its readback.",
+      "_operator_decisions_pending": "PENDING OPERATOR DECISION — the content below encodes the RECOMMENDED options of PKT-K1 §7: D-K1-1 provisioning path = root console, Identity Center only (D2(a) mechanism); D-K1-2 must-not carve-outs for this one expiring principal = cloudtrail:UpdateTrail (exact trail), iam:PutRolePolicy (the two task roles, boundary-conditioned), the state object / lock / state-CMK (W0 precedent) and s3:PutEncryptionConfiguration (three buckets; denied to W0 only, not a must-not action); D-K1-3 variant A = NO kms:PutKeyPolicy (fail-safe: if the CreateKey policy-lockout check needs it, CreateKey is refused and no key exists); D-K1-4 expiry <= 24 h (purpose key_apply). Until those decisions are recorded this section and its generator are not provisionable.",
+      "_split_form": "Three documents (permission-set INLINE + two CUSTOMER MANAGED), measured under the AWS counting rules (IAM role inline aggregate 10,240 non-whitespace characters == the Identity Center permission-set inline non-whitespace limit, one inline policy per permission set; each customer managed policy 6,144; IAM and Identity Center quota pages read 2026-10-21): inline = state backend + the writes below + the explicit denies and NotResource fences, every Allow expiring; customer managed 1 = refresh_closure with the KMS reads widened to key/* in the region (the new key ids exist only after CreateKey), every Allow expiring; customer managed 2 = the flat deny ceiling (PERMANENT_DENY ∪ FORBIDDEN_CAPABILITIES minus the scoped capabilities), NOT expiring. One single inline document would exceed 10,240 at any identifier length. The generator refuses to emit any of the three above its quota (require_key_apply_policy_quotas).",
+      "kms_key_create": [
+        "kms:CreateKey",
+        "kms:TagResource"
+      ],
+      "_kms_key_create_note": "module.edge aws_kms_key.spa and module.observability aws_kms_key.audit (CreateKey with Policy + Tags; the provider sends the default_tags common set plus Name). CreateKey has no resource (Resource *) and no aws:ResourceTag (the key does not exist yet): bounded by aws:RequestTag/Name in {<prefix>-spa-cmk, <prefix>-audit-cmk}, ForAllValues:StringEquals aws:TagKeys within the common tag keys + Name, and the region. kms:TagResource is required when CreateKey sends Tags; its evaluated resource for tag-on-create is NOT STATED offline, so it is granted on * with the same request-tag conditions, and the two existing keys are re-denied (explicit_denies). Never-expiring Denies refuse kms:BypassPolicyLockoutSafetyCheck = true and kms:MultiRegion = true. Key spec and usage are pinned by the module and checked by the plan review (the repository evaluator models no IfExists operator).",
+      "kms_key_configure": [
+        "kms:EnableKeyRotation"
+      ],
+      "_kms_key_configure_note": "enable_key_rotation = true on both keys; called right after CreateKey on a key id unknown in advance, so granted on key/* in the region (not tag-conditioned: AWS documents that tag changes can take minutes to affect KMS authorization, and a denied call after CreateKey leaves a created, tainted key whose replacement needs kms:ScheduleKeyDeletion). The two existing keys are re-denied.",
+      "kms_alias_create": [
+        "kms:CreateAlias"
+      ],
+      "_kms_alias_create_note": "aws_kms_alias.spa (alias/<prefix>/spa) and .audit (alias/<prefix>/audit). CreateAlias authorizes against the alias AND the target key: Allow on the two exact alias ARNs + key/*, a NotResource fence denies every other alias, and the two existing keys are re-denied as targets. Read-back is kms:ListAliases (refresh_closure).",
+      "reads_widened": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListResourceTags"
+      ],
+      "_reads_widened_note": "The provider reads each new key right after creating it and on every later refresh (FREEZE-2 permissions lane R2-2). The ids are AWS-assigned, so the read-closure document grants these four METADATA reads on arn:<partition>:kms:<region>:<account>:key/* in the region instead of the two exact key ARNs refresh_closure uses — not tag-conditioned for the propagation reason above. No Decrypt/Encrypt/GenerateDataKey on any key except the state CMK through the backend services.",
+      "bucket_encryption": [
+        "s3:PutEncryptionConfiguration"
+      ],
+      "_bucket_encryption_note": "The three SSE configuration updates (module.edge spa, module.observability audit, module.storage app) on exactly the three bucket ARNs; a NotResource fence denies every other bucket (the state bucket included). No condition key constrains the default algorithm or key id of PutBucketEncryption, so the content is checked by the plan review and the readback. S3 does not validate the key id at this call (FREEZE-1), so no KMS grant is needed for it. Read-back s3:GetEncryptionConfiguration is in refresh_closure.",
+      "trail_key": [
+        "cloudtrail:UpdateTrail"
+      ],
+      "_trail_key_note": "module.observability aws_cloudtrail.audit kms_key_id update, on exactly the one trail ARN; a NotResource fence denies every other trail. UpdateTrail has no condition key over WHICH parameters change (bucket, SNS, logs, key) — the must-not consequence 'redirect the trail' — so the plan review requires every other trail attribute unchanged and the readback re-reads the trail; the call itself is recorded in CloudTrail event history independently of the trail's bucket. CloudTrail validates the key as its own service principal; the caller needs no KMS grant (FREEZE-1).",
+      "task_role_policies": [
+        "iam:PutRolePolicy"
+      ],
+      "_task_role_policies_note": "module.iam aws_iam_role_policy.app_s3 api + worker (the P6-CI-6 AppBucketKmsViaS3Only statement) and aws_iam_role_policy.api_ses_send (merged #194): iam:PutRolePolicy on exactly the api-task and worker-task role ARNs, Condition StringEquals iam:PermissionsBoundary = the reviewed boundary (both roles carry it — sealed 2026-10-13 reads), expiring, and a NotResource fence denies every other role. No PassRole.",
+      "budget_update": [
+        "budgets:ModifyBudget"
+      ],
+      "_budget_note": "module.cost aws_budgets_budget.monthly 150 -> <= 20 (the root rejects > 20), on arn:<partition>:budgets::<account>:budget/<prefix>-monthly. No budgets:TagResource. No aws-portal:*.",
+      "dns_record": [
+        "route53:ChangeResourceRecordSets"
+      ],
+      "dns_change_poll": [
+        "route53:GetChange"
+      ],
+      "_dns_note": "module.alb aws_route53_record.api[0] CREATE (the apply runs with staging_window_active = true from the always-on topology, PKT-K2 §3): ChangeResourceRecordSets on the ONE consumed hosted zone with ForAllValues:StringEquals NormalizedRecordNames = [api_fqdn], RecordTypes = [A], Actions = [CREATE] (narrower than the window principal: no UPSERT, no DELETE); GetChange on change/* (change-scoped); a NotResource fence denies every other zone.",
+      "scoped_capabilities": [
+        "cloudtrail:UpdateTrail",
+        "dynamodb:DeleteItem",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "iam:PutRolePolicy",
+        "kms:Decrypt",
+        "s3:GetObject",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutObject"
+      ],
+      "_scoped_note": "Subtracted from the flat ceiling and re-denied off-scope by NotResource fences: the state object, the lock table, the state CMK (kms:ViaService s3/dynamodb only), the two task roles, the one trail, the three buckets. kms:PutKeyPolicy is NOT scoped (variant A, PENDING D-K1-3): it stays flatly denied.",
+      "fences": [
+        "KeyApplyDenyStateObjectOutside",
+        "KeyApplyDenyLockOutside",
+        "KeyApplyDenyStateCmkUseOutside",
+        "KeyApplyDenyInlinePolicyOutsideTaskRoles",
+        "KeyApplyDenyTrailUpdateOutside",
+        "KeyApplyDenyEncryptionChangeOutside",
+        "KeyApplyDenyRecordChangesOutsideZone",
+        "KeyApplyDenyOtherAliases"
+      ],
+      "explicit_denies": [
+        "KeyApplyDenyRiskyKeyShapes",
+        "KeyApplyDenyMultiRegionKeys",
+        "KeyApplyDenyWritesOnTheExistingKeys"
+      ],
+      "_explicit_denies_note": "Never expiring: CreateKey with kms:BypassPolicyLockoutSafetyCheck = true; CreateKey with kms:MultiRegion = true; CreateAlias / EnableKeyRotation / PutKeyPolicy / TagResource / UntagResource on the state CMK and the secrets CMK.",
+      "_expiry": "Every Allow in the inline and read-closure documents carries DateLessThan aws:CurrentTime = <expiry>; the expiry is authorized against an issuance by expiry_authorization.authorize(purpose='key_apply') — <= 24 h, >= 15 min. The ceiling and every Deny carry no date. No plan or apply may START within 3 h of expiry (the window-principal rule).",
+      "_not_granted": "kms:PutKeyPolicy (variant A), kms:ScheduleKeyDeletion, kms:DeleteAlias, kms:DisableKey, kms:CreateGrant, kms:UntagResource, kms:Decrypt/GenerateDataKey/Encrypt on any key except the state CMK via the backend services; any ec2/elbv2/elasticache/ecs/rds/cloudfront/secretsmanager write; route53 UPSERT/DELETE or any other name/type; iam:CreateRole/DeleteRole/DeleteRolePolicy/TagRole/PassRole; s3:PutBucketPolicy/PutLifecycleConfiguration/DeleteObject; cloudtrail:StopLogging/DeleteTrail/PutEventSelectors; budgets:TagResource; aws-portal:*. Rollback (key deletion, alias deletion, trail key removal) is a separate packet.",
+      "_retirement": "Mandatory and ACTIVE right after the key-apply readback (expiry is only the backstop): delete the account assignment, the permission set and both customer managed policies; verify the reserved-role census and NoSuchEntity for both policies.",
+      "_provisioning_truth": "A stored permission-set document is NOT a provisioned principal: a TERMINAL ProvisionPermissionSet status (SUCCEEDED) AND an effective-role read (inline digest equal to the stored document, both customer managed policies attached) are required. Nothing in this section authorizes any of those acts."
+    },
   "explicitly_not_required": {
     "audit_bucket_mutation": "s3:PutBucketPolicy and s3:PutBucketPublicAccessBlock on the audit bucket are NOT required for the current Gate 4N plan. Live evidence: the trail has been logging since 2026-07-27 and is delivering; the audit bucket policy and PAB are already converged and were read successfully by the reference refresh. Gate 4N-I3 granted them unnecessarily, covering only 2 of the 6 module-owned observability resources, and thereby opened a path to halt log delivery without calling cloudtrail:StopLogging.",
     "cloudtrail_create": "cloudtrail:CreateTrail and StartLogging are NOT required: the trail exists and is logging.",
