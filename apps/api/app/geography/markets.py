@@ -16,13 +16,18 @@ Matching fails closed:
 * :func:`may_overlap` (used for exclusions) is true unless a component known on both
   sides differs, so an exclusion also removes a market it cannot rule out.
 
-Ambiguous qualifiers are never guessed. "Perth, WA" (Washington or Western Australia),
-"Atlanta, GA" (Georgia or Gabon) and "Tbilisi, Georgia" have no country until the
-scoped location's country picks the reading that lies in it; without one they stay
-unqualified and therefore match nothing. Text a customer configured for a location
-(:func:`parse_market`) is also qualified by that location's country ("Ikeja" for a
-Nigerian location); an observed market (:func:`parse_observed`) never is, because a
-bare "London" in evidence says nothing about which London.
+An observed market's ambiguous qualifier is never resolved toward the scope's
+country. "Atlanta, GA" (Georgia or Gabon), "Perth, WA" (Washington or Western
+Australia) and "Tbilisi, Georgia" (US state or country) are read only where place
+knowledge places the city in exactly one reading: the short list of principal cities in
+``places_data.KNOWN_CITIES``, plus, when an observed market is compared with a scope,
+the scope's own city ("Chicago, IL" against a Chicago, Illinois scope). Anything still
+ambiguous stays unqualified and therefore lies within no scope. Text a customer
+configured for their own location (:func:`parse_market`) may additionally be read in
+that location's country when place knowledge does not decide, and a bare name there
+is qualified by it ("Ikeja" for a Nigerian location); an observed market
+(:func:`parse_observed`) never is, because a bare "London" in evidence says nothing
+about which London.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from app.geography.places_data import (
     COUNTRIES,
     COUNTRY_ALIASES,
     COUNTRY_DISPLAY_NAMES,
+    KNOWN_CITIES,
     REGION_QUALIFIES_CITY,
     SUBDIVISIONS,
 )
@@ -88,6 +94,12 @@ for _country, _divisions in SUBDIVISIONS.items():
             entries = _REGION_INDEX.setdefault(_token, [])
             if (_country, _key) not in entries:
                 entries.append((_country, _key))
+
+
+#: region key or country code -> folded principal cities (KNOWN_CITIES)
+_KNOWN_CITIES: dict[str, frozenset[str]] = {
+    _key: frozenset(fold(_name) for _name in _names) for _key, _names in KNOWN_CITIES.items()
+}
 
 
 def country_name(code: str | None) -> str | None:
@@ -182,14 +194,49 @@ def _area_candidates(folded: str) -> list[_Area]:
     return candidates
 
 
-def _pick(candidates: list[_Area], default_country: str | None) -> _Area | None:
-    """The single reading of an area token, or ``None`` when absent or ambiguous."""
-    if default_country:
-        local = [c for c in candidates if c[0] == default_country]
-        if len(local) == 1:
-            return local[0]
+def _city_known_in(city: str | None, area: _Area, known: MarketIdentity | None) -> bool:
+    """Is ``city`` known to exist in the reading ``area``? From ``KNOWN_CITIES``, or
+    from ``known`` (a place the caller knows exists, e.g. the scope being matched)."""
+    if not city:
+        return False
+    country, region = area
+    if known is not None and known.city == city and known.country == country:
+        if region is None or known.region == region:
+            return True
+    if region is not None:
+        return city in _KNOWN_CITIES.get(region, ())
+    return city in _KNOWN_CITIES.get(country, ()) or any(
+        city in cities for key, cities in _KNOWN_CITIES.items() if key.startswith(f"{country}-")
+    )
+
+
+def _resolve(
+    candidates: list[_Area],
+    city_for: dict[_Area, str | None],
+    *,
+    country: str | None,
+    qualify: bool,
+    known: MarketIdentity | None,
+) -> _Area | None:
+    """The single reading of a qualifier, or ``None`` (absent or still ambiguous).
+
+    One reading: that one. Several: the reading in which place knowledge knows the
+    city, when exactly one does. Otherwise, only for text configured for a location
+    (``qualify``), the reading in that location's ``country``. Never the scope's
+    country for an observed market: an observation that remains ambiguous matches
+    nothing.
+    """
     if len(candidates) == 1:
         return candidates[0]
+    if not candidates:
+        return None
+    knowing = [c for c in candidates if _city_known_in(city_for.get(c), c, known)]
+    if len(knowing) == 1:
+        return knowing[0]
+    if not knowing and qualify and country:
+        local = [c for c in candidates if c[0] == country]
+        if len(local) == 1:
+            return local[0]
     return None
 
 
@@ -223,24 +270,33 @@ def parse_market(text: str | None, *, default_country: str | None = None) -> Mar
     "Texas", "Ikeja") into an identity; ``None`` when nothing usable remains.
 
     ``default_country`` is the country of the location the text belongs to. It
-    chooses between the readings of an ambiguous qualifier and qualifies a bare
-    place name ("Ikeja" for a Nigerian location is Ikeja, NG). An explicit,
-    unambiguous qualifier always wins over it.
+    qualifies a bare place name ("Ikeja" for a Nigerian location is Ikeja, NG) and
+    chooses between the readings of an ambiguous qualifier that place knowledge
+    does not decide. An explicit, unambiguous qualifier always wins over it.
     """
-    return _parse(text, default_country, qualify=True)
+    return _parse(text, default_country, qualify=True, known=None)
 
 
-def parse_observed(text: str | None, *, hint_country: str | None = None) -> MarketIdentity | None:
+def parse_observed(
+    text: str | None, *, known: MarketIdentity | None = None
+) -> MarketIdentity | None:
     """Parse a market observed in evidence or carried by a request.
 
-    ``hint_country`` only chooses between the readings of an ambiguous qualifier
-    ("Perth, WA" in Australia); it never supplies a country the text does not
-    state, so a bare "London" stays unqualified and lies within no scope.
+    An ambiguous qualifier is resolved only by place knowledge (``KNOWN_CITIES``,
+    plus ``known``, a place the caller knows exists - typically the scope it is
+    about to compare with). No country is ever supplied that the text does not
+    state: a bare "London" stays unqualified and lies within no scope.
     """
-    return _parse(text, hint_country, qualify=False)
+    return _parse(text, None, qualify=False, known=known)
 
 
-def _parse(text: str | None, country: str | None, *, qualify: bool) -> MarketIdentity | None:
+def _parse(
+    text: str | None,
+    country: str | None,
+    *,
+    qualify: bool,
+    known: MarketIdentity | None,
+) -> MarketIdentity | None:
     if text is None:
         return None
     label = text.strip()
@@ -258,12 +314,17 @@ def _parse(text: str | None, country: str | None, *, qualify: bool) -> MarketIde
 
     last = parts[-1]
     candidates = _area_candidates(last)
-    area = _pick(candidates, country)
+    # The city each reading would give: a country qualifier in "city, region,
+    # country" sits one part further from the city than a region qualifier does.
+    city_for = {
+        c: (parts[-3] if c[1] is None and len(parts) >= 3 else parts[-2]) for c in candidates
+    }
+    area = _resolve(candidates, city_for, country=country, qualify=qualify, known=known)
     if area is None:
         if not candidates and qualify and country:
             # An unlisted region of the location's own country ("Ikeja, Lagos").
             return _identity(parts[-2], _free_region(last, country), country, label)
-        # Unknown or ambiguous qualifier: the market stays unqualified.
+        # Unknown or still-ambiguous qualifier: the market stays unqualified.
         return _identity(parts[-2], None, None, label)
 
     found_country, region = area
@@ -284,17 +345,20 @@ def _parse_single(token: str, country: str | None, label: str, *, qualify: bool)
     if token in CITY_FIRST_NAMES:
         return _identity(token, None, country if qualify else None, label)
     candidates = _area_candidates(token)
-    area = _pick(candidates, country)
     if qualify and country:
         local = [c for c in candidates if c[0] == country]
+        if len(local) == 1:
+            found_country, region = local[0]
+            return _identity(None, region, found_country, label)
         if not local and _country_code(token) is None:
             # A region of another country, or no area at all: a place in this one
             # ("Victoria" for a Canadian location, "Ikeja" for a Nigerian one).
             return _identity(token, None, country, label)
-    if area is None:
-        return _identity(token, None, None, label)
-    found_country, region = area
-    return _identity(None, region, found_country, label)
+    if len(candidates) == 1:
+        found_country, region = candidates[0]
+        return _identity(None, region, found_country, label)
+    # No area, or an area name with several readings and no city to decide by.
+    return _identity(token, None, None, label)
 
 
 def market_from_parts(
@@ -351,8 +415,8 @@ def may_overlap(candidate: MarketIdentity | None, scope: MarketIdentity | None) 
 
 
 def text_within(text: str | None, scope: MarketIdentity | None) -> bool:
-    """Is the observed market ``text`` within ``scope``? (:func:`parse_observed`
-    with the scope's country as the hint, then :func:`market_within`)."""
+    """Is the observed market ``text`` within ``scope``? The scope's own city counts
+    as place knowledge when reading an ambiguous qualifier, its country does not."""
     if scope is None:
         return False
-    return market_within(parse_observed(text, hint_country=scope.country), scope)
+    return market_within(parse_observed(text, known=scope), scope)

@@ -139,7 +139,7 @@ def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
         return False
     # Explicit exclusions always win, including over a market they cannot rule out.
     country = _context_country(rule)
-    observed = parse_observed(market, hint_country=country)
+    observed = parse_observed(market)
     for text in rule.excluded_markets:
         excluded = parse_market(text, default_country=country)
         if excluded is not None and may_overlap(observed, excluded):
@@ -177,7 +177,6 @@ def resolve_geo(
 
     # Evidence naming the same place in different words ("London, UK" and
     # "London, United Kingdom") is pooled; the first wording seen is reported.
-    hint = _context_country(rule)
     keys: dict[str, tuple] = {}
     display: dict[tuple, str] = {}
     per_market: dict[tuple, float] = {}
@@ -185,7 +184,7 @@ def resolve_geo(
     for kind, market in signals:
         text = market.strip()
         if text not in keys:
-            identity = parse_observed(text, hint_country=hint)
+            identity = parse_observed(text)
             keys[text] = (
                 ("place", identity.city, identity.region, identity.country)
                 if identity is not None and identity.is_qualified

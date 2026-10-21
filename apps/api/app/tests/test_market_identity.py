@@ -33,60 +33,113 @@ from app.geography.places_data import COUNTRIES
 # Parsing
 # --------------------------------------------------------------------------- #
 
-#: (text, hint country, expected (city, region, country)) for an OBSERVED market.
+#: (text, expected (city, region, country)) for an OBSERVED market.
 OBSERVED = [
-    ("Dallas, TX", None, ("dallas", "US-TX", "US")),
-    ("London, UK", None, ("london", None, "GB")),
-    ("Lagos, NG", None, ("lagos", None, "NG")),
-    ("Nairobi, KE", None, ("nairobi", None, "KE")),
-    ("London, Ontario", None, ("london", "CA-ON", "CA")),
-    ("London, ON", None, ("london", "CA-ON", "CA")),
-    ("London, England", None, ("london", "GB-ENG", "GB")),
-    ("London, Ontario, Canada", None, ("london", "CA-ON", "CA")),
-    ("Paris, TX", None, ("paris", "US-TX", "US")),
-    ("Paris, France", None, ("paris", None, "FR")),
-    ("Portland, OR", None, ("portland", "US-OR", "US")),
-    ("Lagos, Portugal", None, ("lagos", None, "PT")),
-    ("Birmingham, UK", None, ("birmingham", None, "GB")),
-    ("Texas", None, (None, "US-TX", "US")),
-    ("Texas, USA", None, (None, "US-TX", "US")),
-    ("New York, NY", None, ("new york", "US-NY", "US")),
-    ("Dallas TX 75201", None, ("dallas", "US-TX", "US")),
-    ("Washington, D.C.", None, ("washington", "US-DC", "US")),
-    ("São Paulo, Brazil", None, ("sao paulo", None, "BR")),
-    ("St. Louis, Missouri", None, ("st louis", "US-MO", "US")),
-    ("Windhoek, NA", None, ("windhoek", None, "NA")),
-    # Ambiguous qualifiers stay unqualified without a hint...
-    ("Portland, ME", None, ("portland", None, None)),
-    ("Birmingham, AL", None, ("birmingham", None, None)),
-    ("Perth, WA", None, ("perth", None, None)),
-    ("Tbilisi, Georgia", None, ("tbilisi", None, None)),
-    ("Los Angeles, CA", None, ("los angeles", None, None)),
-    # ...and the hint picks the reading in that country.
-    ("Portland, ME", "US", ("portland", "US-ME", "US")),
-    ("Birmingham, AL", "US", ("birmingham", "US-AL", "US")),
-    ("Perth, WA", "AU", ("perth", "AU-WA", "AU")),
-    ("Perth, WA", "US", ("perth", "US-WA", "US")),
-    ("Tbilisi, Georgia", "GE", ("tbilisi", None, "GE")),
-    ("Los Angeles, CA", "US", ("los angeles", "US-CA", "US")),
-    ("Toronto, CA", "CA", ("toronto", None, "CA")),
-    # An explicit, unambiguous qualifier beats the hint.
-    ("London, Ontario", "GB", ("london", "CA-ON", "CA")),
-    ("London, UK", "CA", ("london", None, "GB")),
+    ("Dallas, TX", ("dallas", "US-TX", "US")),
+    ("London, UK", ("london", None, "GB")),
+    ("Lagos, NG", ("lagos", None, "NG")),
+    ("Nairobi, KE", ("nairobi", None, "KE")),
+    ("London, Ontario", ("london", "CA-ON", "CA")),
+    ("London, ON", ("london", "CA-ON", "CA")),
+    ("London, England", ("london", "GB-ENG", "GB")),
+    ("London, Ontario, Canada", ("london", "CA-ON", "CA")),
+    ("Paris, TX", ("paris", "US-TX", "US")),
+    ("Paris, France", ("paris", None, "FR")),
+    ("Portland, OR", ("portland", "US-OR", "US")),
+    ("Lagos, Portugal", ("lagos", None, "PT")),
+    ("Birmingham, UK", ("birmingham", None, "GB")),
+    ("Texas", (None, "US-TX", "US")),
+    ("Texas, USA", (None, "US-TX", "US")),
+    ("New York, NY", ("new york", "US-NY", "US")),
+    ("Dallas TX 75201", ("dallas", "US-TX", "US")),
+    ("Washington, D.C.", ("washington", "US-DC", "US")),
+    ("São Paulo, Brazil", ("sao paulo", None, "BR")),
+    ("St. Louis, Missouri", ("st louis", "US-MO", "US")),
+    ("Windhoek, NA", ("windhoek", None, "NA")),
+    # An ambiguous qualifier is read where place knowledge (KNOWN_CITIES) puts the
+    # city in exactly one reading...
+    ("Tbilisi, Georgia", ("tbilisi", None, "GE")),
+    ("Batumi, Georgia", ("batumi", None, "GE")),
+    ("Atlanta, Georgia", ("atlanta", "US-GA", "US")),
+    ("Savannah, GA", ("savannah", "US-GA", "US")),
+    ("Libreville, GA", ("libreville", None, "GA")),
+    ("Los Angeles, CA", ("los angeles", "US-CA", "US")),
+    ("Toronto, CA", ("toronto", None, "CA")),
+    ("Chicago, IL", ("chicago", "US-IL", "US")),
+    ("Tel Aviv, IL", ("tel aviv", None, "IL")),
+    ("Perth, WA", ("perth", "AU-WA", "AU")),
+    ("Seattle, WA", ("seattle", "US-WA", "US")),
+    ("Portland, ME", ("portland", "US-ME", "US")),
+    ("Birmingham, AL", ("birmingham", "US-AL", "US")),
+    ("Atlanta GA", ("atlanta", "US-GA", "US")),
+    # ...and otherwise stays unqualified: it matches nothing.
+    ("Smallville, Georgia", ("smallville", None, None)),
+    ("Smallville, GA", ("smallville", None, None)),
+    ("Joliet, IL", ("joliet", None, None)),
+    ("Smallville, WA", ("smallville", None, None)),
+    ("Georgia", ("georgia", None, None)),
+    ("CA", ("ca", None, None)),
     # A bare place name is never given a country it does not state.
-    ("London", None, ("london", None, None)),
-    ("London", "GB", ("london", None, None)),
-    ("London, None", "GB", ("london", None, None)),
-    ("Ikeja, Lagos", "NG", ("ikeja", None, None)),
+    ("London", ("london", None, None)),
+    ("London, None", ("london", None, None)),
+    ("Ikeja, Lagos", ("ikeja", None, None)),
 ]
 
 
-@pytest.mark.parametrize(("text", "hint", "expected"), OBSERVED)
-def test_parse_observed(text, hint, expected):
-    identity = parse_observed(text, hint_country=hint)
+@pytest.mark.parametrize(("text", "expected"), OBSERVED)
+def test_parse_observed(text, expected):
+    identity = parse_observed(text)
     assert identity is not None
     assert (identity.city, identity.region, identity.country) == expected
     assert identity.label == text
+
+
+@pytest.mark.parametrize(
+    ("text", "known", "expected"),
+    [
+        # The place being compared with is knowledge too: its own city decides.
+        ("Joliet, IL", ("Joliet", "Illinois", "US"), ("joliet", "US-IL", "US")),
+        ("Smallville, GA", ("Smallville", "Georgia", "US"), ("smallville", "US-GA", "US")),
+        ("Smallville, WA", ("Smallville", "WA", "Australia"), ("smallville", "AU-WA", "AU")),
+        # ...but only its city, never just its country or region.
+        ("Smallville, GA", (None, "Georgia", "US"), ("smallville", None, None)),
+        ("Smallville, GA", ("Otherville", "Georgia", "US"), ("smallville", None, None)),
+        # A city known in the other reading stays ambiguous: nothing is guessed.
+        ("Tbilisi, Georgia", ("Tbilisi", "Georgia", "US"), ("tbilisi", None, None)),
+    ],
+)
+def test_parse_observed_with_a_known_place(text, known, expected):
+    city, region, country = known
+    place = market_from_parts(city=city, region=region, country=country)
+    identity = parse_observed(text, known=place)
+    assert (identity.city, identity.region, identity.country) == expected
+
+
+def test_known_cities_resolve_every_ambiguous_qualifier_and_never_both_ways():
+    """Every reading of every ambiguous qualifier has principal cities, and no city
+    is listed under two readings of the same qualifier (it would stay ambiguous)."""
+    from app.geography import markets
+
+    tokens = (
+        set(markets._REGION_INDEX)
+        | set(markets._COUNTRY_BY_NAME)
+        | {code.lower() for code in COUNTRIES}
+    )
+    ambiguous = {t: markets._area_candidates(t) for t in tokens}
+    ambiguous = {t: c for t, c in ambiguous.items() if len(c) > 1}
+    assert "georgia" in ambiguous and "ga" in ambiguous and "ca" in ambiguous
+    for token, readings in ambiguous.items():
+        cities = []
+        for country, region in readings:
+            keys = [region] if region else [
+                k for k in markets._KNOWN_CITIES if k == country or k.startswith(f"{country}-")
+            ]
+            listed = set().union(*(markets._KNOWN_CITIES.get(k, frozenset()) for k in keys))
+            assert listed, (token, country, region)
+            cities.append(listed)
+        for i, first in enumerate(cities):
+            for second in cities[i + 1 :]:
+                assert not first & second, (token, first & second)
 
 
 #: (text, location country, expected) for a market a customer CONFIGURED.
@@ -237,18 +290,46 @@ CONFUSABLES = [
     ("Kingston, Jamaica", "JM", "Kingston, ON", False),
     ("Perth, Western Australia", "AU", "Perth, Scotland", False),
     ("Perth, Western Australia", "AU", "Perth, WA", True),
-    ("Perth, WA", "US", "Perth, Western Australia", False),
+    ("Smallville, WA", "US", "Smallville, Western Australia", False),
     ("Victoria, BC", "CA", "Victoria, Australia", False),
     ("Hyderabad, India", "IN", "Hyderabad, Pakistan", False),
     ("Valencia, Spain", "ES", "Valencia, Venezuela", False),
     ("San Jose, CA", "US", "San José, Costa Rica", False),
     ("Córdoba, Argentina", "AR", "Cordoba, Spain", False),
     ("São Paulo, Brazil", "BR", "Sao Paulo, BR", True),
+    # Georgia, the US state, and Georgia, the country (adversarial review r1,
+    # MAJOR): an ambiguous qualifier is never resolved toward the scope's country.
+    ("Georgia", "US", "Tbilisi, Georgia", False),
+    ("Georgia", "US", "Batumi, Georgia", False),
+    ("Georgia", "US", "Atlanta, Georgia", True),
+    ("Georgia", "US", "Savannah, GA", True),
+    ("Georgia", "US", "Smallville, Georgia", False),
+    ("Georgia", "US", "Smallville, GA", False),
+    ("Georgia", "US", "Libreville, GA", False),
+    ("Georgia", "GE", "Tbilisi, Georgia", True),
+    ("Georgia", "GE", "Batumi, Georgia", True),
     ("Georgia", "GE", "Atlanta, GA", False),
-    # Known residual, pinned so it stays visible: in a US scope an observed
-    # "Georgia" qualifier is read as the state, because the text alone cannot tell
-    # it from the country. Ambiguity resolves toward the scope's own country.
-    ("Georgia", "US", "Tbilisi, Georgia", True),
+    ("Georgia", "GE", "Smallville, Georgia", False),
+    ("Atlanta, GA", "US", "Atlanta, Georgia", True),
+    ("Atlanta, GA", "US", "Tbilisi, Georgia", False),
+    # The same pattern for a 2-letter collision: "CA" is California and Canada.
+    ("California", "US", "Los Angeles, CA", True),
+    ("California", "US", "San Francisco, CA", True),
+    ("California", "US", "Toronto, CA", False),
+    ("California", "US", "Vancouver, CA", False),
+    ("California", "US", "Smallville, CA", False),
+    ("Canada", "CA", "Toronto, CA", True),
+    ("Canada", "CA", "Los Angeles, CA", False),
+    ("Canada", "CA", "Smallville, CA", False),
+    # ...and for two subdivisions sharing a code: "WA".
+    ("Western Australia", "AU", "Perth, WA", True),
+    ("Western Australia", "AU", "Seattle, WA", False),
+    ("Washington State", "US", "Seattle, WA", True),
+    ("Washington State", "US", "Perth, WA", False),
+    ("Washington State", "US", "Smallville, WA", False),
+    # A city-level scope is itself knowledge of where its city is.
+    ("Joliet, Illinois", "US", "Joliet, IL", True),
+    ("Joliet, Illinois", "US", "Joliet, Israel", False),
     # Unknown markets fail closed.
     ("Dallas, TX", "US", "Atlantis", False),
     ("Dallas, TX", "US", "", False),
@@ -395,6 +476,12 @@ class TestCoverage:
 
     def test_market_within_requires_a_qualified_scope(self):
         assert market_within(parse_observed("London, UK"), MarketIdentity(city="london")) is False
+        # Two unqualified identities with the same city still do not match: an
+        # unqualified scope admits nothing (pins the ``is_qualified`` guard).
+        bare = parse_observed("London")
+        assert bare == MarketIdentity(city="london")
+        assert market_within(bare, MarketIdentity(city="london")) is False
+        assert market_within(MarketIdentity(), MarketIdentity()) is False
         assert market_within(None, parse_market("London, UK")) is False
         assert market_within(parse_observed("London, UK"), None) is False
 
@@ -459,8 +546,13 @@ class TestConnectorPolicy:
             (("London, UK",), "", False),
             (("London, UK",), "London", False),
             (("London, UK",), "London, None", False),
-            # An allowed market that names no country clears nothing.
+            # An allowed market that names no country clears nothing, not even itself.
             (("London",), "London, UK", False),
+            (("London",), "London", False),
+            # Ambiguous request markets are not resolved toward the cleared country.
+            (("Georgia, US",), "Tbilisi, Georgia", False),
+            (("Georgia, US",), "Atlanta, Georgia", True),
+            (("Georgia, US",), "Smallville, GA", False),
         ],
     )
     def test_market_clearance(self, allowed, market, permitted):

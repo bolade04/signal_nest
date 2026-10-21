@@ -432,6 +432,108 @@ SUBDIVISIONS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
 #: has to agree when both sides state one ("London, UK" is London, England).
 REGION_QUALIFIES_CITY: Final[frozenset[str]] = frozenset({"US", "CA", "AU"})
 
+#: Principal cities (the capital and a few of the largest) of every reading of an
+#: ambiguous qualifier in the tables above: the 2-letter codes shared by a US state,
+#: Canadian province or Australian state and an ISO country ("GA" Georgia / Gabon,
+#: "CA" California / Canada, "IN" Indiana / India, ...), "WA" and "NT" (shared by two
+#: subdivisions) and the name "Georgia" (US state / country). Keyed by region key
+#: ("US-GA") or by ISO country code ("GE"); a country reading also knows the cities
+#: listed under that country's region keys (Canada's are under "CA-ON" etc.).
+#: Deliberately small and checkable by eye: an ambiguous qualifier is resolved only
+#: when its city is listed under exactly one reading; any other city stays
+#: unresolved, and an unresolved market matches nothing (P6-DATA-6 fails closed).
+#: Names are written naturally and folded when indexed.
+KNOWN_CITIES: Final[dict[str, tuple[str, ...]]] = {
+    # US states whose postal code is also an ISO country code.
+    "US-AL": ("Montgomery", "Birmingham", "Huntsville", "Mobile", "Tuscaloosa"),
+    "US-AR": ("Little Rock", "Fort Smith", "Fayetteville", "Springdale", "Jonesboro"),
+    "US-AZ": ("Phoenix", "Tucson", "Mesa", "Chandler", "Scottsdale", "Tempe", "Flagstaff"),
+    "US-CA": (
+        "Sacramento", "Los Angeles", "San Diego", "San Jose", "San Francisco", "Fresno",
+        "Oakland", "Long Beach",
+    ),
+    "US-CO": ("Denver", "Colorado Springs", "Aurora", "Fort Collins", "Boulder"),
+    "US-DE": ("Dover", "Wilmington", "Newark"),
+    "US-GA": ("Atlanta", "Savannah", "Augusta", "Columbus", "Macon", "Athens"),
+    "US-ID": ("Boise", "Meridian", "Nampa", "Idaho Falls", "Pocatello"),
+    "US-IL": ("Springfield", "Chicago", "Aurora", "Naperville", "Peoria", "Rockford"),
+    "US-IN": ("Indianapolis", "Fort Wayne", "Evansville", "South Bend", "Bloomington"),
+    "US-KY": ("Frankfort", "Louisville", "Lexington", "Bowling Green"),
+    "US-LA": ("Baton Rouge", "New Orleans", "Shreveport", "Lafayette"),
+    "US-MA": ("Boston", "Worcester", "Springfield", "Cambridge", "Lowell"),
+    "US-MD": ("Annapolis", "Baltimore", "Frederick", "Rockville", "Columbia"),
+    "US-ME": ("Augusta", "Portland", "Bangor", "Lewiston"),
+    "US-MN": ("Saint Paul", "Minneapolis", "Rochester", "Duluth", "Bloomington"),
+    "US-MO": ("Jefferson City", "Kansas City", "Saint Louis", "Springfield", "Columbia"),
+    "US-MS": ("Jackson", "Gulfport", "Southaven", "Hattiesburg", "Biloxi"),
+    "US-MT": ("Helena", "Billings", "Missoula", "Great Falls", "Bozeman"),
+    "US-NC": ("Raleigh", "Charlotte", "Greensboro", "Durham", "Winston-Salem", "Asheville"),
+    "US-NE": ("Lincoln", "Omaha", "Bellevue", "Grand Island"),
+    "US-PA": ("Harrisburg", "Philadelphia", "Pittsburgh", "Allentown", "Erie", "Scranton"),
+    "US-SC": ("Columbia", "Charleston", "Greenville", "Myrtle Beach"),
+    "US-SD": ("Pierre", "Sioux Falls", "Rapid City"),
+    "US-TN": ("Nashville", "Memphis", "Knoxville", "Chattanooga"),
+    "US-VA": ("Richmond", "Virginia Beach", "Norfolk", "Arlington", "Alexandria", "Roanoke"),
+    "US-WA": ("Olympia", "Seattle", "Spokane", "Tacoma", "Bellevue", "Vancouver"),
+    # The countries those codes also name.
+    "AL": ("Tirana", "Durres", "Vlore", "Shkoder"),
+    "AR": ("Buenos Aires", "Cordoba", "Rosario", "Mendoza", "La Plata"),
+    "AZ": ("Baku", "Ganja", "Sumqayit"),
+    "CO": ("Bogota", "Medellin", "Cali", "Barranquilla", "Cartagena"),
+    "DE": (
+        "Berlin", "Hamburg", "Munich", "Muenchen", "Cologne", "Koeln", "Frankfurt",
+        "Stuttgart", "Duesseldorf",
+    ),
+    "GA": ("Libreville", "Port-Gentil", "Franceville"),
+    "GE": ("Tbilisi", "Batumi", "Kutaisi", "Rustavi"),
+    "ID": ("Jakarta", "Surabaya", "Bandung", "Medan", "Denpasar"),
+    "IL": ("Jerusalem", "Tel Aviv", "Haifa", "Beersheba", "Eilat"),
+    "IN": (
+        "New Delhi", "Delhi", "Mumbai", "Bengaluru", "Bangalore", "Chennai", "Kolkata",
+        "Hyderabad", "Pune", "Ahmedabad",
+    ),
+    "KY": ("George Town",),
+    "LA": ("Vientiane", "Luang Prabang", "Pakse"),
+    "MA": ("Rabat", "Casablanca", "Marrakesh", "Marrakech", "Fes", "Fez", "Tangier"),
+    "MD": ("Chisinau", "Balti", "Tiraspol"),
+    "ME": ("Podgorica", "Niksic", "Budva", "Kotor"),
+    "MN": ("Ulaanbaatar", "Ulan Bator", "Erdenet", "Darkhan"),
+    "MO": ("Macau", "Macao"),
+    "MS": ("Plymouth", "Brades"),
+    "MT": ("Valletta", "Birkirkara", "Sliema", "Mosta"),
+    "NC": ("Noumea",),
+    "NE": ("Niamey", "Zinder", "Maradi"),
+    "NL": ("Amsterdam", "Rotterdam", "The Hague", "Utrecht", "Eindhoven"),
+    "NU": ("Alofi",),
+    "PA": ("Panama City", "Colon", "David"),
+    "PE": ("Lima", "Arequipa", "Trujillo", "Cusco", "Cuzco"),
+    "SA": ("Riyadh", "Jeddah", "Mecca", "Makkah", "Medina", "Dammam"),
+    "SC": ("Victoria",),
+    "SD": ("Khartoum", "Omdurman", "Port Sudan"),
+    "SK": ("Bratislava", "Kosice", "Presov", "Zilina"),
+    "TN": ("Tunis", "Sfax", "Sousse"),
+    "VA": ("Vatican City",),
+    "YT": ("Mamoudzou",),
+    # Canada (the "CA" country reading) and the provinces whose code is shared.
+    "CA-ON": ("Toronto", "Ottawa", "Mississauga", "Hamilton", "London"),
+    "CA-QC": ("Montreal", "Quebec City", "Laval", "Gatineau"),
+    "CA-BC": ("Vancouver", "Victoria", "Surrey"),
+    "CA-AB": ("Calgary", "Edmonton"),
+    "CA-MB": ("Winnipeg",),
+    "CA-NS": ("Halifax",),
+    "CA-NB": ("Fredericton", "Moncton"),
+    "CA-NL": ("St. John's",),
+    "CA-PE": ("Charlottetown",),
+    "CA-SK": ("Regina", "Saskatoon"),
+    "CA-NT": ("Yellowknife", "Inuvik", "Hay River"),
+    "CA-NU": ("Iqaluit",),
+    "CA-YT": ("Whitehorse",),
+    # Australian states whose code is shared ("WA", "NT", "SA").
+    "AU-WA": ("Perth", "Fremantle", "Bunbury", "Broome"),
+    "AU-NT": ("Darwin", "Alice Springs"),
+    "AU-SA": ("Adelaide", "Mount Gambier"),
+}
+
 #: Single names that are both a subdivision and, far more often in a market tag, a
 #: city ("New York" the city, not the state). Read as a city, which is the narrower
 #: scope; the state is still reachable as "New York State" or "NY".
