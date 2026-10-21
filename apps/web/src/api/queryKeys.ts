@@ -57,6 +57,10 @@ export const queryKeys = {
   // a workspace's opportunities reaches it; its own segment keeps its cache shape apart.
   opportunityFeed: (workspaceId: string, filters: OpportunityFilters) =>
     ['workspaces', workspaceId, 'opportunities', 'feed', filters] as const,
+  // One page with its paging headers (an ApiPage, not a bare array), for screens that
+  // must report the true total rather than the page length.
+  opportunityPage: (workspaceId: string, filters: OpportunityFilters) =>
+    ['workspaces', workspaceId, 'opportunities', 'page', filters] as const,
   opportunity: (workspaceId: string, opportunityId: string) =>
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId] as const,
   opportunityIntelligence: (workspaceId: string, opportunityId: string) =>

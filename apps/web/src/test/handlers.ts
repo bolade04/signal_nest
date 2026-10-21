@@ -147,6 +147,10 @@ const SORT_KEYS: readonly OpportunitySort[] = ['priority', 'opportunity', 'confi
  */
 export function pagedJson<T>(rows: T[], url: URL, defaultLimit = 100) {
   const limit = Number(url.searchParams.get('limit') ?? defaultLimit);
+  // As the API: `limit` is an integer in 1..500, else 422 before any row is read.
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    return modelError(422, 'validation_error', 'Request validation failed');
+  }
   const cursor = url.searchParams.get('cursor');
   const start = cursor ? Number(cursor.replace('fixture-cursor-', '')) : 0;
   const page = rows.slice(start, start + limit);
