@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ApiError, setAuthToken, setUnauthorizedHandler } from '@/api/client';
+import { ApiError, getAuthToken, setAuthToken, setUnauthorizedHandler } from '@/api/client';
 import * as api from '@/api/endpoints';
 import type {
   InvitationRegisterRequest,
@@ -113,8 +113,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSessionEnded(false);
   }, []);
 
-  const clearLocalSession = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
+  // This tab's session only: request header, auth state and query cache. What is
+  // stored for the browser is the caller's decision.
+  const forgetThisTab = useCallback(() => {
     setAuthToken(null);
     setToken(null);
     setUser(null);
@@ -123,6 +124,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSessionEnded(false);
     queryClient.clear();
   }, [queryClient]);
+
+  const clearLocalSession = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY);
+    forgetThisTab();
+  }, [forgetThisTab]);
 
   const endSessionAfterCredentialChange = useCallback(() => {
     // Every token of the account is already refused, so a re-read still in flight would
@@ -188,18 +194,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIntendedPathState(path);
   }, []);
 
-  // Register the 401 handler once so any expired-token response clears the session.
-  // Local only: the refused request already shows the server session has ended, and
-  // sign-in will say so (P6-UI-013). A sign-out that meets this 401 clears again after
-  // it, which resets the flag: a session the user ended is not reported as ended.
+  // Register the 401 handler once. A 401 ends this tab's session only when it refused
+  // the token this tab is using now (P6-AUTH-4 follow-up): a late answer to a request
+  // sent with an earlier session — signed out and in again since — says nothing about
+  // the current one, and a request sent with no session ends nothing. The stored token
+  // goes only if it is the refused one, so a newer session another tab stored survives
+  // (a); and this tab leaves the signed-in shell even when another tab already cleared
+  // the stored token (c). Local only: the refused request already shows the server
+  // session has ended, and sign-in will say so (P6-UI-013). A sign-out that meets this
+  // 401 clears again after it, which resets the flag: a session the user ended is not
+  // reported as ended.
   useEffect(() => {
-    setUnauthorizedHandler(() => {
-      if (!localStorage.getItem(TOKEN_KEY)) return;
-      clearLocalSession();
+    setUnauthorizedHandler((refused) => {
+      if (refused === null || refused !== getAuthToken()) return;
+      if (localStorage.getItem(TOKEN_KEY) === refused) localStorage.removeItem(TOKEN_KEY);
+      forgetThisTab();
       setSessionEnded(true);
     });
     return () => setUnauthorizedHandler(null);
-  }, [clearLocalSession]);
+  }, [forgetThisTab]);
 
   // Validate a persisted token on first load.
   useEffect(() => {
@@ -214,7 +227,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((session) => applySession(session))
       .catch((err) => {
         if (controller.signal.aborted) return;
-        localStorage.removeItem(TOKEN_KEY);
+        // Only the session this read was for: another tab may have stored a newer one.
+        if (localStorage.getItem(TOKEN_KEY) === existing) localStorage.removeItem(TOKEN_KEY);
         setAuthToken(null);
         setToken(null);
         setStatus('unauthenticated');
