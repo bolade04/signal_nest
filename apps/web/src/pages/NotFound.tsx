@@ -9,7 +9,7 @@ export function NotFoundPage() {
       <EmptyState
         icon={Compass}
         title="Page not found"
-        description="That route doesn't exist. It may have moved, or it's a capability arriving in a later phase."
+        description="That page doesn't exist. Check the address and try again."
         action={
           <Button asChild>
             <Link to="/">Back to overview</Link>

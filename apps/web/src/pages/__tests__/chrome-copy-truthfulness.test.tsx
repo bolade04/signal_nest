@@ -84,6 +84,20 @@ describe('chrome copy is roadmap-free and promises nothing unbuilt (P6-UI-010)',
     expect(text).toContain('AI-suggested starting points, not finished creative.');
   });
 
+  // One of the three sites recorded as still open under P6-UI-010. It says "a later
+  // phase" with no digit, so a /Phase \d/ check alone would pass it: match the word.
+  it('the not-found page promises no later phase', async () => {
+    const screen = renderApp(<App />, { route: '/no-such-page' });
+
+    // Liveness: the not-found page actually rendered.
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('a capability arriving in a later phase');
+    expect(text).not.toMatch(/\bphase\b/i);
+    expect(text).toContain("That page doesn't exist. Check the address and try again.");
+  });
+
   it('campaign-context blurbs claim no use the backend does not make', async () => {
     const screen = renderApp(<CampaignContextPage />, { route: '/context' });
 
