@@ -25,6 +25,10 @@ the path, the query string and the request body:
   in the path or query: ``403 permission_denied`` with the membership message. This limb is
   also proven for the whole matrix by ``test_e7_role_policy_matrix`` (an outsider on every
   route); it is repeated here only where a real B resource makes the probe concrete;
+* foreign CURSORS (P6-PLAT-12): a paging cursor that organization B was issued on its own
+  list is refused (``422 "Invalid cursor."``) when A replays it on A's list, and walking
+  A's list page by page returns only A's rows with an ``X-Total-Count`` that counts only
+  A's rows;
 * foreign RESOURCE identifiers under A's own workspace/organization path (hidden IDOR):
   B's location/request/opportunity/job/item/member/invitation id answers the handler's
   ``404 "... not found ..."``, list filters naming B's ids return A's rows only, and after
@@ -1123,6 +1127,112 @@ class TestAuditLogs:
 
 
 # --------------------------------------------------------------------------- #
+# 10b. Paginated lists: cursors and totals stay inside the organization (P6-PLAT-12)
+# --------------------------------------------------------------------------- #
+PAGED_LISTS = ("opportunities", "audit-logs", "scout-requests", *(c[0] for c in CONTEXT))
+
+
+def _own_row_ids(world: World, tenant: Tenant, path: str) -> set[str]:
+    """Every row the tenant's list may show, read by the witness (not through the API)."""
+    if path == "audit-logs":
+        return {
+            r["id"]
+            for r in _rows(world, AuditLog)
+            if r["organization_id"] == tenant.org_id and r["workspace_id"] in (tenant.ws_id, None)
+        }
+    model = {
+        "opportunities": Opportunity,
+        "scout-requests": ScoutRequest,
+        **{p: m for p, m, _b in CONTEXT},
+    }[path]
+    return {r["id"] for r in _rows(world, model) if r["workspace_id"] == tenant.ws_id}
+
+
+def _ensure_two_rows(world: World, tenant: Tenant, path: str) -> list[tuple[type, str]]:
+    """A cursor exists only when a second page does: give the tenant at least two rows.
+
+    Returns the rows added, which the caller removes again: other probes assume the world
+    exactly as it was built (one opportunity per tenant, for example).
+    """
+    if len(_own_row_ids(world, tenant, path)) >= 2:
+        return []
+    if path == "opportunities":
+        with sessionmaker(bind=world.witness, expire_on_commit=False, future=True)() as s:
+            row = Opportunity(
+                organization_id=tenant.org_id,
+                workspace_id=tenant.ws_id,
+                brand_id=tenant.brand_id,
+                scout_request_id=tenant.request_id,
+                location_id=tenant.location_id,
+                title=f"Second opportunity {tenant.key}",
+                classification="lead",
+                decision="pursue",
+            )
+            s.add(row)
+            s.commit()
+            return [(Opportunity, row.id)]
+    model, body = next((m, b) for p, m, b in CONTEXT if p == path)
+    r = world.send("POST", API + _ws_path(world, tenant, f"/{path}"), tenant.owner_token, body)
+    assert r.status_code == 201, r.text
+    return [(model, r.json()["id"])]
+
+
+def _remove(world: World, added: list[tuple[type, str]]) -> None:
+    with world.witness.begin() as conn:
+        for model, row_id in added:
+            conn.execute(model.__table__.delete().where(model.__table__.c.id == row_id))
+
+
+@pytest.mark.parametrize("path", PAGED_LISTS)
+class TestPaginatedLists:
+    def test_foreign_cursor_refused_and_pages_and_total_are_own_rows_only(
+        self, world: World, pov: Pov, path: str
+    ):
+        a, b = pov.a, pov.b
+        added = _ensure_two_rows(world, a, path) + _ensure_two_rows(world, b, path)
+        try:
+            self._probe(world, pov, a, b, path)
+        finally:
+            _remove(world, added)
+
+    @staticmethod
+    def _probe(world: World, pov: Pov, a: Tenant, b: Tenant, path: str) -> None:
+        # B's cursor, issued to B's owner on B's own list.
+        issued = world.send(
+            "GET", API + _ws_path(world, b, f"/{path}"), b.owner_token, params={"limit": 1}
+        )
+        assert issued.status_code == 200, issued.text
+        foreign_cursor = issued.headers["x-next-cursor"]
+        # Replayed by A on A's own list: refused, and nothing of B's is returned.
+        r = pov.send(
+            "GET", _ws_path(world, a, f"/{path}"), params={"limit": 1, "cursor": foreign_cursor}
+        )
+        assert _error(r) == (422, "validation_error", "Invalid cursor."), r.text
+        # Replayed on B's list by A: the tenancy dependency refuses first.
+        _assert_membership_403(
+            pov.send(
+                "GET",
+                _ws_path(world, b, f"/{path}"),
+                params={"limit": 1, "cursor": foreign_cursor},
+            )
+        )
+        # Positive: A walks its own list one row per page; only A's rows, total = A's count.
+        own, seen, totals, cursor = _own_row_ids(world, a, path), [], set(), None
+        for _ in range(500):
+            params = {"limit": 1, **({"cursor": cursor} if cursor else {})}
+            page = pov.send("GET", _ws_path(world, a, f"/{path}"), params=params)
+            assert page.status_code == 200, page.text
+            seen.extend(row["id"] for row in page.json())
+            totals.add(page.headers["x-total-count"])
+            cursor = page.headers.get("x-next-cursor")
+            if cursor is None:
+                break
+        assert len(seen) == len(set(seen)) and set(seen) == own
+        assert totals == {str(len(own))}
+        assert not set(seen) & _own_row_ids(world, b, path)
+
+
+# --------------------------------------------------------------------------- #
 # 11. Completeness against the served application
 # --------------------------------------------------------------------------- #
 #: Every customer-facing tenant-scoped operation -> the tests in THIS module that prove it.
@@ -1130,6 +1240,9 @@ _CTX_TESTS = (
     "TestContextEntities::test_list_returns_own_rows_only_and_foreign_ws_403",
     "TestContextEntities::test_create_in_foreign_ws_403_nothing_written_own_201",
     "TestContextEntities::test_delete_with_foreign_item_id_404_and_row_survives",
+)
+_PAGED_TEST = (
+    "TestPaginatedLists::test_foreign_cursor_refused_and_pages_and_total_are_own_rows_only",
 )
 COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", W): ("TestWorkspaceAndOrganization::test_get_workspace_own_200_foreign_403",),
@@ -1170,7 +1283,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("PUT", f"{W}/business-profile"): (
         "TestBrandsAndProfile::test_profile_update_foreign_403_unchanged_own_200",
     ),
-    **{("GET", f"{W}/{p}"): _CTX_TESTS[:1] for p, _m, _b in CONTEXT},
+    **{("GET", f"{W}/{p}"): _CTX_TESTS[:1] + _PAGED_TEST for p, _m, _b in CONTEXT},
     **{("POST", f"{W}/{p}"): _CTX_TESTS[1:2] for p, _m, _b in CONTEXT},
     **{("DELETE", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[2:] for p, _m, _b in CONTEXT},
     ("GET", f"{W}/locations"): ("TestLocations::test_list_and_create",),
@@ -1193,6 +1306,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/geocode"): ("TestLocations::test_geocode_workspace_id_in_query",),
     ("GET", f"{W}/scout-requests"): (
         "TestScoutRequests::test_list_own_only_and_foreign_location_filter_is_empty",
+        *_PAGED_TEST,
     ),
     ("POST", f"{W}/scout-requests"): (
         "TestScoutRequests::test_create_with_foreign_location_in_body_404_nothing_created",
@@ -1225,6 +1339,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     },
     ("GET", f"{W}/opportunities"): (
         "TestOpportunities::test_list_own_only_and_foreign_query_filters_empty",
+        *_PAGED_TEST,
     ),
     ("GET", f"{W}/opportunities/{{opportunity_id}}"): (
         "TestOpportunities::test_detail_and_intelligence_with_foreign_opportunity_id_404",
@@ -1256,6 +1371,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("GET", f"{W}/audit-logs"): (
         "TestAuditLogs::test_own_200_own_organization_rows_only_foreign_403",
+        *_PAGED_TEST,
     ),
 }
 
