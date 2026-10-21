@@ -46,6 +46,11 @@ written:
 campaign_context, claims, scouting_requests, signals, clustering, scoring,
 opportunities, auth, audit, llm, jobs`.
 
+*(2026-10-21 note, `P6-PLAT-7`: the change that adds this note removes the empty
+`business_profiles` and `clustering` packages, each of which held only a 0-byte `__init__.py`
+and was imported by nothing. Business profiles live in `brands/` — the `business_profiles`
+table is declared in `brands/models.py` — and clustering in `intelligence/clustering.py`.)*
+
 Framework-free engines live under `scoring/`, `geography/`, and `claims/` as pure
 services that are unit-tested without FastAPI or a database.
 
@@ -240,7 +245,8 @@ in [`docs/project-phase-6-plan.md`](project-phase-6-plan.md). ~~None of the Phas
   `audit`, `auth`, `brands`, `business_profiles`, `campaign_context`, `capabilities`, `claims`,
   `clustering`, `connectors`, `core`, `db`, `feedback`, `geography`, `infra`, `intelligence`,
   `jobs`, `llm`, `locations`, `opportunities`, `organizations`, `scoring`, `scouting_requests`,
-  `signals`, `system`, `tests`. Present at the ~~acceptance~~ Phase 1–2 squash commit `8dca455e` *(and the accepted commit `b5965d35`;
+  `signals`, `system`, `tests`. *(2026-10-21 note, `P6-PLAT-7`: without the removed
+  `business_profiles` and `clustering`, the list is 24 directories.)* Present at the ~~acceptance~~ Phase 1–2 squash commit `8dca455e` *(and the accepted commit `b5965d35`;
   `apps/api` is identical — 2026-10-06 clarification)* but not in the list above: `api` (router
   aggregation), `core`, `db`, `infra` (cache, ~~mail,~~ queue, storage and vector adapters *(2026-10-06
   correction — inaccurate when written: `infra/mail.py` was first added on 2026-09-26, in #184)*), `tests` (the API's pytest suite) *(2026-10-07
