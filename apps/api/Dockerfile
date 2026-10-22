@@ -86,6 +86,20 @@ RUN python -m pip uninstall --yes pip \
 # ---------------------------------------------------------------------------
 FROM base AS runtime
 
+# The base image's own installer stays out of the final images (P6-CI-6 coverage gaps): python:3.12-slim
+# ships pip in /usr/local (with its launchers) and the interpreter's bundled ensurepip wheel, and pip
+# vendors packages (urllib3, requests, msgpack, setuptools/pkg_resources, ...) without dist-info, which an
+# image scan does not analyse. Nothing at runtime installs packages or creates a virtualenv with pip, so
+# both are removed here, as root, before the venv is copied in; the venv's own pip was removed in the
+# builder stage above. After the last COPY below, a second check proves that no installer reached the
+# final filesystem by any layer, and the merge-path image gate fails on any pip its scan lists.
+RUN /usr/local/bin/python -m pip uninstall --yes pip \
+    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+    && rm -f /usr/local/lib/python3.12/ensurepip/_bundled/*.whl \
+    && test ! -e /usr/local/lib/python3.12/site-packages/pip \
+    && ! ls /usr/local/lib/python3.12/site-packages | grep -qi '^pip' \
+    && ! ls /usr/local/lib/python3.12/ensurepip/_bundled | grep -q '\.whl$'
+
 WORKDIR /app
 
 # The finished virtualenv (runtime dependencies only — no build toolchain).
@@ -97,6 +111,16 @@ COPY --chown=10001:10001 app ./app
 COPY --chown=10001:10001 alembic ./alembic
 COPY --chown=10001:10001 alembic.ini ./alembic.ini
 COPY --chown=10001:10001 pyproject.toml ./pyproject.toml
+
+# No package installer in the final filesystem (P6-CI-6 coverage gaps), checked after every layer that adds
+# files: no pip package, pip metadata or wheel file under the interpreter prefix, the venv or the application,
+# no pip launcher, and neither interpreter can import pip. The build fails otherwise. Reads only; writes nothing.
+RUN ! find /usr/local /opt/venv /app \( -name '*.whl' -o -iname 'pip-*.dist-info' -o \( -type d -name pip -path '*-packages/pip' \) \) -print | grep -q . \
+    && for f in /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 /opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.12; do \
+           test ! -e "$f" && test ! -L "$f" || exit 1; \
+       done \
+    && ! /usr/local/bin/python -c "import pip" 2>/dev/null \
+    && ! /opt/venv/bin/python -c "import pip" 2>/dev/null
 
 # Make the source importable as the ``app`` package without an editable install.
 ENV PYTHONPATH=/app
