@@ -28,7 +28,10 @@ the path, the query string and the request body:
 * foreign RESOURCE identifiers under A's own workspace/organization path (hidden IDOR):
   B's location/request/opportunity/job/item/member/invitation id answers the handler's
   ``404 "... not found ..."``, list filters naming B's ids return A's rows only, and after
-  every rejected mutation B's row is byte-for-byte unchanged (witness snapshot).
+  every rejected mutation B's row is byte-for-byte unchanged (witness snapshot). Since
+  P6-PLAT-8 this includes B's location id inside the location lists of campaign and offer
+  bodies (``location_ids``, ``eligible_location_ids``) on create and on update (P6-PLAT-9's
+  PATCH), which were stored as sent before.
 
 What is deliberately NOT counted as isolation proof: 401s, 422s on malformed bodies, role
 denials (the role matrix is E7's), and the dependency's ``404 Workspace not found.`` for a
@@ -98,7 +101,7 @@ NOT_A_MEMBER = "You are not a member of this organization."  # dependency seam
 HANDLER_NOT_A_MEMBER = "Not a member of this organization."  # the two GET helpers
 PASSWORD = "ci3-isolation-pw-123"
 
-# (path segment, model, valid body, the body's identifier-list field if any)
+# (path segment, model, valid body)
 CONTEXT = (
     ("products", ProductProfile, {"name": "Widget"}),
     ("audiences", AudienceProfile, {"label": "Owners"}),
@@ -110,6 +113,8 @@ CONTEXT = (
     ("channel-preferences", ChannelPreference, {"channel": "email"}),
     ("campaigns", Campaign, {"name": "Launch"}),
 )
+# The two context entities whose body carries a list of location ids (P6-PLAT-8).
+LOCATION_LISTS = {"campaigns": "location_ids", "offers": "eligible_location_ids"}
 
 
 # --------------------------------------------------------------------------- #
@@ -719,6 +724,49 @@ class TestContextEntities:
         assert pov.send("DELETE", _ws_path(world, a, f"/{path}/{mine}")).status_code == 204
         assert world.row(model, mine) is None
 
+    def test_patch_with_foreign_item_id_404_and_row_unchanged(self, world, pov, path, model, body):
+        a, b = pov.a, pov.b
+        before = world.row(model, b.items[path])
+        r = pov.send("PATCH", _ws_path(world, a, f"/{path}/{b.items[path]}"), body)
+        _assert_404(r, "Item not found in this workspace.")
+        _assert_membership_403(
+            pov.send("PATCH", _ws_path(world, b, f"/{path}/{b.items[path]}"), body)
+        )
+        assert world.row(model, b.items[path]) == before
+        # Positive: updating one of A's own items works and keeps its id and scope.
+        own = pov.send("PATCH", _ws_path(world, a, f"/{path}/{a.items[path]}"), body)
+        assert own.status_code == 200, own.text
+        assert (own.json()["id"], own.json()["workspace_id"]) == (a.items[path], a.ws_id)
+
+
+@pytest.mark.parametrize("path,model,body", [c for c in CONTEXT if c[0] in LOCATION_LISTS])
+class TestContextLocationLists:
+    def test_foreign_location_id_in_body_404_nothing_written(self, world, pov, path, model, body):
+        a, b = pov.a, pov.b
+        field_name = LOCATION_LISTS[path]
+        before = world.count(model, workspace_id=a.ws_id)
+        r = pov.send("POST", _ws_path(world, a, f"/{path}"), {**body, field_name: [b.location_id]})
+        _assert_404(r, "Location not found in this workspace.")
+        assert world.count(model, workspace_id=a.ws_id) == before
+        item = a.items[path]
+        snapshot = world.row(model, item)
+        r = pov.send(
+            "PATCH",
+            _ws_path(world, a, f"/{path}/{item}"),
+            {field_name: [a.location_id, b.location_id]},
+        )
+        _assert_404(r, "Location not found in this workspace.")
+        assert world.row(model, item) == snapshot
+        # Positive: A's own location is accepted on create and on update.
+        own = pov.send(
+            "POST", _ws_path(world, a, f"/{path}"), {**body, field_name: [a.location_id]}
+        )
+        assert own.status_code == 201 and own.json()[field_name] == [a.location_id]
+        upd = pov.send(
+            "PATCH", _ws_path(world, a, f"/{path}/{item}"), {field_name: [a.location_id]}
+        )
+        assert upd.status_code == 200 and upd.json()[field_name] == [a.location_id]
+
 
 # --------------------------------------------------------------------------- #
 # 5. Locations, geo-coverage, geocode
@@ -1110,7 +1158,17 @@ _CTX_TESTS = (
     "TestContextEntities::test_list_returns_own_rows_only_and_foreign_ws_403",
     "TestContextEntities::test_create_in_foreign_ws_403_nothing_written_own_201",
     "TestContextEntities::test_delete_with_foreign_item_id_404_and_row_survives",
+    "TestContextEntities::test_patch_with_foreign_item_id_404_and_row_unchanged",
 )
+_LOCATION_LIST_TESTS = (
+    "TestContextLocationLists::test_foreign_location_id_in_body_404_nothing_written",
+)
+
+
+def _location_list_tests(path: str) -> tuple[str, ...]:
+    return _LOCATION_LIST_TESTS if path in LOCATION_LISTS else ()
+
+
 COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", W): ("TestWorkspaceAndOrganization::test_get_workspace_own_200_foreign_403",),
     ("GET", f"{ORG}/workspaces"): (
@@ -1151,8 +1209,12 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         "TestBrandsAndProfile::test_profile_update_foreign_403_unchanged_own_200",
     ),
     **{("GET", f"{W}/{p}"): _CTX_TESTS[:1] for p, _m, _b in CONTEXT},
-    **{("POST", f"{W}/{p}"): _CTX_TESTS[1:2] for p, _m, _b in CONTEXT},
-    **{("DELETE", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[2:] for p, _m, _b in CONTEXT},
+    **{("POST", f"{W}/{p}"): _CTX_TESTS[1:2] + _location_list_tests(p) for p, _m, _b in CONTEXT},
+    **{("DELETE", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[2:3] for p, _m, _b in CONTEXT},
+    **{
+        ("PATCH", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[3:] + _location_list_tests(p)
+        for p, _m, _b in CONTEXT
+    },
     ("GET", f"{W}/locations"): ("TestLocations::test_list_and_create",),
     ("POST", f"{W}/locations"): ("TestLocations::test_list_and_create",),
     ("PUT", f"{W}/locations/{{location_id}}"): (
@@ -1310,7 +1372,9 @@ class TestCoverageCompleteness:
         covered = {(m, f"{API}{p}") for m, p in COVERAGE}
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
-        assert len(served) == 71
+        # 71 -> 80 (P6-PLAT-9): one PATCH per context collection; the equalities above prove
+        # no other operation came or went.
+        assert len(served) == 80
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
