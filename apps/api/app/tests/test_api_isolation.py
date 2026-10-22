@@ -232,6 +232,7 @@ def test_internal_capabilities_is_detailed_and_secret_free(
         "storage",
         "llm",
         "worker_registry",
+        "rate_limit",
     }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
@@ -260,6 +261,7 @@ def test_internal_readiness_reports_probe_diagnostics(client: TestClient, auth: 
         "storage",
         "llm",
         "worker_registry",
+        "rate_limit",
     }
     # Diagnostics carry durations but never secret material.
     for probe in body["probes"]:

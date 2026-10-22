@@ -67,6 +67,15 @@ just without the low-latency wake-up hint. Confirm the database is healthy.
 **Containment.** None required for correctness. If notify failures are noisy, expect
 slightly higher enqueue→claim latency bounded by the poll interval.
 
+*(2026-10-20, `P6-PLAT-2`/`P6-PLAT-3`: no wake-up is published any more, so
+`redis_notify_total` stays at zero, and a Redis outage no longer touches job pickup.
+It does affect request rate limiting when `RATE_LIMIT_BACKEND=redis`. Look for the
+`rate_limit.shared_store_unavailable` warning and
+`dependency_operation_total{operation="rate_limit"}`. With
+`RATE_LIMIT_REDIS_FAILURE_MODE=local` the API keeps serving under per-process limits;
+with `deny` every request except `/health` gets 503 until Redis answers. See
+[deployment.md](./deployment.md).)*
+
 **Recovery.** Restore Redis. Notification latency returns to normal. No queue repair
 needed. If rate limiting was relying on a future Redis backend, note this is **not
 yet implemented** (the limiter is process-local — see the security review).

@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
-from app.core.lifecycle import graceful_shutdown
+from app.core.lifecycle import close_redis_client, graceful_shutdown
 from app.core.logging import configure_logging, get_logger
 from app.core.metrics import (
     SERVICE_SHUTDOWNS_TOTAL,
@@ -28,6 +28,7 @@ from app.core.middleware import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     html_docs_paths,
+    rate_limit_middleware_options,
 )
 from app.core.tracing import configure_tracing_from_settings
 
@@ -86,6 +87,7 @@ async def lifespan(app: FastAPI):
             outcome="clean",
         )
         graceful_shutdown(settings)
+        close_redis_client(getattr(app.state, "rate_limit_redis_client", None))
 
 
 def create_app() -> FastAPI:
@@ -100,7 +102,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(RateLimitMiddleware)
+    # P6-PLAT-3: per process in memory (development/test), or shared in Redis. The
+    # Redis client is kept on app.state so shutdown can close its pool.
+    rate_limit_options = rate_limit_middleware_options(settings)
+    app.state.rate_limit_redis_client = rate_limit_options.get("redis_client")
+    app.add_middleware(RateLimitMiddleware, **rate_limit_options)
     app.add_middleware(CorrelationMiddleware)
     app.add_middleware(
         CORSMiddleware,
