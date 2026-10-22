@@ -42,7 +42,7 @@ from app.connectors.replay import (
     seed_replay,
 )
 from app.core.config import Settings, get_settings
-from app.core.enums import ScoutRequestStatus
+from app.core.enums import Role, ScoutRequestStatus
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
@@ -51,7 +51,7 @@ from app.jobs.pipeline import _run
 from app.locations.models import BusinessLocation
 from app.main import app
 from app.opportunities.models import Opportunity
-from app.organizations.models import Organization, User, Workspace
+from app.organizations.models import Organization, OrganizationMember, User, Workspace
 from app.scouting_requests.connectors import fetch_signals
 from app.scouting_requests.models import ScoutRequest
 from app.scouting_requests.run_history import _map_stats
@@ -545,6 +545,37 @@ def test_takedown_requires_an_operator_and_changes_nothing_otherwise(replay_worl
     plain = {"Authorization": f"Bearer {live_bearer('plain-user')}"}
     assert w.client.post(url, headers=plain, json={"reason": "x"}).status_code == 403
     assert w.client.get(f"{API}/internal/system/data-sources", headers=plain).status_code == 403
+    assert _count(w.factory, RawSignal, TAKEN) == before > 0
+    with w.factory() as s:
+        assert s.scalars(select(SourceTakedown)).all() == []
+
+
+def test_an_organization_owner_gets_the_operator_refusal_and_learns_nothing(replay_world):
+    """A customer OWNER is not an operator: both data-source routes answer the same 403
+    for a real key and an unknown one, so a customer cannot enumerate sources."""
+    w = replay_world
+    owner_id = seed_mod.sid("user")
+    with w.factory() as s:
+        member = s.scalars(
+            select(OrganizationMember).where(OrganizationMember.user_id == owner_id)
+        ).one()
+        assert member.role == Role.OWNER.value
+        s.get(User, owner_id).is_operator = False  # the demo owner minus the dev/test grant
+        s.commit()
+    before = _count(w.factory, RawSignal, TAKEN)
+    base = f"{API}/internal/system/data-sources"
+    answers = [
+        w.client.get(base, headers=w.auth),
+        w.client.post(f"{base}/{TAKEN}/takedown", headers=w.auth, json={"reason": "x"}),
+        w.client.post(f"{base}/no-such-source/takedown", headers=w.auth, json={"reason": "x"}),
+    ]
+    assert [r.status_code for r in answers] == [403, 403, 403]
+    # A real key and an unknown one look alike (only the per-request id differs).
+    bodies = [{k: v for k, v in r.json()["error"].items() if k != "request_id"} for r in answers]
+    assert bodies[1] == bodies[2] == {
+        "code": "permission_denied",
+        "message": "Operator privileges are required for this resource.",
+    }
     assert _count(w.factory, RawSignal, TAKEN) == before > 0
     with w.factory() as s:
         assert s.scalars(select(SourceTakedown)).all() == []
