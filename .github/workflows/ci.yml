@@ -14,10 +14,15 @@ on:
       - 'feature/**'
   workflow_dispatch:
 
-# Newer commits on the same branch / PR cancel older in-flight runs.
+# Concurrency (2026-10-22, queued CI-6 follow-up). pull_request runs: one group per PR NUMBER — not the
+# head branch name, since two PRs whose source branches share a name (fork PRs included) must not cancel
+# each other — and a newer push to that PR cancels its older in-flight run (a superseded run only wastes
+# runners). Every other event — push to main or feature/**, workflow_dispatch — gets a group of its own,
+# keyed by the run id, so a push-to-main run is never cancelled by, nor queued behind, a later push: it
+# always completes. Before 2026-10-22 one group (`pull_request.number || ref`) cancelled for every event.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: jobs only read repository contents.
 permissions:
@@ -2219,7 +2224,8 @@ jobs:
       # member (and a root_wiring_check mirror source, verified against the committed lockfile).
       # The same step also runs cmk_remediation.tftest.hcl (P6-CI-6): module-targeted runs that
       # render the edge, observability and storage modules' customer-managed-key wiring.
-      # Expected runs: 11 (7 + 4). Placed before toolchain_post so the cache it creates is classified.
+      # The same step also runs data_sql_sg_contract.tftest.hcl (AL-1, PR #248: the applied RDS security-group description).
+      # Expected runs: 13 (7 + 4 + 2). Placed before toolchain_post so the cache it creates is classified.
       - name: Root input-boundary and alias-wiring contract tests (offline, fully mocked provider)
         id: root_boundary_tests
         if: always()
