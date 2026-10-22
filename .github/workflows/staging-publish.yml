@@ -185,7 +185,7 @@ jobs:
       # pinned to the ECS task-definition runtime (LINUX/X86_64, §26.2).
       - name: Build API image (linux/amd64, SHA-stamped)
         id: build-api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/api
           file: apps/api/Dockerfile
@@ -269,7 +269,7 @@ jobs:
 
       - name: Build worker image (linux/amd64, SHA-stamped)
         id: build-worker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/api
           file: apps/api/Dockerfile
