@@ -88,7 +88,8 @@ def sha256(path: Path) -> str:
 
 def piptools_compile(project: Path, args: list[str], env: dict[str, str] | None = None) -> None:
     """Plain pip-compile, as maintenance would run it (fixture generation and controls)."""
-    subprocess.run([sys.executable, "-m", "piptools", "compile", "--quiet", *args],
+    subprocess.run([sys.executable, "-m", "piptools", "compile", "--quiet",
+                    "--no-build-isolation", *args],
                    cwd=project, check=True, capture_output=True, text=True,
                    env=vl.compile_environment() if env is None else env)
 
@@ -300,7 +301,7 @@ class VerifyLocksTests(unittest.TestCase):
         proc = subprocess.run([sys.executable, "-c", code, str(HERE), str(self.project)],
                               capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-        self.assertIn("TOOLCHAIN MISMATCH: pip 25.1.1 (required 0.0.0)", proc.stdout)
+        self.assertIn("TOOLCHAIN MISMATCH: pip 26.2.2 (required 0.0.0)", proc.stdout)
 
     # ------------------------------------------------------------------ configuration isolation
     def test_project_pip_tools_config_cannot_turn_verification_into_an_upgrade(self) -> None:
@@ -484,6 +485,27 @@ class VerifyLocksTests(unittest.TestCase):
         self.assertEqual(control.stdout.strip(), "7.0.0")
         proc = self.run_verifier(env=env)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_pip_compile_builds_metadata_without_build_isolation(self) -> None:
+        # pip-tools reads static metadata, so no backend runs today; should one ever be needed, it
+        # comes from the lock toolchain's own environment, never from an unpinned fetch into a
+        # temporary build environment (P6-CI-6 coverage gaps).
+        seen: list[list[str]] = []
+        real_run = vl.subprocess.run
+
+        def capture(command, **kwargs):
+            seen.append(list(command))
+            return real_run(command, **kwargs)
+
+        vl.subprocess.run = capture
+        try:
+            vl.compile_lock(self.project, self.tmp / "isolation.txt", ("full",), None,
+                            offline_args(self.index, self.cache))
+        finally:
+            vl.subprocess.run = real_run
+        self.assertEqual(len(seen), 1)
+        self.assertIn("--no-build-isolation", seen[0])
+        self.assertNotIn("--build-isolation", seen[0])
 
     def test_committed_hashes_never_reach_pip_tools(self) -> None:
         pins = vl.parse_lock(self.lock(vl.DEV))

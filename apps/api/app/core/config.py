@@ -36,6 +36,16 @@ _AWS_REGION_RE = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
 _SES_CONFIGURATION_SET_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _MAX_SUPPORT_CONTACT_LENGTH = 200
 
+# --- P6 platform services (P6-PLAT-1) ---------------------------------------
+#: Whether this build implements a pgvector-backed similarity path (P6-PLAT-1). It
+#: does not: no migration creates the ``vector`` extension, no column has a vector
+#: type and no query uses a vector operator, so ``vector_backend=pgvector`` would
+#: silently run the in-process brute-force path. Settings refuse it while this is
+#: False. It is a fact about the code, not a deployment setting: it becomes True in
+#: the change that implements pgvector, never through the environment.
+PGVECTOR_IMPLEMENTED = False
+# --- end P6 platform services -----------------------------------------------
+
 
 def _has_control_character(value: str) -> bool:
     return any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
@@ -149,6 +159,33 @@ class Settings(BaseSettings):
     #: are strictly opt-in; core code always depends on the abstraction, never a
     #: hosted vendor. A disabled backend is a no-op, never an error.
     metrics_enabled: bool = False
+
+    # --- P6-INF-5: metrics exporter (additive block) --------------------------
+    #: Exporter installed when ``metrics_enabled`` is true. ``none`` keeps the no-op
+    #: backend; ``emf`` writes CloudWatch Embedded Metric Format documents to stdout,
+    #: which the ECS awslogs driver already ships to CloudWatch Logs, where the
+    #: metrics are extracted (app/core/metrics_emf.py) — no agent, endpoint or
+    #: credential. Off unless both are set, so tests and local runs never emit.
+    metrics_exporter: Literal["none", "emf"] = "none"
+    #: CloudWatch namespace of the EMF metrics. Staging IaC sets one per deployment
+    #: (the alarms read the same value); never an ``AWS/`` namespace.
+    metrics_namespace: str = "SignalNest/app"
+    #: Seconds between EMF flushes. Bounded so a series reaches CloudWatch within one
+    #: 5-minute alarm period and the flusher can never spin.
+    metrics_flush_interval_seconds: float = 60.0
+
+    @model_validator(mode="after")
+    def _validate_metrics_exporter(self) -> Settings:
+        from app.core.metrics_emf import namespace_problem
+
+        problem = namespace_problem(self.metrics_namespace)
+        if problem is not None:
+            raise ValueError(f"metrics_namespace {problem}")
+        if not 1.0 <= self.metrics_flush_interval_seconds <= 300.0:
+            raise ValueError("metrics_flush_interval_seconds must be between 1 and 300")
+        return self
+
+    # --- end P6-INF-5 -----------------------------------------------------------
 
     # --- Distributed tracing (Phase 3A.4b Batch 3) ---------------------------
     #: Master switch for span emission. Off by default (and in tests) so tracing
@@ -294,6 +331,10 @@ class Settings(BaseSettings):
     embedding_dim: int = 256
 
     # --- Jobs ----------------------------------------------------------------
+    #: Selects no transport in this build (P6-PLAT-2). Jobs are enqueued in, and
+    #: claimed from, the database job store (``job_queue_backend``); workers poll it.
+    #: ``redis`` once selected a Redis wake-up that no worker subscribed to; it is still
+    #: accepted (the staging task environment sets it) and is unused.
     queue_backend: Literal["inprocess", "redis"] = "inprocess"
     cache_backend: Literal["memory", "redis"] = "memory"
 
@@ -403,6 +444,18 @@ class Settings(BaseSettings):
     #: Total wall-clock budget for the whole readiness sweep across all probes.
     readiness_total_timeout_seconds: float = 5.0
 
+    # --- P6 platform services: request rate limiting (P6-PLAT-3) -------------
+    #: Where request counts live. ``memory`` counts in this process only (bounded;
+    #: development and test - production refuses it); ``redis`` counts in the shared
+    #: Redis at ``redis_url``, so the limit holds across every API replica.
+    rate_limit_backend: Literal["memory", "redis"] = "memory"
+    #: What the Redis limiter does while Redis cannot answer. It never lets requests
+    #: through unlimited: ``local`` keeps limiting with this process's bounded
+    #: counter (the per-replica limit) and logs + counts the degradation; ``deny``
+    #: answers 503 until Redis answers again.
+    rate_limit_redis_failure_mode: Literal["local", "deny"] = "local"
+    # --- end P6 platform services --------------------------------------------
+
     # --- Derived helpers -----------------------------------------------------
     @property
     def db_backend_name(self) -> str:
@@ -486,11 +539,9 @@ class Settings(BaseSettings):
                     "environment=production requires a PostgreSQL database "
                     "(SQLite is a local-only backend)"
                 )
-            if self.queue_backend == "inprocess":
-                errors.append(
-                    "environment=production requires a durable queue backend "
-                    "(queue_backend=inprocess is local-only)"
-                )
+            # queue_backend is deliberately not constrained here (P6-PLAT-2): the
+            # durable queue is the database job store, which PostgreSQL above already
+            # makes production-grade; queue_backend selects no transport.
             if self.cache_backend == "memory":
                 errors.append(
                     "environment=production requires a shared cache backend "
@@ -736,12 +787,17 @@ class Settings(BaseSettings):
             errors.append("readiness_cache_ttl_seconds must be >= 0")
 
         # Redis tuning bounds. Only enforced when Redis is actually selected for
-        # the cache or queue coordination, since the values are otherwise unused.
+        # the cache, queue coordination or rate limiting (P6-PLAT-3), since the
+        # values are otherwise unused.
         # Presence of ``redis_url`` itself is a soft, environment-gated concern
         # (enforced above for full mode); selecting Redis without a URL in local
         # or development is surfaced as an *unconfigured* capability by the runtime
         # report rather than failing Settings construction.
-        redis_selected = self.cache_backend == "redis" or self.queue_backend == "redis"
+        redis_selected = (
+            self.cache_backend == "redis"
+            or self.queue_backend == "redis"
+            or self.rate_limit_backend == "redis"
+        )
         if redis_selected:
             if self.redis_pool_size < 1:
                 errors.append("redis_pool_size must be >= 1")
@@ -802,6 +858,30 @@ class Settings(BaseSettings):
             errors.append("connector_rss_rate_refill_per_second must be greater than 0")
         if self.connector_rss_max_attempts < 1:
             errors.append("connector_rss_max_attempts must be >= 1")
+
+        # --- P6 platform services (P6-PLAT-1 / P6-PLAT-3) -------------------
+        # P6-PLAT-1: a vector backend this build does not implement is refused in
+        # every environment rather than silently run as brute force. Production
+        # also refuses bruteforce (above), so until the P6-PLAT-1 decision is
+        # implemented production has no accepted vector_backend - by design.
+        if self.vector_backend == "pgvector" and not PGVECTOR_IMPLEMENTED:
+            errors.append(
+                "vector_backend=pgvector is not implemented in this build (no vector "
+                "extension, column or query exists, so it would silently run the "
+                "in-process brute-force path)"
+            )
+        # P6-PLAT-3: production counts requests in the shared store so the limit
+        # holds across replicas. The one-shot migration actor serves no HTTP and
+        # never builds the limiter, so neither check applies to it.
+        if not self.migration_mode:
+            if self.rate_limit_backend == "redis" and not self.redis_url:
+                errors.append("rate_limit_backend=redis requires redis_url")
+            if self.is_production and self.rate_limit_backend == "memory":
+                errors.append(
+                    "environment=production requires a shared rate-limit backend "
+                    "(rate_limit_backend=memory counts per process)"
+                )
+        # --- end P6 platform services ----------------------------------------
 
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))

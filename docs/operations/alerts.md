@@ -204,6 +204,13 @@ Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
   accordingly.
 - **Action:** distinguish abuse from organic load; if distributed enforcement is
   required, see the rate-limit decision in the security review.
+- *(2026-10-20, `P6-PLAT-3`)* With `RATE_LIMIT_BACKEND=redis` the limit is shared
+  across replicas, and the per-process note above applies only to the `memory`
+  backend. While Redis cannot answer, watch
+  `dependency_operation_total{dependency="redis",operation="rate_limit"}`
+  (`outcome="degraded"`: limiting fell back to per process; `outcome="denied"`:
+  `deny` mode answered `503`) and the `rate_limit.shared_store_unavailable` warning
+  (see [deployment.md](./deployment.md), runtime contract).
 
 ## Enabling checklist
 

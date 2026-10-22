@@ -53,9 +53,15 @@ resource "aws_db_subnet_group" "this" {
 # ingress rules (from API/worker/migration task SGs); the revision_reader module owns the
 # reader-task 5432 ingress rule (runtime-gated). Declaring no egress block leaves the
 # security group with no egress rule.
+#
+# `description` is ForceNew in the AWS provider: any change replaces the security group,
+# and the replacement cascades into the RDS instance's vpc_security_group_ids and every
+# ingress rule that references it. It must stay byte-equal to the value the live group was
+# created with, even though the comment above (not the string) now also names the
+# revision_reader rule. Pinned by infra/aws/data_sql_sg_contract.tftest.hcl.
 resource "aws_security_group" "rds" {
   name        = "${var.name_prefix}-pg-sg"
-  description = "RDS PostgreSQL SG for ${var.name_prefix}; ingress rules are owned by the ecs and revision_reader modules."
+  description = "RDS PostgreSQL SG for ${var.name_prefix}; ingress rules are owned by the ecs module."
   vpc_id      = var.vpc_id
 
   tags = {

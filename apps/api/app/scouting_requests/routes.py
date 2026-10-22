@@ -2,8 +2,8 @@
 
 Create / configure / pause / resume / run / review scouting requests. Every request is
 isolated by workspace + brand + location + campaign, so results never leak across markets.
-Running a request enqueues ``run_scout_request`` on the queue adapter (in-process by
-default; Redis worker in full mode).
+Running a request enqueues a durable ``scout_request.execute`` job in the database job
+store; a worker claims and runs it.
 """
 
 from __future__ import annotations
