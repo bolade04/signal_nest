@@ -14,14 +14,14 @@ on:
       - 'feature/**'
   workflow_dispatch:
 
-# Concurrency (2026-10-22, queued CI-6 follow-up). pull_request runs: one group per PR head ref and a
-# newer push to that PR cancels its older in-flight run (a superseded run only saturates the runners).
-# Every other event — push to main or feature/**, workflow_dispatch — gets a group of its own, keyed by
-# the run id, so a push-to-main run is never cancelled by, nor queued behind, a later push: it always
-# completes. Before this change one group keyed on `pull_request.number || ref` cancelled in progress
-# for every event, main included.
+# Concurrency (2026-10-22, queued CI-6 follow-up). pull_request runs: one group per PR NUMBER — not the
+# head branch name, since two PRs whose source branches share a name (fork PRs included) must not cancel
+# each other — and a newer push to that PR cancels its older in-flight run (a superseded run only wastes
+# runners). Every other event — push to main or feature/**, workflow_dispatch — gets a group of its own,
+# keyed by the run id, so a push-to-main run is never cancelled by, nor queued behind, a later push: it
+# always completes. Before 2026-10-22 one group (`pull_request.number || ref`) cancelled for every event.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.head_ref) || format('{0}-{1}', github.ref, github.run_id) }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: jobs only read repository contents.
