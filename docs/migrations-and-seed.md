@@ -84,6 +84,32 @@ rm -f signalnest.db
 - With `--reset`, every table is cleared and rebuilt.
 - All generated signals and opportunities are flagged `is_simulated=True`.
 
+**Scout runs are real durable runs.** Each seeded scout request is run the way "Run
+now" runs it: the seed enqueues a durable `scout_request.execute` job per request, then
+executes those jobs on the worker's own execution path (claim → running → succeeded).
+Each seeded request therefore shows one run in its run history and its Background jobs
+panel. A database seeded before this behaviour has no run records until
+`npm run seed:reset`.
+
+**Two steps, not one transaction.** The configuration and the queued runs (with
+`--reset`, also the clearing of every table) commit together; the runs then execute
+afterwards, each in its own transaction. So `--reset` is **not** atomic with the runs.
+If a run fails, the database keeps the rebuilt configuration, the runs that succeeded,
+and the failed run recorded on its job (`retry_wait` or `failed`); the command exits 1
+with a one-line message. To recover, fix the cause and run `npm run seed:reset` again
+(a plain `npm run seed` reports "already present" and changes nothing).
+
+**With a worker running.** If `npm run dev` (or `npm run worker`) is running, its worker
+may take some of the seeded runs. The seed counts a run as done whichever worker
+completed it, and waits up to 60 seconds for runs held elsewhere. If any other
+unfinished job is waiting in the database, the seed does not drain the queue (that
+would run someone else's work): it leaves its own unfinished runs queued for the worker
+and says so, unless one of its own runs has already failed outright, which it reports
+as a failure as above. Before every claim it re-checks that only its own jobs are
+unfinished; a job another process enqueues between that check and the claim can still
+be run by the seed's runner, exactly as the worker would run it. The seed only ever
+targets a development/test SQLite database.
+
 **Scenario:** one specialty-coffee brand ("Brew & Bean") operating **four fully
 independent locations** — Dallas TX, London UK, Lagos NG, Nairobi KE. Each has its own
 geo-coverage rule, local competitors, audience, and a per-location promotion. The

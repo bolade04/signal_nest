@@ -3,10 +3,10 @@ for the dark-deployed scouting-schedule foundation.
 
 Everything here exercises the *backend* seam directly (no HTTP): the schedule
 service and the ``scout_schedule.tick`` durable handler. Tests run against a
-throwaway four-market demo seed (Dallas, London, Lagos, Nairobi). The seed creates
-**no** durable ``Job`` rows, so any job observed here was enqueued by the code under
-test, letting the suite assert exactly what fan-out did (or, while dark, did not)
-happen.
+throwaway four-market demo seed (Dallas, London, Lagos, Nairobi). The seed's own
+scout runs (P6-UI-009) are cleared after seeding, so any job observed here was enqueued
+by the code under test, letting the suite assert exactly what fan-out did (or, while
+dark, did not) happen.
 
 Sessions never commit: each test rolls back, so schedules/jobs created by one test
 never leak into another and the per-request / per-workspace limits start clean.
@@ -30,6 +30,7 @@ from app.jobs.status import JobStatus, JobType
 from app.scouting_requests import schedules as sched
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.scouting_requests.run_history import get_run_history
+from app.tests._seed_support import clear_seeded_runs
 
 _MARKETS = ("dallas", "london", "lagos", "nairobi")
 _NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -61,6 +62,7 @@ def factory(tmp_path_factory):
     seed_mod.SessionLocal = make
     try:
         seed_mod.seed(reset=True)
+        clear_seeded_runs(make)
         yield make
     finally:
         seed_mod.SessionLocal = original

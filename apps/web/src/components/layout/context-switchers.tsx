@@ -20,12 +20,14 @@ export function WorkspaceSwitcher() {
     setWorkspaceId,
   } = useWorkspace();
 
+  // min-w-0 here and on each trigger: in the compact header strip on a phone the
+  // switchers narrow (their labels truncate) instead of running off-screen (P6-UI-011).
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <Building2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       {organizations.length > 1 ? (
         <Select value={organizationId ?? undefined} onValueChange={setOrganizationId}>
-          <SelectTrigger aria-label="Organization" className="h-8 w-[150px] text-xs">
+          <SelectTrigger aria-label="Organization" className="h-8 w-[150px] min-w-0 text-xs">
             <SelectValue placeholder="Organization" />
           </SelectTrigger>
           <SelectContent>
@@ -38,7 +40,7 @@ export function WorkspaceSwitcher() {
         </Select>
       ) : null}
       <Select value={workspaceId ?? undefined} onValueChange={setWorkspaceId}>
-        <SelectTrigger aria-label="Workspace" className="h-8 w-[180px] text-xs">
+        <SelectTrigger aria-label="Workspace" className="h-8 w-[180px] min-w-0 text-xs">
           <SelectValue placeholder="Select workspace" />
         </SelectTrigger>
         <SelectContent>
@@ -63,13 +65,13 @@ export function LocationSwitcher() {
   if (!locations.length) return null;
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <MapPin className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <Select
         value={locationId ?? ALL_LOCATIONS}
         onValueChange={(v) => setLocationId(v === ALL_LOCATIONS ? null : v)}
       >
-        <SelectTrigger aria-label="Location filter" className="h-8 w-[190px] text-xs">
+        <SelectTrigger aria-label="Location filter" className="h-8 w-[190px] min-w-0 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
