@@ -33,6 +33,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/toast';
 import { scoreHelp } from '@/lib/labels';
+import { safeExternalHref } from '@/lib/links';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatDateTime, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -50,7 +51,8 @@ function EvidenceItem({ item }: { item: Record<string, unknown> }) {
   const sourceType = str(item.source_type) ?? str(item.source);
   const author = str(item.author);
   const timestamp = str(item.timestamp) ?? str(item.created_at);
-  const url = str(item.source_url) ?? str(item.url);
+  // Source-supplied links pass the scheme allow-list or render no link at all.
+  const url = safeExternalHref(item.source_url) ?? safeExternalHref(item.url);
 
   return (
     <li className="rounded-md border border-border bg-background p-3">
@@ -361,25 +363,29 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
                 <>
                   <Separator />
                   <ul className="space-y-2">
-                    {o.validation_evidence!.map((ev, i) => (
-                      <li key={i} className="text-sm">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">{titleCase(ev.source_type)}</span>
-                          <Badge intent="neutral">weight {ev.weight}</Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{ev.detail}</p>
-                        {ev.source_url ? (
-                          <a
-                            href={ev.source_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                          >
-                            Source <ExternalLink className="size-3" />
-                          </a>
-                        ) : null}
-                      </li>
-                    ))}
+                    {o.validation_evidence!.map((ev, i) => {
+                      // Source-supplied links pass the scheme allow-list or render no link.
+                      const sourceHref = safeExternalHref(ev.source_url);
+                      return (
+                        <li key={i} className="text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium">{titleCase(ev.source_type)}</span>
+                            <Badge intent="neutral">weight {ev.weight}</Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{ev.detail}</p>
+                          {sourceHref ? (
+                            <a
+                              href={sourceHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                            >
+                              Source <ExternalLink className="size-3" />
+                            </a>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </>
               ) : null}
