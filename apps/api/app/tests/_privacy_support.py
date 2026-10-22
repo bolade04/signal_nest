@@ -9,6 +9,11 @@ One world, three organizations, every table populated:
   in different letter case.
 * ``ORG_C`` — ALICE again, its only member. Deleting ALICE's account deletes C.
 
+CAROL's email address is verified (``email_verified_at`` set), so the data found only by her
+address — B's invitation in other letter case, audit values naming her address — is hers to
+export and erase. Every other account is unverified, as a self-registered account is until it
+proves its address.
+
 Each organization gets one row in every tenant table (:func:`populate_organization`), so a
 deletion that misses a table leaves a row the tests and the verifier can see. Audit records
 are written the way the product writes them: the invitation audits carry the invitee's
@@ -248,6 +253,7 @@ def seed(s, *, at: datetime) -> None:
             User(
                 id=user_id, email=email, full_name=f"Name {user_id}",
                 hashed_password=PASSWORD_HASH,
+                email_verified_at=at if user_id == CAROL else None,
             )
         )
     s.flush()

@@ -8,9 +8,9 @@ been executed against a deployed environment. Retention **durations** are undeci
 
 | Requester | Path | Proof |
 |---|---|---|
-| An account holder who can sign in | Settings → Account → **Delete account** (current password, type `DELETE`); or `POST /api/v1/account/delete` | the receipt's `verification` report (`verified: true`) |
+| An account holder who can sign in | Settings → Account → **Delete account** (current password, type `DELETE`); or `POST /api/v1/account/delete` | the receipt's reference check (`references_cleared: true`), then the operator's full verification (§2) |
 | An account holder who cannot sign in | password reset first, then the self-serve path (the operator never deletes an account on someone's word alone) | as above |
-| An organization (its OWNER) | Settings → **Delete organization** (current password, the organization's exact name); or `POST /api/v1/organizations/{id}/delete` | the receipt's `verification` report; keep `workspace_ids` |
+| An organization (its OWNER) | Settings → **Delete organization** (current password, the organization's exact name); or `POST /api/v1/organizations/{id}/delete` | the receipt's reference check; keep `workspace_ids` for the operator's full verification (§2) |
 | A person with no account (an invitee) | operator: `python -m app.privacy.cli erase-email --email <address> --confirm` | the command's `verification` report |
 
 Rules the code enforces:
@@ -24,6 +24,16 @@ Rules the code enforces:
   `organization_jobs_active`); retry when the job ends.
 - **Members of a deleted organization** keep their accounts; they lose access to that
   organization only.
+- **Data found only by an email address** (invitations addressed to it, audit values naming
+  it) is erased with an account, and listed in its export, only when the account has
+  **verified** that address. Registration does not prove an address, and account identity is
+  exact while these matches ignore letter case, so an unverified address may be another
+  person's. An unverified account is erased by its id alone; the preview, the receipt and the
+  export say so (`email_keyed_data`). To erase that data for a person whose account is gone,
+  prove the address out of band and run `erase-email` (refused while any account holds the
+  address in any letter case).
+- **Whole values only.** An audit value is erased when it holds the account's id or address as
+  a whole value, never because a longer address contains it (`xcarol@…`, `carol@….au`).
 
 After a deletion, also: remove the address from the **SES account-level suppression list** if it
 is there (AWS-side, operator), and note the request in the operator's own request log.
@@ -33,8 +43,13 @@ is there (AWS-side, operator), and note the request in the operator's own reques
 E10 — "A data-deletion request has been serviced end to end by an implemented mechanism" — must
 be independently verifiable and must not rely on audit records (`P6-PRIV-5` is P1). The verifier
 (`app.privacy.verification`) reflects the **live schema** and reports every remaining reference
-to the subject and every text/JSON value that still contains its identifiers. It does not read
-the audit trail, the inventory module or the deletion code.
+to the subject and every text/JSON value that still contains its identifiers as a whole value.
+It does not read the audit trail, the inventory module or the deletion code.
+
+A deletion request runs only the verifier's **reference check** before it answers (one equality
+count per column that can point at the subject; the receipt lists only rows that point at the
+subject itself). The text/JSON scan reads every text column of every table, so it is not run in
+the request: the operator runs it with the commands below.
 
 ```
 python -m app.privacy.cli verify-account --user-id <id> [--email <address>]
@@ -64,9 +79,13 @@ python -m app.privacy.cli sweep [--class <class> ...] [--dry-run]
 - Run it daily. **No scheduler exists for it yet**: an ECS scheduled task (or equivalent) running
   this command is an infrastructure follow-up for the operations lane; until then it is run by
   hand.
-- Workspace members can see (and an editor can cancel) a workspace's `retention.purge` jobs in
-  the job list, as for any job of the workspace; a cancelled link is re-enqueued by the next
-  day's sweep.
+- Workspace members can see a workspace's `retention.purge` jobs in the job list, as for any job
+  of the workspace, but no customer role can cancel one (409 `job_not_cancellable`): the purge
+  applies the operator's retention policy. The operator stops a purge by changing that policy
+  (the job re-checks it when it runs).
+- The sweep's output counts only the jobs it created (`jobs_enqueued`); a link the day already
+  has is listed under `jobs_existing` by status, so a cancelled or failed link shows instead of
+  being counted as enqueued.
 
 ## 4. After restoring a backup
 

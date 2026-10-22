@@ -35,29 +35,37 @@ const SIX: ModelRole[] = ['owner', 'admin', 'marketer', 'reviewer', 'compliance_
 type Screen = RenderResult & { user: ReturnType<typeof userEvent.setup> };
 
 const VERIFICATION: AccountDeletionOut['verification'] = {
-  verified: true,
+  references_cleared: true,
   subject_type: 'account',
   subject_id: 'user-1',
-  email_sha256: 'a'.repeat(64),
   tables_checked: 37,
   reference_columns_checked: 10,
-  content_columns_checked: 359,
   reference_findings: [],
-  content_findings: [],
   retained_anonymised: [],
+  content_scan: 'operator',
   generated_at: '2026-10-20T00:00:00+00:00',
+};
+const VERIFIED_EMAIL: AccountDeletionPreviewOut['email_keyed_data'] = {
+  status: 'included',
+  note: 'Your email address is verified.',
+};
+const UNVERIFIED_EMAIL: AccountDeletionPreviewOut['email_keyed_data'] = {
+  status: 'excluded_unverified',
+  note: 'Your email address is not verified.',
 };
 const LEAVES: AccountDeletionPreviewOut = {
   can_delete: true,
   organizations: [
     { organization_id: 'org-1', organization_name: 'Demo Org', role: 'marketer', member_count: 2, outcome: 'membership_removed' },
   ],
+  email_keyed_data: VERIFIED_EMAIL,
 };
 const BLOCKED: AccountDeletionPreviewOut = {
   can_delete: false,
   organizations: [
     { organization_id: 'org-1', organization_name: 'Demo Org', role: 'owner', member_count: 2, outcome: 'blocked_sole_owner' },
   ],
+  email_keyed_data: VERIFIED_EMAIL,
 };
 const RECEIPT: AccountDeletionOut = {
   user_id: 'user-1',
@@ -65,17 +73,19 @@ const RECEIPT: AccountDeletionOut = {
   deleted_organizations: [],
   counts: { deleted: { users: 1 }, nulled: {}, anonymised: {} },
   verification: VERIFICATION,
+  email_keyed_data: VERIFIED_EMAIL,
 };
 const ORG_RECEIPT: OrganizationDeletionOut = {
   organization_id: 'org-1',
   workspace_ids: ['ws-1'],
   counts: { deleted: { organizations: 1 }, nulled: {}, anonymised: {} },
-  verification: { ...VERIFICATION, subject_type: 'organization', subject_id: 'org-1', email_sha256: null },
+  verification: { ...VERIFICATION, subject_type: 'organization', subject_id: 'org-1' },
 };
 const EXPORT: AccountExportOut = {
   schema_version: 1,
   generated_at: '2026-10-20T00:00:00+00:00',
   subject: { type: 'account', user_id: 'user-1', organization_id: null },
+  email_keyed_data: VERIFIED_EMAIL,
   profile: { id: 'user-1', email: 'demo@signalnest.dev' },
   memberships: [],
   sessions: [],
@@ -189,6 +199,21 @@ describe('account deletion', () => {
     await screen.user.click(within(dialog).getByRole('button', { name: /delete my account/i }));
     expect(await within(dialog).findByText('Type DELETE, in capitals, to confirm')).toBeInTheDocument();
     expect(deleteBodies).toEqual([]);
+  });
+
+  it.each([
+    ['unverified', UNVERIFIED_EMAIL, true],
+    ['verified', VERIFIED_EMAIL, false],
+  ] as const)('says when an %s address leaves data found only by it', async (_label, email, shown) => {
+    serve({ ...LEAVES, email_keyed_data: email }, () => HttpResponse.json(RECEIPT));
+    const screen = await settingsAs('marketer');
+    await screen.user.click(accountCard(screen).getByRole('button', { name: /delete account/i }));
+    const dialog = await screen.findByRole('dialog', { name: /delete account/i });
+    await within(dialog).findByText('You will leave Demo Org.');
+    const notice = within(dialog).queryByText(/your email address is not verified/i);
+    if (shown) expect(notice).toBeInTheDocument();
+    else expect(notice).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /delete my account/i })).toBeEnabled();
   });
 
   it('a sole owner is told why and cannot submit', async () => {

@@ -54,6 +54,11 @@ function failureMessage(error: unknown, fallback: string): string {
   return calmFailureMessage(error, fallback);
 }
 
+// The account's address is unverified, so the API leaves data found only by that address
+// (invitations addressed to it, audit records naming it): it may be another person's.
+const UNVERIFIED_EMAIL_COPY =
+  'Your email address is not verified, so invitations sent to it and records that name it will not be deleted. Verify your address first to include them.';
+
 const IMPACT_COPY: Record<MembershipImpactOut['outcome'], (name: string) => string> = {
   membership_removed: (name) => `You will leave ${name}.`,
   organization_deleted: (name) =>
@@ -217,6 +222,9 @@ function DeleteAccountForm({
           We couldn’t check what deleting your account would do. Close this and try again.
         </p>
       )}
+      {preview.data?.email_keyed_data.status === 'excluded_unverified' ? (
+        <p className="text-sm text-muted-foreground">{UNVERIFIED_EMAIL_COPY}</p>
+      ) : null}
 
       <Field label="Email">
         {({ id }) => <Input id={id} type="email" value={email} readOnly aria-readonly="true" autoComplete="username" />}

@@ -14,6 +14,9 @@
             "title": "Deleted Organizations",
             "type": "array"
           },
+          "email_keyed_data": {
+            "$ref": "#/components/schemas/EmailKeyedDataOut"
+          },
           "organizations": {
             "items": {
               "$ref": "#/components/schemas/MembershipImpactOut"
@@ -34,7 +37,8 @@
           "organizations",
           "deleted_organizations",
           "counts",
-          "verification"
+          "verification",
+          "email_keyed_data"
         ],
         "title": "AccountDeletionOut",
         "type": "object"
@@ -46,6 +50,9 @@
             "title": "Can Delete",
             "type": "boolean"
           },
+          "email_keyed_data": {
+            "$ref": "#/components/schemas/EmailKeyedDataOut"
+          },
           "organizations": {
             "items": {
               "$ref": "#/components/schemas/MembershipImpactOut"
@@ -56,7 +63,8 @@
         },
         "required": [
           "can_delete",
-          "organizations"
+          "organizations",
+          "email_keyed_data"
         ],
         "title": "AccountDeletionPreviewOut",
         "type": "object"
@@ -102,6 +110,9 @@
             },
             "title": "Capability Overrides Set",
             "type": "array"
+          },
+          "email_keyed_data": {
+            "$ref": "#/components/schemas/EmailKeyedDataOut"
           },
           "email_verification_requests": {
             "items": {
@@ -180,6 +191,7 @@
           "schema_version",
           "generated_at",
           "subject",
+          "email_keyed_data",
           "profile",
           "memberships",
           "sessions",
@@ -1503,6 +1515,29 @@
         "title": "DeletedOrganizationOut",
         "type": "object"
       },
+      "EmailKeyedDataOut": {
+        "description": "Whether data found only by the account's email address counts as the account's.\n\n``included``: the address is verified, so invitations addressed to it (and, for a\ndeletion, audit values naming it) are exported or erased with the account.\n``excluded_unverified``: the address was never verified, so nothing proves it is the\naccount's; that data is neither exported nor erased, because it may be another\nperson's. ``note`` says the same in words.",
+        "properties": {
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "included",
+              "excluded_unverified"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "note"
+        ],
+        "title": "EmailKeyedDataOut",
+        "type": "object"
+      },
       "EmailVerificationConfirmRequest": {
         "additionalProperties": false,
         "description": "A verification token, carried in the body and never in a URL.\n\nOnly the token: the account is the signed-in caller's, and the token must be that\naccount's. Unknown fields are rejected.",
@@ -1583,29 +1618,12 @@
         "type": "object"
       },
       "ErasureVerificationOut": {
-        "description": "The independent verification report (``app.privacy.verification``).\n\n``verified`` is true only when no row references the subject and no text or JSON\nvalue contains its identifiers. It is computed from the live schema, not from audit\nrecords and not from the deletion's own bookkeeping.",
+        "description": "The check a deletion request runs on the committed state (``app.privacy.verification``).\n\nIt is the verifier's **reference check**, computed from the live schema (not from audit\nrecords and not from the deletion's own bookkeeping): every column that can point at\nthe deleted subject is counted for the subject's own ids. ``references_cleared`` is true\nwhen none does and, for an organization, every retained audit record is anonymised.\nFindings name only rows that point at the subject itself.\n\nThe scan of every text and JSON column for the subject's identifiers is not run in the\nrequest: it reads every text column of every table. An operator runs it with\n``python -m app.privacy.cli verify-account`` / ``verify-organization`` (the E10 path).",
         "properties": {
-          "content_columns_checked": {
-            "title": "Content Columns Checked",
-            "type": "integer"
-          },
-          "content_findings": {
-            "items": {
-              "$ref": "#/components/schemas/ErasureFindingOut"
-            },
-            "title": "Content Findings",
-            "type": "array"
-          },
-          "email_sha256": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Email Sha256"
+          "content_scan": {
+            "const": "operator",
+            "title": "Content Scan",
+            "type": "string"
           },
           "generated_at": {
             "title": "Generated At",
@@ -1621,6 +1639,10 @@
             },
             "title": "Reference Findings",
             "type": "array"
+          },
+          "references_cleared": {
+            "title": "References Cleared",
+            "type": "boolean"
           },
           "retained_anonymised": {
             "items": {
@@ -1647,23 +1669,17 @@
           "tables_checked": {
             "title": "Tables Checked",
             "type": "integer"
-          },
-          "verified": {
-            "title": "Verified",
-            "type": "boolean"
           }
         },
         "required": [
-          "verified",
+          "references_cleared",
           "subject_type",
           "subject_id",
-          "email_sha256",
           "tables_checked",
           "reference_columns_checked",
-          "content_columns_checked",
           "reference_findings",
-          "content_findings",
           "retained_anonymised",
+          "content_scan",
           "generated_at"
         ],
         "title": "ErasureVerificationOut",
@@ -6555,7 +6571,7 @@
   "paths": {
     "/api/v1/account/delete": {
       "post": {
-        "description": "Delete the signed-in account and everything that is only its own.\n\nA wrong current password is 422 ``current_password_incorrect`` and changes nothing.\nThe only OWNER of an organization that has other members is refused with 409\n``account_deletion_sole_owner``. Organizations in which the account is the only\nmember are deleted with it. On success every token of the account stops working,\nbecause the account no longer exists.",
+        "description": "Delete the signed-in account and everything that is only its own.\n\nA wrong current password is 422 ``current_password_incorrect`` and changes nothing.\nThe only OWNER of an organization that has other members is refused with 409\n``account_deletion_sole_owner``. Organizations in which the account is the only\nmember are deleted with it. On success every token of the account stops working,\nbecause the account no longer exists. Invitations addressed to the account's email and\naudit values naming it are erased only when the address is verified\n(``email_keyed_data``).",
         "operationId": "delete_my_account_api_v1_account_delete_post",
         "parameters": [
           {
@@ -11120,7 +11136,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/cancel": {
       "post": {
-        "description": "Request cancellation.\n\nA not-yet-running job is cancelled immediately; a running job is marked for\ncooperative cancellation and stopped by the worker at its next safe point.",
+        "description": "Request cancellation.\n\nA not-yet-running job is cancelled immediately; a running job is marked for\ncooperative cancellation and stopped by the worker at its next safe point. A job\nthat applies the operator's retention policy (``retention.purge``) is refused with\n409 ``job_not_cancellable`` for every role.",
         "operationId": "cancel_job_api_v1_workspaces__workspace_id__jobs__job_id__cancel_post",
         "parameters": [
           {

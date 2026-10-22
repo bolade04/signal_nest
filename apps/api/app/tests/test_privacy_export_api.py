@@ -4,9 +4,10 @@
     GET /api/v1/organizations/{id}/export         exact OWNER    -> 200
 
 * **Account.** CAROL's export holds her profile, her membership, both invitations addressed to
-  her (one in another letter case, in another organization), the feedback she submitted and
-  the audit event she performed; no password hash, no token digest, and no other account's
-  email address.
+  her (one in another letter case, in another organization: her address is verified), the
+  feedback she submitted and the audit event she performed; no password hash, no token digest,
+  and no other account's email address. An unverified address lists no invitation
+  (``test_privacy_email_scope.py``).
 * **Organization.** ALICE's export of A holds every table the inventory marks exported, every
   row scoped to A or one of its workspaces, its three members with email and name; no row of
   B or C, no token digest, no derived vector; a per-table cap reports truncation.
@@ -64,6 +65,7 @@ def test_account_export_holds_the_accounts_own_data_only(env: PrivacyEnv):
     assert body["profile"]["email"] == EMAIL[CAROL]
     assert [m["organization_id"] for m in body["memberships"]] == [ORG_A]
     assert {i["id"] for i in body["invitations_received"]} == {"prv-inv-carol", "prv-inv-b-carol"}
+    assert body["email_keyed_data"]["status"] == "included"
     assert body["invitations_sent"] == []
     assert [f["id"] for f in body["feedback_submitted"]] == ["a1-feedback"]
     assert [o["id"] for o in body["capability_overrides_set"]] == ["a1-override"]

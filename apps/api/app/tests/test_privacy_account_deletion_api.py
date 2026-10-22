@@ -7,12 +7,12 @@ The world is ``_privacy_support``'s: every table populated for three organizatio
 
 * **A member leaves.** CAROL (VIEWER of A, invited to B) is deleted: her user row, membership,
   sessions and account tokens are gone; both invitations addressed to her (one in another
-  letter case, in another organization) are gone; feedback and the capability override she
-  authored survive with the attribution cleared; every audit record that named her by id or
-  email is anonymised and every other audit record is byte-identical; nothing of A's tenant
-  content, of B, of C, or of any other account changes. The receipt's verification report is
-  ``verified`` and an independent re-run agrees; before the deletion the same verifier finds
-  her (the positive control).
+  letter case, in another organization) are gone, because her address is verified; feedback
+  and the capability override she authored survive with the attribution cleared; every audit
+  record that named her by id or email is anonymised and every other audit record is
+  byte-identical; nothing of A's tenant content, of B, of C, or of any other account changes.
+  The receipt's reference check is clear and the operator's full verification (references and
+  content) agrees; before the deletion the same verifier finds her (the positive control).
 * **The sole owner.** ALICE is A's only OWNER while A has other members: refused 409
   ``account_deletion_sole_owner`` and nothing changes; the preview says so in advance. Once
   another member is an OWNER, deleting ALICE removes her A membership (A survives) and deletes
@@ -22,6 +22,10 @@ The world is ``_privacy_support``'s: every table populated for three organizatio
   them writes anything.
 * **After.** The token used is refused (401): the account no longer exists. Signing in again
   fails.
+* **What the request checks.** After committing, the request runs the verifier's reference
+  check on the live schema: every column that can point at the account. A reference left in a
+  table the deletion code does not know is reported in the receipt. The scan of every text
+  column is not run in the request; that is the operator's command.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import text, update
 
 from app.audit.models import AuditLog
 from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetToken
@@ -41,6 +45,7 @@ from app.organizations.models import (
     OrganizationMember,
     User,
 )
+from app.privacy import verification
 from app.privacy.erasure import ERASED
 from app.privacy.verification import verify_organization_erased, verify_subject_erased
 from app.tests._privacy_support import (
@@ -106,7 +111,9 @@ def _untouched_by_account_deletion(table, row) -> bool:
 def test_preview_for_a_plain_member(env: PrivacyEnv):
     r = env.client.get(PREVIEW, headers=env.auth(CAROL))
     assert r.status_code == 200, r.text
-    assert r.json() == {
+    body = r.json()
+    assert body.pop("email_keyed_data")["status"] == "included"  # her address is verified
+    assert body == {
         "can_delete": True,
         "organizations": [
             {
@@ -142,8 +149,9 @@ def test_member_deletion_erases_the_account_and_nothing_else(env: PrivacyEnv):
     receipt = r.json()
     assert receipt["user_id"] == CAROL
     assert receipt["deleted_organizations"] == []
-    assert receipt["verification"]["verified"] is True
+    assert receipt["verification"]["references_cleared"] is True
     assert receipt["verification"]["subject_id"] == CAROL
+    assert receipt["email_keyed_data"]["status"] == "included"
     assert receipt["counts"]["deleted"] == {
         "auth_sessions": 1,
         "email_verification_tokens": 1,
@@ -244,11 +252,11 @@ def test_owner_deletion_after_handing_over_deletes_her_sole_member_organization(
 
     assert r.status_code == 200, r.text
     receipt = r.json()
-    assert receipt["verification"]["verified"] is True
+    assert receipt["verification"]["references_cleared"] is True
     [deleted] = receipt["deleted_organizations"]
     assert deleted["organization_id"] == ORG_C
     assert deleted["workspace_ids"] == list(WORKSPACES[ORG_C])
-    assert deleted["verification"]["verified"] is True
+    assert deleted["verification"]["references_cleared"] is True
     assert deleted["verification"]["retained_anonymised"] == [
         {"table": "audit_logs", "column": "organization_id", "rows": 1}
     ]
@@ -294,3 +302,44 @@ def test_refusals_write_nothing(env: PrivacyEnv, body, expected):
 def test_anonymous_is_401(env: PrivacyEnv):
     assert env.client.post(DELETE, json=BODY).status_code == 401
     assert env.client.get(PREVIEW).status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# What the request checks
+# --------------------------------------------------------------------------- #
+def test_the_request_runs_no_content_scan(env: PrivacyEnv, monkeypatch):
+    """The scan of every text column (359 at this head) stays out of the request path."""
+    scans: list[object] = []
+    real = verification._content_findings
+
+    def counted(*args, **kwargs):
+        scans.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(verification, "_content_findings", counted)
+    r = env.client.post(DELETE, headers=env.auth(CAROL), json=BODY)
+    assert r.status_code == 200, r.text
+    assert scans == []
+    check = r.json()["verification"]
+    assert check["content_scan"] == "operator"
+    assert check["references_cleared"] is True
+    assert check["reference_columns_checked"] > 0
+
+
+def test_the_receipt_reports_a_reference_left_behind(env: PrivacyEnv):
+    """Positive control: the in-request check reflects the live schema, so a table the deletion
+    code does not know, still pointing at the account, is a finding in the receipt."""
+    with env.engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE side_notes (id VARCHAR PRIMARY KEY, author_user_id VARCHAR)")
+        )
+        conn.execute(text("INSERT INTO side_notes VALUES ('n1', :u)"), {"u": CAROL})
+
+    r = env.client.post(DELETE, headers=env.auth(CAROL), json=BODY)
+
+    assert r.status_code == 200, r.text
+    check = r.json()["verification"]
+    assert check["references_cleared"] is False
+    assert check["reference_findings"] == [
+        {"table": "side_notes", "column": "author_user_id", "rows": 1}
+    ]

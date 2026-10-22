@@ -24,7 +24,10 @@ Mechanics, identical for every class:
   idempotency key carries the cut-off), purging only inside its own tenant scope; a full
   batch enqueues its successor, up to ``retention_purge_max_batches`` links. The job
   store is tenant-scoped by design — a job row needs an organization and a workspace —
-  which is why the platform classes do not use it.
+  which is why the platform classes do not use it. Workspace members can see these jobs,
+  but no customer role can cancel one (the job route refuses ``retention.purge``). A sweep
+  counts only the jobs it created; a link the day already has is reported by its status,
+  so a cancelled or failed one shows instead of being counted as enqueued.
 
 The sweep is started by an operator or a scheduled task (``python -m app.privacy.cli
 sweep``); no scheduler for it exists in the infrastructure yet.
@@ -296,7 +299,10 @@ class ClassOutcome:
     cutoff: str | None = None
     batches: int = 0
     complete: bool | None = None
+    #: Jobs this sweep created (workspace classes).
     jobs_enqueued: int = 0
+    #: The day's jobs that already existed, by status; they are not enqueued again.
+    jobs_existing: dict[str, int] = field(default_factory=dict)
     candidates: int | None = None
     deleted: dict[str, int] = field(default_factory=dict)
 
@@ -373,7 +379,18 @@ def _sweep_workspaces(session_factory, data_class, cutoff, outcome, dry_run) -> 
             outcome.candidates = count_candidates(db, data_class, cutoff)
             return
         now = database_now(db)
+        key = purge_idempotency_key(data_class, cutoff, 0)
         for workspace_id, organization_id in workspaces:
+            existing = db.scalar(
+                select(Job.status).where(
+                    Job.organization_id == organization_id,
+                    Job.workspace_id == workspace_id,
+                    Job.idempotency_key == key,
+                )
+            )
+            if existing is not None:
+                outcome.jobs_existing[existing] = outcome.jobs_existing.get(existing, 0) + 1
+                continue
             enqueue_purge(
                 db,
                 organization_id=organization_id,

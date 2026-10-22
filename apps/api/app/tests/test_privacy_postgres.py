@@ -5,7 +5,8 @@ dialect, each in a PostgreSQL database of its own (``TEST_POSTGRES_URL``; unset 
 skips elsewhere):
 
 * the foreign-key walk and the ``SELECT … FOR UPDATE`` locks of account and organization
-  deletion run, and the receipts' verification reports are ``verified``;
+  deletion run, the receipts' reference checks are clear, and the full verification of the
+  account is ``verified``;
 * the verifier's case-insensitive text search over ``json`` columns (``lower(CAST(… AS
   TEXT)) LIKE … ESCAPE``) finds a planted copy — the positive control — and the SQL ``NULL``
   written into an anonymised audit record's ``json`` columns reads as cleared;
@@ -64,7 +65,7 @@ def test_account_deletion_on_postgres(env: PrivacyEnv):
         json={"current_password": PASSWORD, "confirmation": "DELETE"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["verification"]["verified"] is True
+    assert r.json()["verification"]["references_cleared"] is True
     assert r.json()["counts"]["anonymised"] == {"audit_logs": 5}
     with env.session() as s:
         assert verify_subject_erased(s, user_id=CAROL, email=EMAIL[CAROL]).verified
@@ -82,7 +83,7 @@ def test_organization_deletion_on_postgres(env: PrivacyEnv):
     )
     assert r.status_code == 200, r.text
     report = r.json()["verification"]
-    assert report["verified"] is True
+    assert report["references_cleared"] is True
     assert report["retained_anonymised"] == [
         {"table": "audit_logs", "column": "organization_id", "rows": 6}
     ]

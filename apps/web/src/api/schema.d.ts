@@ -21,7 +21,9 @@ export interface paths {
          *     The only OWNER of an organization that has other members is refused with 409
          *     ``account_deletion_sole_owner``. Organizations in which the account is the only
          *     member are deleted with it. On success every token of the account stops working,
-         *     because the account no longer exists.
+         *     because the account no longer exists. Invitations addressed to the account's email and
+         *     audit values naming it are erased only when the address is verified
+         *     (``email_keyed_data``).
          */
         post: operations["delete_my_account_api_v1_account_delete_post"];
         delete?: never;
@@ -1380,7 +1382,9 @@ export interface paths {
          * @description Request cancellation.
          *
          *     A not-yet-running job is cancelled immediately; a running job is marked for
-         *     cooperative cancellation and stopped by the worker at its next safe point.
+         *     cooperative cancellation and stopped by the worker at its next safe point. A job
+         *     that applies the operator's retention policy (``retention.purge``) is refused with
+         *     409 ``job_not_cancellable`` for every role.
          */
         post: operations["cancel_job_api_v1_workspaces__workspace_id__jobs__job_id__cancel_post"];
         delete?: never;
@@ -1921,6 +1925,7 @@ export interface components {
             counts: components["schemas"]["ErasureCountsOut"];
             /** Deleted Organizations */
             deleted_organizations: components["schemas"]["DeletedOrganizationOut"][];
+            email_keyed_data: components["schemas"]["EmailKeyedDataOut"];
             /** Organizations */
             organizations: components["schemas"]["MembershipImpactOut"][];
             /** User Id */
@@ -1934,6 +1939,7 @@ export interface components {
         AccountDeletionPreviewOut: {
             /** Can Delete */
             can_delete: boolean;
+            email_keyed_data: components["schemas"]["EmailKeyedDataOut"];
             /** Organizations */
             organizations: components["schemas"]["MembershipImpactOut"][];
         };
@@ -1966,6 +1972,7 @@ export interface components {
             capability_overrides_set: {
                 [key: string]: unknown;
             }[];
+            email_keyed_data: components["schemas"]["EmailKeyedDataOut"];
             /** Email Verification Requests */
             email_verification_requests: {
                 [key: string]: unknown;
@@ -2476,6 +2483,25 @@ export interface components {
             workspace_ids: string[];
         };
         /**
+         * EmailKeyedDataOut
+         * @description Whether data found only by the account's email address counts as the account's.
+         *
+         *     ``included``: the address is verified, so invitations addressed to it (and, for a
+         *     deletion, audit values naming it) are exported or erased with the account.
+         *     ``excluded_unverified``: the address was never verified, so nothing proves it is the
+         *     account's; that data is neither exported nor erased, because it may be another
+         *     person's. ``note`` says the same in words.
+         */
+        EmailKeyedDataOut: {
+            /** Note */
+            note: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "included" | "excluded_unverified";
+        };
+        /**
          * EmailVerificationConfirmRequest
          * @description A verification token, carried in the body and never in a URL.
          *
@@ -2520,25 +2546,32 @@ export interface components {
         };
         /**
          * ErasureVerificationOut
-         * @description The independent verification report (``app.privacy.verification``).
+         * @description The check a deletion request runs on the committed state (``app.privacy.verification``).
          *
-         *     ``verified`` is true only when no row references the subject and no text or JSON
-         *     value contains its identifiers. It is computed from the live schema, not from audit
-         *     records and not from the deletion's own bookkeeping.
+         *     It is the verifier's **reference check**, computed from the live schema (not from audit
+         *     records and not from the deletion's own bookkeeping): every column that can point at
+         *     the deleted subject is counted for the subject's own ids. ``references_cleared`` is true
+         *     when none does and, for an organization, every retained audit record is anonymised.
+         *     Findings name only rows that point at the subject itself.
+         *
+         *     The scan of every text and JSON column for the subject's identifiers is not run in the
+         *     request: it reads every text column of every table. An operator runs it with
+         *     ``python -m app.privacy.cli verify-account`` / ``verify-organization`` (the E10 path).
          */
         ErasureVerificationOut: {
-            /** Content Columns Checked */
-            content_columns_checked: number;
-            /** Content Findings */
-            content_findings: components["schemas"]["ErasureFindingOut"][];
-            /** Email Sha256 */
-            email_sha256: string | null;
+            /**
+             * Content Scan
+             * @constant
+             */
+            content_scan: "operator";
             /** Generated At */
             generated_at: string;
             /** Reference Columns Checked */
             reference_columns_checked: number;
             /** Reference Findings */
             reference_findings: components["schemas"]["ErasureFindingOut"][];
+            /** References Cleared */
+            references_cleared: boolean;
             /** Retained Anonymised */
             retained_anonymised: components["schemas"]["ErasureFindingOut"][];
             /** Subject Id */
@@ -2547,8 +2580,6 @@ export interface components {
             subject_type: string;
             /** Tables Checked */
             tables_checked: number;
-            /** Verified */
-            verified: boolean;
         };
         /** ExportSubjectOut */
         ExportSubjectOut: {

@@ -15,6 +15,13 @@ Durations are an operator/legal decision (O-5 / P6-D05) and are never assumed:
 * **The job re-checks the policy.** A job whose class is no longer configured, or whose cut-off
   is later than the current duration allows, is refused (non-retryable ``policy``) and
   deletes nothing.
+* **No customer role suppresses it.** The purge enforces the operator's retention policy, so
+  the workspace job route refuses to cancel a ``retention.purge`` job for every role it admits
+  (409 ``job_not_cancellable``), and the job then runs. A re-run sweep counts only the jobs it
+  created and reports the day's existing ones by status.
+* **Job history spares unfinished jobs.** Only terminal jobs past the cut-off are purged; an old
+  job that is still pending, scheduled, claimed, running, waiting to retry or being cancelled
+  stays.
 * **Dry run** counts and changes nothing.
 """
 
@@ -25,7 +32,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import insert, update
 
 from app.audit.models import AuditLog
 from app.auth.models import AuthSession
@@ -33,16 +40,19 @@ from app.core.config import Settings, get_settings
 from app.intelligence.records import SignalIntelligenceRecord
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
-from app.jobs.status import JobErrorCode, JobExecutionError, JobType
+from app.jobs.status import TERMINAL_STATUSES, JobErrorCode, JobExecutionError, JobStatus, JobType
 from app.jobs.store import DurableJobStore
 from app.jobs.worker import JobRunner
 from app.opportunities.models import Opportunity, OpportunityScore
-from app.organizations.models import OrganizationInvitation
+from app.organizations.models import OrganizationInvitation, OrganizationMember
 from app.privacy import cli, retention
 from app.privacy.inventory import PLATFORM_CLASSES, WORKSPACE_CLASSES, RetentionClass
 from app.signals.models import NormalizedSignal, RawSignal, SignalCluster
 from app.tests._privacy_support import (
     ALICE,
+    API,
+    CAROL,
+    DAVE,
     ORG_A,
     ORG_B,
     WS_A,
@@ -284,6 +294,84 @@ def test_job_history_keeps_running_and_recent_jobs(env: PrivacyEnv, monkeypatch)
     remaining = {j["id"] for j in env.rows(Job)}
     assert not remaining & seeded  # the seeded terminal jobs were 400 days old
     assert len(remaining) == 4  # the four purge jobs themselves: recent, kept
+
+
+def test_job_history_never_purges_an_unfinished_job(env: PrivacyEnv):
+    """One 400-day-old job in every status: only the terminal ones are purged."""
+    old = NOW - timedelta(days=400)
+    with env.engine.begin() as conn:
+        for status in JobStatus:
+            conn.execute(
+                insert(Job.__table__).values(
+                    id=f"old-{status.value}", organization_id=ORG_A, workspace_id=WS_A,
+                    job_type="scout_request.execute", payload={}, payload_hash="0" * 64,
+                    status=status.value, contract_version="1", priority=0, attempt_count=0,
+                    max_attempts=1, created_at=old, updated_at=old,
+                )
+            )
+    with env.session() as s:
+        retention.purge_batch(
+            s, RetentionClass.JOB_HISTORY, retention.cutoff_for(NOW, 30), batch_size=500,
+            workspace_id=WS_A,
+        )
+        s.commit()
+    unfinished = {f"old-{s.value}" for s in JobStatus if s not in TERMINAL_STATUSES}
+    assert len(unfinished) == 6
+    # The seeded a1-job (succeeded, 400 days old) went with the four planted terminal ones.
+    assert {j["id"] for j in env.rows(Job, Job.workspace_id == WS_A)} == unfinished
+
+
+# --------------------------------------------------------------------------- #
+# Who may stop a purge, and what the sweep reports
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("user_id", "role"), [(ALICE, "owner"), (DAVE, "admin"), (CAROL, "marketer")]
+)
+def test_no_customer_role_cancels_a_retention_purge(env: PrivacyEnv, monkeypatch, user_id, role):
+    """Every role the workspace job-cancel route admits (OWNER, ADMIN, MARKETER) is refused."""
+    _set(monkeypatch, classes=(RetentionClass.OPPORTUNITIES,))
+    with env.engine.begin() as conn:
+        conn.execute(
+            update(OrganizationMember.__table__)
+            .where(OrganizationMember.organization_id == ORG_A,
+                   OrganizationMember.user_id == user_id)
+            .values(role=role)
+        )
+    assert _sweep(env, classes=(RetentionClass.OPPORTUNITIES,))["opportunities"].jobs_enqueued == 4
+    [job] = [j for j in _purge_jobs(env) if j["workspace_id"] == WS_A]
+
+    r = env.client.post(
+        f"{API}/workspaces/{WS_A}/jobs/{job['id']}/cancel", headers=env.auth(user_id)
+    )
+
+    assert (r.status_code, r.json()["error"]["code"]) == (409, "job_not_cancellable")
+    assert env.rows(Job, Job.id == job["id"])[0]["status"] == "pending"
+    assert _drain(env) == 4
+    assert env.count(Opportunity, Opportunity.workspace_id == WS_A) == 0  # seeded 400 days old
+
+
+def test_a_customer_job_is_still_cancellable(env: PrivacyEnv):
+    """The refusal is for the purge only: a pending scouting job is cancelled as before."""
+    with env.engine.begin() as conn:
+        conn.execute(update(Job.__table__).where(Job.id == "a1-job").values(status="pending"))
+    r = env.client.post(f"{API}/workspaces/{WS_A}/jobs/a1-job/cancel", headers=env.auth(DAVE))
+    assert (r.status_code, r.json()["status"]) == (200, "cancelled")
+
+
+def test_the_sweep_counts_only_the_jobs_it_created(env: PrivacyEnv, monkeypatch):
+    _set(monkeypatch, classes=(RetentionClass.OPPORTUNITIES,))
+    first = _sweep(env, classes=(RetentionClass.OPPORTUNITIES,))["opportunities"]
+    assert (first.status, first.jobs_enqueued) == ("enqueued", 4)
+    [job] = [j for j in _purge_jobs(env) if j["workspace_id"] == WS_A]
+    with env.engine.begin() as conn:  # however it came to be cancelled, it will not run today
+        conn.execute(update(Job.__table__).where(Job.id == job["id"]).values(status="cancelled"))
+
+    again = _sweep(env, classes=(RetentionClass.OPPORTUNITIES,))["opportunities"]
+
+    assert (again.status, again.jobs_enqueued) == ("enqueued", 0)
+    assert again.jobs_existing == {"cancelled": 1, "pending": 3}
+    assert first.jobs_existing == {}
+    assert len(_purge_jobs(env)) == 4
 
 
 def test_every_class_is_partitioned_between_sweep_and_job():

@@ -45,11 +45,26 @@ class MembershipImpactOut(BaseModel):
     outcome: MembershipOutcomeValue
 
 
+class EmailKeyedDataOut(BaseModel):
+    """Whether data found only by the account's email address counts as the account's.
+
+    ``included``: the address is verified, so invitations addressed to it (and, for a
+    deletion, audit values naming it) are exported or erased with the account.
+    ``excluded_unverified``: the address was never verified, so nothing proves it is the
+    account's; that data is neither exported nor erased, because it may be another
+    person's. ``note`` says the same in words.
+    """
+
+    status: Literal["included", "excluded_unverified"]
+    note: str
+
+
 class AccountDeletionPreviewOut(BaseModel):
     """Read-only: whether the account can be deleted now, and what that would do."""
 
     can_delete: bool
     organizations: list[MembershipImpactOut]
+    email_keyed_data: EmailKeyedDataOut
 
 
 class ErasureFindingOut(BaseModel):
@@ -59,23 +74,28 @@ class ErasureFindingOut(BaseModel):
 
 
 class ErasureVerificationOut(BaseModel):
-    """The independent verification report (``app.privacy.verification``).
+    """The check a deletion request runs on the committed state (``app.privacy.verification``).
 
-    ``verified`` is true only when no row references the subject and no text or JSON
-    value contains its identifiers. It is computed from the live schema, not from audit
-    records and not from the deletion's own bookkeeping.
+    It is the verifier's **reference check**, computed from the live schema (not from audit
+    records and not from the deletion's own bookkeeping): every column that can point at
+    the deleted subject is counted for the subject's own ids. ``references_cleared`` is true
+    when none does and, for an organization, every retained audit record is anonymised.
+    Findings name only rows that point at the subject itself.
+
+    The scan of every text and JSON column for the subject's identifiers is not run in the
+    request: it reads every text column of every table. An operator runs it with
+    ``python -m app.privacy.cli verify-account`` / ``verify-organization`` (the E10 path).
     """
 
-    verified: bool
+    references_cleared: bool
     subject_type: str
     subject_id: str | None
-    email_sha256: str | None
     tables_checked: int
     reference_columns_checked: int
-    content_columns_checked: int
     reference_findings: list[ErasureFindingOut]
-    content_findings: list[ErasureFindingOut]
     retained_anonymised: list[ErasureFindingOut]
+    #: Where the content scan runs: the operator's command, never the request.
+    content_scan: Literal["operator"]
     generated_at: str
 
 
@@ -102,6 +122,7 @@ class AccountDeletionOut(BaseModel):
     deleted_organizations: list[DeletedOrganizationOut]
     counts: ErasureCountsOut
     verification: ErasureVerificationOut
+    email_keyed_data: EmailKeyedDataOut
 
 
 class OrganizationDeletionOut(BaseModel):
@@ -125,6 +146,7 @@ class AccountExportOut(BaseModel):
     schema_version: int
     generated_at: str
     subject: ExportSubjectOut
+    email_keyed_data: EmailKeyedDataOut
     profile: dict[str, Any]
     memberships: list[dict[str, Any]]
     sessions: list[dict[str, Any]]

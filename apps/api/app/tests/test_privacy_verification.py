@@ -9,10 +9,17 @@ while correctly anonymised ones are reported as retained and pass.
 
 The verifier reflects the live schema: a table the ORM does not know (created here with raw
 DDL) is checked too.
+
+The content scan matches an identifier only where it stands whole: the address at the end of a
+sentence or in angle brackets is a finding, while a longer address that contains it
+(``xcarol_x@…``) or extends its domain (``carol_x@….org``) belongs to someone else and is not.
+The operator command runs the full scan (references and content); the deletion routes run only
+the reference check (``content=False``).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -21,6 +28,7 @@ from sqlalchemy import insert, text, update
 from app.audit.models import AuditLog
 from app.feedback.models import OpportunityFeedback
 from app.jobs.models import Job
+from app.privacy import cli
 from app.privacy.erasure import delete_account, erase_invitee_email, erase_organization
 from app.privacy.verification import (
     verify_organization_erased,
@@ -133,6 +141,57 @@ def test_each_planted_copy_is_found(carol_deleted: PrivacyEnv, plant, finding):
     report = _account_report(carol_deleted)
     assert not report.verified
     assert finding in _findings(report), report.as_dict()
+
+
+@pytest.mark.parametrize(
+    ("value", "found"),
+    [
+        (f"failed for {EMAIL[CAROL].upper()}.", True),
+        (f"failed for <{EMAIL[CAROL]}>", True),
+        (f"failed for x{EMAIL[CAROL]}", False),
+        (f"failed for {EMAIL[CAROL]}.org", False),
+    ],
+    ids=["end-of-sentence", "angle-brackets", "longer-local-part", "longer-domain"],
+)
+def test_the_content_scan_matches_whole_addresses_only(carol_deleted: PrivacyEnv, value, found):
+    with carol_deleted.engine.begin() as conn:
+        conn.execute(
+            update(Job.__table__).where(Job.id == "b1-job").values(last_error_summary=value)
+        )
+    report = _account_report(carol_deleted)
+    assert (("jobs", "last_error_summary") in _findings(report)) is found, report.as_dict()
+    assert report.verified is not found
+
+
+def test_the_reference_check_alone_scans_no_content(carol_deleted: PrivacyEnv):
+    with carol_deleted.engine.begin() as conn:
+        conn.execute(
+            update(Job.__table__).where(Job.id == "b1-job")
+            .values(last_error_summary=f"failed for {EMAIL[CAROL]}")
+        )
+    with carol_deleted.session() as s:
+        report = verify_subject_erased(s, user_id=CAROL, email=EMAIL[CAROL], content=False)
+    assert (report.content_scanned, report.content_columns_checked) == (False, 0)
+    assert report.references_cleared and not report.content_findings
+    assert not report.verified  # an unscanned report is never "verified"
+
+
+def test_the_operator_command_runs_the_full_scan(carol_deleted: PrivacyEnv, capsys):
+    argv = ["verify-account", "--user-id", CAROL, "--email", EMAIL[CAROL]]
+    assert cli.main(argv) == cli.EXIT_OK
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["verified"] is True and printed["content_scanned"] is True
+    assert printed["content_columns_checked"] > 300
+    with carol_deleted.engine.begin() as conn:
+        conn.execute(
+            update(Job.__table__).where(Job.id == "b1-job")
+            .values(last_error_summary=f"failed for {EMAIL[CAROL]}")
+        )
+    assert cli.main(argv) == cli.EXIT_FINDINGS
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["content_findings"] == [
+        {"table": "jobs", "column": "last_error_summary", "rows": 1}
+    ]
 
 
 def test_the_email_alone_is_checked_for_an_invitee(env: PrivacyEnv):

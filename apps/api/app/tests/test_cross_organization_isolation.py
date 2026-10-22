@@ -1112,7 +1112,7 @@ class TestOrganizationPrivacy:
     deletion's positive control has two halves: the acting owner, on its OWN organization,
     reaches the handler (its ``organization_name_mismatch`` refusal is decided after the
     tenancy gate, and nothing is deleted); and a throwaway organization registered here is
-    deleted for real by its own owner, with a verified receipt.
+    deleted for real by its own owner, with a receipt whose reference check is clear.
     """
 
     def test_export_own_200_scoped_foreign_403(self, world: World, pov: Pov):
@@ -1178,7 +1178,7 @@ class TestOrganizationPrivacy:
             {"current_password": PASSWORD, "confirm_organization_name": name},
         )
         assert r.status_code == 200, r.text
-        assert r.json()["verification"]["verified"] is True
+        assert r.json()["verification"]["references_cleared"] is True
         # The throwaway owner was never a member of A or B: both are intact.
         for t in (world.a, world.b):
             assert world.count(Workspace, organization_id=t.org_id) == workspaces[t.org_id]

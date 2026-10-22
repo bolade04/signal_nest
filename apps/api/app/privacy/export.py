@@ -7,6 +7,9 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   account-token history, invitations addressed to it, invitations it sent (without the
   invitee's address, which is someone else's data), feedback it submitted, capability
   overrides it set and the audit events it performed. No credential, token or digest.
+  Invitations are found by the account's email address, so they are listed only when that
+  address is verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says
+  which, in words.
 * **Organization export** — every table the inventory marks exported, restricted to the
   organization (by ``organization_id``, or by its workspaces for the tables that carry
   only ``workspace_id``), minus the columns the inventory excludes (token digests and
@@ -35,6 +38,7 @@ from app.organizations.models import (
     User,
     Workspace,
 )
+from app.privacy.erasure import EmailScope, email_scope
 from app.privacy.inventory import TABLES
 
 EXPORT_SCHEMA_VERSION = 1
@@ -57,14 +61,27 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+_EMAIL_KEYED_NOTE = {
+    EmailScope.INCLUDED: (
+        "Your email address is verified, so invitations addressed to it are included."
+    ),
+    EmailScope.EXCLUDED_UNVERIFIED: (
+        "Your email address is not verified, so invitations addressed to it are not included: "
+        "nothing proves the address is yours. Verify it, then download your data again."
+    ),
+}
+
+
 def export_account(db: Session, *, user: User) -> dict[str, Any]:
     """Everything stored about the signed-in account, in machine-readable form."""
     uid = user.id
     email = user.email.lower()
+    scope = email_scope(user)
     return {
         "schema_version": EXPORT_SCHEMA_VERSION,
         "generated_at": _now(),
         "subject": {"type": "account", "user_id": uid},
+        "email_keyed_data": {"status": scope.value, "note": _EMAIL_KEYED_NOTE[scope]},
         "profile": {
             "id": uid,
             "email": user.email,
@@ -129,7 +146,9 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             .join(Organization, Organization.id == OrganizationInvitation.organization_id)
             .where(func.lower(OrganizationInvitation.email) == email)
             .order_by(OrganizationInvitation.created_at, OrganizationInvitation.id),
-        ),
+        )
+        if scope is EmailScope.INCLUDED
+        else [],
         "invitations_sent": _rows(
             db,
             select(

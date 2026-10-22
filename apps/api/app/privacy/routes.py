@@ -6,11 +6,18 @@
     GET  /organizations/{id}/export              exact OWNER: the organization's data
     POST /organizations/{id}/delete              exact OWNER: delete it (password + name)
 
-Every deletion commits before it answers, then runs the independent verification
-(:mod:`app.privacy.verification`) on the committed state and returns its report in the
-receipt. A report that is not ``verified`` is logged as an error for an operator; the
-deletion itself is not undone. Exports and the preview write nothing. Security events
-carry pseudonymous ids and counts only — never an email address, name or password.
+Every deletion commits before it answers, then runs the independent verifier's reference
+check (:mod:`app.privacy.verification`, ``content=False``) on the committed state and
+returns it in the receipt: only rows that point at the deleted subject itself. A check that
+finds any is logged as an error for an operator; the deletion itself is not undone. The
+verifier's content scan reads every text column of every table, so it is not run here: an
+operator runs it with ``python -m app.privacy.cli``. Exports and the preview write nothing.
+Security events carry pseudonymous ids and counts only — never an email address, name or
+password.
+
+Data found only by the account's email address is the account's only when that address is
+verified (:class:`~app.privacy.erasure.EmailScope`); the preview, the receipt and the
+account export say which applies.
 """
 
 from __future__ import annotations
@@ -30,14 +37,16 @@ from app.core.logging import get_logger, log_event
 from app.db.session import get_db
 from app.organizations.models import User
 from app.privacy import erasure, export
-from app.privacy.erasure import ErasureCounts, MembershipOutcome
+from app.privacy.erasure import EmailScope, ErasureCounts, MembershipOutcome, email_scope
 from app.privacy.schemas import (
     AccountDeletionOut,
     AccountDeletionPreviewOut,
     AccountDeletionRequest,
     AccountExportOut,
     DeletedOrganizationOut,
+    EmailKeyedDataOut,
     ErasureCountsOut,
+    ErasureFindingOut,
     ErasureVerificationOut,
     MembershipImpactOut,
     OrganizationDeletionOut,
@@ -61,9 +70,32 @@ def _counts(counts: ErasureCounts) -> ErasureCountsOut:
     return ErasureCountsOut(**counts.as_dict())
 
 
-def _report(report: ErasureReport) -> ErasureVerificationOut:
-    out = ErasureVerificationOut.model_validate(report.as_dict())
-    if not out.verified:
+_PREVIEW_NOTE = {
+    EmailScope.INCLUDED: (
+        "Your email address is verified, so invitations addressed to it and audit records "
+        "that name it will be erased too."
+    ),
+    EmailScope.EXCLUDED_UNVERIFIED: (
+        "Your email address is not verified, so invitations addressed to it and audit records "
+        "that name it will not be erased: nothing proves the address is yours. Verify it "
+        "first to include them."
+    ),
+}
+_RECEIPT_NOTE = {
+    EmailScope.INCLUDED: (
+        "Your email address was verified, so invitations addressed to it and audit records "
+        "that named it were erased too."
+    ),
+    EmailScope.EXCLUDED_UNVERIFIED: (
+        "Your email address was not verified, so invitations addressed to it and audit "
+        "records that name it were not erased: nothing proved the address was yours."
+    ),
+}
+
+
+def _check(report: ErasureReport) -> ErasureVerificationOut:
+    """The receipt's view of a reference-only report (the subject's own rows only)."""
+    if not report.references_cleared:
         log_event(
             logger,
             "privacy.erasure.verification_failed",
@@ -72,9 +104,18 @@ def _report(report: ErasureReport) -> ErasureVerificationOut:
             subject_type=report.subject_type,
             subject_id=report.subject_id,
             reference_findings=len(report.reference_findings),
-            content_findings=len(report.content_findings),
         )
-    return out
+    return ErasureVerificationOut(
+        references_cleared=report.references_cleared,
+        subject_type=report.subject_type,
+        subject_id=report.subject_id,
+        tables_checked=report.tables_checked,
+        reference_columns_checked=report.reference_columns_checked,
+        reference_findings=[ErasureFindingOut(**vars(f)) for f in report.reference_findings],
+        retained_anonymised=[ErasureFindingOut(**vars(f)) for f in report.retained_anonymised],
+        content_scan="operator",
+        generated_at=report.generated_at,
+    )
 
 
 @router.get("/account/export", response_model=AccountExportOut)
@@ -91,9 +132,11 @@ def preview_account_deletion(
 ) -> AccountDeletionPreviewOut:
     """What deleting the signed-in account would do to each of its organizations."""
     impacts = erasure.plan_account_deletion(db, user_id=user.id)
+    scope = email_scope(user)
     return AccountDeletionPreviewOut(
         can_delete=not any(i.outcome is MembershipOutcome.BLOCKED_SOLE_OWNER for i in impacts),
         organizations=[MembershipImpactOut.model_validate(i) for i in impacts],
+        email_keyed_data=EmailKeyedDataOut(status=scope.value, note=_PREVIEW_NOTE[scope]),
     )
 
 
@@ -109,9 +152,10 @@ def delete_my_account(
     The only OWNER of an organization that has other members is refused with 409
     ``account_deletion_sole_owner``. Organizations in which the account is the only
     member are deleted with it. On success every token of the account stops working,
-    because the account no longer exists.
+    because the account no longer exists. Invitations addressed to the account's email and
+    audit values naming it are erased only when the address is verified
+    (``email_keyed_data``).
     """
-    email = user.email
     result = erasure.delete_account(db, user=user, current_password=body.current_password)
     db.commit()
     log_event(
@@ -126,20 +170,25 @@ def delete_my_account(
         DeletedOrganizationOut(
             organization_id=o.organization_id,
             workspace_ids=list(o.workspace_ids),
-            verification=_report(
+            verification=_check(
                 verify_organization_erased(
-                    db, organization_id=o.organization_id, workspace_ids=o.workspace_ids
+                    db,
+                    organization_id=o.organization_id,
+                    workspace_ids=o.workspace_ids,
+                    content=False,
                 )
             ),
         )
         for o in result.deleted_organizations
     ]
+    scope = result.email_scope
     return AccountDeletionOut(
         user_id=result.user_id,
         organizations=[MembershipImpactOut.model_validate(i) for i in result.organizations],
         deleted_organizations=deleted,
         counts=_counts(result.counts),
-        verification=_report(verify_subject_erased(db, user_id=result.user_id, email=email)),
+        verification=_check(verify_subject_erased(db, user_id=result.user_id, content=False)),
+        email_keyed_data=EmailKeyedDataOut(status=scope.value, note=_RECEIPT_NOTE[scope]),
     )
 
 
@@ -188,9 +237,12 @@ def delete_organization(
         organization_id=organization_id,
         workspace_ids=list(result.workspace_ids),
         counts=_counts(result.counts),
-        verification=_report(
+        verification=_check(
             verify_organization_erased(
-                db, organization_id=organization_id, workspace_ids=result.workspace_ids
+                db,
+                organization_id=organization_id,
+                workspace_ids=result.workspace_ids,
+                content=False,
             )
         ),
     )

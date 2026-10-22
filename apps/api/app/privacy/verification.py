@@ -13,23 +13,29 @@ two questions about the subject:
    not), and the subject table's own ``id`` — is counted for the subject's ids.
 2. **Content.** Every text or JSON column of every table is scanned, case-insensitively,
    for the subject's identifiers (the account id and email address; or the organization
-   and workspace ids), so a copy left in free text or a JSON payload is found too.
+   and workspace ids), so a copy left in free text or a JSON payload is found too. An
+   identifier counts only where it stands whole: a longer address that contains the
+   subject's (``xcarol@…``) or extends its domain (``carol@….au``) is someone else's.
 
-A report is ``verified`` only when both come back empty. The single declared exception is
-the organization's own audit records, which ``O-6`` keeps after the organization is gone:
-for an organization subject, ``audit_logs`` rows whose ``organization_id`` is the subject
-are reported as *retained* — and each must have every identifying column cleared, or it
-is a finding. Nothing here writes.
+A report is ``verified`` only when the content was scanned and both come back empty. The
+single declared exception is the organization's own audit records, which ``O-6`` keeps after
+the organization is gone: for an organization subject, ``audit_logs`` rows whose
+``organization_id`` is the subject are reported as *retained* — and each must have every
+identifying column cleared, or it is a finding. Nothing here writes.
 
-Cost: the content scan reads every text column of every table once per identifier. That
-is acceptable for an operator tool and for the pilot's data volume; it is not an online
-path for a large database.
+Cost: the content scan reads every text column of every table (359 at this writing) once
+per identifier. That is acceptable for an operator tool and for the pilot's data volume; it
+is not an online path. The deletion routes therefore run only the reference check
+(``content=False``: one equality count per reference column, bounded by the schema, not by
+the data's text) and leave the content scan to the operator's command
+(:mod:`app.privacy.cli`).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
@@ -55,6 +61,8 @@ class ErasureReport:
     email_sha256: str | None
     tables_checked: int = 0
     reference_columns_checked: int = 0
+    #: False when only the reference check ran (``content=False``).
+    content_scanned: bool = True
     content_columns_checked: int = 0
     reference_findings: list[Finding] = field(default_factory=list)
     content_findings: list[Finding] = field(default_factory=list)
@@ -62,11 +70,17 @@ class ErasureReport:
     generated_at: str = ""
 
     @property
+    def references_cleared(self) -> bool:
+        return not self.reference_findings
+
+    @property
     def verified(self) -> bool:
-        return not self.reference_findings and not self.content_findings
+        """Both questions answered and empty. A report without the content scan never is."""
+        return self.content_scanned and self.references_cleared and not self.content_findings
 
     def as_dict(self) -> dict:
         out = asdict(self)
+        out["references_cleared"] = self.references_cleared
         out["verified"] = self.verified
         return out
 
@@ -113,6 +127,18 @@ def _needles(value: str) -> tuple[str, ...]:
     return (lowered,) if escaped == lowered else (lowered, escaped)
 
 
+# Whole-identifier matching. Written here, not imported from the deletion code, so the
+# verifier keeps its own reading of what "contains the subject" means. Before the
+# identifier: no character of an address's local part (RFC 5322 atext and the dot, not the
+# apostrophe); after it: no domain-label character, and no dot starting another label.
+_BEFORE = r"(?<![A-Za-z0-9!#$%&*+/=?^_`{|}~.-])"
+_AFTER = r"(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9])"
+
+
+def _whole(needle: str) -> re.Pattern[str]:
+    return re.compile(_BEFORE + re.escape(needle) + _AFTER, re.IGNORECASE)
+
+
 def _count(db: Session, table: Table, *where) -> int:
     return db.execute(select(func.count()).select_from(table).where(*where)).scalar_one()
 
@@ -121,14 +147,22 @@ def _content_findings(
     db: Session, tables: list[Table], identifiers: list[str], *, skip: set[tuple[str, str]]
 ) -> tuple[int, list[Finding]]:
     needles = tuple(n for value in identifiers for n in _needles(value))
+    patterns = tuple(_whole(n) for n in needles)
     checked, findings = 0, []
     for table in tables:
         for column in table.columns:
             if not _is_text(column) or (table.name, column.name) in skip:
                 continue
             checked += 1
+            # The database narrows to values that contain a needle; each is then read and
+            # counted only where an identifier stands whole.
             text = func.lower(cast(column, Text))
-            rows = _count(db, table, or_(*(text.contains(n, autoescape=True) for n in needles)))
+            values = db.execute(
+                select(cast(column, Text))
+                .select_from(table)
+                .where(or_(*(text.contains(n, autoescape=True) for n in needles)))
+            ).scalars()
+            rows = sum(1 for v in values if v and any(p.search(v) for p in patterns))
             if rows:
                 findings.append(Finding(table.name, column.name, rows))
     return checked, findings
@@ -141,11 +175,12 @@ def _stamp(report: ErasureReport, tables: list[Table]) -> ErasureReport:
 
 
 def verify_subject_erased(
-    db: Session, *, user_id: str | None = None, email: str | None = None
+    db: Session, *, user_id: str | None = None, email: str | None = None, content: bool = True
 ) -> ErasureReport:
     """Prove no row references the account ``user_id`` and no value contains it or ``email``.
 
     Either may be given alone: an invitee who never registered has only an email.
+    ``content=False`` runs the reference check only (the deletion route's in-request check).
     """
     if not user_id and not email:
         raise ValueError("verify_subject_erased() needs a user id, an email, or both.")
@@ -162,10 +197,13 @@ def verify_subject_erased(
                 rows = _count(db, table, column == user_id)
                 if rows:
                     report.reference_findings.append(Finding(table.name, column.name, rows))
-    identifiers = [v for v in (user_id, email) if v]
-    report.content_columns_checked, report.content_findings = _content_findings(
-        db, tables, identifiers, skip=set()
-    )
+    if content:
+        identifiers = [v for v in (user_id, email) if v]
+        report.content_columns_checked, report.content_findings = _content_findings(
+            db, tables, identifiers, skip=set()
+        )
+    else:
+        report.content_scanned = False
     return _stamp(report, tables)
 
 
@@ -174,13 +212,18 @@ _AUDIT_IDENTIFYING = ("actor_user_id", "entity_id", "reason", "previous_state", 
 
 
 def verify_organization_erased(
-    db: Session, *, organization_id: str, workspace_ids: tuple[str, ...] | list[str] = ()
+    db: Session,
+    *,
+    organization_id: str,
+    workspace_ids: tuple[str, ...] | list[str] = (),
+    content: bool = True,
 ) -> ErasureReport:
     """Prove nothing references the organization or its workspaces, beyond anonymised audit.
 
     ``workspace_ids`` are the organization's workspaces as they were before deletion (the
     deletion receipt lists them). Without them, tables that reach the organization only
-    through a workspace are checked by content only.
+    through a workspace are checked by content only. ``content=False`` runs the reference
+    and retained-audit checks only (the deletion route's in-request check).
     """
     report = ErasureReport(
         subject_type="organization", subject_id=organization_id, email_sha256=None
@@ -226,9 +269,12 @@ def verify_organization_erased(
         )
         if rows:
             report.reference_findings.append(Finding("audit_logs", "context", rows))
-    report.content_columns_checked, report.content_findings = _content_findings(
-        db, tables, [organization_id, *workspace_ids], skip=skip
-    )
+    if content:
+        report.content_columns_checked, report.content_findings = _content_findings(
+            db, tables, [organization_id, *workspace_ids], skip=skip
+        )
+    else:
+        report.content_scanned = False
     return _stamp(report, tables)
 
 

@@ -161,6 +161,13 @@ class JobType(StrEnum):
     RETENTION_PURGE = "retention.purge"
 
 
+#: Job types no customer role may cancel. A retention purge applies the operator's retention
+#: policy (``O-5`` / ``P6-D05``, reserved to the operator and legal), not the workspace's own
+#: work, so no workspace role decides whether it runs. The operator stops one by changing
+#: that policy, which the job re-checks when it runs.
+CUSTOMER_UNCANCELLABLE_JOB_TYPES: frozenset[JobType] = frozenset({JobType.RETENTION_PURGE})
+
+
 class JobErrorCode(StrEnum):
     """Stable, secret-free error codes that drive the retry decision."""
 

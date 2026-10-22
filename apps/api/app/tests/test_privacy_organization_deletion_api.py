@@ -7,8 +7,8 @@
   tenant table, with its members and invitations; A's audit records are kept (``O-6``) with
   every identifying column cleared; B and C are byte-identical; the members' ACCOUNTS
   survive (CAROL and DAVE keep their user rows and can still sign in), and so do memberships
-  elsewhere. The receipt's verification report is ``verified``, lists the retained anonymised
-  audit records, and an independent re-run agrees. Before, the same verifier finds A
+  elsewhere. The receipt's reference check is clear and lists the retained anonymised audit
+  records, and the operator's full verification agrees. Before, the same verifier finds A
   (positive control).
 * **Authority.** Exactly OWNER: ADMIN and VIEWER members get the role denial, a non-member the
   membership denial, anonymous 401. The service re-checks the role under the organization
@@ -18,6 +18,8 @@
   ``organization_name_mismatch``; a malformed body is 422 ``validation_error``.
 * **Running jobs.** A claimed or running job of the organization refuses the deletion with 409
   ``organization_jobs_active``.
+* **What the request checks.** The verifier's reference check and the retained-audit check run
+  in the request. The scan of every text column does not; that is the operator's command.
 
 Every refusal writes nothing.
 """
@@ -33,7 +35,7 @@ from app.audit.models import AuditLog
 from app.core.errors import PermissionDeniedError
 from app.jobs.models import Job
 from app.organizations.models import Organization, OrganizationMember, User
-from app.privacy import erasure
+from app.privacy import erasure, verification
 from app.privacy.verification import verify_organization_erased
 from app.tests._privacy_support import (
     ALICE,
@@ -86,7 +88,7 @@ def test_owner_deletes_the_organization_and_only_it(env: PrivacyEnv):
     receipt = r.json()
     assert receipt["organization_id"] == ORG_A
     assert receipt["workspace_ids"] == list(WORKSPACES[ORG_A])
-    assert receipt["verification"]["verified"] is True
+    assert receipt["verification"]["references_cleared"] is True
     assert receipt["verification"]["retained_anonymised"] == [
         {"table": "audit_logs", "column": "organization_id", "rows": 6}
     ]
@@ -120,15 +122,13 @@ def test_owner_deletes_the_organization_and_only_it(env: PrivacyEnv):
 def test_a_member_left_without_organizations_can_still_delete_their_account(env: PrivacyEnv):
     assert env.client.post(DELETE_A, headers=env.auth(ALICE), json=BODY).status_code == 200
     headers = env.auth(CAROL)
-    assert env.client.get(f"{API}/account/deletion-preview", headers=headers).json() == {
-        "can_delete": True,
-        "organizations": [],
-    }
+    preview = env.client.get(f"{API}/account/deletion-preview", headers=headers).json()
+    assert (preview["can_delete"], preview["organizations"]) == (True, [])
     r = env.client.post(
         f"{API}/account/delete", headers=headers,
         json={"current_password": PASSWORD, "confirmation": "DELETE"},
     )
-    assert r.status_code == 200 and r.json()["verification"]["verified"] is True
+    assert r.status_code == 200 and r.json()["verification"]["references_cleared"] is True
 
 
 @pytest.mark.parametrize(
@@ -198,5 +198,20 @@ def test_deleting_another_organization_by_its_own_owner_leaves_a_untouched(env: 
         f"{API}/organizations/{ORG_C}/delete", headers=env.auth(ALICE),
         json={"current_password": PASSWORD, "confirm_organization_name": NAME[ORG_C]},
     )
-    assert r.status_code == 200 and r.json()["verification"]["verified"] is True
+    assert r.status_code == 200 and r.json()["verification"]["references_cleared"] is True
     assert env.snapshot(belongs_to(ORG_A)) == a_rows
+
+
+def test_the_request_runs_no_content_scan(env: PrivacyEnv, monkeypatch):
+    scans: list[object] = []
+    real = verification._content_findings
+
+    def counted(*args, **kwargs):
+        scans.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(verification, "_content_findings", counted)
+    r = env.client.post(DELETE_A, headers=env.auth(ALICE), json=BODY)
+    assert r.status_code == 200, r.text
+    assert scans == []
+    assert r.json()["verification"]["content_scan"] == "operator"
