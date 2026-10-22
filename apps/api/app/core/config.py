@@ -150,6 +150,33 @@ class Settings(BaseSettings):
     #: hosted vendor. A disabled backend is a no-op, never an error.
     metrics_enabled: bool = False
 
+    # --- P6-INF-5: metrics exporter (additive block) --------------------------
+    #: Exporter installed when ``metrics_enabled`` is true. ``none`` keeps the no-op
+    #: backend; ``emf`` writes CloudWatch Embedded Metric Format documents to stdout,
+    #: which the ECS awslogs driver already ships to CloudWatch Logs, where the
+    #: metrics are extracted (app/core/metrics_emf.py) — no agent, endpoint or
+    #: credential. Off unless both are set, so tests and local runs never emit.
+    metrics_exporter: Literal["none", "emf"] = "none"
+    #: CloudWatch namespace of the EMF metrics. Staging IaC sets one per deployment
+    #: (the alarms read the same value); never an ``AWS/`` namespace.
+    metrics_namespace: str = "SignalNest/app"
+    #: Seconds between EMF flushes. Bounded so a series reaches CloudWatch within one
+    #: 5-minute alarm period and the flusher can never spin.
+    metrics_flush_interval_seconds: float = 60.0
+
+    @model_validator(mode="after")
+    def _validate_metrics_exporter(self) -> Settings:
+        from app.core.metrics_emf import namespace_problem
+
+        problem = namespace_problem(self.metrics_namespace)
+        if problem is not None:
+            raise ValueError(f"metrics_namespace {problem}")
+        if not 1.0 <= self.metrics_flush_interval_seconds <= 300.0:
+            raise ValueError("metrics_flush_interval_seconds must be between 1 and 300")
+        return self
+
+    # --- end P6-INF-5 -----------------------------------------------------------
+
     # --- Distributed tracing (Phase 3A.4b Batch 3) ---------------------------
     #: Master switch for span emission. Off by default (and in tests) so tracing
     #: is strictly opt-in; core code depends only on the provider-neutral seam,
