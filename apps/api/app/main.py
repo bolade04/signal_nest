@@ -17,7 +17,12 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.lifecycle import close_redis_client, graceful_shutdown
 from app.core.logging import configure_logging, get_logger
-from app.core.metrics import SERVICE_SHUTDOWNS_TOTAL, SERVICE_STARTUPS_TOTAL, get_metrics
+from app.core.metrics import (
+    SERVICE_SHUTDOWNS_TOTAL,
+    SERVICE_STARTUPS_TOTAL,
+    configure_metrics_from_settings,
+    get_metrics,
+)
 from app.core.middleware import (
     CorrelationMiddleware,
     RateLimitMiddleware,
@@ -38,6 +43,9 @@ async def lifespan(app: FastAPI):
     # no-op unless tracing is enabled, and fails closed (a missing collector/SDK
     # degrades to no-op) so it can never block startup.
     configure_tracing_from_settings(settings)
+    # The metrics exporter likewise: a no-op unless metrics are enabled with an
+    # exporter selected (P6-INF-5), and it never blocks startup.
+    configure_metrics_from_settings(settings)
 
     # Schema-compatibility gate (verify, never mutate). Migrations are owned by a
     # single actor (``python -m app.db.migrate``); replicas never migrate. Fails

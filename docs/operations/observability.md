@@ -92,6 +92,39 @@ imports a hosted SDK.
   (`telemetry_failure_count()`), never propagated. Only validation errors (coding
   bugs) are raised.
 
+### Exporter: CloudWatch Embedded Metric Format (P6-INF-5)
+
+`app/core/metrics_emf.py` is the real exporter. With `METRICS_ENABLED=true` and
+`METRICS_EXPORTER=emf`, `configure_metrics_from_settings` (called by the API lifespan
+and the worker entrypoint) installs `EmfMetrics`, which writes CloudWatch Embedded
+Metric Format documents — one JSON object per line — to stdout through the same root
+log handler as the structured logs. On ECS the `awslogs` driver ships stdout to the
+workload's log group (`infra/aws/modules/ecs`), and CloudWatch Logs extracts the
+declared metrics on ingestion: no agent, endpoint, credential, SDK or new resource.
+Anything else (the defaults) leaves the no-op backend in place.
+
+- **Namespace** `METRICS_NAMESPACE` (default `SignalNest/app`; never `AWS/…`); staging
+  IaC sets one per deployment and its alarms read the same value.
+- **Aggregation.** Counters are summed and gauges keep their last value, written once
+  per `METRICS_FLUSH_INTERVAL_SECONDS` (default 60, bounded 1–300) by a daemon thread
+  and on shutdown (`flush_metrics`). Histograms are written as value arrays of at most
+  100 (the EMF limit), so CloudWatch computes percentiles (the p95 latency alert); a
+  full array is written at once, so memory stays bounded.
+- **Dimensions.** Every document declares `[service, environment]` (the rollup that
+  ratio and percentile alarms read) and that pair plus the series' other labels.
+  `error_class` and `job_status` are written as properties only (searchable in Logs
+  Insights, never a dimension). A label value that is not a short token
+  (`[A-Za-z0-9_.:-]{1,64}`) or a non-finite value is dropped and counted as a
+  telemetry failure (`exporter_status="degraded"`) instead of minting a billed metric.
+- **What counts as a request.** `http_requests_total`/`http_request_duration_ms` are
+  recorded by `CorrelationMiddleware` for every response it sees AND for an unhandled
+  exception, which it records as the 500 Starlette's error middleware turns it into —
+  before P6-INF-5 those 500s were never counted.
+- **Not verified locally:** CloudWatch's extraction itself. The document shape is
+  tested (`app/tests/test_metrics_emf.py`); that CloudWatch Logs turns the lines
+  `awslogs` delivers into metrics is AWS behaviour, first observable in an authorized
+  staging window.
+
 ### Catalog
 
 | Family | Metrics |

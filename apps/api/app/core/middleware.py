@@ -83,32 +83,46 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
                 parent=parent,
                 attributes={"component": "api", "http.request.method": request.method},
             ) as span:
-                response = await call_next(request)
-                elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+                try:
+                    response = await call_next(request)
+                except Exception:
+                    # An unhandled exception leaves every user middleware: Starlette's
+                    # ServerErrorMiddleware, outside this one, turns it into the 500
+                    # (app.core.errors). Count and log it here as the 500 it becomes,
+                    # or the 5xx-ratio alert (docs/operations/alerts.md §1) would never
+                    # see the failures that matter most. Nothing of the exception is
+                    # recorded; the catch-all handler logs its class.
+                    self._record(request, 500, start, span)
+                    raise
                 response.headers["x-request-id"] = rid
-                outcome = _status_outcome(response.status_code)
-                status_class = _status_class(response.status_code)
-                # Span attributes are bounded: the normalized route template and the
-                # status *code* (a small enumerable set), never the raw path or ids.
-                span.set_attribute("http.route", _route_template(request))
-                span.set_attribute("http.response.status_code", response.status_code)
-                span.set_attribute("outcome", outcome)
-                log_event(
-                    logger,
-                    "http.request",
-                    component="api",
-                    outcome=outcome,
-                    duration_ms=elapsed_ms,
-                    method=request.method,
-                    path=request.url.path,
-                    status_code=response.status_code,
-                )
-                # Metrics carry only bounded labels — never the path or raw code, which
-                # would explode series cardinality.
-                m = get_metrics()
-                m.increment(HTTP_REQUESTS_TOTAL, outcome=outcome, status_class=status_class)
-                m.observe(HTTP_REQUEST_DURATION_MS, elapsed_ms, outcome=outcome)
+                self._record(request, response.status_code, start, span)
                 return response
+
+    @staticmethod
+    def _record(request: Request, status_code: int, start: float, span) -> None:
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        outcome = _status_outcome(status_code)
+        status_class = _status_class(status_code)
+        # Span attributes are bounded: the normalized route template and the
+        # status *code* (a small enumerable set), never the raw path or ids.
+        span.set_attribute("http.route", _route_template(request))
+        span.set_attribute("http.response.status_code", status_code)
+        span.set_attribute("outcome", outcome)
+        log_event(
+            logger,
+            "http.request",
+            component="api",
+            outcome=outcome,
+            duration_ms=elapsed_ms,
+            method=request.method,
+            path=request.url.path,
+            status_code=status_code,
+        )
+        # Metrics carry only bounded labels — never the path or raw code, which
+        # would explode series cardinality.
+        m = get_metrics()
+        m.increment(HTTP_REQUESTS_TOTAL, outcome=outcome, status_class=status_class)
+        m.observe(HTTP_REQUEST_DURATION_MS, elapsed_ms, outcome=outcome)
 
 
 #: Browser security headers set on every API response (P6-AUTH-5). HSTS carries no
