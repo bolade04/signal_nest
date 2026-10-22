@@ -1,1 +1,6 @@
 semgrep==1.181.0
+# pip (CERT-2, 2026-10-21): the venv's installer itself, installed from this lock over the interpreter's bundled
+# ensurepip pip (25.0.1, whose vendored certifi 2024.8.30 the vendored-pin scan reports CRITICAL under
+# GHSA-6q48-6c7w-9gw2), as the reader and API venvs already do. The bundled pip performs this one install and is
+# replaced; the pin equals the reader tooling lock's. Compile with --allow-unsafe so pip is kept in the lock.
+pip==26.2.2

@@ -1,0 +1,9 @@
+# Reader job TOOLCACHE-PREFIX lock input (GHSA-6q48-6c7w-9gw2, certifi < 2026.10.19): the one package the
+# required "Revision reader" CI job installs into its interpreter prefix (`pythonLocation`, the runner's
+# toolcache Python) besides the Gate 4N PyYAML of scripts/requirements-gate-hashes.txt. The prefix is scanned
+# as installed (gate reader-tooling-syspy); its bundled pip is whatever actions/python-versions built, and pip
+# vendors a certifi bundle of its own, so the prefix's pip must be a release whose vendored certifi is fixed.
+# requirements-toolcache-pip.txt is compiled from this file, with hashes (--allow-unsafe keeps pip in it).
+# Never edited by hand. The pin equals the reader tooling lock's (security/test_tooling_locks.py keeps them equal).
+#   pip - the installer itself, installed from this lock over the toolcache's bundled copy
+pip==26.2.2

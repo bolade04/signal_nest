@@ -52,6 +52,54 @@
         "title": "AudienceIn",
         "type": "object"
       },
+      "AudiencePatch": {
+        "properties": {
+          "demographics": {
+            "additionalProperties": true,
+            "title": "Demographics",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "motivations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Motivations",
+            "type": "array"
+          },
+          "objections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Objections",
+            "type": "array"
+          }
+        },
+        "title": "AudiencePatch",
+        "type": "object"
+      },
       "BrandOut": {
         "properties": {
           "business_type": {
@@ -137,6 +185,51 @@
           }
         },
         "title": "BrandVoiceIn",
+        "type": "object"
+      },
+      "BrandVoicePatch": {
+        "properties": {
+          "avoid": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Avoid",
+            "type": "array"
+          },
+          "do_use": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Do Use",
+            "type": "array"
+          },
+          "example_copy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Copy"
+          },
+          "personality": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Personality",
+            "type": "array"
+          },
+          "tone": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tone",
+            "type": "array"
+          }
+        },
+        "title": "BrandVoicePatch",
         "type": "object"
       },
       "BusinessProfileBase": {
@@ -665,6 +758,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
             "title": "Location Ids",
             "type": "array"
           },
@@ -688,6 +782,44 @@
           "name"
         ],
         "title": "CampaignIn",
+        "type": "object"
+      },
+      "CampaignPatch": {
+        "properties": {
+          "goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Location Ids",
+            "type": "array"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "CampaignPatch",
         "type": "object"
       },
       "CapabilitiesOut": {
@@ -1153,6 +1285,31 @@
         "title": "ChannelPrefIn",
         "type": "object"
       },
+      "ChannelPrefPatch": {
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "weekly_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Volume"
+          }
+        },
+        "title": "ChannelPrefPatch",
+        "type": "object"
+      },
       "ClaimIn": {
         "properties": {
           "category": {
@@ -1199,6 +1356,47 @@
         "title": "ClaimIn",
         "type": "object"
       },
+      "ClaimPatch": {
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "title": "ClaimPatch",
+        "type": "object"
+      },
       "CompetitorIn": {
         "properties": {
           "known_weaknesses": {
@@ -1240,6 +1438,46 @@
           "name"
         ],
         "title": "CompetitorIn",
+        "type": "object"
+      },
+      "CompetitorPatch": {
+        "properties": {
+          "known_weaknesses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Known Weaknesses",
+            "type": "array"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          }
+        },
+        "title": "CompetitorPatch",
         "type": "object"
       },
       "DeadLetterJobsOut": {
@@ -3526,6 +3764,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
             "title": "Eligible Location Ids",
             "type": "array"
           },
@@ -3656,6 +3895,163 @@
           "name"
         ],
         "title": "OfferIn",
+        "type": "object"
+      },
+      "OfferPatch": {
+        "properties": {
+          "cta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta"
+          },
+          "discount_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discount Amount"
+          },
+          "eligible_location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Eligible Location Ids",
+            "type": "array"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "landing_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landing Url"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "percentage_discount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentage Discount"
+          },
+          "product_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Service"
+          },
+          "promo_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promo Code"
+          },
+          "regular_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regular Price"
+          },
+          "required_disclaimer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Disclaimer"
+          },
+          "sale_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sale Price"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terms"
+          }
+        },
+        "title": "OfferPatch",
         "type": "object"
       },
       "OnboardingRequest": {
@@ -4499,6 +4895,83 @@
           "name"
         ],
         "title": "ProductIn",
+        "type": "object"
+      },
+      "ProductPatch": {
+        "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "claims_rules": {
+            "additionalProperties": true,
+            "title": "Claims Rules",
+            "type": "object"
+          },
+          "competitors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "exclusion_rules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Rules",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pain_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pain Points",
+            "type": "array"
+          },
+          "relevance_weight": {
+            "title": "Relevance Weight",
+            "type": "number"
+          },
+          "use_cases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Use Cases",
+            "type": "array"
+          }
+        },
+        "title": "ProductPatch",
         "type": "object"
       },
       "ReadinessCheckOut": {
@@ -5554,6 +6027,25 @@
           "source_type"
         ],
         "title": "SourcePrefIn",
+        "type": "object"
+      },
+      "SourcePrefPatch": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "title": "SourcePrefPatch",
         "type": "object"
       },
       "StuckJobsOut": {
@@ -8770,6 +9262,84 @@
           "campaign-context",
           "audiences"
         ]
+      },
+      "patch": {
+        "operationId": "update_audiences_api_v1_workspaces__workspace_id__audiences__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudiencePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Audiences Api V1 Workspaces  Workspace Id  Audiences  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Audiences",
+        "tags": [
+          "campaign-context",
+          "audiences"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/audit-logs": {
@@ -9034,6 +9604,84 @@
           }
         },
         "summary": "Delete Brand-Voice",
+        "tags": [
+          "campaign-context",
+          "brand-voice"
+        ]
+      },
+      "patch": {
+        "operationId": "update_brand_voice_api_v1_workspaces__workspace_id__brand_voice__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandVoicePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Brand Voice Api V1 Workspaces  Workspace Id  Brand Voice  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Brand-Voice",
         "tags": [
           "campaign-context",
           "brand-voice"
@@ -9418,6 +10066,84 @@
           "campaign-context",
           "campaigns"
         ]
+      },
+      "patch": {
+        "operationId": "update_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Campaigns Api V1 Workspaces  Workspace Id  Campaigns  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Campaigns",
+        "tags": [
+          "campaign-context",
+          "campaigns"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/channel-preferences": {
@@ -9608,6 +10334,84 @@
           }
         },
         "summary": "Delete Channel-Preferences",
+        "tags": [
+          "campaign-context",
+          "channels"
+        ]
+      },
+      "patch": {
+        "operationId": "update_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelPrefPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Channel Preferences Api V1 Workspaces  Workspace Id  Channel Preferences  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Channel-Preferences",
         "tags": [
           "campaign-context",
           "channels"
@@ -9806,6 +10610,84 @@
           "campaign-context",
           "claims"
         ]
+      },
+      "patch": {
+        "operationId": "update_claims_api_v1_workspaces__workspace_id__claims__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Claims Api V1 Workspaces  Workspace Id  Claims  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Claims",
+        "tags": [
+          "campaign-context",
+          "claims"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/competitors": {
@@ -9996,6 +10878,84 @@
           }
         },
         "summary": "Delete Competitors",
+        "tags": [
+          "campaign-context",
+          "competitors"
+        ]
+      },
+      "patch": {
+        "operationId": "update_competitors_api_v1_workspaces__workspace_id__competitors__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompetitorPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Competitors Api V1 Workspaces  Workspace Id  Competitors  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Competitors",
         "tags": [
           "campaign-context",
           "competitors"
@@ -10935,6 +11895,84 @@
           "campaign-context",
           "offers"
         ]
+      },
+      "patch": {
+        "operationId": "update_offers_api_v1_workspaces__workspace_id__offers__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfferPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Offers Api V1 Workspaces  Workspace Id  Offers  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Offers",
+        "tags": [
+          "campaign-context",
+          "offers"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/onboarding": {
@@ -11823,6 +12861,84 @@
           }
         },
         "summary": "Delete Products",
+        "tags": [
+          "campaign-context",
+          "products"
+        ]
+      },
+      "patch": {
+        "operationId": "update_products_api_v1_workspaces__workspace_id__products__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Products Api V1 Workspaces  Workspace Id  Products  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Products",
         "tags": [
           "campaign-context",
           "products"
@@ -12935,6 +14051,84 @@
           }
         },
         "summary": "Delete Source-Preferences",
+        "tags": [
+          "campaign-context",
+          "sources"
+        ]
+      },
+      "patch": {
+        "operationId": "update_source_preferences_api_v1_workspaces__workspace_id__source_preferences__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePrefPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Source Preferences Api V1 Workspaces  Workspace Id  Source Preferences  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Source-Preferences",
         "tags": [
           "campaign-context",
           "sources"
