@@ -178,9 +178,10 @@ _CONTEXT = (
 _W = "/workspaces/{workspace_id}"
 _O = "/organizations/{organization_id}"
 
-#: The explicit policy table. 44 role-gated rows (39 that existed before 6B-3A + 5 new
-#: OWNER/ADMIN routes), 25 membership-only rows (24 workspace + 1 new organization route),
-#: and the 2 GET routes whose membership check is inside the handler.
+#: The explicit policy table. 53 role-gated rows (39 that existed before 6B-3A + 5 new
+#: OWNER/ADMIN routes + 9 context-collection PATCH routes from P6-PLAT-9), 25 membership-only
+#: rows (24 workspace + 1 new organization route), and the 2 GET routes whose membership
+#: check is inside the handler.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -195,6 +196,11 @@ E7_POLICY: tuple[Policy, ...] = (
             RANK_FLOOR,
             _handler_404(ITEM_404),
         )
+        for c in _CONTEXT
+    ),
+    # P6-PLAT-9: the body is validated after the gate, so an admitted role's ``[]`` is a 422.
+    *(
+        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", EDITORS, RANK_FLOOR, _body_422())
         for c in _CONTEXT
     ),
     _row("POST", f"{_W}/locations", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -521,7 +527,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 44,
+            "role_gated": 53,
             MEMBER_WS: 24,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -532,7 +538,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            RANK_FLOOR: 37,
+            RANK_FLOOR: 46,
             WS_EXACT: 1,
             ORG_EXACT: 6,
             MEMBER_WS: 24,
@@ -552,7 +558,9 @@ class TestPolicyTableCompleteness:
         assert served == published
         # 105 -> 106 (P6-UI-017): the one new operation is POST /auth/password/change, an
         # AUTHENTICATED_ONLY route; the equality above proves no other route came or went.
-        assert len(served) == 106
+        # 106 -> 115 (P6-PLAT-9): one PATCH per campaign-context collection, each a RANK_FLOOR
+        # row above.
+        assert len(served) == 115
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -560,7 +568,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 71
+        assert len(rows) == 80
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
