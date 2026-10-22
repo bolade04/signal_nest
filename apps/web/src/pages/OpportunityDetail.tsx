@@ -266,8 +266,7 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
                     <span className="font-medium">AI explanation unavailable for this run.</span>{' '}
                     <span className="text-muted-foreground">
                       The AI provider did not return a usable response, so the explanation text
-                      on this page is placeholder copy, not AI reasoning. Scores and observed
-                      evidence are unaffected.
+                      on this page is placeholder copy, not AI reasoning.
                     </span>
                   </p>
                 </div>

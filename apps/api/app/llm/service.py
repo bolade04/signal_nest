@@ -62,6 +62,21 @@ def _backoff_seconds(attempt: int, exc: Exception, retry_after_cap: float) -> fl
     return min(_BACKOFF_BASE_SECONDS * 2**attempt, _BACKOFF_CAP_SECONDS)
 
 
+def _schema_errors(schema: type[BaseModel], exc: ValidationError) -> str:
+    """``field: error-type`` per error, and nothing from the rejected value.
+
+    pydantic's message quotes the input, which is model output and can echo tenant
+    context from the prompt; it would reach ``llm.failed`` and the E6 probe's output.
+    A location part that is not one of the schema's own field names is masked.
+    """
+    fields = schema.model_fields
+    parts = []
+    for err in exc.errors(include_url=False, include_context=False, include_input=False):
+        loc = ".".join(str(p) if isinstance(p, int) or p in fields else "?" for p in err["loc"])
+        parts.append(f"{loc or '<root>'}: {err['type']}")
+    return "; ".join(parts)
+
+
 class LLMService:
     def __init__(
         self,
@@ -148,7 +163,10 @@ class LLMService:
         try:
             return schema.model_validate(response.output)
         except ValidationError as exc:
-            raise LLMMalformedError(f"Response failed schema validation: {exc}") from exc
+            # ``from None``: the ValidationError's own text quotes the rejected input.
+            raise LLMMalformedError(
+                f"Response failed schema validation: {_schema_errors(schema, exc)}"
+            ) from None
 
     def _log(self, response: LLMResponse, attempt: int) -> None:
         logger.info(

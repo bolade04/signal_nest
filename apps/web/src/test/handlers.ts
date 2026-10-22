@@ -140,10 +140,11 @@ const opportunities: Opp[] = CITIES.flatMap((c, ci) =>
 );
 
 // One opportunity's explanation is degraded (P6-LLM-5): the provider failed, so the API
-// stores its placeholder copy with explanation_source 'degraded' and no ai_inference.
+// stores its placeholder copy (pipeline.DEGRADED_WHY) with explanation_source 'degraded'
+// and no ai_inference.
 export const degradedOpportunityId = 'opp-loc-dallas-1';
 export const DEGRADED_WHY =
-  'AI explanation unavailable: the language-model provider did not return a usable response for this run. Scores and observed evidence are unaffected.';
+  'AI explanation unavailable: the language-model provider did not return a usable response for this run.';
 
 function detailFor(o: Opp): OpportunityDetail {
   const degraded = o.id === degradedOpportunityId;

@@ -23,6 +23,9 @@ describe('opportunity detail explanation source', () => {
     const note = screen.getByRole('note');
     expect(note).toHaveTextContent(DEGRADED_NOTE);
     expect(note).toHaveTextContent(/placeholder copy, not AI reasoning/i);
+    // A provider outage also fails classification, which the scores are computed from:
+    // nothing on the page may claim they are unaffected.
+    expect(screen.queryAllByText(/unaffected/i)).toHaveLength(0);
     // The stored placeholder is shown as-is and no inference is fabricated.
     expect(screen.getByText(DEGRADED_WHY)).toBeInTheDocument();
     expect(screen.getByText(/No inference generated\./i)).toBeInTheDocument();

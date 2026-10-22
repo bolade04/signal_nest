@@ -1,6 +1,9 @@
 """The E6 live-provider probe, exercised offline: it refuses without explicit confirmation
 and, given a replayed provider, runs each step, bounds the billable calls, reports the
-uninducible branches as such, and never emits the key or model text."""
+uninducible branches as such, and never emits the key or model text.
+
+Settings are built by ``app.tests._llm_offline`` and ``run_probe`` is unreachable from
+the refusal tests, so no test here depends on the machine's LLM configuration."""
 
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import pytest
 
 from app.core.config import Settings
 from app.llm import live_probe
+from app.tests._llm_offline import offline_llm, offline_settings
 
 KEY = "fixture-key"
 CLASSIFIED = {"signal_type": "complaint", "pain_point_dna": "speed_complaint"}
@@ -20,6 +24,24 @@ EXPLAINED = {
     "ai_inference": "MODEL-TEXT-MUST-NOT-BE-EMITTED",
     "recommended_action": "r",
 }
+#: Stands in for tenant context a model may echo in schema-invalid output.
+MODEL_TEXT = "TENANT-MARKER-7f3a"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _offline():
+    with offline_llm():
+        yield
+
+
+@pytest.fixture
+def probe_unreachable(monkeypatch):
+    """The refusal paths must stop before ``run_probe`` (and before any provider)."""
+
+    def unreachable(*_args, **_kwargs):
+        raise AssertionError("run_probe was reached without confirmation")
+
+    monkeypatch.setattr(live_probe, "run_probe", unreachable)
 
 
 def _message(output: dict, stop_reason: str = "end_turn") -> httpx.Response:
@@ -37,8 +59,9 @@ def _message(output: dict, stop_reason: str = "end_turn") -> httpx.Response:
 class FakeProvider:
     """Answers like the Messages API would for each probe step."""
 
-    def __init__(self, *, truncate: bool = True):
+    def __init__(self, *, truncate: bool = True, classified: dict = CLASSIFIED):
         self.truncate = truncate
+        self.classified = classified
         self.requests: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -53,7 +76,7 @@ class FakeProvider:
             return _message(CLASSIFIED, stop_reason="max_tokens")
         if "explanation engine" in body["messages"][0]["content"]:
             return _message(EXPLAINED)
-        return _message(CLASSIFIED)
+        return _message(self.classified)
 
     def client_factory(self, timeout: float) -> httpx.Client:
         if timeout == 0.001:
@@ -65,19 +88,19 @@ class FakeProvider:
 
 
 def _settings(**overrides) -> Settings:
-    return Settings(
+    return offline_settings(
         llm_provider="anthropic", llm_api_key=KEY, llm_model="claude-sonnet-4-6", **overrides
     )
 
 
-def test_refuses_without_explicit_confirmation(capsys):
+def test_refuses_without_explicit_confirmation(capsys, probe_unreachable):
     assert live_probe.main([]) == 2
     assert live_probe.CONFIRM_FLAG in capsys.readouterr().err
 
 
 def test_refuses_without_a_real_provider():
     records: list[dict] = []
-    assert live_probe.run_probe(Settings(), emit=records.append) == 2
+    assert live_probe.run_probe(offline_settings(), emit=records.append) == 2
     assert records == [
         {"step": "preflight", "outcome": "refused", "reason": "no real provider configured"}
     ]
@@ -132,7 +155,19 @@ def test_an_unexpected_outcome_fails_the_probe():
     assert records[-1] == {"step": "summary", "unexpected": 1}
 
 
+def test_schema_invalid_model_output_is_not_emitted():
+    fake = FakeProvider(classified={**CLASSIFIED, "is_actionable": MODEL_TEXT})
+    records: list[dict] = []
+    assert live_probe.run_probe(_settings(), client_factory=fake.client_factory,
+                                emit=records.append) == 1
+    classify = next(r for r in records if r["step"] == "success_classify")
+    assert classify["outcome"] == "LLMMalformedError"
+    assert classify["detail"] == "Response failed schema validation: is_actionable: bool_parsing"
+    emitted = json.dumps(records)
+    assert MODEL_TEXT not in emitted and "input_value" not in emitted
+
+
 @pytest.mark.parametrize("flag", ["--confirm", "--yes", "-y"])
-def test_near_miss_flags_do_not_confirm(flag):
+def test_near_miss_flags_do_not_confirm(flag, probe_unreachable):
     with pytest.raises(SystemExit):
         live_probe.main([flag])

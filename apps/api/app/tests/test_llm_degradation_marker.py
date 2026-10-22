@@ -2,20 +2,27 @@
 
 The scout pipeline runs end to end against a throwaway four-market seed with its LLM
 service swapped for the real Anthropic adapter over a recorded-response replay (no
-network). Three provider behaviours are replayed - success, explanation failure,
-classification failure - and the persisted opportunities and the opportunity detail
-API are asserted for each:
+network). Four provider behaviours are replayed - success, explanation failure,
+classification failure, and an outage that fails both - and the persisted
+opportunities and the opportunity detail API are asserted for each:
 
 * ``explanation_source == "model"`` only when the model's validated output was stored;
 * ``"degraded"`` when the provider failed - the stored copy says no AI explanation
-  exists (no fabricated inference, no generic "relevant to your market" filler);
-* ``"rule_based"`` below the relevance action floor, where no model is consulted;
-* a failed classification is recorded on the signal as ``classification_source``.
+  exists (no fabricated inference, no generic "relevant to your market" filler) and
+  never claims the scores are unaffected;
+* a failed classification is recorded on the signal as ``classification_source`` and
+  degrades its opportunity, which is then never explained (the scores, title and
+  grouping were computed without the classification, and the copy says so);
+* ``"rule_based"`` below the relevance action floor, where no model is consulted.
+
+Every module-level path to a provider is offline (``app.tests._llm_offline``), so the
+module behaves the same on a machine whose environment configures a real provider.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -25,6 +32,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core.enums import ExplanationSource
+from app.core.logging import JsonFormatter
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
@@ -33,9 +41,11 @@ from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
 from app.main import app
 from app.opportunities.models import Opportunity
+from app.scoring.relevance import RELEVANCE_ACTION_FLOOR
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal
 from app.tests._auth2_support import live_bearer
+from app.tests._llm_offline import offline_llm, offline_settings
 
 API = get_settings().api_prefix
 EXPLANATION = {
@@ -55,6 +65,22 @@ CLASSIFIED = {
     "rationale": "Repeated complaints about wait times.",
 }
 OLD_CANNED = ("Signal is relevant to your market.", "Demand appears to be forming.")
+#: The stored copy when classification failed, pinned verbatim: it names the failure
+#: and makes no claim that the scores are unaffected.
+UNCLASSIFIED_WHY = (
+    "AI explanation unavailable: the language-model provider did not return a usable "
+    "response for this run. AI classification failed for at least one of these signals, "
+    "so the scores, title and grouping shown were computed without it."
+)
+RULE_BASED_WHY = "Below the relevance action floor; monitoring only."
+#: Stands in for tenant context a model may echo in schema-invalid output.
+MODEL_TEXT = "TENANT-MARKER-7f3a"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _offline():
+    with offline_llm():
+        yield
 
 
 def _ok(output: dict) -> httpx.Response:
@@ -88,19 +114,29 @@ def _task(request: httpx.Request) -> str:
     raise AssertionError(f"unexpected prompt: {content[:60]!r}")
 
 
-def _replay_service(*, classify_ok: bool, explain_ok: bool) -> tuple[LLMService, list[str]]:
+def _replay_service(
+    *, classify_ok: bool, explain_ok: bool, classified: dict = CLASSIFIED
+) -> tuple[LLMService, list[str]]:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         task = _task(request)
         calls.append(task)
         if task == "classify_signal":
-            return _ok(CLASSIFIED) if classify_ok else _overloaded()
+            return _ok(classified) if classify_ok else _overloaded()
         return _ok(EXPLANATION) if explain_ok else _overloaded()
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     provider = AnthropicProvider("fixture-key", "claude-sonnet-4-6", 5, client=client)
-    return LLMService(provider, sleep=lambda _s: None), calls
+    return LLMService(provider, sleep=lambda _s: None, settings=offline_settings()), calls
+
+
+def _relevance_at(monkeypatch, value: int) -> None:
+    """Score every cluster's relevance at ``value``; the rest of the scoring is real."""
+    real = pipeline.score_relevance
+    monkeypatch.setattr(
+        pipeline, "score_relevance", lambda signal, ctx: (value, real(signal, ctx)[1])
+    )
 
 
 @pytest.fixture(scope="module")
@@ -172,11 +208,14 @@ def test_provider_failure_persists_a_marked_honest_placeholder(seeded, monkeypat
     degraded = [o for o in opps if o.explanation_source == ExplanationSource.DEGRADED.value]
     assert degraded, "an explanation failure must be stored as degraded"
     # Bounded retries: each failed explanation costs exactly llm_max_retries + 1 calls.
-    attempts = get_settings().llm_max_retries + 1
+    attempts = offline_settings().llm_max_retries + 1
     assert calls.count("explain_opportunity") == attempts * len(degraded)
     for o in degraded:
         assert o.why_it_matters == pipeline.DEGRADED_EXPLANATION["why_it_matters"]
-        assert o.why_it_matters.startswith("AI explanation unavailable")
+        assert o.why_it_matters == (
+            "AI explanation unavailable: the language-model provider did not return a "
+            "usable response for this run."
+        )
         assert o.ai_inference is None
         assert o.suggested_angles == []
         assert o.why_it_matters not in OLD_CANNED and o.ai_inference not in OLD_CANNED
@@ -194,7 +233,74 @@ def test_classification_failure_is_recorded_and_the_run_completes(seeded, monkey
         assert s.signal_type is None and s.pain_point_dna is None
     skipped = [s for s in signals if s.is_noise or s.is_duplicate]
     assert all(s.ingest_metadata["classification_source"] is None for s in skipped)
-    assert opps
+    # The opportunity carries the failure: degraded, and never explained from an
+    # empty pain point even though the explain call would have succeeded.
+    assert opps and "explain_opportunity" not in calls
+    for o in opps:
+        assert o.explanation_source == ExplanationSource.DEGRADED.value
+        assert o.why_it_matters == UNCLASSIFIED_WHY
+        assert o.ai_inference is None and o.suggested_angles == []
+
+
+def test_outage_failing_both_calls_claims_nothing_about_the_scores(seeded, client, monkeypatch):
+    service, calls = _replay_service(classify_ok=False, explain_ok=False)
+    opps, _ = _rerun(seeded, monkeypatch, service)
+    assert calls and set(calls) == {"classify_signal"}
+    for o in opps:
+        assert o.explanation_source == ExplanationSource.DEGRADED.value
+        assert o.why_it_matters == UNCLASSIFIED_WHY
+        assert "unaffected" not in o.why_it_matters.lower()
+        assert o.ai_inference is None and o.suggested_angles == []
+        body = _detail(client, seeded, o)
+        assert body["explanation_source"] == "degraded"
+        assert body["why_it_matters"] == UNCLASSIFIED_WHY
+
+
+def test_below_the_action_floor_is_rule_based_and_never_explained(seeded, client, monkeypatch):
+    _relevance_at(monkeypatch, RELEVANCE_ACTION_FLOOR - 1)
+    service, calls = _replay_service(classify_ok=True, explain_ok=True)
+    opps, _ = _rerun(seeded, monkeypatch, service)
+    assert "classify_signal" in calls and "explain_opportunity" not in calls
+    for o in opps:
+        assert o.explanation_source == ExplanationSource.RULE_BASED.value
+        assert o.why_it_matters == RULE_BASED_WHY
+        assert o.ai_inference == "Not enough topical relevance to this business to act."
+        assert _detail(client, seeded, o)["explanation_source"] == "rule_based"
+
+
+def test_at_the_action_floor_the_model_explains(seeded, monkeypatch):
+    _relevance_at(monkeypatch, RELEVANCE_ACTION_FLOOR)
+    service, calls = _replay_service(classify_ok=True, explain_ok=True)
+    opps, _ = _rerun(seeded, monkeypatch, service)
+    assert calls.count("explain_opportunity") == len(opps)
+    assert {o.explanation_source for o in opps} == {ExplanationSource.MODEL.value}
+
+
+def test_an_unclassified_cluster_below_the_floor_is_degraded_not_rule_based(
+    seeded, monkeypatch
+):
+    _relevance_at(monkeypatch, RELEVANCE_ACTION_FLOOR - 1)
+    service, calls = _replay_service(classify_ok=False, explain_ok=True)
+    opps, _ = _rerun(seeded, monkeypatch, service)
+    assert "explain_opportunity" not in calls
+    for o in opps:
+        assert o.explanation_source == ExplanationSource.DEGRADED.value
+        assert o.why_it_matters == UNCLASSIFIED_WHY
+
+
+def test_schema_invalid_model_output_never_reaches_the_logs(seeded, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="signalnest")
+    invalid = {**CLASSIFIED, "is_actionable": MODEL_TEXT}
+    service, calls = _replay_service(classify_ok=True, explain_ok=True, classified=invalid)
+    opps, _ = _rerun(seeded, monkeypatch, service)
+    assert all(o.explanation_source == "degraded" for o in opps)
+    formatter = JsonFormatter(environment="staging")
+    lines = [(r.getMessage(), formatter.format(r)) for r in caplog.records]
+    assert {"llm.failed", "classify_failed"} <= {event for event, _ in lines}
+    failed = [line for event, line in lines if event == "llm.failed"]
+    assert failed and all("is_actionable: bool_parsing" in line for line in failed)
+    for _, line in lines:
+        assert MODEL_TEXT not in line and "input_value" not in line
 
 
 # --------------------------------------------------------------------------- #

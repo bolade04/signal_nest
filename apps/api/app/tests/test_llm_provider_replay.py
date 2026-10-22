@@ -5,7 +5,8 @@ test serves a fixed provider response (success, timeout, connection failure, 429
 and without ``retry-after``, 5xx/529, 4xx, non-JSON body, non-JSON or truncated or
 schema-invalid model text, refusal, unexpected stop reasons) and asserts both the
 normalized outcome and the exact request the adapter put on the wire. No test opens a
-network connection or uses a real key.
+network connection or uses a real key, and no test's settings come from the machine
+(``app.tests._llm_offline``).
 
 The fixtures are hand-written to the providers' documented response shapes (see the
 ``app.llm.providers_real`` module docstring for the source and its date); they are not
@@ -21,8 +22,10 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings
+from app.core.logging import JsonFormatter
 from app.llm import service as service_mod
 from app.llm.base import (
     LLMMalformedError,
@@ -44,6 +47,7 @@ from app.llm.providers_real import (
 )
 from app.llm.schemas import ClassifySignalOut
 from app.llm.service import LLMService
+from app.tests._llm_offline import offline_llm, offline_settings
 
 KEY = "fixture-key"
 CLASSIFIED = {
@@ -56,6 +60,14 @@ CLASSIFIED = {
 }
 #: A provider error message that must never be echoed into exception text or logs.
 LEAKY_MESSAGE = "prompt text: my-private-scraped-content"
+#: Stands in for tenant context a model may echo in schema-invalid output.
+MODEL_TEXT = "TENANT-MARKER-7f3a"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _offline():
+    with offline_llm():
+        yield
 
 
 # --------------------------------------------------------------------------- #
@@ -491,7 +503,7 @@ class TestOpenAI:
 # Service: bounded retries and backoff over the real adapter
 # --------------------------------------------------------------------------- #
 def _settings(**overrides: Any) -> Settings:
-    return Settings(llm_provider="anthropic", llm_api_key=KEY, **overrides)
+    return offline_settings(llm_provider="anthropic", llm_api_key=KEY, **overrides)
 
 
 @pytest.fixture
@@ -621,6 +633,52 @@ class TestServiceRetries:
         logged = json.dumps(list(events.values()))
         assert LEAKY_MESSAGE not in logged and KEY not in logged
 
+    @pytest.mark.parametrize(
+        "task, output, error",
+        [
+            (
+                "classify_signal",
+                {**CLASSIFIED, "is_actionable": MODEL_TEXT},
+                "is_actionable: bool_parsing",
+            ),
+            (
+                "classify_signal",
+                {"sentiment": "negative", "rationale": MODEL_TEXT},
+                "signal_type: missing",
+            ),
+            (
+                "explain_opportunity",
+                {
+                    "why_it_matters": "w",
+                    "who_cares": "c",
+                    "ai_inference": "i",
+                    "recommended_action": "r",
+                    "suggested_angles": MODEL_TEXT,
+                },
+                "suggested_angles: list_type",
+            ),
+        ],
+    )
+    def test_schema_errors_never_carry_model_output(self, settings, caplog, task, output, error):
+        caplog.set_level(logging.DEBUG, logger="signalnest.llm")
+        with pytest.raises(LLMMalformedError) as exc:
+            _service(Replay(anthropic_ok(output)), []).run(task, INPUTS)
+        assert str(exc.value) == f"Response failed schema validation: {error}"
+        # No chained ValidationError either: its text quotes the rejected input.
+        assert exc.value.__cause__ is None and exc.value.__suppress_context__
+        formatter = JsonFormatter(environment="staging")
+        failed = [formatter.format(r) for r in caplog.records if r.getMessage() == "llm.failed"]
+        assert len(failed) == 1 and error in failed[0]
+        assert MODEL_TEXT not in failed[0] and "input_value" not in failed[0]
+
+    def test_schema_error_locations_outside_the_schema_are_masked(self):
+        class Keyed(BaseModel):
+            scores: dict[str, int]
+
+        with pytest.raises(ValidationError) as exc:
+            Keyed.model_validate({"scores": {MODEL_TEXT: "high"}})
+        assert service_mod._schema_errors(Keyed, exc.value) == "scores.?: int_parsing"
+
     def test_dev_fallback_still_serves_mock_when_explicitly_enabled(self, settings):
         settings(llm_allow_dev_fallback=True)
         replay = Replay(anthropic_error(400, "invalid_request_error"))
@@ -634,7 +692,7 @@ class TestServiceRetries:
 # --------------------------------------------------------------------------- #
 class TestConfigBounds:
     def test_defaults_are_within_bounds(self):
-        s = Settings()
+        s = offline_settings()
         assert (s.llm_max_retries, s.llm_timeout_seconds) == (2, 30)
         assert (s.llm_max_output_tokens, s.llm_retry_after_cap_seconds) == (1024, 10.0)
 
@@ -653,8 +711,6 @@ class TestConfigBounds:
         ],
     )
     def test_out_of_bounds_values_are_rejected(self, field, value):
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError) as exc:
-            Settings(**{field: value})
+            offline_settings(**{field: value})
         assert field in str(exc.value)

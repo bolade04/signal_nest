@@ -175,10 +175,11 @@ class ExplanationSource(StrEnum):
     """Where an opportunity's explanation text came from (P6-LLM-5).
 
     ``model``: validated output of the configured LLM provider (in local/demo mode
-    that is the deterministic mock). ``degraded``: the provider failed and fixed
-    placeholder copy was stored instead. ``rule_based``: below the relevance action
-    floor; deterministic copy, no model consulted. A NULL column predates the marker
-    and means "not recorded" - it is never backfilled by guessing.
+    that is the deterministic mock). ``degraded``: the provider failed - to explain
+    the opportunity or to classify one of its signals - and fixed placeholder copy
+    was stored instead. ``rule_based``: below the relevance action floor;
+    deterministic copy, no model consulted. A NULL column predates the marker and
+    means "not recorded" - it is never backfilled by guessing.
     """
 
     MODEL = "model"

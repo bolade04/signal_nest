@@ -64,7 +64,8 @@ With the same image in both API and worker services and `LLM_PROVIDER=anthropic`
    detail endpoint, `explanation_source` (`model` expected where relevance is above the action
    floor, `rule_based` below it); and the worker's `llm.call` log lines
    (`provider=anthropic`, `is_simulated=false`, token counts, `attempt`). No `llm.failed` line
-   is expected; any `degraded` opportunity is recorded as observed, not hidden.
+   is expected; any `degraded` opportunity (a failed explanation, or a failed classification of
+   one of its signals, logged as `classify_failed`) is recorded as observed, not hidden.
 3. Note: until `P6-DATA-1` lands, connector input is fixture data (`is_simulated=true` on the
    opportunity). E6 concerns the provider, not the source; record both facts separately.
 

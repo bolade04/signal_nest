@@ -225,10 +225,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
             except LLMError as exc:
                 classification_source = ExplanationSource.DEGRADED.value
                 logger.warning(
-                    "classify_failed",
-                    extra={
-                        "extra_fields": {"error_class": type(exc).__name__, "err": str(exc)}
-                    },
+                    "classify_failed", extra={"extra_fields": {"error_class": type(exc).__name__}}
                 )
 
         # Additive Phase 3B Batch 3 annotation: a deterministic, offline intelligence
@@ -393,9 +390,14 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
 
         # Explanation — from the model only when action is plausible; the source
         # marker is persisted so degraded or rule-based copy is never mistaken for
-        # model reasoning (P6-LLM-5).
+        # model reasoning (P6-LLM-5). A member whose classification failed degrades
+        # the whole opportunity: its scores, title and grouping lack that input.
+        unclassified = any(
+            m.ingest_metadata.get("classification_source") == ExplanationSource.DEGRADED.value
+            for m in members
+        )
         explanation, explanation_source = _explain(
-            request, primary, geo, audience_label, safe_positioning, relevance
+            request, primary, geo, audience_label, safe_positioning, relevance, unclassified
         )
 
         priority = int(round(opp_breakdown.total * (conf_breakdown.total / 100.0)))
@@ -589,12 +591,20 @@ def _member_geo_evidence(db, members) -> list[tuple[str, str]]:
 
 
 #: Placeholder stored when the provider fails (P6-LLM-5). It states that no AI
-#: explanation exists rather than imitating one; ``ai_inference`` stays empty.
+#: explanation exists rather than imitating one; ``ai_inference`` stays empty. It
+#: makes no claim that the scores are unaffected: an outage fails classification
+#: too, and the scores, title and grouping are computed from the classification.
+DEGRADED_WHY = (
+    "AI explanation unavailable: the language-model provider did not return a "
+    "usable response for this run."
+)
+#: The placeholder when a member signal could not be classified.
+UNCLASSIFIED_WHY = (
+    f"{DEGRADED_WHY} AI classification failed for at least one of these signals, so the "
+    "scores, title and grouping shown were computed without it."
+)
 DEGRADED_EXPLANATION = {
-    "why_it_matters": (
-        "AI explanation unavailable: the language-model provider did not return a "
-        "usable response for this run. Scores and observed evidence are unaffected."
-    ),
+    "why_it_matters": DEGRADED_WHY,
     "ai_inference": None,
     "recommended_action": (
         "Review the observed evidence before acting; no AI recommendation was generated."
@@ -605,8 +615,16 @@ DEGRADED_EXPLANATION = {
 
 
 def _explain(
-    request, primary, geo, audience_label, safe_positioning, relevance
+    request, primary, geo, audience_label, safe_positioning, relevance, unclassified
 ) -> tuple[dict, ExplanationSource]:
+    if unclassified:
+        # Never explained: the prompt would carry an empty pain point, and a
+        # below-floor verdict may only reflect the missing classification.
+        return {
+            **DEGRADED_EXPLANATION,
+            "why_it_matters": UNCLASSIFIED_WHY,
+            "who_cares": audience_label,
+        }, ExplanationSource.DEGRADED
     if relevance < RELEVANCE_ACTION_FLOOR:
         return {
             "why_it_matters": "Below the relevance action floor; monitoring only.",

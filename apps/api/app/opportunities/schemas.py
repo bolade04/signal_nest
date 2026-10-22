@@ -58,7 +58,8 @@ class OpportunityDetail(OpportunityCard):
     ai_inference: str | None
     #: Provenance of why_it_matters / who_cares / ai_inference / suggested_angles
     #: (and recommended_action on act decisions). ``degraded`` = the AI provider
-    #: failed and placeholder copy is shown; null = recorded before the marker.
+    #: failed (to explain, or to classify a member signal) and placeholder copy is
+    #: shown; null = recorded before the marker.
     explanation_source: Literal["model", "degraded", "rule_based"] | None
     suggested_angles: list[str]
     risk_note: str | None
