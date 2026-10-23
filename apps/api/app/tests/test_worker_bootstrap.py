@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -63,6 +64,7 @@ from app.jobs.worker_models import WorkerRegistration
 from app.jobs.worker_registry import WorkerRegistry
 from app.opportunities.models import Opportunity
 from app.scouting_requests.models import ScoutRequest
+from app.tests._seed_support import clear_seeded_runs
 
 API_DIR = Path(__file__).resolve().parents[3]
 _MARKET = "dallas"
@@ -316,24 +318,36 @@ def seeded_factory(tmp_path_factory):
     """Seeded four-market demo data on a file-backed DB, no Job rows.
 
     Connectors are the deterministic fixture ones, so execution is offline and
-    repeatable. The seed creates no jobs, so every job observed below was created
-    by the code under test.
+    repeatable. The seed records one run per request (P6-UI-009); those are cleared,
+    so every job observed below was created by the code under test.
+
+    The seed runs in a child process: it queues its runs through
+    ``app.jobs.service``, whose import registers the handlers, and seeding in this
+    process would make that — not the worker's own bootstrap — populate the registry
+    the tests below rely on.
     """
     tmp = tmp_path_factory.mktemp("worker_bootstrap")
+    db_file = tmp / "bootstrap_e2e.db"
     engine = create_engine(
-        f"sqlite:///{tmp/'bootstrap_e2e.db'}",
+        f"sqlite:///{db_file}",
         connect_args={"check_same_thread": False},
         future=True,
     )
     Base.metadata.create_all(engine)
     make = sessionmaker(bind=engine, expire_on_commit=False, future=True)
-    original = seed_mod.SessionLocal
-    seed_mod.SessionLocal = make
+    proc = subprocess.run(
+        [sys.executable, "-c", "from app.db.seed import seed; seed(reset=True)"],
+        cwd=API_DIR,
+        env={**os.environ, "DATABASE_URL": f"sqlite:///{db_file}"},
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    clear_seeded_runs(make)
     try:
-        seed_mod.seed(reset=True)
         yield make
     finally:
-        seed_mod.SessionLocal = original
         engine.dispose()
 
 

@@ -13,6 +13,7 @@ Importing this module registers every handler on the
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -103,6 +104,58 @@ def execute_schedule_tick(ctx: HandlerContext) -> dict[str, Any]:
     )
 
 
+@register_terminal_failure_hook(JobType.SCOUT_SCHEDULE_TICK)
+def recover_failed_schedule_tick(ctx: TerminalFailureContext) -> None:
+    """Keep a recurring schedule alive after one of its ticks failed for good (P6-PLAT-6).
+
+    A tick is the only thing that enqueues the next tick, so a tick that reaches
+    ``failed`` or ``dead_lettered`` would otherwise end the schedule silently and
+    forever. This hook hands the failure to
+    :func:`app.scouting_requests.schedules.recover_after_tick_failure`, which re-seeds
+    the next occurrence (skipping the failed one, never back-filling) under the same
+    capability and enabled checks a healthy tick applies, and logs the loss.
+
+    The tenant scope is the job row's (``ctx.context``), never the payload's, so a
+    tampered payload naming another tenant's schedule is refused downstream. A
+    payload this hook cannot parse is logged and left alone: there is no schedule it
+    could safely identify. The worker owns the transaction: this writes and flushes,
+    never commits.
+    """
+    from app.scouting_requests.schedules import recover_after_tick_failure
+
+    schedule_id = ctx.payload.get("schedule_id")
+    occurrence_raw = ctx.payload.get("occurrence_at")
+    occurrence_at: datetime | None = None
+    if isinstance(occurrence_raw, str) and occurrence_raw:
+        try:
+            occurrence_at = datetime.fromisoformat(occurrence_raw)
+        except ValueError:
+            occurrence_at = None
+    if not isinstance(schedule_id, str) or not schedule_id or occurrence_at is None:
+        log_event(
+            logger,
+            "scout_schedule_tick_failed",
+            level=logging.ERROR,
+            component="jobs",
+            outcome="unrecoverable_payload",
+            chained=False,
+            job_status=ctx.status,
+            error_class=ctx.error_code.value,
+        )
+        return
+
+    recover_after_tick_failure(
+        ctx.db,
+        schedule_id=schedule_id,
+        occurrence_at=occurrence_at,
+        organization_id=ctx.context.organization_id,
+        workspace_id=ctx.context.workspace_id,
+        job_status=ctx.status,
+        error_code=ctx.error_code.value,
+        now=ctx.now,
+    )
+
+
 #: The in-flight states a scout request occupies only while a run is expected to
 #: make progress. A final job failure means no run is coming, so a request left in
 #: one of these is stranded: ``POST .../run`` rejects it with "already queued or
@@ -157,5 +210,6 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
 __all__ = [
     "execute_schedule_tick",
     "execute_scout_request",
+    "recover_failed_schedule_tick",
     "settle_failed_scout_request",
 ]

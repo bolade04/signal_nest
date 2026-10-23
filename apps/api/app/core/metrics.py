@@ -15,14 +15,17 @@ vendor SDK. The design keeps three guarantees that matter operationally:
   request or a job. Validation errors are the one deliberate exception: they are
   bugs, not outages, and must fail loudly.
 
-An in-memory backend is provided for assertions; a real exporter is deferred.
+An in-memory backend is provided for assertions. The real exporter is CloudWatch
+Embedded Metric Format on the process's log stream (:mod:`app.core.metrics_emf`, P6-INF-5),
+installed by :func:`configure_metrics_from_settings` only when ``metrics_enabled`` and
+``metrics_exporter="emf"`` are both set.
 """
 
 from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 # --------------------------------------------------------------------------- #
 # Cardinality policy
@@ -252,9 +255,50 @@ def get_metrics() -> MetricsBackend:
 
 
 def configure_metrics(backend: MetricsBackend | None) -> None:
-    """Install a metrics backend (``None`` resets to a fresh :class:`NoOpMetrics`)."""
+    """Install a metrics backend (``None`` resets to a fresh :class:`NoOpMetrics`).
+
+    A replaced backend that owns a background flusher (it exposes ``close``) is closed
+    best-effort, so swapping backends never leaves a second exporter thread writing.
+    """
     global _backend
+    previous = _backend
     _backend = backend if backend is not None else NoOpMetrics()
+    close = getattr(previous, "close", None)
+    if close is not None and previous is not _backend:
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def configure_metrics_from_settings(settings: Any) -> MetricsBackend:
+    """Install the exporter the settings select, if any; return the process backend.
+
+    Only an enabled, selected exporter changes the installed backend. With metrics off
+    or ``metrics_exporter="none"`` (the defaults) the current backend stays — the no-op
+    default, or a backend a test installed — so process startup never discards one.
+    Fails closed: an exporter that cannot be constructed installs the no-op backend
+    rather than stopping the process from starting.
+    """
+    if not getattr(settings, "metrics_enabled", False):
+        return _backend
+    if getattr(settings, "metrics_exporter", "none") != "emf":
+        return _backend
+    try:
+        from app.core.metrics_emf import EmfMetrics
+
+        backend = EmfMetrics(
+            namespace=settings.metrics_namespace,
+            service=settings.service_name,
+            environment=settings.environment,
+            flush_interval_seconds=settings.metrics_flush_interval_seconds,
+        )
+        backend.start()
+    except Exception:
+        configure_metrics(NoOpMetrics())
+        return _backend
+    configure_metrics(backend)
+    return backend
 
 
 def flush_metrics() -> None:
@@ -298,6 +342,7 @@ __all__ = [
     "InMemoryMetrics",
     "get_metrics",
     "configure_metrics",
+    "configure_metrics_from_settings",
     "flush_metrics",
     "validate_metric",
     "telemetry_failure_count",

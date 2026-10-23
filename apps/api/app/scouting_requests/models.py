@@ -47,11 +47,13 @@ class ScoutRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class ScoutSchedule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Recurring cadence attached to exactly one scout request + market (SB-B).
 
-    Additive and dark-deployed: rows only ever drive work while the
-    ``scout_scheduling_enabled`` flag is on. A schedule owns one recurring cadence
-    for one scout request; the uniqueness constraint enforces the product rule of
-    at most one schedule per request. Recurrence is a pure fixed interval measured
-    in UTC from the enable/resume moment — no clock-of-day, timezone or DST.
+    Additive and dark-deployed: rows only ever drive work while scheduling resolves
+    enabled for their workspace (the capability resolver — P6-CAP-1; with the shipped
+    ``scout_scheduling_enabled=False`` and no override, never). A schedule owns one
+    recurring cadence for one scout request; the uniqueness constraint enforces the
+    product rule of at most one schedule per request. Recurrence is a pure fixed
+    interval measured in UTC from the enable/resume moment — no clock-of-day,
+    timezone or DST.
     """
 
     __tablename__ = "scout_schedules"

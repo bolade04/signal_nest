@@ -41,7 +41,8 @@ services:
     QUEUE_BACKEND: redis
     CACHE_BACKEND: redis
     STORAGE_BACKEND: s3
-    VECTOR_BACKEND: pgvector
+    # P6-PLAT-1: pgvector is not implemented in this build and is refused at startup.
+    VECTOR_BACKEND: bruteforce
     JOB_QUEUE_BACKEND: local
     REDIS_URL: redis://redis:6379/0
     LLM_PROVIDER: mock

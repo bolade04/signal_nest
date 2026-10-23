@@ -1,14 +1,13 @@
 """Aggregate router mounting every domain router under the API prefix.
 
-Importing ``app.jobs.pipeline`` here guarantees the ``run_scout_request`` job handler
-is registered in the queue before any request tries to enqueue it.
+Durable job handlers are registered by :mod:`app.jobs.handlers`, which the enqueue
+service (:mod:`app.jobs.service`) imports wherever enqueue is reachable.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-import app.jobs.pipeline  # noqa: F401  (registers the run_scout_request job)
 from app.audit.routes import router as audit_router
 from app.auth.routes import router as auth_router
 from app.brands.routes import router as brands_router

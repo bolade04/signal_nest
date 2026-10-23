@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/auth/AuthContext';
 import { toAppPath } from '@/auth/intended-path';
+import { SESSION_ENDED_COPY, SESSION_ENDED_NOTICE } from '@/auth/session-ended';
 import { signOutNoticeCopy } from '@/auth/sign-out';
 import { PASSWORD_CHANGED_NOTICE, PASSWORD_RESET_NOTICE } from './account-token';
 import { AuthLayout } from './AuthLayout';
@@ -31,8 +32,10 @@ export function SignInPage() {
   const location = useLocation();
   const [formError, setFormError] = useState<string | null>(null);
   // Handed over in router state by a completed password reset, a completed password
-  // change (P6-UI-017) or a sign-out (P6-AUTH-4); never read from the URL.
+  // change (P6-UI-017), a sign-out (P6-AUTH-4) or a session the server ended
+  // (P6-UI-013); never read from the URL.
   const notice = (location.state as { notice?: unknown } | null)?.notice;
+  const sessionEnded = notice === SESSION_ENDED_NOTICE;
   const passwordReset = notice === PASSWORD_RESET_NOTICE;
   const passwordChanged = notice === PASSWORD_CHANGED_NOTICE;
   const signedOut = signOutNoticeCopy(notice);
@@ -78,6 +81,11 @@ export function SignInPage() {
   return (
     <AuthLayout title="Sign in" subtitle="Welcome back. Let's see what your scouts found.">
       <form onSubmit={form.handleSubmit(submit)} className="space-y-4" noValidate>
+        {sessionEnded ? (
+          <p role="status" className="rounded-md border border-border bg-secondary/50 px-3 py-2 text-sm">
+            {SESSION_ENDED_COPY}
+          </p>
+        ) : null}
         {passwordReset ? (
           <p role="status" className="rounded-md border border-border bg-secondary/50 px-3 py-2 text-sm">
             Your password has been reset. Sign in with your new password.
