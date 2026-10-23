@@ -45,10 +45,10 @@ import json
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, MetaData, String, Table, Text, cast, func, inspect, or_, select
+from sqlalchemy import JSON, MetaData, String, Table, Text, cast, func, inspect, select
 from sqlalchemy.orm import Session
 
-from app.privacy.matching import Mention, Subject, mention, mention_in_json
+from app.privacy.matching import Mention, Subject, mention, mention_in_json, prefilter
 
 _SKIPPED_TABLES = frozenset({"alembic_version"})
 
@@ -156,20 +156,16 @@ def _content_findings(
     db: Session, tables: list[Table], subject: Subject, *, skip: set[tuple[str, str]]
 ) -> tuple[int, list[Finding], list[Finding]]:
     """Columns checked, ``WHOLE`` findings and ``AMBIGUOUS`` rows, per column."""
-    needles = subject.sql_needles()
     checked, findings, ambiguous = 0, [], []
     for table in tables:
         for column in table.columns:
             if not _is_text(column) or (table.name, column.name) in skip:
                 continue
             checked += 1
-            # The database narrows to values that contain a needle; the shared matcher then
-            # decides, for each, whether it names the subject.
-            text = func.lower(cast(column, Text))
+            # The database narrows to values that may hold any form of an identifier (ASCII
+            # fragments only); the shared matcher then decides, for each, whether it does.
             values = db.execute(
-                select(cast(column, Text))
-                .select_from(table)
-                .where(or_(*(text.contains(n, autoescape=True) for n in needles)))
+                select(cast(column, Text)).select_from(table).where(prefilter(column, subject))
             ).scalars()
             mentions = [_mention(v, subject, as_json=_is_json(column)) for v in values if v]
             whole = sum(1 for m in mentions if m is Mention.WHOLE)

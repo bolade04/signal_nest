@@ -36,20 +36,52 @@ Rules the code enforces:
   person's. An unverified account is erased by id (and by what it accepted), and the preview,
   the receipt and the export say so (`email_keyed_data`). To erase that data for a person whose
   account is gone, prove the address out of band and run `erase-email`. That command is refused
-  only while an account with a **verified** address holds it, in any letter case. An unverified
-  account holding it does not block it, and is reported by the command's own verification.
-- **Which occurrences are erased.** The deletion and the verifier share one matcher
-  (`app.privacy.matching`), judged by the product's own address grammar, the validator
-  registration uses. An occurrence of the address is `WHOLE` when no registrable address could
-  contain it: `mailto:a@b.co`, `<a@b.co>`, `"a@b.co"`, `(a@b.co)`, in capitals, or before a
-  sentence-ending dot. It is erased. It is `AMBIGUOUS` when one could. That includes other
-  people's addresses (`xa@b.co`, `o'a@b.co`, `ía@b.co`, `a@b.co.org`), and also the account's
-  own address after `email=`, `users/`, `#`, `{`, `|`, `'`, `’` or `«`, or before `.Word`,
-  because registration accepts all of those characters in an address. An ambiguous occurrence
-  is left, since erasing it could destroy another person's data, and the verifier reports it
-  (§2). Not found at all: a URL-encoded address (`a%40b.co`), and an address in a different
-  Unicode normalization form. JSON object keys are never rewritten, so a key that names the
-  account makes the verification fail.
+  only while an account with a **verified** address holds it (in any letter case or form).
+  An unverified account holding the address does not block it, and the command's own
+  verification reports that account (`users.email`).
+
+  **That holder may be a live member.** Every account that joined by invitation is unverified
+  until it verifies. If such an account holds the address, `erase-email` also deletes that
+  account's **accepted invitation** and clears the address from the audit records about it.
+  The account and its membership stay, and its export then lists no invitation. Before running
+  it on an address a live account holds, ask the person to verify the address and delete the
+  account themselves, or record that this history goes.
+- **Which occurrences are erased** (*interim, pending the operator's decision `D-PRIV-7`* on
+  ambiguous occurrences, decisions packet row 3.6a). The deletion and the verifier share one
+  matcher (`app.privacy.matching`).
+  - **Every form of the address is looked for:**
+    - Unicode NFC and NFD;
+    - any letter case, with non-ASCII letters fully case-folded;
+    - inside JSON `\uXXXX` escapes, up to three layers;
+    - percent-encoded;
+    - with the domain as the IDNA A-label (`xn--…`) or as the U-label.
+
+    The SQL pre-filter compares only ASCII fragments that every one of those forms contains,
+    so no database `lower()` decides anything for non-ASCII letters, on SQLite or on
+    PostgreSQL. The comparison is made in Python. Invitations addressed to the account, and
+    the verified-holder check of `erase-email`, compare the address the same way.
+  - Each occurrence is judged by the product's own address grammar, the validator registration
+    uses.
+    - **`WHOLE`**: no registrable address could contain it. Examples: `mailto:a@b.co`,
+      `<a@b.co>`, `"a@b.co"`, `(a@b.co)`, capitals, before a sentence-ending dot, or
+      percent-encoded on its own. It is erased.
+    - **`AMBIGUOUS`**: a registrable address could contain it. That includes other people's
+      addresses (`xa@b.co`, `o'a@b.co`, `ía@b.co`, `a@b.co.org`). It also includes the
+      account's own address after `email=`, `users/`, `#`, `{`, `|`, `'`, `’` or `«`, or before
+      `.Word`, because registration accepts all of those characters in an address.
+    - **Undecided** (also `AMBIGUOUS`): the local part and the domain stand as separate tokens
+      but the address does not occur, as in `a&#64;b.co` or `a [at] b.co`.
+
+    An ambiguous or undecided occurrence is left, since erasing it could destroy another
+    person's data, and the verifier reports it (§2).
+  - **Erasure clears whole values.** A text or JSON string that names the account `WHOLE` is
+    cleared as a whole, together with any other address in the same string. Separate list items
+    are separate values.
+  - JSON object keys are never rewritten, so a key that names the account makes the
+    verification fail (a finding).
+  - **Not detected, a recorded limit.** Transformations that keep neither the address nor both
+    its local part and its domain as text are not found: a hash or base64 of it, or the domain
+    spelled out (`b [dot] co`). No product writer produces any of them.
 
 After a deletion, also: remove the address from the **SES account-level suppression list** if it
 is there (AWS-side, operator), and note the request in the operator's own request log.
@@ -58,12 +90,21 @@ is there (AWS-side, operator), and note the request in the operator's own reques
 
 E10 — "A data-deletion request has been serviced end to end by an implemented mechanism" — must
 be independently verifiable and must not rely on audit records (`P6-PRIV-5` is P1). The verifier
-(`app.privacy.verification`) reflects the **live schema** and reports every remaining reference
-to the subject and every text/JSON value that still names it `WHOLE`, judged by the deletion's
-own matcher (§1; JSON is decoded first, keys included). It also lists, under
-`content_ambiguous`, every row with an `AMBIGUOUS` occurrence. It does not read the audit
-trail or the inventory module, and it does not call the deletion code. It shares only the
-matcher with it, so a record the deletion should have cleared can never pass as clean.
+(`app.privacy.verification`) reflects the **live schema**. It reports every remaining
+reference to the subject, and every text or JSON value that still names it `WHOLE` in any form,
+as a finding. It uses the deletion's own matcher (§1); JSON is decoded first, keys included. It
+lists, under `content_ambiguous`, every row with an `AMBIGUOUS` or undecided occurrence. It
+does not read the audit trail or the inventory module, and it does not call the deletion code.
+It shares only the matcher with it, so a record the deletion should have cleared can never pass
+as clean.
+
+Precisely, while any occurrence of the subject remains, the verifier never reports `verified`
+without `needs_review`:
+- a `WHOLE` one is a finding, so `verified` is false (exit `1`);
+- an `AMBIGUOUS` or undecided one is left and flagged: `verified` with `needs_review` (exit
+  `4`).
+
+Only the transformations listed under "Not detected" in §1 pass unseen.
 
 A deletion request runs only the verifier's **reference check** before it answers (one equality
 count per column that can point at the subject; the receipt lists only rows that point at the
@@ -80,8 +121,9 @@ Exit codes:
 - `0` = verified, nothing to review.
 - `1` = findings (each names table, column and row count).
 - `4` = verified, but `content_ambiguous` lists rows that may hold the subject's identifier in a
-  context the address grammar cannot attribute. An operator reads those rows and records whose
-  they are. Erase a row by hand only if it is the subject's.
+  context the address grammar cannot attribute, or where the matcher cannot decide. *Interim,
+  pending `D-PRIV-7`:* an operator reads those rows and records whose they are, and erases a
+  row by hand only if it is the subject's.
 
 The report carries the SHA-256 of the email, not the email, so it can be kept as evidence. For an
 organization, its audit records are reported under `retained_anonymised` (kept by `O-6`), and
@@ -90,7 +132,7 @@ each must have every identifying column cleared, or it is a finding.
 **Which run applies to an account deletion.** The receipt's `email_keyed_data.status` says it,
 and so does the `email_scope` field of the `privacy.account.deleted` log event.
 - `included`: run `verify-account --user-id <id> --email <address>`. Exit `0`, or `4` after
-  review, is the proof.
+  review (interim, pending `D-PRIV-7`), is the proof.
 - `excluded_unverified`: run `verify-account --user-id <id>` (exit `0` or `4`). With `--email`,
   findings are expected: the address-keyed data that was deliberately left, such as an
   invitation the account never accepted. They stay until `erase-email` (§1) on out-of-band
@@ -100,7 +142,8 @@ and so does the `email_scope` field of the `privacy.account.deleted` log event.
 A recorded E10 demonstration needs, in an authorized environment:
 - the request (self-serve);
 - the receipt;
-- an operator re-run of the verifier with exit `0`, or exit `4` with the reviewed rows recorded;
+- an operator re-run of the verifier with exit `0`. Under the interim procedure pending
+  `D-PRIV-7`, exit `4` with the reviewed rows recorded is also accepted.
 - the time of each.
 
 None has been recorded yet.

@@ -44,9 +44,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
-from typing import Any
+from typing import Any, NamedTuple
 
-from sqlalchemy import Column, Table, Text, cast, delete, func, null, or_, select, update
+from sqlalchemy import Column, Table, delete, func, null, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditLog
@@ -65,7 +65,7 @@ from app.organizations.models import (
     User,
     Workspace,
 )
-from app.privacy.matching import Mention, Subject, mention
+from app.privacy.matching import Mention, Subject, mention, prefilter, same_address
 
 #: Ids per statement. Well under SQLite's bound-parameter limit.
 CHUNK = 500
@@ -174,12 +174,6 @@ def delete_rows(db: Session, table: Table, ids: Sequence[str]) -> ErasureCounts:
 # --------------------------------------------------------------------------- #
 # Audit anonymisation
 # --------------------------------------------------------------------------- #
-def _mentions(column, needles: Iterable[str]):
-    """SQL pre-filter: the column's text contains a needle (refined by the matcher)."""
-    text = func.lower(cast(column, Text))
-    return or_(*(text.contains(n, autoescape=True) for n in needles))
-
-
 def _names(text: str, subject: Subject) -> bool:
     return mention(text, subject) is Mention.WHOLE
 
@@ -202,12 +196,19 @@ def _scrub(value: Any, subject: Subject) -> Any:
 _INVITATION_ENTITY = "organization_invitation"
 
 
+class AcceptedInvitation(NamedTuple):
+    """An invitation an account accepted: where it lives, and the address it was sent to."""
+
+    organization_id: str
+    email: str
+
+
 def anonymise_audit_for_subject(
     db: Session,
     *,
     user_id: str | None,
     email: str | None,
-    invitations: Mapping[str, str] | None = None,
+    invitations: Mapping[str, AcceptedInvitation] | None = None,
 ) -> int:
     """Clear every audit value that names an account (by id) or a person (by email).
 
@@ -218,26 +219,29 @@ def anonymise_audit_for_subject(
     means a ``WHOLE`` mention to the shared matcher (:mod:`app.privacy.matching`), so a
     record about a longer address that merely contains this one is untouched.
     ``email=None`` erases by id only (an account whose address is not verified).
-    ``invitations`` maps invitation ids to their address: in the records about exactly those
-    invitations, that address is cleared too, whatever ``email`` is (the invitations the
-    account accepted). Returns the number of records changed, each counted once.
+    ``invitations`` maps the ids of the invitations the account accepted to where they live and
+    their address: in the records about exactly those invitations, in the invitation's own
+    organization, that address is cleared too, whatever ``email`` is. Returns the number of
+    records changed, each counted once.
     """
     invitations = dict(invitations or {})
     base = Subject(ids=(user_id,) if user_id else (), addresses=(email,) if email else ())
     if not base and not invitations:
         return 0
     columns = (AuditLog.reason, AuditLog.previous_state, AuditLog.new_state, AuditLog.context)
-    clauses = [_mentions(c, base.sql_needles()) for c in columns] if base else []
+    clauses = [prefilter(c, base) for c in columns] if base else []
     if user_id:
         clauses += [AuditLog.actor_user_id == user_id, AuditLog.entity_id == user_id]
-    if invitations:
-        clauses.append(
-            (AuditLog.entity_type == _INVITATION_ENTITY)
-            & AuditLog.entity_id.in_(sorted(invitations))
-        )
+    clauses += [
+        (AuditLog.entity_type == _INVITATION_ENTITY)
+        & (AuditLog.entity_id == invitation_id)
+        & (AuditLog.organization_id == invitation.organization_id)
+        for invitation_id, invitation in sorted(invitations.items())
+    ]
     rows = db.execute(
         select(
             AuditLog.id,
+            AuditLog.organization_id,
             AuditLog.actor_user_id,
             AuditLog.entity_type,
             AuditLog.entity_id,
@@ -250,10 +254,13 @@ def anonymise_audit_for_subject(
     changed = 0
     for row in rows:
         subject = base
-        if row.entity_type == _INVITATION_ENTITY and row.entity_id in invitations:
-            subject = Subject(
-                ids=base.ids, addresses=(*base.addresses, invitations[row.entity_id])
-            )
+        invitation = invitations.get(row.entity_id)
+        if (
+            invitation is not None
+            and row.entity_type == _INVITATION_ENTITY
+            and invitation.organization_id == row.organization_id
+        ):
+            subject = Subject(ids=base.ids, addresses=(*base.addresses, invitation.email))
         values: dict[str, Any] = {}
         if user_id and row.actor_user_id == user_id:
             values["actor_user_id"] = None
@@ -475,31 +482,33 @@ class AccountErasure:
 
 
 def _invitations_addressed_to(db: Session, email: str) -> list[str]:
-    return list(
-        db.execute(
-            select(OrganizationInvitation.id).where(
-                func.lower(OrganizationInvitation.email) == email.lower()
-            )
-        ).scalars()
-    )
+    """Invitations sent to ``email`` in any form (letter case, NFC/NFD, U-/A-label domain),
+    decided in Python: SQLite's ``lower()`` does not fold non-ASCII letters."""
+    rows = db.execute(
+        select(OrganizationInvitation.id, OrganizationInvitation.email).where(
+            prefilter(OrganizationInvitation.email, Subject(addresses=(email,)))
+        )
+    ).all()
+    return [row.id for row in rows if same_address(row.email, email)]
 
 
 def erase_invitations_addressed_to(db: Session, *, email: str) -> ErasureCounts:
-    """Delete every invitation addressed to ``email`` (case-insensitive), in any state."""
+    """Delete every invitation addressed to ``email`` (in any form), in any state."""
     ids = _invitations_addressed_to(db, email)
     return delete_rows(db, OrganizationInvitation.__table__, ids) if ids else ErasureCounts()
 
 
-def invitations_accepted_by(db: Session, *, user_id: str) -> dict[str, str]:
-    """The invitations ``user_id`` accepted, id → address. Read it before the user row goes:
+def invitations_accepted_by(db: Session, *, user_id: str) -> dict[str, AcceptedInvitation]:
+    """The invitations ``user_id`` accepted, by id. Read it before the user row goes:
     ``accepted_by_user_id`` is ``ON DELETE SET NULL``, so the deletion destroys the link."""
-    return dict(
-        db.execute(
-            select(OrganizationInvitation.id, OrganizationInvitation.email).where(
-                OrganizationInvitation.accepted_by_user_id == user_id
-            )
-        ).tuples().all()
-    )
+    rows = db.execute(
+        select(
+            OrganizationInvitation.id,
+            OrganizationInvitation.organization_id,
+            OrganizationInvitation.email,
+        ).where(OrganizationInvitation.accepted_by_user_id == user_id)
+    ).all()
+    return {row.id: AcceptedInvitation(row.organization_id, row.email) for row in rows}
 
 
 def delete_account(
@@ -566,16 +575,19 @@ def delete_account(
 def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
     """Erase a person by address, on out-of-band proof: their invitations and mentions.
 
-    Refused when an account with a **verified** address holds it (case-insensitive): that is
-    the account holder's own deletion, which also covers this. An unverified account holding
-    the address in any letter case does not block it, because nothing proves the address is
-    that account's (a registrant can claim any address). Flushes, never commits.
+    Refused when an account with a **verified** address holds it (in any form): that is the
+    account holder's own deletion, which also covers this. An unverified account holding the
+    address does not block it, because nothing proves the address is that account's (a
+    registrant can claim any address); its accepted invitations go too, while it stays a
+    member. Flushes, never commits.
     """
-    if db.scalar(
-        select(User.id).where(
-            func.lower(User.email) == email.lower(), User.email_verified_at.is_not(None)
+    holders = db.execute(
+        select(User.email).where(
+            prefilter(User.email, Subject(addresses=(email,))),
+            User.email_verified_at.is_not(None),
         )
-    ):
+    ).scalars()
+    if any(same_address(holder, email) for holder in holders):
         raise ConflictError(
             "An account with this verified email address exists; delete the account instead.",
             code="erasure_account_exists",
@@ -589,6 +601,7 @@ def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
 __all__ = [
     "CHUNK",
     "ERASED",
+    "AcceptedInvitation",
     "AccountErasure",
     "EmailScope",
     "ErasureCounts",

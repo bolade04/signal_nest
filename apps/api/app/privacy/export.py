@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import Table, func, or_, select
+from sqlalchemy import Table, or_, select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditLog
@@ -41,6 +41,7 @@ from app.organizations.models import (
 )
 from app.privacy.erasure import EmailScope, email_scope
 from app.privacy.inventory import TABLES
+from app.privacy.matching import Subject, prefilter, same_address
 
 EXPORT_SCHEMA_VERSION = 1
 ORGANIZATION_EXPORT_ROW_CAP = 5000
@@ -74,10 +75,41 @@ _EMAIL_KEYED_NOTE = {
 }
 
 
+def _invitations_received(db: Session, *, user: User, scope: EmailScope) -> list[dict[str, Any]]:
+    """The invitations the account accepted and, when its address is verified, every other one
+    sent to that address in any form. The address is compared in Python (case-folded, any
+    normalization or domain label form): SQLite's ``lower()`` does not fold non-ASCII letters."""
+    accepted = OrganizationInvitation.accepted_by_user_id == user.id
+    addressed = prefilter(OrganizationInvitation.email, Subject(addresses=(user.email,)))
+    rows = db.execute(
+        select(
+            OrganizationInvitation.id,
+            OrganizationInvitation.organization_id,
+            Organization.name.label("organization_name"),
+            OrganizationInvitation.role,
+            OrganizationInvitation.created_at,
+            OrganizationInvitation.expires_at,
+            OrganizationInvitation.accepted_at,
+            OrganizationInvitation.revoked_at,
+            OrganizationInvitation.email.label("addressed_to"),
+            OrganizationInvitation.accepted_by_user_id.label("accepted_by"),
+        )
+        .join(Organization, Organization.id == OrganizationInvitation.organization_id)
+        .where(or_(accepted, addressed) if scope is EmailScope.INCLUDED else accepted)
+        .order_by(OrganizationInvitation.created_at, OrganizationInvitation.id)
+    ).all()
+    out = []
+    for row in rows:
+        values = {k: _jsonable(v) for k, v in row._mapping.items()}
+        addressed_to, accepted_by = values.pop("addressed_to"), values.pop("accepted_by")
+        if accepted_by == user.id or same_address(addressed_to, user.email):
+            out.append(values)
+    return out
+
+
 def export_account(db: Session, *, user: User) -> dict[str, Any]:
     """Everything stored about the signed-in account, in machine-readable form."""
     uid = user.id
-    email = user.email.lower()
     scope = email_scope(user)
     return {
         "schema_version": EXPORT_SCHEMA_VERSION,
@@ -133,29 +165,7 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             .where(EmailVerificationToken.user_id == uid)
             .order_by(EmailVerificationToken.created_at),
         ),
-        "invitations_received": _rows(
-            db,
-            select(
-                OrganizationInvitation.id,
-                OrganizationInvitation.organization_id,
-                Organization.name.label("organization_name"),
-                OrganizationInvitation.role,
-                OrganizationInvitation.created_at,
-                OrganizationInvitation.expires_at,
-                OrganizationInvitation.accepted_at,
-                OrganizationInvitation.revoked_at,
-            )
-            .join(Organization, Organization.id == OrganizationInvitation.organization_id)
-            .where(
-                or_(
-                    OrganizationInvitation.accepted_by_user_id == uid,
-                    func.lower(OrganizationInvitation.email) == email,
-                )
-                if scope is EmailScope.INCLUDED
-                else OrganizationInvitation.accepted_by_user_id == uid
-            )
-            .order_by(OrganizationInvitation.created_at, OrganizationInvitation.id),
-        ),
+        "invitations_received": _invitations_received(db, user=user, scope=scope),
         "invitations_sent": _rows(
             db,
             select(

@@ -341,7 +341,7 @@ _CONTEXTS = [
     ("u4", f"{EMAIL[CAROL]}.Thanks", "hers", False),
     ("u5", f"mailto:{EMAIL[CAROL]}", "hers", True),
     ("u6", f'"Carol" <{EMAIL[CAROL]}>', "hers", True),
-    ("u7", f"{_LOCAL}%40{_DOMAIN_}", "hers", False),
+    ("u7", f"{_LOCAL}%40{_DOMAIN_}", "hers", True),  # percent-decoded: whole (review r3)
     ("u9", EMAIL[CAROL].upper(), "hers", True),
     ("u10", f"#{EMAIL[CAROL]}", "hers", False),
 ]
@@ -376,7 +376,7 @@ def test_every_context_is_erased_exactly_when_it_names_her_whole(env: PrivacyEnv
             assert row == before[f"pl-{case}"], case
     # What was left is reported, row by row, for an operator: never passed over in silence.
     left = [c for c in _CONTEXTS if not c[3] and mention(c[1], _HERS) is Mention.AMBIGUOUS]
-    assert len(left) == 10  # o1-o5 and u1-u4, u10; o6 and u7 are not occurrences at all
+    assert len(left) == 10  # o1-o5 and u1-u4, u10; o6 (another address) is no occurrence
     with env.session() as s:
         report = verify_subject_erased(s, user_id=CAROL, email=EMAIL[CAROL])
     assert report.verified and report.needs_review, report.as_dict()
@@ -527,4 +527,76 @@ def test_the_deletion_event_carries_the_email_scope(env: PrivacyEnv, caplog):
         assert _delete(env, headers).status_code == 200
     [event] = [r for r in caplog.records if r.getMessage() == "privacy.account.deleted"]
     assert event.extra_fields["email_scope"] == "excluded_unverified"
+
+
+# --------------------------------------------------------------------------- #
+# Behaviour pinned so the docs can state it (review r3 R3-3, R3-4, R3-5)
+# --------------------------------------------------------------------------- #
+def test_the_accepted_invitation_clause_stays_in_its_organization(env: PrivacyEnv):
+    """R3-4: a record in ANOTHER organization that names the same invitation id is not the
+    invitation's, so the unverified owner's deletion leaves it untouched."""
+    with env.engine.begin() as conn:
+        conn.execute(
+            update(User.__table__).where(User.id == CAROL).values(email_verified_at=None)
+        )
+        conn.execute(
+            insert(AuditLog.__table__).values(
+                id="pl-same-entity-b", organization_id=ORG_B, actor_user_id=BOB,
+                action="organization_invitation.created",
+                entity_type="organization_invitation", entity_id="prv-inv-carol",
+                new_state={"email": EMAIL[CAROL], "role": "viewer"}, context={},
+            )
+        )
+    [planted] = env.rows(AuditLog, AuditLog.id == "pl-same-entity-b")
+
+    assert _delete(env, env.auth(CAROL), PASSWORD).status_code == 200
+
+    assert env.rows(AuditLog, AuditLog.id == "pl-same-entity-b") == [planted]
+    [created] = env.rows(AuditLog, AuditLog.id == "prv-audit-1")  # A's own record: cleared
+    assert created["new_state"]["email"] == ERASED
+
+
+def test_a_value_is_erased_whole_when_it_names_her_whole(env: PrivacyEnv):
+    """R3-3: erasure clears whole values. A string naming her WHOLE goes entirely, even if it
+    also holds another person's address; separate list items are separate values."""
+    mixed = f"cc {EMAIL[CAROL]} and x{EMAIL[CAROL]}"
+    with env.engine.begin() as conn:
+        conn.execute(
+            insert(AuditLog.__table__).values(
+                id="pl-mixed", organization_id=ORG_B, actor_user_id=BOB, action="note.created",
+                entity_type="note", entity_id="n-mixed", reason=mixed,
+                new_state={"v": mixed, "to": [EMAIL[CAROL], f"x{EMAIL[CAROL]}"]}, context={},
+            )
+        )
+
+    assert _delete(env, env.auth(CAROL), PASSWORD).status_code == 200
+
+    [row] = env.rows(AuditLog, AuditLog.id == "pl-mixed")
+    assert row["reason"] is None
+    assert row["new_state"] == {"v": ERASED, "to": [ERASED, f"x{EMAIL[CAROL]}"]}
+
+
+def test_erase_email_takes_an_active_invited_accounts_accepted_invitation(env: PrivacyEnv):
+    """R3-5: the operator's erase-email for an address held by an ACTIVE, unverified invited
+    account deletes that account's accepted invitation and clears the address from its records,
+    while the account and its membership stay."""
+    invited = env.client.post(
+        f"{API}/organizations/{ORG_A}/invitations", headers=env.auth(ALICE),
+        json={"email": NEWBIE, "role": "viewer"},
+    )
+    joined = env.client.post(
+        f"{API}/auth/invitations/register",
+        json={"token": invited.json()["token"], "full_name": "New Bie",
+              "password": NEWBIE_PASSWORD},
+    )
+    uid = joined.json()["user"]["id"]
+
+    assert cli.main(["erase-email", "--email", NEWBIE, "--confirm"]) == cli.EXIT_FINDINGS
+
+    assert env.count(OrganizationInvitation, OrganizationInvitation.id == invited.json()["id"]) == 0
+    assert env.count(User, User.id == uid) == 1
+    assert env.count(
+        OrganizationMember,
+        (OrganizationMember.user_id == uid) & (OrganizationMember.organization_id == ORG_A),
+    ) == 1
 
