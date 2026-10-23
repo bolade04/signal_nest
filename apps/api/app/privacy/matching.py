@@ -34,12 +34,15 @@ several forms:
     ``ΣΣ`` is the upper case of ``σσ`` and of ``σς``; ``IA`` of ``ia`` and ``ıa``; ``JOSÉ`` of
     ``josé`` and ``joſé``.
   - An occurrence relates to the subject only through such a spelling when it is written with
-    one (other than the subject's exact spelling) or matches only the subject's upper case
-    (:func:`_local_case`). It is ``AMBIGUOUS`` when a *twin* exists in the product: an account's
-    e-mail or an invitation's address with the occurrence's upper case and another canonical
-    form (NFC, lower-cased letter by letter, the domain as registration stores it). It is then
-    never exported or erased for either twin. When no twin exists, it is the subject's:
-    ``WHOLE`` (:func:`_twin_case`).
+    one (other than the subject's exact spelling) or, holding no lower-case letter, matches only
+    the subject's upper case (:func:`_local_case`). A spelling with a lower-case letter is decided
+    by its lower case: ``strasse`` and ``Strasse`` are another address than ``straße`` (``NONE``),
+    while ``STRASSE`` relates to both (fix pass 7).
+  - Such an occurrence is ``AMBIGUOUS`` when a *twin* exists in the product: an account's e-mail
+    or an invitation's address with the occurrence's upper case and another canonical form (NFC,
+    lower-cased letter by letter, the domain as registration stores it). It is then never
+    exported or erased for either twin. When no twin exists, it is the subject's: ``WHOLE``
+    (:func:`_twin_case`).
   - The lookup (:func:`existing_addresses`) runs only for such an occurrence, once per spelling,
     and selects with a ``LIKE`` pattern built from that upper case (:func:`_twin_pattern`).
     Without a lookup (:attr:`Subject.existing` unset) every such occurrence stays ``AMBIGUOUS``.
@@ -215,18 +218,25 @@ def _local_case(written: str, own: str) -> Mention:
 
     ``WHOLE``: its exact spelling, or a letter case of it that no other registrable address
     shares. ``AMBIGUOUS``: a case it shares with another registrable address (``ΣΣ`` is the upper
-    case of both ``σσ`` and ``σς``), or one that matches only its upper case (``straße`` for
-    ``strasse``); :func:`_twin_case` then decides with the addresses the product holds.
-    ``NONE``: neither.
+    case of both ``σσ`` and ``σς``), or, written without any lower-case letter, one that matches
+    only its upper case (``STRASSE`` for ``straße``); :func:`_twin_case` then decides with the
+    addresses the product holds. ``NONE``: neither. A spelling with a lower-case letter is decided
+    by its lower case, so ``strasse`` and ``Strasse`` are never ``straße`` (fix pass 7).
     """
     if written == own:
         return Mention.WHOLE
     same_lower = _lower(written) == _lower(own)
     if same_lower and not shares_upper_case(written):
         return Mention.WHOLE
-    if same_lower or _upper(written) == _upper(own):
+    if same_lower:
+        return Mention.AMBIGUOUS
+    if _upper(written) == _upper(own) and not _has_lower_case(written):
         return Mention.AMBIGUOUS
     return Mention.NONE
+
+
+def _has_lower_case(text: str) -> bool:
+    return any(char.islower() for char in text)
 
 
 #: Looks up the local parts of the addresses the product holds (account e-mails, invitation

@@ -75,7 +75,11 @@ Rules the code enforces:
       `О`, `С`, `Т`, sequences such as `SS`, `FF`, `ST`).
       - An occurrence relates to the account only through such a spelling when it is written
         with one (other than the account's own exact spelling), or matches only the account's
-        upper case.
+        upper case while holding no lower-case letter.
+      - A spelling with a lower-case letter is decided by its lower case: it is the account's
+        only when that lower case is the account's canonical form. So for `straße@…`, the
+        spellings `strasse@…` and `Strasse@…` are another person's address and are never
+        touched, while `STRASSE@…` relates to both (fix pass 7).
       - Such an occurrence is `AMBIGUOUS` when a **twin** exists in the product when the
         deletion, export or verification runs: an account's e-mail or an invitation's address
         with the occurrence's upper case and another canonical form (NFC, lower-cased letter

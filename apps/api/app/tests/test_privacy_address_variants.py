@@ -28,7 +28,10 @@ upper-case spellings belong to two registrable addresses: ``ΣΣ`` is the upper 
 of ``σς``, ``IA`` of ``ia`` and ``ıa``, ``STRASSE`` of ``strasse`` and ``straße``, and ``JOSÉ``
 of ``josé`` and ``joſé``. When the product holds the other one (an account's e-mail or an
 invitation's address), such an occurrence is flagged and never exported or erased, for either
-twin. When it holds no twin, the occurrence is the subject's and is erased. **Registration's own
+twin. When it holds no twin, the occurrence is the subject's and is erased. Only a spelling
+without lower-case letters may relate through the upper case: one with a lower-case letter is the
+subject's only when its lower case is the subject's canonical form, so ``strasse@…`` and
+``Strasse@…`` are another person's address for ``straße`` (fix pass 7). **Registration's own
 domain
 mapping counts** (R5-2): ``privacy。example``, fullwidth and mathematical letters are the same
 domain to registration, so they are found too. A fullwidth ``＠`` is an explicit separator
@@ -486,31 +489,44 @@ def test_a_single_holder_takes_the_shared_spelling_only_as_its_canonical_form(
         assert code == cli.EXIT_REVIEW
 
 
-#: (subject, the text BOB's audit record holds, the twin address). The coordinator's cases: an
-#: ordinary all-capitals spelling is the subject's unless the product holds its twin.
+#: (subject, the text BOB's audit record holds, the twin address, route). The coordinator's cases.
+#: "twin": an ordinary all-capitals spelling (or the subject's own lower case with a shared capital)
+#: is the subject's unless the product holds its twin. "none" (fix pass 7): a spelling with a
+#: lower-case letter whose lower case is not the subject's canonical form is another person's
+#: address, and is never touched, flagged or counted, with or without the twin.
 TWINS = [
-    ("sales@privacy.example", "SALES@PRIVACY.EXAMPLE", "ſales@privacy.example"),
-    ("info@privacy.example", "INFO@privacy.example", "ınfo@privacy.example"),
-    ("josé@privacy.example", "JOSÉ@privacy.example", "joſé@privacy.example"),
-    ("иван@пример.рф", "ИВАН@пример.рф", "иᲀан@пример.рф"),
-    ("straße@privacy.example", "STRASSE@privacy.example", "strasse@privacy.example"),
-    ("strasse@privacy.example", "STRASSE@privacy.example", "straße@privacy.example"),
-    # The twin's own lower-case spelling matches the subject only through the upper case.
-    ("straße@privacy.example", "strasse@privacy.example", "strasse@privacy.example"),
+    ("sales@privacy.example", "SALES@PRIVACY.EXAMPLE", "ſales@privacy.example", "twin"),
+    ("info@privacy.example", "INFO@privacy.example", "ınfo@privacy.example", "twin"),
+    ("josé@privacy.example", "JOSÉ@privacy.example", "joſé@privacy.example", "twin"),
+    ("иван@пример.рф", "ИВАН@пример.рф", "иᲀан@пример.рф", "twin"),
+    ("straße@privacy.example", "STRASSE@privacy.example", "strasse@privacy.example", "twin"),
+    ("strasse@privacy.example", "STRASSE@privacy.example", "straße@privacy.example", "twin"),
+    ("strasse@privacy.example", "Strasse@privacy.example", "straße@privacy.example", "twin"),
+    ("σσ@privacy.example", "ΣΣ@privacy.example", "σς@privacy.example", "twin"),
+    ("σς@privacy.example", "ΣΣ@privacy.example", "σσ@privacy.example", "twin"),
+    ("ia@privacy.example", "Ia@privacy.example", "ıa@privacy.example", "twin"),
+    ("straße@privacy.example", "strasse@privacy.example", "strasse@privacy.example", "none"),
+    ("straße@privacy.example", "Strasse@privacy.example", "strasse@privacy.example", "none"),
+    ("strasse@privacy.example", "Straße@privacy.example", "straße@privacy.example", "none"),
+    ("σσ@privacy.example", "σς@privacy.example", "σς@privacy.example", "none"),
+    ("σς@privacy.example", "Σσ@privacy.example", "σσ@privacy.example", "none"),
+    ("ia@privacy.example", "ıa@privacy.example", "ıa@privacy.example", "none"),
+    ("ıa@privacy.example", "Ia@privacy.example", "ia@privacy.example", "none"),
 ]
 _TWIN_CASES = [(*t, kind) for t in TWINS for kind in TWIN_KINDS]
 
 
 @pytest.mark.parametrize(
-    ("subject", "text", "twin", "kind"),
+    ("subject", "text", "twin", "route", "kind"),
     _TWIN_CASES,
-    ids=[f"{text}-{kind}" for _, text, _, kind in _TWIN_CASES],
+    ids=[f"{s}-{text}-{kind}" for s, text, _, _, kind in _TWIN_CASES],
 )
 def test_a_shared_letter_case_is_erased_unless_a_twin_exists(
-    env: PrivacyEnv, capsys, subject, text, twin, kind
+    env: PrivacyEnv, capsys, subject, text, twin, route, kind
 ):
-    """Erased with the subject when the product holds no twin (exit 0); left and flagged when an
-    account or an invitation holds the twin (exit 4). The twin's own rows are never touched."""
+    """"twin" route: erased with the subject when the product holds no twin (exit 0); left and
+    flagged when an account or an invitation holds the twin (exit 4). "none" route: left, never
+    flagged, exit 0. The twin's own rows are never touched."""
     uid, stored, headers = _register(env, subject, verified=True)
     _plant_twin(env, kind, twin)
     twin_rows = {"users": env.rows(User), "invitations": env.rows(OrganizationInvitation)}
@@ -532,15 +548,19 @@ def test_a_shared_letter_case_is_erased_unless_a_twin_exists(
     [row] = env.rows(AuditLog, AuditLog.id == "pl-twin")
     code = cli.main(["verify-account", "--user-id", uid, "--email", stored])
     printed = json.loads(capsys.readouterr().out)
-    if kind == "no-twin":
+    flagged = {(f["table"], f["column"]) for f in printed["content_ambiguous"]}
+    if route == "twin" and kind == "no-twin":
         assert (row["reason"], row["new_state"]) == (None, {"v": ERASED})
         assert code == cli.EXIT_OK, printed
+        return
+    assert (row["reason"], row["new_state"]) == (f"Note: {text}", {"v": text})
+    if route == "none":
+        assert code == cli.EXIT_OK, printed
+        assert printed["content_findings"] == [] and flagged == set()
     else:
-        assert (row["reason"], row["new_state"]) == (f"Note: {text}", {"v": text})
         assert code == cli.EXIT_REVIEW, printed
-        assert {("audit_logs", "reason"), ("audit_logs", "new_state")} <= {
-            (f["table"], f["column"]) for f in printed["content_ambiguous"]
-        }
+        assert {("audit_logs", "reason"), ("audit_logs", "new_state")} <= flagged
+    if kind != "no-twin":
         users = [u for u in twin_rows["users"] if u["email"] == twin]
         invitations = [i for i in twin_rows["invitations"] if i["email"] == twin]
         assert users == [u for u in env.rows(User) if u["email"] == twin]
