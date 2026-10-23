@@ -8,17 +8,32 @@ identifier is classified as one :class:`Mention`.
 **Where an address can occur, in any form.** A writer may have stored the subject's address in
 several forms: Unicode NFC or NFD; any letter case, non-ASCII letters included; inside JSON
 ``\\uXXXX`` escapes; percent-encoded; or with its domain as the IDNA A-label (``xn--…``) instead
-of the U-label the product stores. Two steps cover every form:
+of the U-label the product stores.
+
+**What counts as the same address.** Registration's own rule decides (measured, fix pass 4). It
+stores the NFC form, the U-label domain and a lower-cased domain, so those spellings are one
+address to it and to this matcher. It keeps ``straße``/``strasse``, ``weiß``/``weiss``, ``ſ``/``s``,
+``ﬃ``/``ffi`` and ``ς``/``σ`` apart as distinct accounts. So does this matcher, which lower-cases
+(``str.lower()``) rather than case-folds (``str.casefold()`` would join each pair). The local
+part's letter case is the one exception: registration keeps ``Kate`` and ``kate`` apart, but
+erasure and export match an account's own address in any letter case, gated on its verification
+(a recorded policy). Two steps cover every form:
 
 * **The SQL pre-filter** (:func:`prefilter`) selects every row that may hold one of the forms.
   It does not rely on any dialect's ``lower()`` for non-ASCII letters (SQLite's is ASCII-only)
   or on a JSON escape's spelling (``\\u00c9`` versus ``\\u00e9``). For each generated form
   (:func:`address_forms` × :func:`encoded_forms`) it requires only that form's runs of ASCII
   characters that no percent-encoder or JSON writer rewrites (``[A-Za-z0-9._~-]``), compared in
-  ASCII lower case. Every form of the address contains those runs verbatim.
+  ASCII lower case. Every form of the address contains those runs verbatim. An address whose
+  local part has no such run of two characters (``иван@пример.рф``, ``a@b.co``) has no selective
+  fragment. In a request its whole forms are matched instead, in lower, upper and capitalised
+  case, raw and encoded. That keeps the request's work bounded, but other mixed casings of a
+  non-ASCII local part are then not selected on SQLite, nor in a JSON column on either engine.
+  The operator's verification (``exhaustive=True``) reads every row for such an address, so it
+  sees them.
 * **The confirmation** (:func:`mention`) reads each candidate text under four views: as
   stored, with JSON ``\\uXXXX`` escapes decoded, percent-decoded, and both. Each view is
-  normalized to NFC and fully case-folded. It then finds the address's own forms (U-label and
+  normalized to NFC and lower-cased. It then finds the address's own forms (U-label and
   A-label domain) in every view.
 
 **How an occurrence is judged.** It is judged by the product's own address grammar, the one
@@ -40,10 +55,13 @@ operator (``D-PRIV-7``).
   tell these cases apart. Erasure therefore leaves the occurrence, because clearing it could
   destroy another person's data. The verifier reports it apart from its findings (``needs
   review``) for an operator.
-* **Undecided, flagged ``AMBIGUOUS``**: no form of the address occurs, yet its local part and
-  its domain both stand as separate tokens in the same text, as in ``a&#64;b.co`` or
-  ``a [at] b.co``. The matcher cannot tell whether that is the address, so it flags it rather
-  than pass it.
+* **Undecided, flagged ``AMBIGUOUS``**: no form of the address occurs, but its local part and
+  its domain are joined by an explicit separator written instead of ``@``: ``[at]``, ``(at)``,
+  ``{at}``, ``<at>``, ``[@]``, ``(@)``, ``&#64;``, ``&#x40;``, ``&commat;``, or ``at`` / ``@``
+  between spaces. Examples are ``a&#64;b.co`` and ``a [at] b.co``. The matcher cannot tell
+  whether that is the address, so it flags it rather than pass it. Mere co-occurrence is not
+  flagged: a text naming ``John`` and ``acme.example`` separately is not about
+  ``john@acme.example``.
 
 Whitespace and ``@`` are never part of an unquoted address, so the search for a longer address
 stops there. Its bounds are search limits, not validity rules (see ``_LOCAL_MAX``). The
@@ -54,8 +72,9 @@ stores is.
 (``[A-Za-z0-9_-]``) touches them on either side, and ``AMBIGUOUS`` otherwise.
 
 **Not detected (recorded limits).** These are transformations that keep neither the address nor
-both its local part and its domain as text: a hash or base64 of it, or the domain spelled out
-(``b [dot] co``). No product writer produces any of them.
+its local part and domain joined by one of those separators: a hash or base64 of it, the domain
+spelled out (``b [dot] co``), or a separator not in that list. No product writer produces any of
+them; third-party or customer text can.
 """
 
 from __future__ import annotations
@@ -90,10 +109,12 @@ _JSON_ESCAPE = re.compile(
 _JSON_SHORT = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 #: How many layers of JSON escaping the confirmation undoes (a value escaped inside JSON text).
 _ESCAPE_LAYERS = 3
-#: Characters that would continue a local part or an address around a token.
-_LOCAL_TOUCH = re.compile(r"[\w.+-]")
-_DOMAIN_BEFORE = re.compile(r"[\w.@-]")
-_DOMAIN_AFTER = re.compile(r"[\w-]")
+#: An explicit separator written between a local part and a domain instead of "@" (lower case:
+#: the views are lower-cased). Mere co-occurrence of the two is never enough (review r4 R4-3).
+_SEPARATOR = (
+    r"(?:\s*(?:\[\s*(?:at|@)\s*\]|\(\s*(?:at|@)\s*\)|\{\s*(?:at|@)\s*\}|<\s*(?:at|@)\s*>"
+    r"|&#0*64;|&#x0*40;|&commat;)\s*|\s+(?:at|@)\s+)"
+)
 
 
 class Mention(IntEnum):
@@ -108,8 +129,13 @@ class Mention(IntEnum):
 # The forms of an address
 # --------------------------------------------------------------------------- #
 def _canonical(text: str) -> str:
-    """NFC, fully case-folded (non-ASCII letters included), NFC again."""
-    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).casefold())
+    """NFC, lower-cased (non-ASCII letters included), NFC again.
+
+    ``str.lower()``, never ``str.casefold()``: case-folding maps distinct letters together
+    (``ß``→``ss``, ``ſ``→``s``, ``ﬃ``→``ffi``, ``ς``→``σ``), and registration keeps those
+    addresses apart as distinct accounts (review r4 R4-1).
+    """
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).lower())
 
 
 @dataclass(frozen=True)
@@ -139,7 +165,7 @@ def _parts(address: str) -> _Parts:
 def address_forms(address: str) -> tuple[str, ...]:
     """The textual forms of ``address`` a writer may have produced: the local part in NFC and NFD,
     the domain as U-label (NFC and NFD) and as IDNA A-label. Letter case is left to the matcher,
-    which case-folds, and to :func:`prefilter`, which compares ASCII only."""
+    which lower-cases, and to :func:`prefilter`, which compares ASCII only."""
     try:
         parsed = validate_email(address, check_deliverability=False)
         local, domains = parsed.local_part, [parsed.domain, parsed.ascii_domain or parsed.domain]
@@ -170,6 +196,36 @@ def _contains_all(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
     return all(any(s in fragment for fragment in longer) for s in shorter)
 
 
+def _ascii_lower(text: str) -> str:
+    """What every SQL ``lower()`` does: ASCII letters only (SQLite stops there)."""
+    return "".join(c.lower() if c.isascii() else c for c in text)
+
+
+def _has_local_run(address: str) -> bool:
+    """Whether the local part offers a selective ASCII fragment (a run of two or more)."""
+    try:
+        local = validate_email(address, check_deliverability=False).local_part
+    except EmailNotValidError:
+        local = address.rpartition("@")[0]
+    return bool(_runs(local))
+
+
+def _whole_needles(form: str) -> tuple[str, ...]:
+    """Whole-form needles for an address without an ASCII fragment, as a SQL ``lower()`` sees
+    them. Raw text in the casings a person types (local part lower, upper or capitalised; domain
+    lower or upper). JSON-escaped with the domain lower-case, as every product writer stores it
+    (``EmailStr`` lower-cases the domain). Percent-encoded in lower case. Each is one ``LIKE``
+    per row, so the set is kept small. Other casings are left to the operator's exhaustive scan.
+    """
+    local, _, domain = form.rpartition("@")
+    locals_ = (local.lower(), local.upper(), local.capitalize())
+    raw = [f"{loc}@{dom}" for loc in locals_ for dom in (domain.lower(), domain.upper())]
+    escaped = [json.dumps(f"{loc}@{domain.lower()}")[1:-1] for loc in locals_]
+    lowered = form.lower()
+    percent = [quote(lowered, safe=""), quote(lowered, safe="@")]
+    return tuple(dict.fromkeys(_ascii_lower(n) for n in (*raw, *escaped, *percent)))
+
+
 @dataclass(frozen=True)
 class Subject:
     """The identifiers to look for: opaque ids, and email addresses."""
@@ -180,14 +236,26 @@ class Subject:
     def __bool__(self) -> bool:
         return bool(self.ids or self.addresses)
 
-    def sql_terms(self) -> tuple[tuple[str, ...], ...]:
+    def sql_terms(self, *, exhaustive: bool = False) -> tuple[tuple[str, ...], ...]:
         """For the SQL pre-filter: alternatives (OR) of fragments that must all occur (AND),
-        each lower-case ASCII. A row holding any form of any identifier satisfies one of them.
-        A term stricter than another (it needs everything the other needs) is dropped."""
+        compared after an ASCII-only ``lower()``. A row holding any form of any identifier
+        satisfies one of them. A term stricter than another (it needs everything the other needs)
+        is dropped.
+
+        An address with no ASCII run in its local part gets its whole forms in typed casings
+        instead of fragments, so a request never selects every row (review r4 R4-2). With
+        ``exhaustive=True`` (the operator's verification) it gets the empty term, which is TRUE:
+        every row is read."""
         terms: list[tuple[str, ...]] = [(i.lower(),) for i in self.ids]
         for address in self.addresses:
-            for form in address_forms(address):
-                terms += [_runs(e) for e in encoded_forms(form)]
+            if _has_local_run(address):
+                for form in address_forms(address):
+                    terms += [_runs(e) for e in encoded_forms(form)]
+            elif exhaustive:
+                terms.append(())
+            else:
+                for form in address_forms(address):
+                    terms += [(needle,) for needle in _whole_needles(form)]
         kept: list[tuple[str, ...]] = []
         # Least restrictive first, so of two terms that imply each other one is always kept.
         for term in sorted(dict.fromkeys(terms), key=lambda t: (len(t), sum(map(len, t)), t)):
@@ -196,13 +264,15 @@ class Subject:
         return tuple(kept)
 
 
-def prefilter(column: Any, subject: Subject) -> Any:
+def prefilter(column: Any, subject: Subject, *, exhaustive: bool = False) -> Any:
     """A SQL condition true for every row whose ``column`` may hold one of ``subject``'s
-    identifiers in any form (a superset; :func:`mention` decides). Only ASCII is lower-cased."""
+    identifiers in any form (a superset; :func:`mention` decides). Only ASCII is lower-cased.
+    ``exhaustive`` is for the operator's verification, off the request path (see
+    :meth:`Subject.sql_terms`)."""
     text = func.lower(cast(column, Text))
     alternatives = [
         and_(*(text.contains(f, autoescape=True) for f in term)) if term else true()
-        for term in subject.sql_terms()
+        for term in subject.sql_terms(exhaustive=exhaustive)
     ]
     return or_(*alternatives)
 
@@ -274,7 +344,7 @@ def _unescape_json(text: str) -> str:
 
 def _views(text: str) -> tuple[str, ...]:
     """``text`` as stored and with up to three layers of JSON escapes undone, each also
-    percent-decoded; every view canonical (NFC, case-folded)."""
+    percent-decoded; every view canonical (NFC, lower-cased)."""
     layers = [text]
     for _ in range(_ESCAPE_LAYERS):
         unescaped = _unescape_json(layers[-1])
@@ -285,24 +355,15 @@ def _views(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_canonical(v) for v in views))
 
 
-def _token(view: str, part: str, *, before: re.Pattern[str], after: re.Pattern[str]) -> bool:
-    for match in re.finditer(re.escape(part), view):
-        s, e = match.start(), match.end()
-        if s and before.match(view[s - 1]):
-            continue
-        if e < len(view) and (
-            after.match(view[e]) or (view[e] == "." and e + 1 < len(view) and view[e + 1].isalnum())
-        ):
-            continue
-        return True
-    return False
-
-
 def _undecided(view: str, parts: _Parts) -> bool:
-    """The local part and the domain stand as separate tokens, but the address does not occur."""
-    local_after = re.compile(r"[\w.+@-]")
-    return _token(view, parts.local, before=_LOCAL_TOUCH, after=local_after) and any(
-        _token(view, d, before=_DOMAIN_BEFORE, after=_DOMAIN_AFTER) for d in parts.domains
+    """The local part and a domain form are joined by an explicit separator instead of "@"."""
+    return any(
+        re.search(
+            r"(?<![\w.+-])" + re.escape(parts.local) + _SEPARATOR + re.escape(domain)
+            + r"(?![\w-])(?!\.\w)",
+            view,
+        )
+        for domain in parts.domains
     )
 
 

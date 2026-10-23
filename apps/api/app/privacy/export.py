@@ -77,7 +77,7 @@ _EMAIL_KEYED_NOTE = {
 
 def _invitations_received(db: Session, *, user: User, scope: EmailScope) -> list[dict[str, Any]]:
     """The invitations the account accepted and, when its address is verified, every other one
-    sent to that address in any form. The address is compared in Python (case-folded, any
+    sent to that address in any form. The address is compared in Python (lower-cased, any
     normalization or domain label form): SQLite's ``lower()`` does not fold non-ASCII letters."""
     accepted = OrganizationInvitation.accepted_by_user_id == user.id
     addressed = prefilter(OrganizationInvitation.email, Subject(addresses=(user.email,)))

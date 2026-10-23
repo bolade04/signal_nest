@@ -7,7 +7,7 @@ reachable variant remains. The shared matcher (``app.privacy.matching``) looks f
 in every form a writer may have produced:
 
 * Unicode NFC and NFD;
-* full case-folding (non-ASCII letters included, not SQL ``lower()``);
+* any letter case, non-ASCII letters included (Python lower-casing, not SQL ``lower()``);
 * JSON ``\\uXXXX`` escapes;
 * percent-encoding;
 * the IDNA A-label and U-label forms of the domain.
@@ -22,6 +22,13 @@ Each case below plants one bystander audit record in organization B, holding the
 ``reason`` (a text column) and in ``new_state`` (a JSON column). The verified subject then
 deletes itself, and the operator's full verification and its exit status are read. R3-1 also
 runs through the product's own invitation writer.
+
+**No folding may join two distinct addresses** (review r4, R4-1). Registration treats
+``straße@…`` and ``strasse@…`` as two accounts, and likewise ``bob@weiß…`` and ``bob@weiss…``,
+``ſam``/``sam``, ``oﬃce``/``office`` and ``σς``/``σσ``. Full Unicode case-folding made each pair
+equal, so a verified account at one form exported, deleted and rewrote another organization's
+invitation and audit record for the other. Each pair now runs through the API in both directions,
+and nothing of the other organization is reached.
 """
 
 from __future__ import annotations
@@ -167,3 +174,145 @@ def test_a_capitalised_non_ascii_invitation_goes_with_its_owner(env: PrivacyEnv,
     assert after["new_state"]["email"] == ERASED
     assert cli.main(["verify-account", "--user-id", uid, "--email", address]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["content_findings"] == []
+
+
+# --------------------------------------------------------------------------- #
+# No folding joins two distinct addresses (review r4 R4-1)
+# --------------------------------------------------------------------------- #
+#: Pairs that registration keeps apart as two accounts, but that full case-folding made equal.
+COLLISIONS = [
+    ("strasse@privacy.example", "straße@privacy.example"),
+    ("bob@weiss.example", "bob@weiß.example"),
+    ("sam@privacy.example", "ſam@privacy.example"),
+    ("office@privacy.example", "oﬃce@privacy.example"),
+    ("σσ@privacy.example", "σς@privacy.example"),
+]
+_DIRECTIONS = [(a, b) for a, b in COLLISIONS] + [(b, a) for a, b in COLLISIONS]
+
+
+@pytest.mark.parametrize(
+    ("holder", "other"), _DIRECTIONS, ids=[f"{h}-holds-{o}-invited" for h, o in _DIRECTIONS]
+)
+def test_a_verified_account_never_reaches_a_distinct_twin_address(env: PrivacyEnv, holder, other):
+    """The holder is verified at its own address; BOB invites the twin address into B through the
+    product. The holder's export must not list that invitation, and its deletion must neither
+    delete it nor rewrite B's audit record about it."""
+    r = env.client.post(
+        f"{API}/auth/register",
+        json={"email": holder, "full_name": "H", "password": "holder-pass-1",
+              "organization_name": "H Org"},
+    )
+    assert r.status_code == 201, r.text
+    uid, headers = r.json()["user"]["id"], {"Authorization": f"Bearer {r.json()['access_token']}"}
+    with env.engine.begin() as conn:
+        conn.execute(
+            update(User.__table__).where(User.id == uid)
+            .values(email_verified_at=datetime.now(UTC))
+        )
+    invited = env.client.post(
+        f"{API}/organizations/{ORG_B}/invitations", headers=env.auth(BOB),
+        json={"email": other, "role": "marketer"},
+    )
+    assert invited.status_code == 201, invited.text
+    invitation_id = invited.json()["id"]
+    [record] = [a for a in env.rows(AuditLog) if a["entity_id"] == invitation_id]
+
+    export = env.client.get(f"{API}/account/export", headers=headers).json()
+    deleted = env.client.post(
+        f"{API}/account/delete", headers=headers,
+        json={"current_password": "holder-pass-1", "confirmation": "DELETE"},
+    )
+
+    assert [i["id"] for i in export["invitations_received"]] == []
+    assert deleted.status_code == 200, deleted.text
+    assert "organization_invitations" not in deleted.json()["counts"]["deleted"]
+    assert env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id) == 1
+    assert env.rows(AuditLog, AuditLog.id == record["id"]) == [record]
+
+
+# --------------------------------------------------------------------------- #
+# The in-request work stays bounded (review r4 R4-2)
+# --------------------------------------------------------------------------- #
+IVAN = "иван@пример.рф"
+
+
+def test_an_address_without_ascii_still_selects_only_its_own_rows(env: PrivacyEnv):
+    """``иван@пример.рф`` has no ASCII run in its local part. The in-request pre-filter must not
+    select every row (it did: an empty term is TRUE), yet must still select the row that names
+    it, in the casings a person types, in a text column and in a JSON column."""
+    from sqlalchemy import func, or_, select
+
+    from app.privacy.matching import Subject, prefilter
+
+    with env.engine.begin() as conn:
+        for n in range(20):
+            conn.execute(
+                insert(AuditLog.__table__).values(
+                    id=f"pl-noise-{n}", organization_id=ORG_B, action="note.created",
+                    entity_type="note", entity_id=f"n-{n}",
+                    reason=f"Wrote to someone{n}@other.example",
+                    new_state={"email": f"someone{n}@other.example"}, context={},
+                )
+            )
+        for n, cased in enumerate((IVAN, IVAN.upper(), IVAN.capitalize())):
+            conn.execute(
+                insert(AuditLog.__table__).values(
+                    id=f"pl-ivan-{n}", organization_id=ORG_B, action="note.created",
+                    entity_type="note", entity_id=f"i-{n}", reason=f"Wrote to {cased}",
+                    new_state={"email": cased}, context={},
+                )
+            )
+    subject = Subject(addresses=(IVAN,))
+    columns = (AuditLog.reason, AuditLog.new_state)
+    with env.witness.connect() as conn:
+        selected = conn.execute(
+            select(AuditLog.id).where(or_(*(prefilter(c, subject) for c in columns)))
+        ).scalars().all()
+    assert sorted(selected) == ["pl-ivan-0", "pl-ivan-1", "pl-ivan-2"]
+    # The operator's verification is off the request path: it reads every row for such an address.
+    with env.witness.connect() as conn:
+        everything = conn.execute(
+            select(func.count()).select_from(AuditLog.__table__)
+            .where(or_(*(prefilter(c, subject, exhaustive=True) for c in columns)))
+        ).scalar_one()
+    assert everything == env.count(AuditLog)
+
+
+def test_a_casing_the_bounded_request_misses_is_still_found_by_the_verifier(env: PrivacyEnv):
+    """The recorded limit of the bounded in-request filter: a mixed casing of a non-ASCII-only
+    address (``иВАН@…``) in a text column is not selected on SQLite, so the deletion leaves it. The
+    operator's verification reads every row for such an address and reports it as a finding
+    (exit 1), never as verified."""
+    r = env.client.post(
+        f"{API}/auth/register",
+        json={"email": IVAN, "full_name": "I", "password": "ivan-pass-123",
+              "organization_name": "I Org"},
+    )
+    assert r.status_code == 201, r.text
+    uid, headers = r.json()["user"]["id"], {"Authorization": f"Bearer {r.json()['access_token']}"}
+    odd = "иВАН@пример.рф"
+    with env.engine.begin() as conn:
+        conn.execute(
+            update(User.__table__).where(User.id == uid)
+            .values(email_verified_at=datetime.now(UTC))
+        )
+        conn.execute(
+            insert(AuditLog.__table__).values(
+                id="pl-odd", organization_id=ORG_B, action="note.created", entity_type="note",
+                entity_id="n-odd", reason=f"Wrote to {odd}", new_state={}, context={},
+            )
+        )
+
+    assert env.client.post(
+        f"{API}/account/delete", headers=headers,
+        json={"current_password": "ivan-pass-123", "confirmation": "DELETE"},
+    ).status_code == 200
+
+    [row] = env.rows(AuditLog, AuditLog.id == "pl-odd")
+    assert env.engine.dialect.name == "sqlite"  # this module runs on SQLite
+    assert row["reason"] == f"Wrote to {odd}"  # left by the bounded request
+    with env.session() as s:
+        report = verify_subject_erased(s, user_id=uid, email=IVAN)
+    assert not report.verified  # found by the operator's exhaustive scan, never passed
+    assert ("audit_logs", "reason") in {(f.table, f.column) for f in report.content_findings}
+

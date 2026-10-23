@@ -49,9 +49,21 @@ Rules the code enforces:
 - **Which occurrences are erased** (*interim, pending the operator's decision `D-PRIV-7`* on
   ambiguous occurrences, decisions packet row 3.6a). The deletion and the verifier share one
   matcher (`app.privacy.matching`).
+  - **What counts as the same address.** Registration's own rule decides; it was measured, not
+    assumed.
+    - **Same address:** registration stores the NFC form, the U-label domain and a lower-case
+      domain, so NFC/NFD spellings, A-/U-label domains and domain letter case are one account.
+    - **Distinct accounts:** registration keeps `straße`/`strasse`, `weiß`/`weiss`, `ſ`/`s`,
+      `ﬃ`/`ffi` and `ς`/`σ` apart. So does the matcher, which lower-cases letters rather than
+      case-folding them (case-folding joined each pair, and let a verified account at one form
+      reach another organization's records for the other).
+    - **The one recorded exception:** registration keeps the local part's letter case
+      (`Kate`/`kate` are two accounts). Erasure and export still match an account's own address
+      in any letter case, which is the policy gated on a verified address. Python's lower-casing
+      also maps an all-capitals Greek `ΣΣ` to `σς`, so such a text matches `σς@…` only.
   - **Every form of the address is looked for:**
     - Unicode NFC and NFD;
-    - any letter case, with non-ASCII letters fully case-folded;
+    - any letter case, non-ASCII letters included (lower-cased, see above);
     - inside JSON `\uXXXX` escapes, up to three layers;
     - percent-encoded;
     - with the domain as the IDNA A-label (`xn--…`) or as the U-label.
@@ -60,6 +72,19 @@ Rules the code enforces:
     so no database `lower()` decides anything for non-ASCII letters, on SQLite or on
     PostgreSQL. The comparison is made in Python. Invitations addressed to the account, and
     the verified-holder check of `erase-email`, compare the address the same way.
+  - **Addresses without an ASCII fragment.** The local part may have no run of two ASCII
+    characters (`иван@пример.рф`, `a@b.co`). Then, inside a request, the filter matches the
+    address's whole forms instead:
+    - raw text in lower, upper or capitalised case;
+    - JSON-escaped with a lower-case domain;
+    - percent-encoded in lower case.
+
+    That keeps the request's work bounded. Measured on SQLite with 20,000 unrelated audit rows,
+    the deletion selected 0 rows instead of all 20,010, and took 0.71 s, against 0.53 s for an
+    ASCII address. It has a limit: other mixed casings of such an address (`иВАН@…`) are not
+    erased in the request on SQLite, nor in a JSON column on either engine. The operator's
+    verification reads every row for such an address, so it reports any copy left as a
+    finding (exit 1); it is never passed.
   - Each occurrence is judged by the product's own address grammar, the validator registration
     uses.
     - **`WHOLE`**: no registrable address could contain it. Examples: `mailto:a@b.co`,
@@ -69,8 +94,12 @@ Rules the code enforces:
       addresses (`xa@b.co`, `o'a@b.co`, `ía@b.co`, `a@b.co.org`). It also includes the
       account's own address after `email=`, `users/`, `#`, `{`, `|`, `'`, `’` or `«`, or before
       `.Word`, because registration accepts all of those characters in an address.
-    - **Undecided** (also `AMBIGUOUS`): the local part and the domain stand as separate tokens
-      but the address does not occur, as in `a&#64;b.co` or `a [at] b.co`.
+    - **Undecided** (also `AMBIGUOUS`): the address does not occur, but its local part and its
+      domain are joined by an explicit separator written instead of `@`. The separators are
+      `[at]`, `(at)`, `{at}`, `<at>`, `[@]`, `(@)`, `&#64;`, `&#x40;`, `&commat;`, and `at` or
+      `@` between spaces; examples are `a&#64;b.co` and `a [at] b.co`. Mere co-occurrence is
+      not flagged: "John from Acme (acme.example)" is not about `john@acme.example`. "sales at
+      shop.example" is flagged, because ` at ` is such a separator.
 
     An ambiguous or undecided occurrence is left, since erasing it could destroy another
     person's data, and the verifier reports it (§2).
@@ -79,9 +108,14 @@ Rules the code enforces:
     are separate values.
   - JSON object keys are never rewritten, so a key that names the account makes the
     verification fail (a finding).
-  - **Not detected, a recorded limit.** Transformations that keep neither the address nor both
-    its local part and its domain as text are not found: a hash or base64 of it, or the domain
-    spelled out (`b [dot] co`). No product writer produces any of them.
+  - **Not detected, a recorded limit.** Transformations that keep neither the address nor its
+    local part and domain joined by one of those separators are not found: a hash or base64 of
+    it, the domain spelled out (`b [dot] co`), or another separator. No product writer stores
+    any of them for an address. Third-party or customer text (raw signals, notes) can contain
+    them, and they then pass the verification unseen. Whole-text content hashes and the hashed
+    signal embedding include an address's parts, but live in the same rows as that text and go
+    with it. The verifier's `email_sha256` is an unsalted SHA-256: keep the report as
+    pseudonymous evidence, not anonymous.
 
 After a deletion, also: remove the address from the **SES account-level suppression list** if it
 is there (AWS-side, operator), and note the request in the operator's own request log.
@@ -104,7 +138,9 @@ without `needs_review`:
 - an `AMBIGUOUS` or undecided one is left and flagged: `verified` with `needs_review` (exit
   `4`).
 
-Only the transformations listed under "Not detected" in §1 pass unseen.
+Only the transformations listed under "Not detected" in §1 pass unseen. A copy of an
+address without an ASCII fragment, in a casing the request does not select, is reported as a
+finding (§1).
 
 A deletion request runs only the verifier's **reference check** before it answers (one equality
 count per column that can point at the subject; the receipt lists only rows that point at the

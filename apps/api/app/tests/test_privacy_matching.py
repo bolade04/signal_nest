@@ -17,12 +17,15 @@ subject's own in a context the grammar cannot tell apart from one.
   those characters can belong to a registrable address (registration accepts
   ``email=carol@…``), so these are the recorded residual ambiguity (``D-PRIV-7``).
   ``carol_x+tag@…`` is another address and no occurrence.
-* **Every form of the address** (review r3). The forms are NFC and NFD, any letter case (full
-  case-folding), JSON ``\\uXXXX`` escapes, percent-encoding, and the IDNA A-label and U-label
-  domain. The confirmation finds each one, and the SQL pre-filter's ASCII fragments select
-  each one under SQLite's ASCII-only ``lower()``, whether as raw text or as the JSON text
-  SQLAlchemy stores. A text holding the local part and the domain as separate tokens, but no
-  form of the address, is undecided, so it is flagged.
+* **Every form of the address** (review r3). The forms are NFC and NFD, any letter case
+  (lower-cased, never case-folded: review r4), JSON ``\\uXXXX`` escapes, percent-encoding,
+  and the IDNA A-label and U-label domain. The confirmation finds each one, and the SQL
+  pre-filter's ASCII fragments select each one under SQLite's ASCII-only ``lower()``, whether
+  as raw text or as the JSON text SQLAlchemy stores. A text whose local part and domain are
+  joined by an explicit separator instead of ``@`` (``&#64;``, ``[at]``, `` at ``), but holds
+  no form of the address, is undecided, so it is flagged. Mere co-occurrence is not (review r4).
+* **No folding joins two distinct addresses** (review r4). ``ß``/``ss``, ``ſ``/``s``, ``ﬃ``/``ffi``
+  and ``ς``/``σ`` stay apart, as registration keeps them.
 * **Opaque ids** are whole unless an id character touches them.
 * **JSON** is judged string by string, object keys included.
 """
@@ -204,10 +207,58 @@ def test_the_confirmation_finds_every_form(address):
         (f"Note: {L} wrote to bob@{D}", NONE),  # the domain belongs to another address
         (f"Note: {L} [at] {D} [dot] example", AMBIGUOUS),
         (f"Note: {L} [at] privacy [dot] example", NONE),  # recorded limit: spelled-out domain
+        # Review r4 R4-3: only an explicit separator joining them is undecided, never mere
+        # co-occurrence of the local part and the domain in the same text.
+        (f"Note: {L} at {D}", AMBIGUOUS),
+        (f"Note: {L}(@){D}", AMBIGUOUS),
+        (f"Ticket by {L}; domain {D}", NONE),
+        (f"{L} wrote about {D} yesterday", NONE),
     ],
 )
 def test_the_local_part_and_domain_apart_are_undecided_and_flagged(text, expected):
     assert mention(text, HERS) is expected
+
+
+@pytest.mark.parametrize(
+    ("address", "text", "expected"),
+    [
+        ("john@acme.example", "John from Acme (acme.example) called about pricing.", NONE),
+        ("john@acme.example", "See acme.example for details. Regards, John", NONE),
+        ("info@acme.example", "More info on acme.example.", NONE),
+        ("a@privacy.example", "We wrote a note about privacy.example.", NONE),
+        ("sales@shop.example", "Q3 sales at shop.example rose 4%.", AMBIGUOUS),  # " at "
+        ("john@acme.example", "John [at] acme.example", AMBIGUOUS),
+    ],
+)
+def test_prose_naming_a_person_and_a_domain_is_not_flagged(address, text, expected):
+    """Review r4 cap 143: ordinary prose was flagged for review; only a separator form is."""
+    assert mention(text, Subject(addresses=(address,))) is expected
+
+
+#: Pairs registration keeps apart as two accounts (fix4 cap 136); no folding may join them.
+_TWINS = [
+    ("strasse@privacy.example", "straße@privacy.example"),
+    ("bob@weiss.example", "bob@weiß.example"),
+    ("sam@privacy.example", "ſam@privacy.example"),
+    ("office@privacy.example", "oﬃce@privacy.example"),
+    ("σσ@privacy.example", "σς@privacy.example"),
+]
+
+
+@pytest.mark.parametrize(("one", "other"), _TWINS + [(b, a) for a, b in _TWINS])
+def test_distinct_addresses_never_fold_together(one, other):
+    """Review r4 R4-1: full case-folding mapped each pair to one form. Only what registration
+    itself treats as one address (NFC/NFD, U-/A-label domain, domain case) and the local part's
+    letter case (a recorded policy) are folded."""
+    assert not same_address(other, one)
+    assert mention(f"Invited {other} today", Subject(addresses=(one,))) is NONE
+
+
+def test_what_registration_treats_as_one_address_still_matches():
+    assert same_address(unicodedata.normalize("NFD", JOSE), JOSE)
+    assert same_address("carol@xn--exmple-cua.com", IDN)
+    assert same_address("carol@EXÄMPLE.COM", IDN)
+    assert same_address("JOSÉ@privacy.example", JOSE)  # local-part case: the recorded policy
 
 
 def test_same_address_compares_every_form():

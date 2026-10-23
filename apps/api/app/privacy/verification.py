@@ -163,9 +163,12 @@ def _content_findings(
                 continue
             checked += 1
             # The database narrows to values that may hold any form of an identifier (ASCII
-            # fragments only); the shared matcher then decides, for each, whether it does.
+            # fragments only; for an address without them, every row: this runs off the request
+            # path); the shared matcher then decides, for each, whether it does.
             values = db.execute(
-                select(cast(column, Text)).select_from(table).where(prefilter(column, subject))
+                select(cast(column, Text))
+                .select_from(table)
+                .where(prefilter(column, subject, exhaustive=True))
             ).scalars()
             mentions = [_mention(v, subject, as_json=_is_json(column)) for v in values if v]
             whole = sum(1 for m in mentions if m is Mention.WHOLE)
