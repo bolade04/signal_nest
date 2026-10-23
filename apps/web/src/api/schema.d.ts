@@ -962,7 +962,8 @@ export interface paths {
         delete: operations["delete_audiences_api_v1_workspaces__workspace_id__audiences__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Audiences */
+        patch: operations["update_audiences_api_v1_workspaces__workspace_id__audiences__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/audit-logs": {
@@ -1014,7 +1015,8 @@ export interface paths {
         delete: operations["delete_brand_voice_api_v1_workspaces__workspace_id__brand_voice__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Brand-Voice */
+        patch: operations["update_brand_voice_api_v1_workspaces__workspace_id__brand_voice__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/brands": {
@@ -1084,7 +1086,8 @@ export interface paths {
         delete: operations["delete_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Campaigns */
+        patch: operations["update_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/channel-preferences": {
@@ -1119,7 +1122,8 @@ export interface paths {
         delete: operations["delete_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Channel-Preferences */
+        patch: operations["update_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/claims": {
@@ -1154,7 +1158,8 @@ export interface paths {
         delete: operations["delete_claims_api_v1_workspaces__workspace_id__claims__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Claims */
+        patch: operations["update_claims_api_v1_workspaces__workspace_id__claims__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/competitors": {
@@ -1189,7 +1194,8 @@ export interface paths {
         delete: operations["delete_competitors_api_v1_workspaces__workspace_id__competitors__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Competitors */
+        patch: operations["update_competitors_api_v1_workspaces__workspace_id__competitors__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
@@ -1332,6 +1338,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate Location
+         * @description Retire a location without deleting it or any of its history (P6-UI-023).
+         *
+         *     See :mod:`app.locations.service` for why this is a deactivation and what it stops.
+         *     Deactivating an already-deactivated location changes nothing and answers 200.
+         */
+        post: operations["deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage": {
         parameters: {
             query?: never;
@@ -1344,6 +1373,26 @@ export interface paths {
         /** Upsert Geo Coverage */
         put: operations["upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reactivate Location
+         * @description Return a deactivated location to service; a no-op (200) when already active.
+         */
+        post: operations["reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1382,7 +1431,8 @@ export interface paths {
         delete: operations["delete_offers_api_v1_workspaces__workspace_id__offers__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Offers */
+        patch: operations["update_offers_api_v1_workspaces__workspace_id__offers__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/onboarding": {
@@ -1543,7 +1593,8 @@ export interface paths {
         delete: operations["delete_products_api_v1_workspaces__workspace_id__products__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Products */
+        patch: operations["update_products_api_v1_workspaces__workspace_id__products__item_id__patch"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/scheduling-capability": {
@@ -1813,7 +1864,8 @@ export interface paths {
         delete: operations["delete_source_preferences_api_v1_workspaces__workspace_id__source_preferences__item_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Source-Preferences */
+        patch: operations["update_source_preferences_api_v1_workspaces__workspace_id__source_preferences__item_id__patch"];
         trace?: never;
     };
     "/health": {
@@ -1854,6 +1906,23 @@ export interface components {
             /** Objections */
             objections?: string[];
         };
+        /** AudiencePatch */
+        AudiencePatch: {
+            /** Demographics */
+            demographics?: {
+                [key: string]: unknown;
+            };
+            /** Description */
+            description?: string | null;
+            /** Keywords */
+            keywords?: string[];
+            /** Label */
+            label?: string;
+            /** Motivations */
+            motivations?: string[];
+            /** Objections */
+            objections?: string[];
+        };
         /** BrandOut */
         BrandOut: {
             /** Business Type */
@@ -1867,6 +1936,19 @@ export interface components {
         };
         /** BrandVoiceIn */
         BrandVoiceIn: {
+            /** Avoid */
+            avoid?: string[];
+            /** Do Use */
+            do_use?: string[];
+            /** Example Copy */
+            example_copy?: string | null;
+            /** Personality */
+            personality?: string[];
+            /** Tone */
+            tone?: string[];
+        };
+        /** BrandVoicePatch */
+        BrandVoicePatch: {
             /** Avoid */
             avoid?: string[];
             /** Do Use */
@@ -2012,6 +2094,19 @@ export interface components {
              * @default active
              */
             status: string;
+        };
+        /** CampaignPatch */
+        CampaignPatch: {
+            /** Goal */
+            goal?: string | null;
+            /** Location Ids */
+            location_ids?: string[];
+            /** Mode */
+            mode?: string;
+            /** Name */
+            name?: string;
+            /** Status */
+            status?: string;
         };
         /** CapabilitiesOut */
         CapabilitiesOut: {
@@ -2246,6 +2341,15 @@ export interface components {
             /** Weekly Volume */
             weekly_volume?: number | null;
         };
+        /** ChannelPrefPatch */
+        ChannelPrefPatch: {
+            /** Channel */
+            channel?: string;
+            /** Enabled */
+            enabled?: boolean;
+            /** Weekly Volume */
+            weekly_volume?: number | null;
+        };
         /** ClaimIn */
         ClaimIn: {
             /** Category */
@@ -2265,12 +2369,36 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** ClaimPatch */
+        ClaimPatch: {
+            /** Category */
+            category?: string | null;
+            /** Kind */
+            kind?: string;
+            /** Notes */
+            notes?: string | null;
+            /** Risk Level */
+            risk_level?: string;
+            /** Text */
+            text?: string;
+        };
         /** CompetitorIn */
         CompetitorIn: {
             /** Known Weaknesses */
             known_weaknesses?: string[];
             /** Name */
             name: string;
+            /** Notes */
+            notes?: string | null;
+            /** Website */
+            website?: string | null;
+        };
+        /** CompetitorPatch */
+        CompetitorPatch: {
+            /** Known Weaknesses */
+            known_weaknesses?: string[];
+            /** Name */
+            name?: string;
             /** Notes */
             notes?: string | null;
             /** Website */
@@ -3192,6 +3320,39 @@ export interface components {
             /** Terms */
             terms?: string | null;
         };
+        /** OfferPatch */
+        OfferPatch: {
+            /** Cta */
+            cta?: string | null;
+            /** Discount Amount */
+            discount_amount?: number | null;
+            /** Eligible Location Ids */
+            eligible_location_ids?: string[];
+            /** End Date */
+            end_date?: string | null;
+            /** Is Active */
+            is_active?: boolean;
+            /** Landing Url */
+            landing_url?: string | null;
+            /** Name */
+            name?: string;
+            /** Percentage Discount */
+            percentage_discount?: number | null;
+            /** Product Service */
+            product_service?: string | null;
+            /** Promo Code */
+            promo_code?: string | null;
+            /** Regular Price */
+            regular_price?: number | null;
+            /** Required Disclaimer */
+            required_disclaimer?: string | null;
+            /** Sale Price */
+            sale_price?: number | null;
+            /** Start Date */
+            start_date?: string | null;
+            /** Terms */
+            terms?: string | null;
+        };
         /**
          * OnboardingRequest
          * @description Full guided-onboarding payload. No presence field is required.
@@ -3487,6 +3648,31 @@ export interface components {
              * @default 1
              */
             relevance_weight: number;
+            /** Use Cases */
+            use_cases?: string[];
+        };
+        /** ProductPatch */
+        ProductPatch: {
+            /** Audience */
+            audience?: string | null;
+            /** Claims Rules */
+            claims_rules?: {
+                [key: string]: unknown;
+            };
+            /** Competitors */
+            competitors?: string[];
+            /** Description */
+            description?: string | null;
+            /** Exclusion Rules */
+            exclusion_rules?: string[];
+            /** Keywords */
+            keywords?: string[];
+            /** Name */
+            name?: string;
+            /** Pain Points */
+            pain_points?: string[];
+            /** Relevance Weight */
+            relevance_weight?: number;
             /** Use Cases */
             use_cases?: string[];
         };
@@ -3916,6 +4102,17 @@ export interface components {
             enabled: boolean;
             /** Source Type */
             source_type: string;
+        };
+        /** SourcePrefPatch */
+        SourcePrefPatch: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Enabled */
+            enabled?: boolean;
+            /** Source Type */
+            source_type?: string;
         };
         /**
          * StuckJobsOut
@@ -5550,7 +5747,10 @@ export interface operations {
     };
     list_audiences_api_v1_workspaces__workspace_id__audiences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5564,6 +5764,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5654,10 +5858,51 @@ export interface operations {
             };
         };
     };
+    update_audiences_api_v1_workspaces__workspace_id__audiences__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudiencePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_audit_logs_api_v1_workspaces__workspace_id__audit_logs_get: {
         parameters: {
             query?: {
                 limit?: number;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -5672,6 +5917,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5693,7 +5942,10 @@ export interface operations {
     };
     list_brand_voice_api_v1_workspaces__workspace_id__brand_voice_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5707,6 +5959,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5785,6 +6041,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_brand_voice_api_v1_workspaces__workspace_id__brand_voice__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrandVoicePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {
@@ -5902,7 +6198,10 @@ export interface operations {
     };
     list_campaigns_api_v1_workspaces__workspace_id__campaigns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5916,6 +6215,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6006,9 +6309,52 @@ export interface operations {
             };
         };
     };
-    list_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences_get: {
+    update_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__patch: {
         parameters: {
             query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6022,6 +6368,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6112,9 +6462,52 @@ export interface operations {
             };
         };
     };
-    list_claims_api_v1_workspaces__workspace_id__claims_get: {
+    update_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences__item_id__patch: {
         parameters: {
             query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelPrefPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_claims_api_v1_workspaces__workspace_id__claims_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6128,6 +6521,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6218,9 +6615,52 @@ export interface operations {
             };
         };
     };
-    list_competitors_api_v1_workspaces__workspace_id__competitors_get: {
+    update_claims_api_v1_workspaces__workspace_id__claims__item_id__patch: {
         parameters: {
             query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_competitors_api_v1_workspaces__workspace_id__competitors_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6234,6 +6674,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6312,6 +6756,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_competitors_api_v1_workspaces__workspace_id__competitors__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompetitorPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {
@@ -6606,6 +7090,40 @@ export interface operations {
             };
         };
     };
+    deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_get: {
         parameters: {
             query?: never;
@@ -6678,9 +7196,46 @@ export interface operations {
             };
         };
     };
-    list_offers_api_v1_workspaces__workspace_id__offers_get: {
+    reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post: {
         parameters: {
             query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_offers_api_v1_workspaces__workspace_id__offers_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6694,6 +7249,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6784,6 +7343,46 @@ export interface operations {
             };
         };
     };
+    update_offers_api_v1_workspaces__workspace_id__offers__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfferPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     onboard_api_v1_workspaces__workspace_id__onboarding_post: {
         parameters: {
             query?: never;
@@ -6834,9 +7433,10 @@ export interface operations {
                 market?: string | null;
                 min_score?: number;
                 search?: string | null;
-                sort?: string;
+                sort?: "priority" | "opportunity" | "confidence" | "relevance" | "created";
                 order?: string;
                 limit?: number;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -6851,6 +7451,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7051,7 +7655,10 @@ export interface operations {
     };
     list_products_api_v1_workspaces__workspace_id__products_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -7065,6 +7672,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7155,6 +7766,46 @@ export interface operations {
             };
         };
     };
+    update_products_api_v1_workspaces__workspace_id__products__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     read_scheduling_capability_api_v1_workspaces__workspace_id__scheduling_capability_get: {
         parameters: {
             query?: never;
@@ -7192,6 +7843,8 @@ export interface operations {
         parameters: {
             query?: {
                 location_id?: string | null;
+                limit?: number | null;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7206,6 +7859,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7645,7 +8302,10 @@ export interface operations {
     };
     list_source_preferences_api_v1_workspaces__workspace_id__source_preferences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -7659,6 +8319,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7737,6 +8401,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_source_preferences_api_v1_workspaces__workspace_id__source_preferences__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourcePrefPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {

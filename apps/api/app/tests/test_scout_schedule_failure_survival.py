@@ -25,8 +25,9 @@ over the four-market demo seed and prove:
   derived state ``stalled`` (customer and operator views, plus the operator overview
   count) — and ``resume`` restarts a stalled schedule.
 
-The seed creates no ``Job`` rows, so every job observed here was produced by the code
-under test. Scheduling is dark by default and enabled per test.
+The seed's own scout runs (P6-UI-009) are cleared after seeding, so every job observed
+here was produced by the code under test. Scheduling is dark by default and enabled per
+test.
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ from app.main import app
 from app.organizations.models import User
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.tests._auth2_support import live_bearer
+from app.tests._seed_support import clear_seeded_runs
 
 API = get_settings().api_prefix
 TICK = JobType.SCOUT_SCHEDULE_TICK.value
@@ -90,6 +92,7 @@ def factory(tmp_path_factory):
     seed_mod.SessionLocal = make
     try:
         seed_mod.seed(reset=True)
+        clear_seeded_runs(make)
         with make() as s:
             s.add(User(id=_OPERATOR, email="op6@example.com", full_name="Operator",
                        hashed_password="x", is_active=True, is_operator=True))

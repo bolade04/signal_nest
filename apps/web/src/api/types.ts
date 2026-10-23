@@ -1,4 +1,4 @@
-import type { components } from './schema';
+import type { components, operations } from './schema';
 
 type S = components['schemas'];
 
@@ -141,7 +141,14 @@ export interface OpportunityFilters {
   market?: string | null;
   min_score?: number;
   search?: string | null;
-  sort?: string;
+  sort?: OpportunitySort;
   order?: string;
   limit?: number;
 }
+
+/** The feed's sort keys, as the API declares them (an unknown key is a 422). */
+export type OpportunitySort = NonNullable<
+  NonNullable<
+    operations['list_opportunities_api_v1_workspaces__workspace_id__opportunities_get']['parameters']['query']
+  >['sort']
+>;

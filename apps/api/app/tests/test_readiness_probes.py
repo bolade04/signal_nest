@@ -36,10 +36,11 @@ def test_local_stack_probes_are_ready() -> None:
         "storage",
         "llm",
         "worker_registry",
+        "rate_limit",
     }
     # The default local backends actively verify as healthy.
     by_name = {r.name: r for r in report.results}
-    for name in ("database", "queue", "durable_queue", "cache", "vector"):
+    for name in ("database", "queue", "durable_queue", "cache", "vector", "rate_limit"):
         assert by_name[name].status is ProbeStatus.HEALTHY
 
 

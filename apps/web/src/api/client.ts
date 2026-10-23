@@ -21,13 +21,23 @@ export class ApiError extends Error {
 // The auth layer registers the current bearer token and a callback for expiry
 // so the client stays the single place that knows about auth headers.
 let authToken: string | null = null;
-let onUnauthorized: (() => void) | null = null;
+let onUnauthorized: ((refusedToken: string | null) => void) | null = null;
 
 export function setAuthToken(token: string | null): void {
   authToken = token;
 }
 
-export function setUnauthorizedHandler(handler: (() => void) | null): void {
+/** The bearer token this tab's requests carry now (null when signed out). */
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
+/**
+ * Register the callback for a 401. It receives the token the refused request was SENT
+ * with (null if none), not the current one: by the time the answer arrives this tab may
+ * have signed out and in again (P6-AUTH-4 follow-up).
+ */
+export function setUnauthorizedHandler(handler: ((refusedToken: string | null) => void) | null): void {
   onUnauthorized = handler;
 }
 
@@ -192,6 +202,36 @@ export interface RequestOptions {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return (await send<T>(path, options)).payload;
+}
+
+/** One page of a cursor-paginated list (P6-PLAT-12): the body plus the paging headers. */
+export interface ApiPage<T> {
+  items: T[];
+  /** `X-Total-Count`: rows matching the filters, whatever the page size. Null if absent. */
+  total: number | null;
+  /** `X-Next-Cursor`: send back as `cursor` for the next page; null on the last page. */
+  nextCursor: string | null;
+}
+
+export async function apiRequestPage<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<ApiPage<T>> {
+  const { payload, headers } = await send<T[]>(path, options);
+  const rawTotal = headers.get('x-total-count');
+  const total = rawTotal !== null && /^\d+$/.test(rawTotal) ? Number(rawTotal) : null;
+  return {
+    items: Array.isArray(payload) ? payload : [],
+    total,
+    nextCursor: headers.get('x-next-cursor') || null,
+  };
+}
+
+async function send<T>(
+  path: string,
+  options: RequestOptions,
+): Promise<{ payload: T; headers: Headers }> {
   const { method = 'GET', body, query, signal, prefixed = true } = options;
 
   const basePath = prefixed ? `${API_PREFIX}${path}` : path;
@@ -210,7 +250,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     'X-Request-ID': correlationId,
   };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const sentToken = authToken;
+  if (sentToken) headers.Authorization = `Bearer ${sentToken}`;
 
   let response: Response;
   try {
@@ -228,7 +269,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const responseId = response.headers.get('x-request-id') ?? correlationId;
 
   if (response.status === 204) {
-    return undefined as T;
+    return { payload: undefined as T, headers: response.headers };
   }
 
   const isJson = response.headers.get('content-type')?.includes('application/json');
@@ -236,10 +277,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   if (!response.ok) {
     if (response.status === 401) {
-      onUnauthorized?.();
+      onUnauthorized?.(sentToken);
     }
     throw new ApiError(errorMessage(payload, response.status), response.status, payload, responseId);
   }
 
-  return payload as T;
+  return { payload: payload as T, headers: response.headers };
 }

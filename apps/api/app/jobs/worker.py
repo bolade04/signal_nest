@@ -57,6 +57,7 @@ from app.core.metrics import (
     JOBS_RETRIED_TOTAL,
     WORKER_LEASE_RECOVERED_TOTAL,
     WORKER_POLL_TOTAL,
+    configure_metrics_from_settings,
     get_metrics,
 )
 from app.core.tracing import (
@@ -882,6 +883,7 @@ class Worker:
 def main() -> None:
     settings = get_settings()
     configure_logging("DEBUG" if settings.debug else "INFO")
+    configure_metrics_from_settings(settings)
     Worker(settings=settings).run()
 
 

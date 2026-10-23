@@ -164,19 +164,20 @@ def _check_database(_settings: Settings) -> tuple[ProbeStatus, str, str | None, 
 
 
 def _check_queue(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
-    if settings.queue_backend == "redis":
-        return _ping_redis(settings, "queue")
-    # In-process queue: the synchronous executor is available as soon as its
-    # adapter is constructed (it needs no broker or worker).
-    from app.infra.queue import queue
-
-    if queue is not None:
-        return (ProbeStatus.HEALTHY, "in-process queue initialized", None, False)
+    # Jobs are enqueued in, and claimed from, the database job store, which the
+    # ``durable_queue`` probe verifies; workers find work by polling it. No wake-up
+    # transport is selected in this build (P6-PLAT-2), so there is nothing else to
+    # probe and nothing degraded: ``queue_backend=redis`` is accepted and unused.
+    detail = (
+        "queue_backend=redis selects nothing in this build (no worker subscribes)"
+        if settings.queue_backend == "redis"
+        else None
+    )
     return (
-        ProbeStatus.UNAVAILABLE,
-        "in-process queue is not initialized",
-        "queue adapter is not constructed",
-        True,
+        ProbeStatus.HEALTHY,
+        "jobs queue in the database job store; workers poll it",
+        detail,
+        False,
     )
 
 
@@ -249,21 +250,28 @@ def _check_storage(settings: Settings) -> tuple[ProbeStatus, str, str | None, bo
 
 
 def _check_vector(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
-    if settings.vector_backend == "pgvector":
-        if settings.is_sqlite:
-            return (
-                ProbeStatus.NOT_CONFIGURED,
-                "vector backend requires a PostgreSQL database",
-                "pgvector selected on a sqlite database",
-                False,
-            )
+    # Build the index the pipeline would build (P6-PLAT-1): the probe reports the
+    # backend that actually runs, never the label it was configured with.
+    from app.infra.vector import VectorBackendUnavailableError, build_index
+
+    try:
+        index = build_index(settings)
+    except VectorBackendUnavailableError:
         return (
-            ProbeStatus.DEGRADED,
-            "pgvector configured (not actively verified)",
-            "pgvector connectivity not probed (config-only)",
+            ProbeStatus.NOT_CONFIGURED,
+            "vector backend is not implemented in this build",
+            f"vector_backend={settings.vector_backend} has no implementation",
             False,
         )
-    return (ProbeStatus.HEALTHY, "brute-force vector index initialized", None, False)
+    index.add("readiness", [1.0])
+    if not index.search([1.0], top_k=1):
+        return (
+            ProbeStatus.UNAVAILABLE,
+            "vector index returned no result",
+            "in-process index lost an added vector",
+            False,
+        )
+    return (ProbeStatus.HEALTHY, "in-process brute-force similarity available", None, False)
 
 
 def _check_llm(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
@@ -325,6 +333,22 @@ def _check_worker_registry(
     return (ProbeStatus.HEALTHY, "worker fleet has an active worker", None, False)
 
 
+def _check_rate_limit(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:
+    # P6-PLAT-3: the Redis limiter is only as good as its store; the in-process one
+    # is per process, which is honest in development/test and degraded anywhere that
+    # may run more than one replica.
+    if settings.rate_limit_backend == "redis":
+        return _ping_redis(settings, "rate limit")
+    if settings.is_production_like:
+        return (
+            ProbeStatus.DEGRADED,
+            "per-process rate limiter (not shared across replicas)",
+            "rate_limit_backend=memory counts per process",
+            False,
+        )
+    return (ProbeStatus.HEALTHY, "in-process rate limiter", None, False)
+
+
 def _ping_redis(
     settings: Settings, capability: str
 ) -> tuple[ProbeStatus, str, str | None, bool]:  # pragma: no cover - full mode only
@@ -351,6 +375,16 @@ def _build_probes(settings: Settings) -> list[ReadinessProbe]:
         ReadinessProbe("storage", required=True, check=_check_storage),
         ReadinessProbe("vector", required=True, check=_check_vector),
         ReadinessProbe("llm", required=False, check=_check_llm),
+        # Blocking only when a Redis outage makes the API refuse traffic (deny mode);
+        # in local mode the API keeps serving under the per-process limit.
+        ReadinessProbe(
+            "rate_limit",
+            required=(
+                settings.rate_limit_backend == "redis"
+                and settings.rate_limit_redis_failure_mode == "deny"
+            ),
+            check=_check_rate_limit,
+        ),
         ReadinessProbe(
             "worker_registry",
             required=settings.require_worker_fleet,
