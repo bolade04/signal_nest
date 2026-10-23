@@ -38,7 +38,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import Text, cast, delete, func, select, text
+from sqlalchemy import BigInteger, Text, cast, delete, func, literal, select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -93,9 +93,9 @@ def lock_sources(db: Session, keys: Iterable[str], *, exclusive: bool) -> None:
     """
     if db.get_bind().dialect.name != "postgresql":
         return
-    function = "pg_advisory_xact_lock" if exclusive else "pg_advisory_xact_lock_shared"
+    lock = func.pg_advisory_xact_lock if exclusive else func.pg_advisory_xact_lock_shared
     for key in sorted(set(keys)):
-        db.execute(text(f"SELECT {function}(:lock_id)"), {"lock_id": _lock_id(key)})
+        db.execute(select(lock(cast(literal(_lock_id(key)), BigInteger))))
 
 
 def _signal_source_key(signal: object) -> str | None:
