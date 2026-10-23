@@ -682,6 +682,59 @@ def test_a_capitalised_invitation_follows_the_capital_rule(
         assert printed["content_findings"] == [] and printed["content_ambiguous"] == []
 
 
+#: Review r7 R7-1: the six Greek letters whose upper case NFC re-composes. Registration stores an
+#: invitation to their capitals in NFC, so every case image is compared in NFC (fix pass 9).
+NFC_GREEK = ["\u0390", "\u03b0", "\u1fd2", "\u1fd7", "\u1fe2", "\u1fe7"]
+
+
+def _taken_or_flagged(env: PrivacyEnv, capsys, uid, stored, export, invitation_id, record, taken):
+    exported = [i["id"] for i in export["invitations_received"]]
+    left = env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id)
+    [after] = env.rows(AuditLog, AuditLog.id == record["id"])
+    code = cli.main(["verify-account", "--user-id", uid, "--email", stored])
+    printed = json.loads(capsys.readouterr().out)
+    if taken:
+        assert (exported, left, after["new_state"]["email"]) == ([invitation_id], 0, ERASED)
+        assert code == cli.EXIT_OK, printed
+    else:
+        assert (exported, left, after) == ([], 1, record)
+        assert code == cli.EXIT_REVIEW, printed
+        assert {("organization_invitations", "email"), ("audit_logs", "new_state")} <= {
+            (f["table"], f["column"]) for f in printed["content_ambiguous"]
+        }
+
+
+@pytest.mark.parametrize("letter", NFC_GREEK)
+def test_an_invitation_to_greek_capitals_nfc_recomposes_is_its_owners(
+    env: PrivacyEnv, capsys, letter
+):
+    """Review r7 cap 224 B: BOB invites ``Ϊ́Α@…`` for a verified ``ΐα@…``. It was neither
+    exported nor deleted, and verification exited 0. Now the request takes it."""
+    upper = unicodedata.normalize("NFC", letter.upper())
+    uid, stored, headers = _register(env, f"{letter}α@privacy.example", verified=True)
+    invitation_id, record, export = _invite_export_delete(env, headers, f"{upper}Α@privacy.example")
+    _taken_or_flagged(env, capsys, uid, stored, export, invitation_id, record, taken=True)
+
+
+@pytest.mark.parametrize(
+    ("letter", "kind"),
+    [(letter, kind) for letter in NFC_GREEK for kind in TWIN_KINDS],
+    ids=[f"{letter}-{kind}" for letter in NFC_GREEK for kind in TWIN_KINDS],
+)
+def test_greek_capitals_nfc_recomposes_follow_the_twin_rule(
+    env: PrivacyEnv, capsys, letter, kind
+):
+    """The same letters beside a shared capital (``Σ`` is the upper case of ``σ`` and ``ς``):
+    ``{letter}σ`` takes BOB's invitation to the capitals unless its twin ``{letter}ς`` exists."""
+    upper = unicodedata.normalize("NFC", letter.upper())
+    uid, stored, headers = _register(env, f"{letter}σ@privacy.example", verified=True)
+    _plant_twin(env, kind, f"{letter}ς@privacy.example", by=ALICE)
+    invitation_id, record, export = _invite_export_delete(env, headers, f"{upper}Σ@privacy.example")
+    _taken_or_flagged(
+        env, capsys, uid, stored, export, invitation_id, record, taken=kind == "no-twin"
+    )
+
+
 def test_the_twin_lookup_selects_only_its_upper_case(env: PrivacyEnv):
     """The lookup runs only for an occurrence related through a shared letter case, once per
     spelling, and its ``LIKE`` selects the twins and few others: 20,000 unrelated invitations,

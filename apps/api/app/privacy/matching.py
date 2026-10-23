@@ -68,8 +68,9 @@ Two steps cover every form:
 * **The confirmation** (:func:`mention`) reads each candidate text under several views: as
   stored, with up to three layers of JSON escapes undone, and each percent-decoded. Every view
   is in NFC and keeps its own letter case. In every view it finds the local part, by its lower
-  case or its upper case, letter by letter. It then reads the domain after ``@``, or after a
-  separator, with registration's UTS46 mapping.
+  case or its upper case, letter by letter, each case image in NFC as well (``ΐ`` upper-cases
+  to a decomposed ``Ϊ́`` that NFC re-composes; review r7 R7-1). It then reads the domain after
+  ``@``, or after a separator, with registration's UTS46 mapping.
 
 **How an occurrence is judged.** It is judged by the product's own address grammar, the one
 every stored address passed. ``RegisterRequest.email`` is pydantic ``EmailStr``, which strips
@@ -188,12 +189,15 @@ def _lower(text: str) -> str:
     """Lower-cased letter by letter: ``str.lower()``, never ``str.casefold()`` (case-folding maps
     distinct letters together, ``ß``→``ss``, ``ſ``→``s``, ``ﬃ``→``ffi``, ``ς``→``σ``, and
     registration keeps those addresses apart: review r4 R4-1), and without the final-sigma rule,
-    so a letter's reading never depends on its neighbour."""
-    return "".join(c.lower() for c in text)
+    so a letter's reading never depends on its neighbour. In NFC, like every stored address: a
+    case mapping can decompose a letter (review r7 R7-1)."""
+    return _nfc("".join(c.lower() for c in text))
 
 
 def _upper(text: str) -> str:
-    return "".join(c.upper() for c in text)
+    """Upper-cased letter by letter, in NFC: ``ΐ`` upper-cases to a decomposed ``Ϊ́`` that NFC
+    re-composes (review r7 R7-1)."""
+    return _nfc("".join(c.upper() for c in text))
 
 
 @lru_cache(maxsize=1)
@@ -204,8 +208,8 @@ def _shared_uppers() -> tuple[str, ...]:
     shared = set()
     for code in range(0x110000):
         letter = chr(code)
-        upper = letter.upper()
-        if _lower(upper) != letter.lower():
+        upper = _nfc(letter.upper())
+        if _lower(upper) != _lower(letter):
             shared.add(upper)
     return tuple(sorted(shared, key=lambda u: (-len(u), u)))
 
@@ -236,8 +240,6 @@ def _local_case(written: str, own: str) -> Mention:
         return Mention.WHOLE
     if same_lower or _spells(written, own):
         return Mention.AMBIGUOUS
-    if _upper(written) == _upper(own) and not _has_lower_case(written):
-        return Mention.AMBIGUOUS
     return Mention.NONE
 
 
@@ -245,10 +247,11 @@ def _spells(written: str, own: str) -> bool:
     """Whether ``written`` spells ``own`` letter by letter: each of ``own``'s letters (lower-cased)
     is written either exactly as itself or as its whole upper case, which may be longer (``ß`` as
     ``SS``) and is shared by the sigma forms (``σ`` and ``ς`` as ``Σ``). So every lower-case
-    letter written is ``own``'s letter there, and every capital is its upper case."""
+    letter written is ``own``'s letter there, and every capital is its upper case. Images are in
+    NFC, like ``written``. The whole of ``written`` must be spelled: a longer text is not."""
     reach = {0}
     for letter in _lower(own):
-        image = letter.upper()
+        image = _nfc(letter.upper())
         reach = {
             start + len(form)
             for start in reach
@@ -258,10 +261,6 @@ def _spells(written: str, own: str) -> bool:
         if not reach:
             return False
     return len(written) in reach
-
-
-def _has_lower_case(text: str) -> bool:
-    return any(char.islower() for char in text)
 
 
 #: Looks up the local parts of the addresses the product holds (account e-mails, invitation
@@ -379,10 +378,12 @@ def _whole_needles(form: str) -> tuple[str, ...]:
     per row, so the set is kept small. Other casings are left to the operator's exhaustive scan.
     """
     local, _, domain = form.rpartition("@")
-    locals_ = (local.lower(), local.upper(), local.capitalize())
-    raw = [f"{loc}@{dom}" for loc in locals_ for dom in (domain.lower(), domain.upper())]
-    escaped = [json.dumps(f"{loc}@{domain.lower()}")[1:-1] for loc in locals_]
-    lowered = form.lower()
+    # In NFC, like the stored text: a case mapping can decompose a letter (review r7 R7-1).
+    locals_ = tuple(_nfc(c) for c in (local.lower(), local.upper(), local.capitalize()))
+    domains = (_nfc(domain.lower()), _nfc(domain.upper()))
+    raw = [f"{loc}@{dom}" for loc in locals_ for dom in domains]
+    escaped = [json.dumps(f"{loc}@{domains[0]}")[1:-1] for loc in locals_]
+    lowered = _nfc(form.lower())
     percent = [quote(lowered, safe=""), quote(lowered, safe="@")]
     return tuple(dict.fromkeys(_ascii_lower(n) for n in (*raw, *escaped, *percent)))
 
@@ -469,7 +470,7 @@ def _upper_images() -> tuple[frozenset[str], tuple[str, ...]]:
     single, multi = set(), set()
     for code in range(0x110000):
         letter = chr(code)
-        upper = letter.upper()
+        upper = _nfc(letter.upper())
         if len(upper) > 1:
             multi.add(upper)
         elif upper.isascii() and not letter.isascii():
@@ -614,12 +615,15 @@ def _views(text: str) -> tuple[str, ...]:
 
 def _spans(view: str, needle: str, case: Any) -> Iterable[tuple[int, int]]:
     """Spans of ``view`` whose letters, each mapped by ``case``, spell ``needle``, in whole
-    letters of ``view`` (a mapping can expand one letter, ``ß``→``SS``)."""
+    letters of ``view`` (a mapping can expand one letter, ``ß``→``SS``). Both sides are compared
+    decomposed (NFD), so a letter whose case image NFC would re-compose with its neighbour is
+    found too (``Ϊ́ΰ`` for ``ΐΰ``; review r7 R7-1)."""
+    needle = unicodedata.normalize("NFD", needle)
     if not needle:
         return
     mapped, origin = [], []
     for index, letter in enumerate(view):
-        image = case(letter)
+        image = unicodedata.normalize("NFD", case(letter))
         mapped.append(image)
         origin.extend([index] * len(image))
     joined = "".join(mapped)

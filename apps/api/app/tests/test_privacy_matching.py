@@ -56,6 +56,8 @@ from app.privacy.matching import (
     same_address,
     shares_upper_case,
 )
+from app.privacy.matching import _local_case as local_case
+from app.privacy.matching import _spells as spells
 from app.privacy.matching import _twin_pattern as twin_pattern
 from app.tests._privacy_support import CAROL, EMAIL
 
@@ -358,7 +360,7 @@ def _holding(*addresses: str):
         found = set()
         for address in addresses:
             local, _, at = address.rpartition("@")
-            if at == domain and "".join(c.upper() for c in local) == upper_local:
+            if at == domain and _nfc("".join(c.upper() for c in local)) == upper_local:
                 found.add(local)
         return frozenset(found)
 
@@ -478,6 +480,57 @@ def test_capital_positions_are_ambiguous_and_lower_case_positions_exact(
     # A stored value is read as registration stores it (it lower-cases the RFC 2142 role names).
     if validate_email(f"{spelling}@{domain}", check_deliverability=False).local_part == spelling:
         assert same_address(f"{spelling}@{domain}", subject, alone) is (route == "twin")
+
+
+#: The six letters whose upper case NFC re-composes (review r7 R7-1): ``ΐ`` upper-cases to a
+#: decomposed ``Ϊ́`` (three code points), which NFC, like every stored address, writes as two.
+NFC_GREEK = ["\u0390", "\u03b0", "\u1fd2", "\u1fd7", "\u1fe2", "\u1fe7"]
+
+
+def _nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+@pytest.mark.parametrize("letter", NFC_GREEK)
+def test_a_capital_that_nfc_recomposes_is_still_the_subjects(letter):
+    """Fix pass 9: every case image is compared in NFC (decomposed in the span search), so the
+    capitals of these letters, alone or beside a lower-case one, are the subject's."""
+    upper = _nfc(letter.upper())
+    assert upper != letter.upper()  # the raw upper case is not NFC
+    subject = f"{letter}α@privacy.example"
+    for spelling in (f"{upper}Α", f"{upper}α", f"{letter}Α"):
+        text = f"Note: {_nfc(spelling)}@privacy.example."
+        assert mention(text, Subject(addresses=(subject,))) is WHOLE, spelling
+    # Two of them, one capital and one lower case, compose across the letters' boundary.
+    pair = Subject(addresses=(f"{letter}{letter}@privacy.example",))
+    assert mention(f"Note: {_nfc(upper + letter)}@privacy.example.", pair) is WHOLE
+    assert same_address(_nfc(f"{upper}Α@privacy.example"), subject)
+    # With a shared capital beside it, the twin rule decides as for any other letter.
+    sigma, final = f"{letter}σ@privacy.example", f"{letter}ς@privacy.example"
+    text = f"Note: {_nfc(upper)}Σ@privacy.example."
+    assert mention(text, Subject(addresses=(sigma,), existing=_holding(sigma))) is WHOLE
+    assert mention(text, Subject(addresses=(sigma,), existing=_holding(sigma, final))) is (
+        AMBIGUOUS
+    )
+
+
+@pytest.mark.parametrize(
+    ("written", "own"),
+    [
+        ("carol_xy", "carol_x"),
+        ("CAROL_XY", "carol_x"),
+        ("Irmakx", "ırmak"),
+        ("IRMAKS", "ırmak"),
+        ("StraSSeS", "straße"),
+        ("Irma", "ırmak"),
+        ("STRASS", "straße"),
+    ],
+)
+def test_a_spelling_must_cover_the_whole_local_part(written, own):
+    """Review r7 R7-3: ``_spells`` relates only a spelling of exactly the subject's letters, never
+    a longer or shorter one (mutant S2, a prefix, is caught here)."""
+    assert not spells(written, own)
+    assert local_case(written, own) is NONE
 
 
 def test_an_address_with_the_subjects_canonical_form_is_no_twin():

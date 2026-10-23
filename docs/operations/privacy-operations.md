@@ -102,18 +102,32 @@ Rules the code enforces:
         - **R6-2.** The RFC 2142 role names (`info`, `marketing`, `sales`, `support`, `abuse`,
           `noc`, `security`, `postmaster`, `hostmaster`, `usenet`, `news`, `webmaster`, `www`,
           `uucp`, `ftp`) are one address to registration in any letter case: it stores
-          `SALES@x` as `sales@x`. The twin rule does not know that. For a verified `ſales@x` or
-          `ınfo@x`, with no `sales@x` or `info@x` account or invitation in the product, an
-          all-capitals `SALES@x` or `INFO@x` in text is taken as that account's and erased.
+          `SALES@x` and `Sales@x` as `sales@x`. The twin rule does not know that. For a verified
+          `ſales@x` or `ınfo@x`, with no `sales@x` or `info@x` account or invitation in the
+          product, a role name written with a capital in text (`SALES@x`, `Sales@x`,
+          `SaLES@x`, `INFO@x`, `Info@x`) is taken as that account's and erased.
         - **R6-3.** With no twin in the product, a spelling that relates through a shared
           capital is the account's. For a verified `straße@x`, `STRASSE@x` is erased although
           it is equally the upper case of `strasse@x`, a person who may exist only in text and
           hold no account or invitation. This is over-erasure of that person's mention, by the
           coordinator's rule; it is recorded for `D-PRIV-7` and the operator.
+        - **R6-5.** The twin lookup runs inside the deletion's own transaction and locks neither
+          `users` nor `organization_invitations`. A twin registered or invited after the lookup
+          has read is not seen by that deletion: the occurrence is erased as the account's, as
+          it would be had the twin appeared just after the deletion. Each verification decides
+          again, as of its own read.
+        - **R6-7.** The SQL pre-filter and the twin lookup rely on the database's `lower()`
+          turning ASCII `A`–`Z` into `a`–`z`, and on nothing else (every other comparison is
+          made in Python, whose case mappings ignore the locale). PostgreSQL's `lower()` follows the database's
+          `LC_CTYPE`; under a Turkish locale it maps `I` to `ı`, so a fragment holding `i` would
+          miss a row written in capitals. The repository sets no database locale anywhere; the
+          deployed RDS default (`en_US.UTF-8`) is assumed, not asserted by code. Before an E10
+          run, the operator confirms `SHOW lc_ctype;` is not a Turkish or Azerbaijani locale.
   - **Every form of the address is looked for:**
     - Unicode NFC and NFD;
     - another letter case, non-ASCII letters included (lower-cased; a letter case shared with
-      a twin the product holds is flagged, see above);
+      a twin the product holds is flagged, see above). Each case image is compared in NFC, like
+      the stored text: `ΐ` upper-cases to a decomposed `Ϊ́`, which NFC re-composes (fix pass 9);
     - inside JSON `\uXXXX` escapes, up to three layers;
     - percent-encoded, one layer (also on top of each JSON layer);
     - with the domain as the IDNA A-label (`xn--…`), as the U-label, or in any spelling the
