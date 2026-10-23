@@ -85,7 +85,7 @@ Rules the code enforces:
     - another letter case, non-ASCII letters included (lower-cased; a letter case shared with
       another account is flagged, see above);
     - inside JSON `\uXXXX` escapes, up to three layers;
-    - percent-encoded;
+    - percent-encoded, one layer (also on top of each JSON layer);
     - with the domain as the IDNA A-label (`xn--…`), as the U-label, or in any spelling the
       UTS46 mapping turns into it (fullwidth, `。`, mathematical letters).
 
@@ -135,17 +135,23 @@ Rules the code enforces:
   - JSON object keys are never rewritten, so a key that names the account makes the
     verification fail (a finding).
   - **Not detected, a recorded limit: exactly these pass the verification unseen.** These are
-    texts that hold neither of two things. One is the local part followed by `@` and a domain
-    spelling that registration's UTS46 mapping turns into the account's domain. The other is
-    the local part joined to such a domain by one of the listed separators.
-    - a hash, base64 or other encoding of the address (percent-encoding and JSON escapes
-      excepted: they are decoded);
+    texts that hold neither of two things in any of the forms listed above. One is the local
+    part followed by `@` and a domain spelling that registration's UTS46 mapping turns into the
+    account's domain. The other is the local part joined to such a domain by one of the listed
+    separators. Measured examples:
+    - a hash, base64 or other encoding of the address. Only one layer of percent-encoding, up
+      to three layers of JSON escapes and the listed `@` entities are decoded. So a second
+      percent layer (`%2540`), a fourth JSON layer, JSON escapes inside percent-encoding
+      (`%5Cu0040`), other HTML entities (`&#46;`, `&#99;`) and quoted-printable (`=40`) pass
+      unseen;
+    - characters inserted into the address: a soft hyphen, a zero-width space or a line break,
+      or quotes around the local part (`"carol"@…`);
     - the domain spelled out (`b [dot] co`), or a separator not in the list;
     - a local part in a compatibility spelling (fullwidth `ｃａｒｏｌ@…`). That is not a
       spelling of the address at all: registration keeps it as a distinct account.
 
     No product writer stores any of them for an address. Third-party or customer text (raw
-    signals, notes) can contain the first two. Whole-text content hashes and the hashed
+    signals, notes) can contain the first three. Whole-text content hashes and the hashed
     signal embedding include an address's parts, but live in the same rows as that text and go
     with it. The verifier's `email_sha256` is an unsalted SHA-256: keep the report as
     pseudonymous evidence, not anonymous.
@@ -171,7 +177,7 @@ without `needs_review`:
 - an `AMBIGUOUS` or undecided one is left and flagged: `verified` with `needs_review` (exit
   `4`).
 
-Exactly the transformations listed under "Not detected" in §1 pass unseen. Everything else is
+Exactly the texts described under "Not detected" in §1 pass unseen. Everything else is
 erased, reported as a finding (exit 1), or flagged (exit 4). That includes a letter case shared
 with another account, and a copy of an address without an ASCII fragment in a casing the request
 does not select (§1).

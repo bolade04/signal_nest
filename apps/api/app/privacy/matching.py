@@ -95,11 +95,14 @@ stores is.
 
 **Not detected (recorded limits).** Exactly these pass unseen: texts that keep neither the
 local part followed by ``@`` and a domain spelling registration maps to the account's domain,
-nor that local part joined to such a domain by one of the listed separators. Examples are a
-hash, base64 or other encoding of the address (percent-encoding and JSON escapes excepted), the
-domain spelled out (``b [dot] co``), or a separator not in that list. No product writer produces
-any of them; third-party or customer text can. A local part in a compatibility spelling
-(fullwidth ``ｃａｒｏｌ``) is not one of them: registration keeps it as a distinct account.
+nor that local part joined to such a domain by one of the listed separators, in the views
+:func:`_views` decodes (up to three JSON-escape layers, each also percent-decoded once).
+Examples are a hash, base64 or other encoding of the address (``%2540``, a fourth JSON layer,
+``%5Cu0040``, ``&#46;``, quoted-printable ``=40``); characters inserted into it (a soft hyphen,
+a zero-width space, a line break, quotes around the local part); the domain spelled out
+(``b [dot] co``); or a separator not in that list. No product writer produces any of them;
+third-party or customer text can. A local part in a compatibility spelling (fullwidth
+``ｃａｒｏｌ``) is not one of them: registration keeps it as a distinct account.
 """
 
 from __future__ import annotations
