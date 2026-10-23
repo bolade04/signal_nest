@@ -19,6 +19,7 @@ import type {
   SessionOut,
   UserOut,
 } from '@/api/types';
+import { toAppPath } from './intended-path';
 import { SIGN_OUT_TIMEOUT_MS, type SignOutEverywhereOutcome, type SignOutOutcome } from './sign-out';
 
 const TOKEN_KEY = 'signalnest-token';
@@ -189,9 +190,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return 'server-revoked';
   }, [abortRefreshes, clearLocalSession, token]);
 
+  // Only ever an app path: every producer stores the address bar (PR #234 F1).
   const setIntendedPath = useCallback((path: string | null) => {
-    intendedPathRef.current = path;
-    setIntendedPathState(path);
+    const appPath = toAppPath(path);
+    intendedPathRef.current = appPath;
+    setIntendedPathState(appPath);
   }, []);
 
   // Register the 401 handler once. A 401 ends this tab's session only when it refused
