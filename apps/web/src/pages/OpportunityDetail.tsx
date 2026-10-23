@@ -273,8 +273,9 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               ) : null}
               {o.explanation_source === 'rule_based' ? (
                 <p role="note" className="text-xs text-muted-foreground">
-                  Rule-based summary: this signal is below the relevance threshold, so no AI model
-                  was consulted.
+                  Rule-based summary: this opportunity is below the relevance threshold, so no AI
+                  explanation was generated for it. Its signals were still classified by the AI
+                  model.
                 </p>
               ) : null}
               {o.ai_inference ? (

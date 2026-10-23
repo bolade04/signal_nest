@@ -13,7 +13,8 @@ opportunities and the opportunity detail API are asserted for each:
 * a failed classification is recorded on the signal as ``classification_source`` and
   degrades its opportunity, which is then never explained (the scores, title and
   grouping were computed without the classification, and the copy says so);
-* ``"rule_based"`` below the relevance action floor, where no model is consulted.
+* ``"rule_based"`` below the relevance action floor, where the signals are classified
+  but no explanation is requested from the model.
 
 Every module-level path to a provider is offline (``app.tests._llm_offline``), so the
 module behaves the same on a machine whose environment configures a real provider.
@@ -114,21 +115,48 @@ def _task(request: httpx.Request) -> str:
     raise AssertionError(f"unexpected prompt: {content[:60]!r}")
 
 
-def _replay_service(
-    *, classify_ok: bool, explain_ok: bool, classified: dict = CLASSIFIED
-) -> tuple[LLMService, list[str]]:
+def _service_over(reply) -> tuple[LLMService, list[str]]:
+    """The real Anthropic adapter over a replay; ``reply(task, request)`` answers each call."""
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         task = _task(request)
         calls.append(task)
-        if task == "classify_signal":
-            return _ok(classified) if classify_ok else _overloaded()
-        return _ok(EXPLANATION) if explain_ok else _overloaded()
+        return reply(task, request)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     provider = AnthropicProvider("fixture-key", "claude-sonnet-4-6", 5, client=client)
     return LLMService(provider, sleep=lambda _s: None, settings=offline_settings()), calls
+
+
+def _replay_service(
+    *, classify_ok: bool, explain_ok: bool, classified: dict = CLASSIFIED
+) -> tuple[LLMService, list[str]]:
+    def reply(task: str, _request: httpx.Request) -> httpx.Response:
+        if task == "classify_signal":
+            return _ok(classified) if classify_ok else _overloaded()
+        return _ok(EXPLANATION) if explain_ok else _overloaded()
+
+    return _service_over(reply)
+
+
+def _partial_outage_service(classified_as) -> tuple[LLMService, list[str]]:
+    """Classification of the 1st, 3rd, ... signal succeeds with ``classified_as(n)``; the
+    2nd, 4th, ... fails on every attempt (a request body is the same on each retry). The
+    explain call would succeed."""
+    seen: dict[bytes, int] = {}
+
+    def reply(task: str, request: httpx.Request) -> httpx.Response:
+        if task == "explain_opportunity":
+            return _ok(EXPLANATION)
+        n = seen.setdefault(request.content, len(seen))
+        return _overloaded() if n % 2 else _ok(classified_as(n))
+
+    return _service_over(reply)
+
+
+def _members(opportunity: Opportunity, signals: list) -> list:
+    return [s for s in signals if s.cluster_id == opportunity.cluster_id]
 
 
 def _relevance_at(monkeypatch, value: int) -> None:
@@ -286,6 +314,47 @@ def test_an_unclassified_cluster_below_the_floor_is_degraded_not_rule_based(
     for o in opps:
         assert o.explanation_source == ExplanationSource.DEGRADED.value
         assert o.why_it_matters == UNCLASSIFIED_WHY
+
+
+@pytest.mark.parametrize(
+    "collision",
+    [{"signal_type": "general", "pain_point_dna": None}, {"pain_point_dna": "general"}],
+    ids=["signal_type", "pain_point_dna"],
+)
+def test_a_mixed_cluster_with_any_unclassified_member_is_degraded(
+    seeded, monkeypatch, collision
+):
+    # An unclassified signal is clustered under "general"; a classified signal whose model
+    # output yields the same key joins it. Here the cluster's first (primary) member is
+    # classified and a later one is not: one unclassified member still degrades it.
+    service, calls = _partial_outage_service(lambda _n: {**CLASSIFIED, **collision})
+    opps, signals = _rerun(seeded, monkeypatch, service)
+    assert len(opps) == 1
+    (o,) = opps
+    sources = {s.ingest_metadata["classification_source"] for s in _members(o, signals)}
+    assert sources == {"model", "degraded"}
+    assert o.title.startswith("General in "), "the primary member must be the classified one"
+    assert "explain_opportunity" not in calls
+    assert o.explanation_source == ExplanationSource.DEGRADED.value
+    assert o.why_it_matters == UNCLASSIFIED_WHY
+
+
+def test_a_partial_outage_degrades_only_clusters_with_an_unclassified_member(
+    seeded, monkeypatch
+):
+    service, calls = _partial_outage_service(
+        lambda n: {**CLASSIFIED, "pain_point_dna": f"pain_{n}"}
+    )
+    opps, signals = _rerun(seeded, monkeypatch, service)
+    degraded, classified = [], []
+    for o in opps:
+        sources = {s.ingest_metadata["classification_source"] for s in _members(o, signals)}
+        (degraded if "degraded" in sources else classified).append(o)
+    assert degraded and classified
+    assert all(o.explanation_source == "degraded" for o in degraded)
+    assert all(o.explanation_source in {"model", "rule_based"} for o in classified)
+    explained = [o for o in classified if o.explanation_source == "model"]
+    assert explained and calls.count("explain_opportunity") == len(explained)
 
 
 def test_schema_invalid_model_output_never_reaches_the_logs(seeded, monkeypatch, caplog):

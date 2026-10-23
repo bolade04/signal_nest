@@ -688,6 +688,17 @@ class TestServiceRetries:
 
 
 # --------------------------------------------------------------------------- #
+# The offline harness itself
+# --------------------------------------------------------------------------- #
+def test_the_offline_harness_refuses_a_real_transport():
+    # Loopback discard port: without the refusal this would fail to connect locally
+    # (ConnectError), never reach another host, and still fail the test.
+    with httpx.Client(transport=httpx.HTTPTransport()) as client:
+        with pytest.raises(AssertionError, match="real HTTP request in an offline LLM test"):
+            client.get("http://127.0.0.1:9/")
+
+
+# --------------------------------------------------------------------------- #
 # Configuration bounds
 # --------------------------------------------------------------------------- #
 class TestConfigBounds:

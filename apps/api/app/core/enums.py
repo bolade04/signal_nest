@@ -178,8 +178,9 @@ class ExplanationSource(StrEnum):
     that is the deterministic mock). ``degraded``: the provider failed - to explain
     the opportunity or to classify one of its signals - and fixed placeholder copy
     was stored instead. ``rule_based``: below the relevance action floor;
-    deterministic copy, no model consulted. A NULL column predates the marker and
-    means "not recorded" - it is never backfilled by guessing.
+    deterministic copy, no explanation requested from the model (which still
+    classified the signals). A NULL column predates the marker and means "not
+    recorded" - it is never backfilled by guessing.
     """
 
     MODEL = "model"

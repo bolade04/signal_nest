@@ -10,7 +10,12 @@ import { renderApp } from '@/test/utils';
 // model, so placeholder text is never read as evidence-backed AI reasoning.
 const DEGRADED_BADGE = 'AI explanation unavailable';
 const DEGRADED_NOTE = /AI explanation unavailable for this run\./i;
-const RULE_BASED_NOTE = /no AI model\s+was consulted/i;
+const RULE_BASED_NOTE = /no AI\s+explanation\s+was\s+generated/i;
+// Below the floor the classifier still ran (its output set the score); only the
+// explanation was skipped, and the note must not claim more than that.
+const RULE_BASED_NOTE_TEXT =
+  'Rule-based summary: this opportunity is below the relevance threshold, so no AI ' +
+  'explanation was generated for it. Its signals were still classified by the AI model.';
 
 describe('opportunity detail explanation source', () => {
   it('labels a degraded explanation as placeholder copy, not AI reasoning', async () => {
@@ -41,7 +46,7 @@ describe('opportunity detail explanation source', () => {
     expect(screen.queryByText(RULE_BASED_NOTE)).not.toBeInTheDocument();
   });
 
-  it('says when no AI model was consulted', async () => {
+  it('says that no AI explanation was generated below the relevance floor', async () => {
     server.use(
       http.get(`*${API_PREFIX}/workspaces/:ws/opportunities/opp-loc-dallas-0`, () =>
         HttpResponse.json({
@@ -51,7 +56,9 @@ describe('opportunity detail explanation source', () => {
       ),
     );
     const screen = renderApp(<App />, { route: '/opportunities/opp-loc-dallas-0' });
-    expect(await screen.findByText(RULE_BASED_NOTE)).toBeInTheDocument();
+    const note = await screen.findByText(RULE_BASED_NOTE);
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe(RULE_BASED_NOTE_TEXT);
+    expect(screen.queryByText(/no AI model\s+was\s+consulted/i)).not.toBeInTheDocument();
     expect(screen.queryByText(DEGRADED_BADGE)).not.toBeInTheDocument();
   });
 

@@ -3,7 +3,7 @@
 Adds ``opportunities.explanation_source`` (P6-LLM-5): the provenance of an
 opportunity's explanation text - ``model`` (validated provider output),
 ``degraded`` (the provider failed; placeholder copy stored) or ``rule_based``
-(below the relevance action floor; no model consulted).
+(below the relevance action floor; no explanation requested from the model).
 
 Additive and safe on a live database: one nullable column, no default, no
 backfill. Existing rows stay NULL, which the API reports as "not recorded" -
