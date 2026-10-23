@@ -25,8 +25,8 @@ several forms:
   each pair).
 - **The one exception: the local part's letter case.** Registration keeps ``Kate`` and ``kate``
   apart. Erasure and export still match an account's own address in another letter case, gated
-  on its verification: a recorded engineering decision, with case-as-identity left open as
-  operator row 5.1.
+  on its verification: a recorded engineering decision. Making account e-mail identity
+  case-insensitive instead is left open as operator decisions packet row 5.1 (F2).
 - **A letter case shared with another account decides nothing** (reviews r5, R5-1).
   - Some upper-case spellings are shared by letters of different lower case
     (:func:`shares_upper_case`):

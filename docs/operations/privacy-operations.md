@@ -63,8 +63,9 @@ Rules the code enforces:
     - **The one recorded exception:** registration keeps the local part's letter case
       (`Kate`/`kate` are two accounts). Erasure and export still match an account's own address
       in another letter case, gated on its verified address. This is a recorded engineering
-      decision; treating letter case as identity is left open as operator decisions packet
-      row 5.1 (F2).
+      decision. The alternative, making account e-mail identity case-insensitive (`Kate` and
+      `kate` one account; a migration and a sign-in change), is left open as operator
+      decisions packet row 5.1 (F2).
     - **A letter case shared with another account decides nothing.** Some upper-case spellings
       belong to two accounts: `ΣΣ` is the upper case of `σσ` and of `σς`, `IA` of `ia` and
       `ıa`, `STRASSE` of `strasse` and `straße`, `OFFICE` of `office` and `oﬃce`. The matcher
