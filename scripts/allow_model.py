@@ -205,11 +205,13 @@ EXEMPTIONS = {
                                      f"arn:aws:iam::{gen.ACCOUNT}:role/anything"],
         },
     },
-    # P6-CI-6 K0-2 (2026-10-21): the key-apply principal's eight forbidden capabilities held SCOPED —
+    # P6-CI-6 K0-2 (2026-10-21): the key-apply principal's nine forbidden capabilities held SCOPED —
     # the same state-backend carve as the window principal, the boundary-conditioned inline-policy
-    # write on exactly the api and worker task roles, and the ONE trail's key update — each fenced
-    # everywhere else. (s3:PutEncryptionConfiguration is scoped too, but it is a PERMANENT_DENY
-    # member, not a forbidden capability; tests/test_key_apply_policy.py proves its fence.)
+    # write on exactly the api and worker task roles, the ONE trail's key update — each fenced
+    # everywhere else — and (D-K1-3 = b-wide, operator decision 2026-10-23) kms:PutKeyPolicy for the
+    # CreateKey policy-lockout check, explicitly denied on the two existing CMKs. (s3:PutEncryptionConfiguration
+    # is scoped too, but it is a PERMANENT_DENY member, not a forbidden capability; tests/test_key_apply_policy.py
+    # proves its fence.)
     "key_apply": {
         "s3:GetObject": {
             "reason": "reads the encrypted state object for the key-apply plan/apply; state_backend_closure.read",
@@ -263,6 +265,18 @@ EXEMPTIONS = {
             "in_scope": lambda: gen.ARN["trail"],
             "out_of_scope": lambda: [
                 f"arn:aws:cloudtrail:{gen.REGION}:{gen.ACCOUNT}:trail/some-other-trail"],
+        },
+        "kms:PutKeyPolicy": {
+            "reason": "key_apply_closure.kms_key_policy_lockout_check (D-K1-3 = b-wide, operator decision "
+                      "2026-10-23): the CreateKey policy-lockout check requires the CALLER to hold "
+                      "kms:PutKeyPolicy on the new key, so it is allowed on * (expiring, region-conditioned; "
+                      "the provider never calls PutKeyPolicy on create). It is NOT limited to the two new keys: "
+                      "the two existing CMKs are re-denied by KeyApplyDenyWritesOnTheExistingKeys and the bypass "
+                      "flag by KeyApplyDenyRiskyKeyShapes; any other key is bounded only by the expiry, the "
+                      "region, K1.R retirement and the R0 row-6 census",
+            "context": lambda: {"kms:BypassPolicyLockoutSafetyCheck": "false"},
+            "in_scope": lambda: gen.key_apply_resource_arns()["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de",
+            "out_of_scope": lambda: list(gen.key_apply_resource_arns()["existing_keys"]),
         },
     },
     "permanent_w0": {

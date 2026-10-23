@@ -12,8 +12,8 @@
   "allow_model.py::EXEMPTIONS": {
    "collection_id": "allow_model.py::EXEMPTIONS",
    "ordered": false,
-   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
-   "reviewed_digest": "sha256:2752a922958ca92dae8ae5b86bac24bded81a46ab8d854f45f6ddfb03df15406",
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:3c7648c46888db415df6942b16e36046eef4120855df86f5cd6ecc4055306911",
    "source": "live"
   },
   "allow_model.py::EXTRA_REQUIRED_SOURCES": {
@@ -488,8 +488,8 @@
   "iam_eval.py::ACTION_CONDITION_KEYS": {
    "collection_id": "iam_eval.py::ACTION_CONDITION_KEYS",
    "ordered": false,
-   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
-   "reviewed_digest": "sha256:7a4ddc88384075badc05f1406fda5d66336c44b20736b7867b40d29e65d10e4a",
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:22e284dbf463b9d1fa1b0c90cbe102f9151768d9464520a952a0c4874b3be1d9",
    "source": "live"
   },
   "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {
@@ -1020,15 +1020,15 @@
   "gen_operator_policies.py::KEY_APPLY_WRITES": {
    "collection_id": "gen_operator_policies.py::KEY_APPLY_WRITES",
    "ordered": false,
-   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
-   "reviewed_digest": "sha256:046be087616ef64aaa2f0a0ffbeba5c1031edcc3b0f9607bafe6da17fcad070b",
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:b6e0e9f86709e1b8c80fe3c1b26d95d9ec36b06788a780f6a9a3571bf24c98f3",
    "source": "live"
   },
   "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": {
    "collection_id": "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES",
    "ordered": false,
-   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
-   "reviewed_digest": "sha256:804e499c7442c0356636eab0ab016cc33a19c7a52a2af95fa63e0a65478f0d91",
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:821cb86b3845bbf08cdfcba47eb2e92c9b58d7a146d68ed2ca0e8064d7581eaf",
    "source": "live"
   }
  }

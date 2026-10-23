@@ -4,7 +4,10 @@ PR #230 added two customer-managed keys, three bucket-encryption changes, the tr
 updates. The root takes no targeted apply and no reviewed principal can apply them, so ONE root apply under this
 principal carries them (with the merged carry-overs: the API alias record CREATE, the budget update, api_ses_send).
 Repository delivery only: nothing here provisions, applies or changes anything in AWS. The content encodes the
-RECOMMENDED options of the pending operator decisions D-K1-1…4 (variant A: no kms:PutKeyPolicy).
+operator decisions of 2026-10-23: D-K1-3 = (b-wide) — kms:PutKeyPolicy allowed on "*" (expiring, region-conditioned)
+for the CreateKey policy-lockout check, carved out of the flat ceiling, still explicitly denied on the two existing
+CMKs and with the lockout bypass flag; D-K1-2 carve-outs as rendered; D-K1-4 <= 24 h; D-K1-5/6/7 (i). The offline
+evaluator cannot show that AWS's lockout check accepts the conditioned Allow; that remains a STOP condition at apply.
 
 What this file proves, positively AND negatively, with real request contexts:
   * the three documents (inline + two customer managed) are discovered, valid, deterministic, inside the quotas, and
@@ -12,8 +15,9 @@ What this file proves, positively AND negatively, with real request contexts:
   * every key-apply write is granted on its exact resource under the request context the provider sends, and is
     DENIED off-scope: other aliases, existing keys, other buckets, other trails, other roles, other zones, other record
     actions, keys with the lockout bypass or multi-region, CreateKey with other tags;
-  * the must-not actions stay EXPLICITLY denied (kms:PutKeyPolicy, kms:ScheduleKeyDeletion, cloudtrail:StopLogging,
-    iam:CreateRole, secretsmanager:GetSecretValue, rds:ModifyDBInstance …); every Allow expires; the ceiling never does;
+  * the must-not actions stay EXPLICITLY denied (kms:ScheduleKeyDeletion, cloudtrail:StopLogging, iam:CreateRole,
+    secretsmanager:GetSecretValue, rds:ModifyDBInstance …; kms:PutKeyPolicy on the existing CMKs and with the bypass
+    flag); every Allow expires; the ceiling never does;
   * the generator output matches the independently authored key_apply_closure contract section;
   * the names the scopes bind to are the ones the .tf sources declare;
   * the reviewed W0, temporary-operator and window documents are untouched (the P6-CI-6 pending-key tripwires in
@@ -319,13 +323,71 @@ def test_the_existing_state_and_secrets_keys_cannot_be_changed(effective, arns):
     assert decision(effective, "kms:Decrypt", gen.ARN["cmk_secrets"], _ctx(**{"kms:ViaService": f"s3.{gen.REGION}.amazonaws.com"})) is Decision.EXPLICIT_DENY
 
 
-def test_variant_a_no_key_policy_write_and_no_destruction_on_the_new_keys(effective):
-    """PENDING D-K1-3, recommended variant A: kms:PutKeyPolicy stays flatly denied, even on a new, correctly tagged key."""
+def test_b_wide_key_policy_write_for_the_lockout_check_and_no_destruction_on_the_new_keys(effective, arns):
+    """D-K1-3 = (b-wide), operator decision 2026-10-23: kms:PutKeyPolicy is EXPLICIT_ALLOW on a new key only while the
+    principal is unexpired, in the region and without the bypass flag; it stays EXPLICIT_DENY on the two existing CMKs
+    and with the bypass flag; destruction and crypto on the new keys stay refused."""
     tagged = _ctx(**{"aws:ResourceTag/Name": f"{gen.PREFIX}-spa-cmk"})
-    for action in ("kms:PutKeyPolicy", "kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:CreateGrant"):
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, tagged) is Decision.EXPLICIT_ALLOW
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, _ctx()) is Decision.EXPLICIT_ALLOW
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, {**tagged, "aws:CurrentTime": AFTER_EXPIRY}) is Decision.IMPLICIT_DENY
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, {**tagged, "aws:RequestedRegion": "eu-west-1"}) is Decision.IMPLICIT_DENY
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, {**tagged, "kms:BypassPolicyLockoutSafetyCheck": "true"}) is Decision.EXPLICIT_DENY
+    for key in arns["existing_keys"]:
+        assert decision(effective, "kms:PutKeyPolicy", key, tagged) is Decision.EXPLICIT_DENY, key
+        assert decision(effective, "kms:PutKeyPolicy", key, _ctx()) is Decision.EXPLICIT_DENY, key
+    for action in ("kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:CreateGrant"):
         assert decision(effective, action, NEW_KEY, tagged) is Decision.EXPLICIT_DENY, action
     for action in ("kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DeleteAlias"):
         assert decision(effective, action, NEW_KEY, tagged) is not Decision.EXPLICIT_ALLOW, action
+
+
+def _without(policy: dict, sid: str) -> dict:
+    return {**policy, "Statement": [s for s in policy["Statement"] if s["Sid"] != sid]}
+
+
+def _edited(policy: dict, sid: str, **fields) -> dict:
+    return {**policy, "Statement": [({**s, **fields} if s["Sid"] == sid else s) for s in policy["Statement"]]}
+
+
+def test_each_b_wide_put_key_policy_control_is_load_bearing(effective, arns):
+    """Falsification: each control around the b-wide grant flips its decision when removed, so none is decorative."""
+    tagged = _ctx(**{"aws:ResourceTag/Name": f"{gen.PREFIX}-spa-cmk"})
+    bypass = {**tagged, "kms:BypassPolicyLockoutSafetyCheck": "true"}
+    secrets = gen.ARN["cmk_secrets"]
+    # positive instance first: the unmutated composition
+    assert decision(effective, "kms:PutKeyPolicy", secrets, tagged) is Decision.EXPLICIT_DENY
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, bypass) is Decision.EXPLICIT_DENY
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, tagged) is Decision.EXPLICIT_ALLOW
+    # the existing-key Deny protects the secrets CMK
+    assert decision(_without(effective, "KeyApplyDenyWritesOnTheExistingKeys"), "kms:PutKeyPolicy", secrets, tagged) \
+        is Decision.EXPLICIT_ALLOW
+    # the bypass Deny's PutKeyPolicy leg protects the new key
+    assert decision(_edited(effective, "KeyApplyDenyRiskyKeyShapes", Action=["kms:CreateKey"]), "kms:PutKeyPolicy",
+                    NEW_KEY, bypass) is Decision.EXPLICIT_ALLOW
+    # the ceiling carve-out is what lets the Allow work at all
+    ceiling = next(s for s in effective["Statement"] if s["Sid"] == "KeyApplyDenyDangerous")
+    uncarved = _edited(effective, "KeyApplyDenyDangerous", Action=sorted(set(ceiling["Action"]) | {"kms:PutKeyPolicy"}))
+    assert decision(uncarved, "kms:PutKeyPolicy", NEW_KEY, tagged) is Decision.EXPLICIT_DENY
+    # and the new Allow is the only grant of it
+    assert decision(_without(effective, "KeyApplyLockoutCheckPutKeyPolicy"), "kms:PutKeyPolicy", NEW_KEY, tagged) \
+        is Decision.IMPLICIT_DENY
+
+
+def test_the_lockout_check_allow_is_exactly_the_reviewed_b_wide_statement(inline):
+    """The one added Allow, verbatim in shape: PutKeyPolicy only, Resource "*", the expiry and the region, nothing else;
+    placed right after the alias grant; and the bypass-flag Deny covers CreateKey AND PutKeyPolicy."""
+    sids = [s["Sid"] for s in inline["Statement"]]
+    stmt = inline["Statement"][sids.index("KeyApplyLockoutCheckPutKeyPolicy")]
+    assert sids.index("KeyApplyLockoutCheckPutKeyPolicy") == sids.index("KeyApplyCreateTheTwoAliases") + 1
+    assert stmt == {"Sid": "KeyApplyLockoutCheckPutKeyPolicy", "Effect": "Allow", "Action": ["kms:PutKeyPolicy"],
+                    "Resource": "*", "Condition": {"DateLessThan": {"aws:CurrentTime": EXPIRY},
+                                                   "StringEquals": {"aws:RequestedRegion": gen.REGION}}}
+    granting = [s["Sid"] for s in inline["Statement"] if s["Effect"] == "Allow" and "kms:PutKeyPolicy" in s["Action"]]
+    assert granting == ["KeyApplyLockoutCheckPutKeyPolicy"]
+    risky = inline["Statement"][sids.index("KeyApplyDenyRiskyKeyShapes")]
+    assert risky["Action"] == ["kms:CreateKey", "kms:PutKeyPolicy"] and risky["Resource"] == "*"
+    assert risky["Condition"] == {"Bool": {"kms:BypassPolicyLockoutSafetyCheck": "true"}}
 
 
 def test_bucket_encryption_on_the_three_buckets_only(effective, arns):
@@ -422,7 +484,11 @@ def test_the_scoped_capabilities_fences_and_denies_match_the_contract(inline, ce
     assert sorted(contract["reads_widened"]) == sorted(gen.REFRESH_CLOSURE["kms_exact"])
     flat = set(ceiling["Statement"][0]["Action"])
     assert not (flat & gen.KEY_APPLY_SCOPED_CAPABILITIES)
-    assert "kms:PutKeyPolicy" in flat and "kms:ScheduleKeyDeletion" in flat
+    # D-K1-3 = (b-wide): exactly kms:PutKeyPolicy leaves the ceiling; every other KMS member stays flatly denied
+    assert "kms:PutKeyPolicy" not in flat
+    assert {a for a in flat if a.startswith("kms:")} == {
+        "kms:CreateGrant", "kms:DisableKey", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:RetireGrant",
+        "kms:RevokeGrant", "kms:ScheduleKeyDeletion"}
 
 
 def test_the_read_closure_is_the_w0_read_closure_with_kms_widened_to_key_star(reads, arns):
@@ -491,7 +557,10 @@ def test_every_forbidden_capability_is_explicitly_denied_everywhere_except_its_f
     ctx = _ctx(**{"iam:PermissionsBoundary": BOUNDARY, "kms:ViaService": f"s3.{gen.REGION}.amazonaws.com"},
                **_tags(f"{gen.PREFIX}-spa-cmk"))
     not_denied = [a for a in sorted(universe) if not a.endswith("*") and decision(effective, a, "*", ctx) is not Decision.EXPLICIT_DENY]
-    assert not_denied == [], not_denied
+    # D-K1-3 = (b-wide): kms:PutKeyPolicy is the ONE capability granted on "*" (no NotResource fence can name a key that
+    # does not exist yet); its off-scope denials are the existing-CMK Deny and the bypass Deny, proven below and in
+    # test_b_wide_key_policy_write_for_the_lockout_check_and_no_destruction_on_the_new_keys. Any other member here fails.
+    assert not_denied == ["kms:PutKeyPolicy"], not_denied
     scoped = {
         "s3:GetObject": (gen.ARN["state_object"], f"{gen.ARN['state_bucket']}/other"),
         "s3:PutObject": (gen.ARN["state_object"], f"{gen.ARN['state_bucket']}/other"),
@@ -502,11 +571,15 @@ def test_every_forbidden_capability_is_explicitly_denied_everywhere_except_its_f
         "iam:PutRolePolicy": (arns["task_roles"][0], identity.iam_role_arn(f"{gen.PREFIX}-ecs-execution")),
         "cloudtrail:UpdateTrail": (arns["trail"], f"arn:aws:cloudtrail:{gen.REGION}:{gen.ACCOUNT}:trail/other"),
         "s3:PutEncryptionConfiguration": (arns["buckets"][2], gen.ARN["state_bucket"]),
+        "kms:PutKeyPolicy": (NEW_KEY, gen.ARN["cmk_secrets"]),
     }
     assert set(scoped) == set(gen.KEY_APPLY_SCOPED_CAPABILITIES)
     for action, (inside, outside) in scoped.items():
         assert decision(effective, action, inside, ctx) is Decision.EXPLICIT_ALLOW, (action, inside)
         assert decision(effective, action, outside, ctx) is Decision.EXPLICIT_DENY, (action, outside)
+    assert decision(effective, "kms:PutKeyPolicy", gen.ARN["cmk_state"], ctx) is Decision.EXPLICIT_DENY
+    assert decision(effective, "kms:PutKeyPolicy", NEW_KEY, {**ctx, "kms:BypassPolicyLockoutSafetyCheck": "true"}) \
+        is Decision.EXPLICIT_DENY
 
 
 # =====================================================================================
@@ -517,12 +590,18 @@ def test_every_forbidden_capability_is_explicitly_denied_everywhere_except_its_f
 def test_the_allow_model_proves_the_key_apply_principal_both_directions():
     """allow_model.TARGETS carries the principal: every grant is justified by the INDEPENDENT contract (refresh,
     state backend, key_apply_closure), 0 escapes over the forbidden universe, 0 losses over its own requirement set,
-    and exactly the eight forbidden capabilities it holds are exempted — each allowed in scope, denied out of scope."""
+    and exactly the nine forbidden capabilities it holds are exempted — each allowed in scope, denied out of scope
+    (for kms:PutKeyPolicy, D-K1-3 = b-wide: out of scope = the two existing CMKs)."""
     import allow_model
 
     entry = allow_model.run()["policies"]["key_apply"]
     assert entry["unclassified"] == [] and entry["escapes"] == [] and entry["losses"] == []
     assert {row["action"] for row in entry["exempted"]} == set(gen.KEY_APPLY_SCOPED_CAPABILITIES) - {"s3:PutEncryptionConfiguration"}
+    assert len(entry["exempted"]) == 9
+    pkp = next(row for row in entry["exempted"] if row["action"] == "kms:PutKeyPolicy")
+    assert pkp["in_scope_decision"] == "EXPLICIT_ALLOW"
+    assert sorted(o["resource"] for o in pkp["out_of_scope"]) == sorted(gen.key_apply_resource_arns()["existing_keys"])
+    assert {o["decision"] for o in pkp["out_of_scope"]} == {"EXPLICIT_DENY"}
     assert set(allow_model.key_apply_required_actions()) >= {a for v in gen.KEY_APPLY_WRITES.values() for a in v}
 
 
@@ -560,3 +639,17 @@ def test_the_dead_grant_detector_covers_the_conditioned_kms_writes():
     stmt = next(s for s in mutated["Statement"] if s["Sid"] == "KeyApplyCreateTheTwoKeys")
     stmt["Condition"]["StringEquals"]["kms:GrantIsForAWSResource"] = "true"
     assert any("kms:GrantIsForAWSResource" in p for p in iam_eval.validate_policy(mutated))
+
+
+def test_the_dead_grant_detector_covers_the_b_wide_put_key_policy_statements():
+    """D-K1-3 = (b-wide): kms:PutKeyPolicy is conditioned in two statements (the lockout-check Allow and the bypass-flag
+    Deny). The detector knows the keys PutKeyPolicy supports, so a Deny conditioned on a key it never populates — which
+    would silently never match — is reported."""
+    assert "kms:BypassPolicyLockoutSafetyCheck" in iam_eval.ACTION_CONDITION_KEYS["kms:PutKeyPolicy"]
+    doc = gen.key_apply_inline_policy(EXPIRY, FQDN)
+    for sid, op, key in (("KeyApplyDenyRiskyKeyShapes", "Bool", "kms:GrantIsForAWSResource"),
+                         ("KeyApplyLockoutCheckPutKeyPolicy", "StringEquals", "kms:EncryptionAlgorithm")):
+        mutated = copy.deepcopy(doc)
+        stmt = next(s for s in mutated["Statement"] if s["Sid"] == sid)
+        stmt["Condition"].setdefault(op, {})[key] = "true"
+        assert any(f"kms:PutKeyPolicy does not support condition key {key}" in p for p in iam_eval.validate_policy(mutated)), sid

@@ -3,15 +3,21 @@
   "_note": "A digest pin is honoured only while it cites an ACTIVE record here. Superseding a record instantly REDs every pin that cited it until re-reviewed.",
   "_root_of_trust": "This ledger is the smallest independently-reviewable surface. It pins the canonical digests of the two authored maps (assurance registry + review-pin registry) that decide what is governed and against what baseline; changing either without re-reviewing this file fails closed. Reviewed end-to-end on every change.",
   "governed_files": {
-    "critical-list-contract.json": "sha256:142739805269d0e9d8487174fce04a3c823d5c23cc6637a0f5f1390ac833c259",
+    "critical-list-contract.json": "sha256:d36df2715c136f504020a2c2fc8957064c017e8079b9853309b0413a826a327a",
     "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
-    "review-pin-registry.json": "sha256:25564d2628fb09c983e2456b25839de7300010fb783069272e0814299690eb84",
-    "security-assurance-registry.json": "sha256:5e9676fcd8fa99d241c01cae459f254fae06bf7ea394b592843514624a80c18c",
+    "review-pin-registry.json": "sha256:0a7e98c078f36dab0f4a9956268a524da51458cf84d74e817c610ce84ff77819",
+    "security-assurance-registry.json": "sha256:e31245d4cdb513516c375294fe236519b1b9d56e5637a7043971658f2d00a705",
     "site-coverage-function-assurance.json": "sha256:332afc74ad5f6bd5c6a88af9b4925caf702de46b2976f76507dbc9e6a09dd728",
     "site-coverage-matrix.json": "sha256:8572ccd2a571a044931f05e2f82b2751786cae140f83aeef6ba8e3607b33b87e",
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE": {
+        "approver": "P6-CI6-KEY-APPLY-K02-BWIDE-DRAFT-TRANCHE",
+        "established": "2026-10-23",
+        "scope": "Re-derivation of the P6-CI-6 key-apply principal documents (PKT-K0 K0-2; freeze allowlist AL-2a; repository delivery only \u2014 no permission set, policy, provisioning or AWS change) for the operator decisions of 2026-10-23: D-K1-3 = (b-wide) \u2014 inline Allow KeyApplyLockoutCheckPutKeyPolicy (kms:PutKeyPolicy, Resource *, DateLessThan aws:CurrentTime <expiry> + StringEquals aws:RequestedRegion) for the CreateKey policy-lockout check, kms:PutKeyPolicy carved out of the flat ceiling (104 -> 103 actions), KeyApplyDenyRiskyKeyShapes extended to kms:PutKeyPolicy, KeyApplyDenyWritesOnTheExistingKeys retained; D-K1-2 carve-outs as rendered plus kms:PutKeyPolicy; D-K1-4 <= 24 h; D-K1-5/6/7 (i). Re-pinned: gen_operator_policies KEY_APPLY_WRITES (+ kms_key_policy_lockout_check) and KEY_APPLY_SCOPED_CAPABILITIES (+ kms:PutKeyPolicy), allow_model EXEMPTIONS (key_apply gains kms:PutKeyPolicy: in scope a new key, out of scope the two existing CMKs), iam_eval ACTION_CONDITION_KEYS (+ kms:PutKeyPolicy, Service Authorization Reference AWS KMS Actions table saved 2026-10-21). The emitted documents are byte-equal to the reviewed renders P6-W1-IAM-01/drafts/k1-v2/variant-bwide.{KI-inline,KD-deny-ceiling-cmp,KR-read-closure-cmp}.placeholder.json. Acceptance does NOT establish that AWS's lockout-safety check accepts the conditioned Allow; the stop rule stands. Independent permissions review of this re-derivation pending (revk1perm).",
+        "status": "ACTIVE"
+    },
     "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE": {
         "approver": "P6-CI6-KEY-APPLY-K02-DRAFT-TRANCHE",
         "established": "2026-10-21",

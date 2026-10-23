@@ -1246,9 +1246,13 @@ def window_transition_effective_policy(expiry: str, api_fqdn: str, *, issuance: 
 # and the window principal deny or lack them — tests/test_closure_independence.py keeps that pending state pinned for them).
 # This principal exists ONLY for that apply and is retired right after its readback.
 #
-# PENDING OPERATOR DECISIONS (D-K1-1…4): the documents below encode the recommended options — variant A (NO
-# kms:PutKeyPolicy: if the CreateKey policy-lockout check needs it, CreateKey is refused and no key exists), the four
-# must-not carve-outs re-denied off-scope by fences, expiry <= 24 h. They are not provisionable until those decisions exist.
+# OPERATOR DECISIONS (2026-10-23): D-K1-3 = (b-wide) — kms:PutKeyPolicy is ALLOWED on "*" (expiring, region-conditioned)
+# so that the CreateKey policy-lockout check can find it on the caller's effective permissions; it is carved out of the
+# flat ceiling and stays explicitly denied on the two existing CMKs and with BypassPolicyLockoutSafetyCheck = true. This
+# does NOT establish that AWS's lockout check accepts the conditioned Allow: a MalformedPolicyDocumentException or an
+# AccessDenied naming kms:PutKeyPolicy is a STOP (no retry, no widening, never the bypass flag). D-K1-2: the must-not
+# carve-outs as rendered (+ kms:PutKeyPolicy), each re-denied off its scope; D-K1-4: expiry <= 24 h; D-K1-5/6/7 (i): no
+# tag-conditioned Deny, no KeySpec/KeyUsage conditions. D-K1-1 = A (root-console provisioning; no repository change).
 #
 # Same split form as the window principal (Identity Center allows ONE inline policy per permission set; its non-whitespace
 # limit is 10,240 == the IAM role inline aggregate; customer managed policies are 6,144 each):
@@ -1269,6 +1273,10 @@ KEY_APPLY_WRITES = {
     "kms_key_configure": ["kms:EnableKeyRotation"],
     # the two aliases (authorized against the alias AND the target key)
     "kms_alias_create": ["kms:CreateAlias"],
+    # D-K1-3 (b-wide): the CreateKey policy-lockout check requires the CALLER to hold kms:PutKeyPolicy on the new key; the
+    # provider never calls PutKeyPolicy on create (PKT-K2 readback: CloudTrail must show none). Resource "*" (the key does
+    # not exist when the check runs); the two existing CMKs stay denied by KeyApplyDenyWritesOnTheExistingKeys.
+    "kms_key_policy_lockout_check": ["kms:PutKeyPolicy"],
     # SPA, audit and application bucket default encryption
     "bucket_encryption": ["s3:PutEncryptionConfiguration"],
     # the audit trail's kms_key_id
@@ -1282,7 +1290,8 @@ KEY_APPLY_WRITES = {
 }
 
 # The forbidden capabilities the key-apply principal holds SCOPED: subtracted from its flat ceiling and re-denied
-# everywhere else by NotResource fences. kms:PutKeyPolicy is NOT here (variant A, pending D-K1-3): it stays flatly denied.
+# everywhere else by NotResource fences — or, for kms:PutKeyPolicy (D-K1-3 = b-wide, 2026-10-23), by the explicit Deny on
+# the two existing CMKs (KeyApplyDenyWritesOnTheExistingKeys) and the bypass-flag Deny (KeyApplyDenyRiskyKeyShapes).
 KEY_APPLY_SCOPED_CAPABILITIES = frozenset({
     "s3:GetObject",                    # state object
     "s3:PutObject",                    # state object
@@ -1293,6 +1302,7 @@ KEY_APPLY_SCOPED_CAPABILITIES = frozenset({
     "iam:PutRolePolicy",               # the two task roles, boundary-conditioned
     "cloudtrail:UpdateTrail",          # the one trail
     "s3:PutEncryptionConfiguration",   # the three buckets (denied to W0 only; not a must-not action)
+    "kms:PutKeyPolicy",                # D-K1-3 (b-wide): the lockout check only; never on the two existing CMKs
 })
 
 
@@ -1385,6 +1395,9 @@ def _key_apply_inline_statements(expiry: str, api_fqdn: str) -> list[dict]:
         {"Sid": "KeyApplyTagOnCreate", "Effect": "Allow", "Action": ["kms:TagResource"], "Resource": "*", "Condition": e(create_tags)},
         {"Sid": "KeyApplyEnableRotation", "Effect": "Allow", "Action": x["kms_key_configure"], "Resource": r["key_star"], "Condition": e(REGION_COND)},
         {"Sid": "KeyApplyCreateTheTwoAliases", "Effect": "Allow", "Action": x["kms_alias_create"], "Resource": r["aliases"] + [r["key_star"]], "Condition": e()},
+        # D-K1-3 (b-wide, 2026-10-23): for the CreateKey policy-lockout check. Neither "*" nor key/* limits it to the two new
+        # keys; the existing-key Deny, the bypass Deny, the expiry, the region, K1.R and the R0 row-6 census bound it.
+        {"Sid": "KeyApplyLockoutCheckPutKeyPolicy", "Effect": "Allow", "Action": x["kms_key_policy_lockout_check"], "Resource": "*", "Condition": e(REGION_COND)},
         # --- the other writes, each on its exact resource -----------------------------------------------------------------
         {"Sid": "KeyApplyBucketEncryption", "Effect": "Allow", "Action": x["bucket_encryption"], "Resource": r["buckets"], "Condition": e()},
         {"Sid": "KeyApplyTrailKey", "Effect": "Allow", "Action": x["trail_key"], "Resource": r["trail"], "Condition": e()},
@@ -1398,7 +1411,7 @@ def _key_apply_inline_statements(expiry: str, api_fqdn: str) -> list[dict]:
              "route53:ChangeResourceRecordSetsActions": ["CREATE"]}})},
         {"Sid": "KeyApplyRoute53ChangePoll", "Effect": "Allow", "Action": x["dns_change_poll"], "Resource": r["change"], "Condition": e()},
         # --- never-expiring explicit denies ------------------------------------------------------------------------------
-        {"Sid": "KeyApplyDenyRiskyKeyShapes", "Effect": "Deny", "Action": ["kms:CreateKey"], "Resource": "*",
+        {"Sid": "KeyApplyDenyRiskyKeyShapes", "Effect": "Deny", "Action": ["kms:CreateKey", "kms:PutKeyPolicy"], "Resource": "*",
          "Condition": {"Bool": {"kms:BypassPolicyLockoutSafetyCheck": "true"}}},
         {"Sid": "KeyApplyDenyMultiRegionKeys", "Effect": "Deny", "Action": ["kms:CreateKey"], "Resource": "*",
          "Condition": {"Bool": {"kms:MultiRegion": "true"}}},

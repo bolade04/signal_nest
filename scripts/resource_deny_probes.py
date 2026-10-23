@@ -168,6 +168,19 @@ PROBES = [
     ("key_apply", "kms:EnableKeyRotation", gen.ARN["cmk_state"],
      gen.key_apply_resource_arns()["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de",
      "rotation, alias and tag writes on the two EXISTING keys (state, secrets)"),
+    # D-K1-3 = (b-wide), operator decision 2026-10-23: kms:PutKeyPolicy is Allowed on "*" for the CreateKey
+    # lockout check. Both of its denials are probed two-sided: the bypass flag (the PutKeyPolicy leg of
+    # KeyApplyDenyRiskyKeyShapes) and the existing secrets CMK (KeyApplyDenyWritesOnTheExistingKeys), each
+    # against a new key without the flag, which must stay allowed (the region is in the probe context because
+    # the Allow is region-conditioned).
+    ("key_apply", "kms:PutKeyPolicy",
+     gen.key_apply_resource_arns()["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de", None,
+     "key-policy writes that bypass the key-policy lockout safety check",
+     {"kms:BypassPolicyLockoutSafetyCheck": "true", "aws:RequestedRegion": gen.REGION}),
+    ("key_apply", "kms:PutKeyPolicy", gen.ARN["cmk_secrets"],
+     gen.key_apply_resource_arns()["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de",
+     "key-policy writes on the two EXISTING keys (state, secrets)",
+     {"kms:BypassPolicyLockoutSafetyCheck": "false", "aws:RequestedRegion": gen.REGION}),
     ("key_apply", "kms:CreateAlias",
      f"arn:aws:kms:{gen.REGION}:{gen.ACCOUNT}:alias/some-other-alias",
      gen.key_apply_resource_arns()["aliases"][0],
