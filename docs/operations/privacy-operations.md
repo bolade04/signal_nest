@@ -51,22 +51,42 @@ Rules the code enforces:
   matcher (`app.privacy.matching`).
   - **What counts as the same address.** Registration's own rule decides; it was measured, not
     assumed.
-    - **Same address:** registration stores the NFC form, the U-label domain and a lower-case
-      domain, so NFC/NFD spellings, A-/U-label domains and domain letter case are one account.
+    - **Same address:** registration stores the NFC form, and maps the domain through UTS46
+      to its lower-case U-label. So NFC/NFD spellings, A-/U-label domains, domain letter case
+      and the domain spellings UTS46 maps (fullwidth letters and stops, the ideographic full
+      stop `。`, mathematical letters) are one account. The matcher resolves a domain in text
+      with that same mapping.
     - **Distinct accounts:** registration keeps `straße`/`strasse`, `weiß`/`weiss`, `ſ`/`s`,
       `ﬃ`/`ffi` and `ς`/`σ` apart. So does the matcher, which lower-cases letters rather than
       case-folding them (case-folding joined each pair, and let a verified account at one form
       reach another organization's records for the other).
     - **The one recorded exception:** registration keeps the local part's letter case
       (`Kate`/`kate` are two accounts). Erasure and export still match an account's own address
-      in any letter case, which is the policy gated on a verified address. Python's lower-casing
-      also maps an all-capitals Greek `ΣΣ` to `σς`, so such a text matches `σς@…` only.
+      in another letter case, gated on its verified address. This is a recorded engineering
+      decision; treating letter case as identity is left open as operator decisions packet
+      row 5.1 (F2).
+    - **A letter case shared with another account decides nothing.** Some upper-case spellings
+      belong to two accounts: `ΣΣ` is the upper case of `σσ` and of `σς`, `IA` of `ia` and
+      `ıa`, `STRASSE` of `strasse` and `straße`, `OFFICE` of `office` and `oﬃce`. The matcher
+      computes which upper-case spellings Unicode lets two letters of different lower case share
+      (`S`, `I`, `Σ`, `Μ`, Cyrillic `В`, `О`, `С`, `Т`, sequences such as `SS`, `FF`, `ST`).
+      - An occurrence written with one of them, other than the account's own exact spelling, is
+        `AMBIGUOUS`.
+      - So is a spelling that matches only the account's upper case.
+      - Such an occurrence is never exported or erased for either twin, and the verifier flags it
+        (exit 4).
+      - This also covers ordinary all-capitals spellings such as `JOSÉ@…`, `SALES@…`,
+        `INFO@…` or `ИВАН@…`, because `joſé`, `ſales`, `ınfo` and `иᲀан` are registrable too.
+      - The account's own exact spelling, a lower-case spelling, and capitals without such
+        letters (`CAROL_X@…`) are `WHOLE`.
   - **Every form of the address is looked for:**
     - Unicode NFC and NFD;
-    - any letter case, non-ASCII letters included (lower-cased, see above);
+    - another letter case, non-ASCII letters included (lower-cased; a letter case shared with
+      another account is flagged, see above);
     - inside JSON `\uXXXX` escapes, up to three layers;
     - percent-encoded;
-    - with the domain as the IDNA A-label (`xn--…`) or as the U-label.
+    - with the domain as the IDNA A-label (`xn--…`), as the U-label, or in any spelling the
+      UTS46 mapping turns into it (fullwidth, `。`, mathematical letters).
 
     The SQL pre-filter compares only ASCII fragments that every one of those forms contains,
     so no database `lower()` decides anything for non-ASCII letters, on SQLite or on
@@ -81,10 +101,13 @@ Rules the code enforces:
 
     That keeps the request's work bounded. Measured on SQLite with 20,000 unrelated audit rows,
     the deletion selected 0 rows instead of all 20,010, and took 0.71 s, against 0.53 s for an
-    ASCII address. It has a limit: other mixed casings of such an address (`иВАН@…`) are not
+    ASCII address. It has a limit: other mixed casings of such an address (`иваН@…`) are not
     erased in the request on SQLite, nor in a JSON column on either engine. The operator's
     verification reads every row for such an address, so it reports any copy left as a
-    finding (exit 1); it is never passed.
+    finding (exit 1), or flags it (exit 4) when the casing is shared with another account
+    (`иВАН@…`); it is never passed. For an address with an ASCII run, the filter also selects
+    the local part followed by `@`, `%40`, `＠` or `﹫` (raw or JSON-escaped), so domain
+    spellings without an ASCII fragment are read too.
   - Each occurrence is judged by the product's own address grammar, the validator registration
     uses.
     - **`WHOLE`**: no registrable address could contain it. Examples: `mailto:a@b.co`,
@@ -96,8 +119,10 @@ Rules the code enforces:
       `.Word`, because registration accepts all of those characters in an address.
     - **Undecided** (also `AMBIGUOUS`): the address does not occur, but its local part and its
       domain are joined by an explicit separator written instead of `@`. The separators are
-      `[at]`, `(at)`, `{at}`, `<at>`, `[@]`, `(@)`, `&#64;`, `&#x40;`, `&commat;`, and `at` or
-      `@` between spaces; examples are `a&#64;b.co` and `a [at] b.co`. Mere co-occurrence is
+      `[at]`, `(at)`, `{at}`, `<at>`, `[@]`, `(@)`, `&#64;`, `&#x40;`, `&commat;`, the
+      fullwidth `＠` and the small `﹫` (registration does not accept either in an address), and
+      `at` or `@` between spaces. Examples are `a&#64;b.co`, `a [at] b.co` and `a＠b.co`. The
+      domain after the separator is read with the same UTS46 mapping. Mere co-occurrence is
       not flagged: "John from Acme (acme.example)" is not about `john@acme.example`. "sales at
       shop.example" is flagged, because ` at ` is such a separator.
 
@@ -108,11 +133,18 @@ Rules the code enforces:
     are separate values.
   - JSON object keys are never rewritten, so a key that names the account makes the
     verification fail (a finding).
-  - **Not detected, a recorded limit.** Transformations that keep neither the address nor its
-    local part and domain joined by one of those separators are not found: a hash or base64 of
-    it, the domain spelled out (`b [dot] co`), or another separator. No product writer stores
-    any of them for an address. Third-party or customer text (raw signals, notes) can contain
-    them, and they then pass the verification unseen. Whole-text content hashes and the hashed
+  - **Not detected, a recorded limit: exactly these pass the verification unseen.** These are
+    texts that hold neither of two things. One is the local part followed by `@` and a domain
+    spelling that registration's UTS46 mapping turns into the account's domain. The other is
+    the local part joined to such a domain by one of the listed separators.
+    - a hash, base64 or other encoding of the address (percent-encoding and JSON escapes
+      excepted: they are decoded);
+    - the domain spelled out (`b [dot] co`), or a separator not in the list;
+    - a local part in a compatibility spelling (fullwidth `ｃａｒｏｌ@…`). That is not a
+      spelling of the address at all: registration keeps it as a distinct account.
+
+    No product writer stores any of them for an address. Third-party or customer text (raw
+    signals, notes) can contain the first two. Whole-text content hashes and the hashed
     signal embedding include an address's parts, but live in the same rows as that text and go
     with it. The verifier's `email_sha256` is an unsalted SHA-256: keep the report as
     pseudonymous evidence, not anonymous.
@@ -138,9 +170,10 @@ without `needs_review`:
 - an `AMBIGUOUS` or undecided one is left and flagged: `verified` with `needs_review` (exit
   `4`).
 
-Only the transformations listed under "Not detected" in §1 pass unseen. A copy of an
-address without an ASCII fragment, in a casing the request does not select, is reported as a
-finding (§1).
+Exactly the transformations listed under "Not detected" in §1 pass unseen. Everything else is
+erased, reported as a finding (exit 1), or flagged (exit 4). That includes a letter case shared
+with another account, and a copy of an address without an ASCII fragment in a casing the request
+does not select (§1).
 
 A deletion request runs only the verifier's **reference check** before it answers (one equality
 count per column that can point at the subject; the receipt lists only rows that point at the

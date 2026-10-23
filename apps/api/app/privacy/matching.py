@@ -6,18 +6,37 @@ a record clean that still holds a value the deletion should have cleared. Every 
 identifier is classified as one :class:`Mention`.
 
 **Where an address can occur, in any form.** A writer may have stored the subject's address in
-several forms: Unicode NFC or NFD; any letter case, non-ASCII letters included; inside JSON
-``\\uXXXX`` escapes; percent-encoded; or with its domain as the IDNA A-label (``xn--…``) instead
-of the U-label the product stores.
+several forms:
+- Unicode NFC or NFD;
+- another letter case, non-ASCII letters included;
+- inside JSON ``\\uXXXX`` escapes;
+- percent-encoded;
+- with its domain as the IDNA A-label (``xn--…``), or in a spelling registration's UTS46
+  mapping turns into the stored U-label (fullwidth letters and stops, ``。``, mathematical
+  letters).
 
-**What counts as the same address.** Registration's own rule decides (measured, fix pass 4). It
-stores the NFC form, the U-label domain and a lower-cased domain, so those spellings are one
-address to it and to this matcher. It keeps ``straße``/``strasse``, ``weiß``/``weiss``, ``ſ``/``s``,
-``ﬃ``/``ffi`` and ``ς``/``σ`` apart as distinct accounts. So does this matcher, which lower-cases
-(``str.lower()``) rather than case-folds (``str.casefold()`` would join each pair). The local
-part's letter case is the one exception: registration keeps ``Kate`` and ``kate`` apart, but
-erasure and export match an account's own address in any letter case, gated on its verification
-(a recorded policy). Two steps cover every form:
+**What counts as the same address.** Registration's own rule decides (measured, fix pass 4).
+- **Same address.** Registration stores the NFC form and maps the domain through UTS46 to its
+  lower-case U-label. So those spellings are one address to it, and to this matcher, which
+  resolves a domain in text with the same mapping (:func:`_domain_of`).
+- **Distinct accounts.** Registration keeps ``straße``/``strasse``, ``weiß``/``weiss``,
+  ``ſ``/``s``, ``ﬃ``/``ffi`` and ``ς``/``σ`` apart. So does this matcher, which lower-cases
+  letter by letter (``str.lower()``) rather than case-folding (``str.casefold()`` would join
+  each pair).
+- **The one exception: the local part's letter case.** Registration keeps ``Kate`` and ``kate``
+  apart. Erasure and export still match an account's own address in another letter case, gated
+  on its verification: a recorded engineering decision, with case-as-identity left open as
+  operator row 5.1.
+- **A letter case shared with another account decides nothing** (reviews r5, R5-1).
+  - Some upper-case spellings are shared by letters of different lower case
+    (:func:`shares_upper_case`):
+    ``ΣΣ`` is the upper case of ``σσ`` and of ``σς``; ``IA`` of ``ia`` and ``ıa``; ``JOSÉ`` of
+    ``josé`` and ``joſé``.
+  - An occurrence written with one of them is ``AMBIGUOUS`` (:func:`_local_case`), unless it is
+    the account's own exact spelling. So is one that matches only the account's upper case.
+  - Such an occurrence is never exported or erased for either twin.
+
+Two steps cover every form:
 
 * **The SQL pre-filter** (:func:`prefilter`) selects every row that may hold one of the forms.
   It does not rely on any dialect's ``lower()`` for non-ASCII letters (SQLite's is ASCII-only)
@@ -30,11 +49,13 @@ erasure and export match an account's own address in any letter case, gated on i
   case, raw and encoded. That keeps the request's work bounded, but other mixed casings of a
   non-ASCII local part are then not selected on SQLite, nor in a JSON column on either engine.
   The operator's verification (``exhaustive=True``) reads every row for such an address, so it
-  sees them.
-* **The confirmation** (:func:`mention`) reads each candidate text under four views: as
-  stored, with JSON ``\\uXXXX`` escapes decoded, percent-decoded, and both. Each view is
-  normalized to NFC and lower-cased. It then finds the address's own forms (U-label and
-  A-label domain) in every view.
+  sees them. For an address with such a run, the local part followed by ``@``, ``%40``, ``＠``
+  or ``﹫`` is selected too, so domain spellings without an ASCII fragment are read.
+* **The confirmation** (:func:`mention`) reads each candidate text under several views: as
+  stored, with up to three layers of JSON escapes undone, and each percent-decoded. Every view
+  is in NFC and keeps its own letter case. In every view it finds the local part, by its lower
+  case or its upper case, letter by letter. It then reads the domain after ``@``, or after a
+  separator, with registration's UTS46 mapping.
 
 **How an occurrence is judged.** It is judged by the product's own address grammar, the one
 every stored address passed. ``RegisterRequest.email`` is pydantic ``EmailStr``, which strips
@@ -56,12 +77,13 @@ operator (``D-PRIV-7``).
   destroy another person's data. The verifier reports it apart from its findings (``needs
   review``) for an operator.
 * **Undecided, flagged ``AMBIGUOUS``**: no form of the address occurs, but its local part and
-  its domain are joined by an explicit separator written instead of ``@``: ``[at]``, ``(at)``,
-  ``{at}``, ``<at>``, ``[@]``, ``(@)``, ``&#64;``, ``&#x40;``, ``&commat;``, or ``at`` / ``@``
-  between spaces. Examples are ``a&#64;b.co`` and ``a [at] b.co``. The matcher cannot tell
-  whether that is the address, so it flags it rather than pass it. Mere co-occurrence is not
-  flagged: a text naming ``John`` and ``acme.example`` separately is not about
-  ``john@acme.example``.
+  its domain are joined by an explicit separator written instead of ``@``. The separators are
+  ``[at]``, ``(at)``, ``{at}``, ``<at>``, ``[@]``, ``(@)``, ``&#64;``, ``&#x40;``, ``&commat;``,
+  the fullwidth ``＠`` and the small ``﹫`` (registration accepts neither), or ``at`` / ``@``
+  between spaces. Examples are ``a&#64;b.co``, ``a [at] b.co`` and ``a＠b.co``. The matcher
+  cannot tell whether that is the address, so it flags it rather than pass it. Mere
+  co-occurrence is not flagged: a text naming ``John`` and ``acme.example`` separately is not
+  about ``john@acme.example``.
 
 Whitespace and ``@`` are never part of an unquoted address, so the search for a longer address
 stops there. Its bounds are search limits, not validity rules (see ``_LOCAL_MAX``). The
@@ -71,10 +93,13 @@ stores is.
 **Opaque ids** (account, organization, workspace) are ``WHOLE`` when no id character
 (``[A-Za-z0-9_-]``) touches them on either side, and ``AMBIGUOUS`` otherwise.
 
-**Not detected (recorded limits).** These are transformations that keep neither the address nor
-its local part and domain joined by one of those separators: a hash or base64 of it, the domain
-spelled out (``b [dot] co``), or a separator not in that list. No product writer produces any of
-them; third-party or customer text can.
+**Not detected (recorded limits).** Exactly these pass unseen: texts that keep neither the
+local part followed by ``@`` and a domain spelling registration maps to the account's domain,
+nor that local part joined to such a domain by one of the listed separators. Examples are a
+hash, base64 or other encoding of the address (percent-encoding and JSON escapes excepted), the
+domain spelled out (``b [dot] co``), or a separator not in that list. No product writer produces
+any of them; third-party or customer text can. A local part in a compatibility spelling
+(fullwidth ``ｃａｒｏｌ``) is not one of them: registration keeps it as a distinct account.
 """
 
 from __future__ import annotations
@@ -109,12 +134,19 @@ _JSON_ESCAPE = re.compile(
 _JSON_SHORT = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 #: How many layers of JSON escaping the confirmation undoes (a value escaped inside JSON text).
 _ESCAPE_LAYERS = 3
-#: An explicit separator written between a local part and a domain instead of "@" (lower case:
-#: the views are lower-cased). Mere co-occurrence of the two is never enough (review r4 R4-3).
-_SEPARATOR = (
-    r"(?:\s*(?:\[\s*(?:at|@)\s*\]|\(\s*(?:at|@)\s*\)|\{\s*(?:at|@)\s*\}|<\s*(?:at|@)\s*>"
-    r"|&#0*64;|&#x0*40;|&commat;)\s*|\s+(?:at|@)\s+)"
+#: An explicit separator written between a local part and a domain instead of "@", including the
+#: fullwidth "＠" and the small "﹫", which registration does not accept in an address (review r5
+#: R5-3). Mere co-occurrence of the two is never enough (review r4 R4-3).
+_AT = r"(?:at|@|\uff20|\ufe6b)"
+_SEPARATOR = re.compile(
+    rf"\s*(?:\[\s*{_AT}\s*\]|\(\s*{_AT}\s*\)|\{{\s*{_AT}\s*\}}|<\s*{_AT}\s*>"
+    r"|&#0*64;|&#x0*40;|&commat;|\uff20|\ufe6b)\s*"
+    rf"|\s+{_AT}\s+",
+    re.IGNORECASE,
 )
+#: What would continue a local part before it, or a domain after it.
+_LOCAL_TOUCH = re.compile(r"[\w.+-]")
+_DOMAIN_TOUCH = re.compile(r"[\w-]")
 
 
 class Mention(IntEnum):
@@ -128,38 +160,85 @@ class Mention(IntEnum):
 # --------------------------------------------------------------------------- #
 # The forms of an address
 # --------------------------------------------------------------------------- #
-def _canonical(text: str) -> str:
-    """NFC, lower-cased (non-ASCII letters included), NFC again.
+def _nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
 
-    ``str.lower()``, never ``str.casefold()``: case-folding maps distinct letters together
-    (``ß``→``ss``, ``ſ``→``s``, ``ﬃ``→``ffi``, ``ς``→``σ``), and registration keeps those
-    addresses apart as distinct accounts (review r4 R4-1).
+
+def _lower(text: str) -> str:
+    """Lower-cased letter by letter: ``str.lower()``, never ``str.casefold()`` (case-folding maps
+    distinct letters together, ``ß``→``ss``, ``ſ``→``s``, ``ﬃ``→``ffi``, ``ς``→``σ``, and
+    registration keeps those addresses apart: review r4 R4-1), and without the final-sigma rule,
+    so a letter's reading never depends on its neighbour."""
+    return "".join(c.lower() for c in text)
+
+
+def _upper(text: str) -> str:
+    return "".join(c.upper() for c in text)
+
+
+@lru_cache(maxsize=1)
+def _shared_uppers() -> tuple[str, ...]:
+    """Upper-case spellings shared by letters whose lower case differs, from Unicode's own case
+    mappings: ``S`` (``s``, ``ſ``), ``I`` (``i``, ``ı``), ``Σ`` (``σ``, ``ς``), ``Μ`` (``μ``,
+    ``µ``), ``В`` (``в``, ``ᲀ``), ``SS`` (``ß``), ``FFI`` (``ﬃ``) and the like. Longest first."""
+    shared = set()
+    for code in range(0x110000):
+        letter = chr(code)
+        upper = letter.upper()
+        if _lower(upper) != letter.lower():
+            shared.add(upper)
+    return tuple(sorted(shared, key=lambda u: (-len(u), u)))
+
+
+def shares_upper_case(text: str) -> bool:
+    """Whether ``text`` holds an upper-case spelling that two letters of different lower case
+    share, so it may be the upper case of a different registrable address (review r5 R5-1)."""
+    return any(upper in text for upper in _shared_uppers())
+
+
+def _local_case(written: str, own: str) -> Mention:
+    """Whether a local part written in a text is the subject's own ``own`` (NFC both).
+
+    ``WHOLE``: its exact spelling, or a letter case of it that no other registrable address
+    shares. ``AMBIGUOUS``: a case it shares with another registrable address (``ΣΣ`` is the upper
+    case of both ``σσ`` and ``σς``), or one that matches only its upper case (``straße`` for
+    ``strasse``): flagged, never taken for either twin. ``NONE``: neither.
     """
-    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).lower())
+    if written == own:
+        return Mention.WHOLE
+    same_lower = _lower(written) == _lower(own)
+    if same_lower and not shares_upper_case(written):
+        return Mention.WHOLE
+    if same_lower or _upper(written) == _upper(own):
+        return Mention.AMBIGUOUS
+    return Mention.NONE
 
 
 @dataclass(frozen=True)
 class _Parts:
-    local: str  # canonical
-    domains: tuple[str, ...]  # canonical U-label, then A-label when it differs
-
-    @property
-    def forms(self) -> tuple[str, ...]:
-        return tuple(f"{self.local}@{d}" for d in self.domains)
+    local: str  # NFC, in the subject's own letter case
+    domain: str  # the domain as registration stores it (U-label, lower case)
 
 
 @lru_cache(maxsize=1024)
 def _parts(address: str) -> _Parts:
-    local, _, domain = address.rpartition("@")
-    domains = [domain]
     try:
         parsed = validate_email(address, check_deliverability=False)
     except EmailNotValidError:
-        pass
-    else:
-        local, domains = parsed.local_part, [parsed.domain, parsed.ascii_domain or parsed.domain]
-    canonical = [_canonical(d) for d in domains]
-    return _Parts(_canonical(local), tuple(dict.fromkeys(canonical)))
+        local, _, domain = address.rpartition("@")
+        return _Parts(_nfc(local), _lower(_nfc(domain)))
+    return _Parts(_nfc(parsed.local_part), parsed.domain)
+
+
+@lru_cache(maxsize=8192)
+def _domain_of(text: str) -> str | None:
+    """The domain registration stores for ``text``, through the same UTS46 mapping: letter case,
+    fullwidth letters and stops, the ideographic full stop, mathematical letters, A-labels
+    (review r5 R5-2). None when ``text`` is no domain."""
+    try:
+        return validate_email(f"a@{text}", check_deliverability=False).domain
+    except (EmailNotValidError, ValueError, UnicodeError):
+        return None
 
 
 def address_forms(address: str) -> tuple[str, ...]:
@@ -199,6 +278,22 @@ def _contains_all(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
 def _ascii_lower(text: str) -> str:
     """What every SQL ``lower()`` does: ASCII letters only (SQLite stops there)."""
     return "".join(c.lower() if c.isascii() else c for c in text)
+
+
+def _local_tail_terms(address: str) -> list[tuple[str, ...]]:
+    """Terms that select the local part followed by ``@`` (or an encoded or fullwidth ``@``),
+    whatever the domain's spelling: registration maps fullwidth letters, ideographic stops and
+    mathematical letters to the same domain, and none of those keeps an ASCII fragment of it
+    (review r5 R5-2)."""
+    try:
+        local = validate_email(address, check_deliverability=False).local_part
+    except EmailNotValidError:
+        local = address.rpartition("@")[0]
+    ats = ("@", "%40", "\uff20", "\\uff20", "\ufe6b", "\\ufe6b")
+    match = re.search(r"[A-Za-z0-9._~-]+$", local)
+    if match and len(match.group()) > 1:
+        return [(_ascii_lower(match.group() + at),) for at in ats]
+    return [(*_runs(local), _ascii_lower(at)) for at in ats]
 
 
 def _has_local_run(address: str) -> bool:
@@ -251,6 +346,7 @@ class Subject:
             if _has_local_run(address):
                 for form in address_forms(address):
                     terms += [_runs(e) for e in encoded_forms(form)]
+                terms += _local_tail_terms(address)
             elif exhaustive:
                 terms.append(())
             else:
@@ -278,11 +374,13 @@ def prefilter(column: Any, subject: Subject, *, exhaustive: bool = False) -> Any
 
 
 def same_address(value: str | None, address: str) -> bool:
-    """Whether ``value`` is ``address`` itself in any form (case, NFC/NFD, U-/A-label domain)."""
+    """Whether ``value`` is ``address`` itself: the same domain as registration stores it (NFC,
+    case, U-/A-label, UTS46 spellings) and a local part :func:`_local_case` calls ``WHOLE``. A
+    letter case another registrable address shares is not enough (review r5 R5-1)."""
     if not value:
         return False
     theirs, ours = _parts(value.strip()), _parts(address)
-    return theirs.local == ours.local and bool(set(theirs.domains) & set(ours.domains))
+    return theirs.domain == ours.domain and _local_case(theirs.local, ours.local) is Mention.WHOLE
 
 
 # --------------------------------------------------------------------------- #
@@ -344,7 +442,7 @@ def _unescape_json(text: str) -> str:
 
 def _views(text: str) -> tuple[str, ...]:
     """``text`` as stored and with up to three layers of JSON escapes undone, each also
-    percent-decoded; every view canonical (NFC, lower-cased)."""
+    percent-decoded; every view in NFC, in its own letter case."""
     layers = [text]
     for _ in range(_ESCAPE_LAYERS):
         unescaped = _unescape_json(layers[-1])
@@ -352,19 +450,75 @@ def _views(text: str) -> tuple[str, ...]:
             break
         layers.append(unescaped)
     views = [view for layer in layers for view in (layer, unquote(layer))]
-    return tuple(dict.fromkeys(_canonical(v) for v in views))
+    return tuple(dict.fromkeys(_nfc(v) for v in views))
 
 
-def _undecided(view: str, parts: _Parts) -> bool:
-    """The local part and a domain form are joined by an explicit separator instead of "@"."""
-    return any(
-        re.search(
-            r"(?<![\w.+-])" + re.escape(parts.local) + _SEPARATOR + re.escape(domain)
-            + r"(?![\w-])(?!\.\w)",
-            view,
-        )
-        for domain in parts.domains
-    )
+def _spans(view: str, needle: str, case: Any) -> Iterable[tuple[int, int]]:
+    """Spans of ``view`` whose letters, each mapped by ``case``, spell ``needle``, in whole
+    letters of ``view`` (a mapping can expand one letter, ``ß``→``SS``)."""
+    if not needle:
+        return
+    mapped, origin = [], []
+    for index, letter in enumerate(view):
+        image = case(letter)
+        mapped.append(image)
+        origin.extend([index] * len(image))
+    joined = "".join(mapped)
+    for match in re.finditer(re.escape(needle), joined):
+        a, b = match.start(), match.end()
+        if (a and origin[a - 1] == origin[a]) or (b < len(joined) and origin[b] == origin[b - 1]):
+            continue  # the match starts or ends inside one letter's image
+        yield origin[a], origin[b - 1] + 1
+
+
+def _domain_end(view: str, start: int, domain: str) -> int | None:
+    """Where a spelling of ``domain`` that starts at ``start`` ends (the shortest), or None."""
+    end = start
+    while end < len(view) and end - start < _DOMAIN_MAX and _extends(view[end]):
+        end += 1
+    for stop in range(start + 1, end + 1):
+        if _domain_of(view[start:stop]) == domain:
+            return stop
+    return None
+
+
+def _undecided(view: str, start: int, stop: int, domain: str) -> bool:
+    """The local part at ``start:stop`` and the domain are joined by an explicit separator."""
+    if start and _LOCAL_TOUCH.match(view[start - 1]):
+        return False
+    separator = _SEPARATOR.match(view, stop)
+    if separator is None:
+        return False
+    end = _domain_end(view, separator.end(), domain)
+    if end is None:
+        return False
+    after = view[end : end + 2]
+    if not after:
+        return True
+    return not (_DOMAIN_TOUCH.match(after[0]) or (after[0] == "." and after[1:].isalnum()))
+
+
+def _address_in_view(view: str, parts: _Parts) -> Mention:
+    best = Mention.NONE
+    spans = {
+        *_spans(view, _lower(parts.local), str.lower),
+        *_spans(view, _upper(parts.local), str.upper),
+    }
+    for start, stop in sorted(spans):
+        case = _local_case(view[start:stop], parts.local)
+        if case is Mention.NONE:
+            continue
+        if view.startswith("@", stop):
+            end = _domain_end(view, stop + 1, parts.domain)
+            if end is not None:
+                found = _address_mention(view, start, end)
+                best = max(best, Mention.AMBIGUOUS if case is Mention.AMBIGUOUS else found)
+                if best is Mention.WHOLE:
+                    return best
+                continue
+        if _undecided(view, start, stop, parts.domain):
+            best = max(best, Mention.AMBIGUOUS)
+    return best
 
 
 def mention(text: str, subject: Subject) -> Mention:
@@ -372,24 +526,17 @@ def mention(text: str, subject: Subject) -> Mention:
     best = Mention.NONE
     views = _views(text)
     for value in subject.ids:
-        needle = _canonical(value)
         for view in views:
-            for match in re.finditer(re.escape(needle), view):
-                best = max(best, _id_mention(view, match.start(), match.end()))
+            for start, stop in _spans(view, _lower(value), str.lower):
+                best = max(best, _id_mention(view, start, stop))
                 if best is Mention.WHOLE:
                     return best
     for address in subject.addresses:
         parts = _parts(address)
-        found = False
         for view in views:
-            for form in parts.forms:
-                for match in re.finditer(re.escape(form), view):
-                    found = True
-                    best = max(best, _address_mention(view, match.start(), match.end()))
-                    if best is Mention.WHOLE:
-                        return best
-        if not found and any(_undecided(view, parts) for view in views):
-            best = max(best, Mention.AMBIGUOUS)
+            best = max(best, _address_in_view(view, parts))
+            if best is Mention.WHOLE:
+                return best
     return best
 
 
@@ -421,4 +568,5 @@ __all__ = [
     "prefilter",
     "registrable",
     "same_address",
+    "shares_upper_case",
 ]

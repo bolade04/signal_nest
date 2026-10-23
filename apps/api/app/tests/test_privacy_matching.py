@@ -47,6 +47,7 @@ from app.privacy.matching import (
     mention_in_json,
     registrable,
     same_address,
+    shares_upper_case,
 )
 from app.tests._privacy_support import CAROL, EMAIL
 
@@ -169,19 +170,25 @@ def _sqlite_lower(text: str) -> str:
     return "".join(c.lower() if c.isascii() else c for c in text)
 
 
-def _texts(address: str):
-    """Every form x encoding x letter case, as raw text and as stored JSON text."""
+def _cased_texts(address: str):
+    """(text, its local part as cased): every form x encoding x letter case, as raw text and as
+    stored JSON text."""
     for form in address_forms(address):
         for cased in (form, form.upper(), form.title()):
+            local = cased.rpartition("@")[0]
             for encoded in encoded_forms(cased):
-                yield f"Note: {encoded}."
-                yield json.dumps({"v": f"Note: {encoded}."})  # SQLAlchemy's JSON text
+                yield f"Note: {encoded}.", local
+                yield json.dumps({"v": f"Note: {encoded}."}), local  # SQLAlchemy's JSON text
+
+
+def _texts(address: str):
+    return (text for text, _local in _cased_texts(address))
 
 
 @pytest.mark.parametrize("address", [E, JOSE, IDN])
 def test_the_sql_prefilter_selects_every_form_under_ascii_only_lower(address):
     terms = Subject(addresses=(address,)).sql_terms()
-    assert all(f.isascii() and f == f.lower() for term in terms for f in term)
+    assert all(f == _sqlite_lower(f) for term in terms for f in term)  # only ASCII lower-cased
     for text in _texts(address):
         stored = _sqlite_lower(text)
         assert any(all(f in stored for f in term) for term in terms), text
@@ -189,10 +196,16 @@ def test_the_sql_prefilter_selects_every_form_under_ascii_only_lower(address):
 
 @pytest.mark.parametrize("address", [E, JOSE, IDN])
 def test_the_confirmation_finds_every_form(address):
+    """Every form is found: WHOLE, unless its letter case is shared with another registrable
+    address (``JOSÉ`` is also the upper case of ``joſé``), which is flagged (review r5)."""
     subject = Subject(addresses=(address,))
-    for text in _texts(address):
+    stored = address.rpartition("@")[0]
+    for text, local in _cased_texts(address):
         value = json.loads(text)["v"] if text.startswith("{") else text
-        assert mention(value, subject) is WHOLE, value
+        shared = unicodedata.normalize("NFC", local) != unicodedata.normalize("NFC", stored) and (
+            shares_upper_case(local)
+        )
+        assert mention(value, subject) is (AMBIGUOUS if shared else WHOLE), value
         if text.startswith("{"):  # the same JSON text read raw, as a text column would hold it
             assert mention(text, subject) is not NONE, text
 
@@ -216,6 +229,10 @@ def test_the_confirmation_finds_every_form(address):
         # A longer local part ending in hers is someone else's, separator or not.
         (f"Note: x{L} [at] {D}", NONE),
         (f"Note: j.{L}&#64;{D}", NONE),
+        # Review r5 R5-3: the fullwidth and the small commercial at are explicit separators.
+        (f"Note: {L}\uff20{D}", AMBIGUOUS),
+        (f"Note: {L}\ufe6b{D}", AMBIGUOUS),
+        (f"Note: {L}\uff20\uff50rivacy.example", AMBIGUOUS),  # and a UTS46 domain spelling
     ],
 )
 def test_the_local_part_and_domain_apart_are_undecided_and_flagged(text, expected):
@@ -252,21 +269,92 @@ _TWINS = [
 def test_distinct_addresses_never_fold_together(one, other):
     """Review r4 R4-1: full case-folding mapped each pair to one form. Only what registration
     itself treats as one address (NFC/NFD, U-/A-label domain, domain case) and the local part's
-    letter case (a recorded policy) are folded."""
+    letter case (a recorded policy) are folded. Since review r5 a twin whose upper case is the
+    subject's own (``STRASSE`` for both) is flagged, never taken; the domain pair stays apart."""
     assert not same_address(other, one)
-    assert mention(f"Invited {other} today", Subject(addresses=(one,))) is NONE
+    mine, theirs = one.rpartition("@")[0], other.rpartition("@")[0]
+    shared = mine != theirs and mine.upper() == theirs.upper()  # the domain pair: same local
+    expected = AMBIGUOUS if shared else NONE
+    assert mention(f"Invited {other} today", Subject(addresses=(one,))) is expected
 
 
 def test_what_registration_treats_as_one_address_still_matches():
     assert same_address(unicodedata.normalize("NFD", JOSE), JOSE)
     assert same_address("carol@xn--exmple-cua.com", IDN)
     assert same_address("carol@EXÄMPLE.COM", IDN)
-    assert same_address("JOSÉ@privacy.example", JOSE)  # local-part case: the recorded policy
+    assert same_address("CAROL_X@privacy.example", E)  # local-part case: the recorded policy
+    assert same_address("carol_x@privacy\u3002example", E)  # UTS46, as registration maps it
 
 
 def test_same_address_compares_every_form():
-    assert same_address("JOSÉ@privacy.example", JOSE)
+    assert not same_address("JOSÉ@privacy.example", JOSE)  # also joſé's upper case (review r5)
+    assert same_address("José@privacy.example", JOSE)
     assert same_address(unicodedata.normalize("NFD", JOSE), JOSE)
     assert same_address("carol@XN--EXMPLE-CUA.COM", IDN)
     assert not same_address(f"x{E}", E)
     assert not same_address(None, E)
+
+
+# --------------------------------------------------------------------------- #
+# A shared upper case decides nothing (reviews r5, R5-1)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("subject", "text"),
+    [
+        ("σσ@privacy.example", "ΣΣ@privacy.example"),
+        ("σς@privacy.example", "ΣΣ@privacy.example"),
+        ("ia@privacy.example", "IA@privacy.example"),
+        ("ıa@privacy.example", "IA@privacy.example"),
+        ("straße@privacy.example", "STRASSE@privacy.example"),
+        ("strasse@privacy.example", "STRASSE@privacy.example"),
+        ("oﬃce@privacy.example", "OFFICE@privacy.example"),
+        ("office@privacy.example", "OFFICE@privacy.example"),
+        (JOSE, "JOSÉ@privacy.example"),
+    ],
+)
+def test_a_shared_upper_case_is_ambiguous_for_either_twin(subject, text):
+    assert mention(f"Note: {text}.", Subject(addresses=(subject,))) is AMBIGUOUS
+    assert not same_address(text, subject)
+
+
+@pytest.mark.parametrize(
+    ("subject", "text", "expected"),
+    [
+        (E, "CAROL_X@PRIVACY.EXAMPLE", WHOLE),  # no letter here has two lower cases
+        ("kate@privacy.example", "KATE@privacy.example", WHOLE),
+        ("Sam@privacy.example", "Sam@privacy.example", WHOLE),  # its own exact spelling
+        ("Sam@privacy.example", "sam@privacy.example", WHOLE),  # lower case: one reading
+        ("Sam@privacy.example", "SAM@privacy.example", AMBIGUOUS),  # also ſam's upper case
+        ("ſam@privacy.example", "SAM@privacy.example", AMBIGUOUS),
+        ("straße@privacy.example", "STRAẞE@privacy.example", AMBIGUOUS),  # S: also ſtraße
+    ],
+)
+def test_only_an_upper_case_with_one_reading_is_whole(subject, text, expected):
+    assert mention(f"Note: {text}.", Subject(addresses=(subject,))) is expected
+
+
+def test_the_shared_upper_case_spellings_are_the_unicode_ones():
+    """The set is computed from Unicode's own case mappings: an upper-case spelling is shared
+    when lower-casing it does not give back every letter whose upper case it is."""
+    for shared in ("S", "I", "Σ", "Μ", "SS", "FF", "FFI", "ST", "В"):
+        assert shares_upper_case(shared), shared
+    for single in ("K", "C", "A", "X", "Ẑ", "ẞ", "И"):
+        assert not shares_upper_case(single), single
+    assert not shares_upper_case("josé")  # lower case shares nothing
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "privacy\u3002example",
+        "privacy\uff0eexample",
+        "privacy\uff61example",
+        "\uff50\uff52\uff49\uff56\uff41\uff43\uff59.example",
+        "\U0001d429rivacy.example",
+        "PRIVACY.EXAMPLE",
+    ],
+)
+def test_a_domain_registration_maps_to_hers_is_whole(domain):
+    """Review r5 R5-2: registration's UTS46 mapping makes these the same domain."""
+    assert mention(f"Note: {L}@{domain}.", HERS) is WHOLE
+    assert same_address(f"{L}@{domain}", E)
