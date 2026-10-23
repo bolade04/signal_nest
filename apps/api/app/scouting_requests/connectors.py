@@ -1,20 +1,32 @@
-"""Signal connectors.
+"""Signal connectors and per-run source selection.
 
 A single ``Connector`` interface is what live connectors (Phase 3B onward)
 implement. The default ``FixtureConnector`` reads from the simulated fixture
 library, filtered by the request's market + keywords + enabled source types, so
 results stay isolated per location.
 
-Since Phase 3B, :func:`get_connector` consults the connector registry
-(``app.connectors``): when a live connector is enabled *and* its policy permits
-the request scope, that connector is used; otherwise this falls back to the
-sandbox ``FixtureConnector``, so default behaviour is unchanged.
+:func:`fetch_signals` is what a scout run calls. It picks the run's sources in a
+fixed order and always says why it holds what it holds (P6-DATA-2):
+
+1. approved **live** feeds for the market (``app.connectors.live`` — dark by
+   default) → ``covered/live_sources``, or ``unavailable/sources_unavailable`` when
+   every live source failed;
+2. the **sandbox** RSS feed, when ``connector_rss_enabled`` and its policy admit the
+   request and the sandbox has a feed for the market → ``covered/sandbox_feed``;
+3. the simulated **demo library** for the four demo markets, unless
+   ``connector_fixture_fallback_enabled`` is off → ``covered/fixture_library``;
+4. otherwise ``not_covered/no_source_for_market`` with no signals — an explicit,
+   user-visible outcome instead of a silent empty result.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Protocol
 
+from app.connectors.base import FetchScope
+from app.connectors.coverage import Coverage, CoverageReason
+from app.core.config import Settings, get_settings
 from app.scouting_requests.fixtures import FixtureSignal, fixtures_for_market
 
 
@@ -57,11 +69,12 @@ def get_connector(
     source_types: list[str] | None = None,
     market: str | None = None,
 ) -> Connector:
-    """Resolve the connector for a request scope.
+    """Resolve the sandbox connector for a request scope.
 
-    Returns a live connector when one is enabled and its policy permits the
-    scope; otherwise the sandbox :class:`FixtureConnector`. Called with no
-    arguments (the legacy signature) it always returns the fixture connector.
+    Returns the sandbox RSS connector when it is enabled and its policy permits the
+    scope; otherwise the :class:`FixtureConnector`. Called with no arguments (the
+    legacy signature) it always returns the fixture connector. Live feeds are chosen
+    by :func:`fetch_signals`, never here.
     """
     from app.connectors.registry import resolve_connector
 
@@ -70,3 +83,69 @@ def get_connector(
         market=market,
     )
     return live or FixtureConnector()
+
+
+@dataclass
+class SignalBatch:
+    """The signals for one scout run and the coverage outcome that explains them."""
+
+    signals: list = field(default_factory=list)
+    coverage: Coverage = field(
+        default_factory=lambda: Coverage(CoverageReason.NO_SOURCE_FOR_MARKET, is_simulated=False)
+    )
+
+
+def fetch_signals(
+    *,
+    market: str | None,
+    keywords: list[str],
+    source_types: list[str],
+    takedowns: frozenset[str] = frozenset(),
+    settings: Settings | None = None,
+) -> SignalBatch:
+    """Select the run's sources (see the module doc) and collect their signals."""
+    from app.connectors.live import live_connector_for
+    from app.connectors.registry import resolve_connector
+    from app.connectors.sample_feeds import sample_feed_covers
+
+    settings = settings or get_settings()
+    types = tuple(source_types or ())
+    scope = FetchScope(market=market, keywords=tuple(keywords or ()), source_types=types)
+
+    live = live_connector_for(
+        market=market, source_types=types, takedowns=takedowns, settings=settings
+    )
+    if live is not None:
+        result = live.collect(scope)
+        total, failed = len(live.targets), len(live.failed_sources)
+        reason = (
+            CoverageReason.SOURCES_UNAVAILABLE
+            if failed == total
+            else CoverageReason.LIVE_SOURCES
+        )
+        return SignalBatch(
+            signals=result.signals,
+            coverage=Coverage(
+                reason,
+                is_simulated=any(s.is_simulated for s in result.signals),
+                sources=total,
+                sources_failed=failed,
+            ),
+        )
+
+    sandbox = resolve_connector(source_types=types, market=market, settings=settings)
+    if sandbox is not None and sample_feed_covers(market):
+        return SignalBatch(
+            signals=sandbox.collect(scope).signals,
+            coverage=Coverage(CoverageReason.SANDBOX_FEED, is_simulated=True),
+        )
+
+    if settings.connector_fixture_fallback_enabled and fixtures_for_market(market):
+        return SignalBatch(
+            signals=FixtureConnector().fetch(
+                market=market, keywords=list(keywords or ()), source_types=list(types)
+            ),
+            coverage=Coverage(CoverageReason.FIXTURE_LIBRARY, is_simulated=True),
+        )
+
+    return SignalBatch()

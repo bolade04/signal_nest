@@ -1480,6 +1480,227 @@
         "title": "CompetitorPatch",
         "type": "object"
       },
+      "CoverageReason": {
+        "enum": [
+          "live_sources",
+          "sandbox_feed",
+          "fixture_library",
+          "no_source_for_market",
+          "sources_unavailable"
+        ],
+        "title": "CoverageReason",
+        "type": "string"
+      },
+      "CoverageStatus": {
+        "enum": [
+          "covered",
+          "not_covered",
+          "unavailable"
+        ],
+        "title": "CoverageStatus",
+        "type": "string"
+      },
+      "DataSourceOut": {
+        "properties": {
+          "activatable": {
+            "title": "Activatable",
+            "type": "boolean"
+          },
+          "approval_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Reference"
+          },
+          "approved_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved On"
+          },
+          "connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connector"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "feed_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feed Url"
+          },
+          "legal_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Status"
+          },
+          "markets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Markets",
+            "type": "array"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "robots_disposition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Robots Disposition"
+          },
+          "robots_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Robots Url"
+          },
+          "source_key": {
+            "title": "Source Key",
+            "type": "string"
+          },
+          "stored": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Stored",
+            "type": "object"
+          },
+          "takedown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TakedownOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tos_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tos Url"
+          }
+        },
+        "required": [
+          "source_key",
+          "connector",
+          "display_name",
+          "publisher",
+          "feed_url",
+          "markets",
+          "tos_url",
+          "robots_url",
+          "robots_disposition",
+          "approval_reference",
+          "approved_on",
+          "legal_status",
+          "enabled",
+          "activatable",
+          "takedown",
+          "stored"
+        ],
+        "title": "DataSourceOut",
+        "type": "object"
+      },
+      "DataSourcesOut": {
+        "properties": {
+          "kill_switch": {
+            "title": "Kill Switch",
+            "type": "boolean"
+          },
+          "live_egress_enabled": {
+            "title": "Live Egress Enabled",
+            "type": "boolean"
+          },
+          "replay_mode": {
+            "title": "Replay Mode",
+            "type": "boolean"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DataSourceOut"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "live_egress_enabled",
+          "kill_switch",
+          "replay_mode",
+          "sources"
+        ],
+        "title": "DataSourcesOut",
+        "type": "object"
+      },
       "DeadLetterJobsOut": {
         "description": "Operator dead-letter summary: total count plus a bounded recent page.",
         "properties": {
@@ -5291,6 +5512,16 @@
       "RunStats": {
         "description": "Aggregate per-run counts, sourced verbatim from the durable job's\n``result_summary``. Present only once a run has produced a summary; a run that\nhas not completed carries ``stats: null`` rather than fabricated zeros.",
         "properties": {
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "noise_filtered": {
             "title": "Noise Filtered",
             "type": "integer"
@@ -5560,6 +5791,38 @@
         "title": "ScoreFactor",
         "type": "object"
       },
+      "ScoutCoverage": {
+        "description": "Why a completed run holds the signals it holds (P6-DATA-2).\n\n``status`` is ``covered`` (a source serves the market; zero opportunities means\nnothing relevant was found), ``not_covered`` (no configured source serves the\nmarket \u2014 running again will not help) or ``unavailable`` (live sources serve the\nmarket but all failed this run). ``reason`` is the closed code behind it.\n``is_simulated`` is true when the run consumed simulated data. ``sources`` and\n``sources_failed`` count the live sources consulted (0 on simulated paths).",
+        "properties": {
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/CoverageReason"
+          },
+          "sources": {
+            "title": "Sources",
+            "type": "integer"
+          },
+          "sources_failed": {
+            "title": "Sources Failed",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CoverageStatus"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "is_simulated",
+          "sources",
+          "sources_failed"
+        ],
+        "title": "ScoutCoverage",
+        "type": "object"
+      },
       "ScoutRequestCreate": {
         "properties": {
           "campaign_id": {
@@ -5660,6 +5923,16 @@
               }
             ],
             "title": "Campaign Id"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "format": "date-time",
@@ -6089,6 +6362,176 @@
           "items"
         ],
         "title": "StuckJobsOut",
+        "type": "object"
+      },
+      "TakedownIn": {
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "TakedownIn",
+        "type": "object"
+      },
+      "TakedownOut": {
+        "properties": {
+          "purge_summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Purge Summary",
+            "type": "object"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "repeat_purges": {
+            "items": {
+              "$ref": "#/components/schemas/TakedownRepeatOut"
+            },
+            "title": "Repeat Purges",
+            "type": "array"
+          },
+          "taken_down_at": {
+            "format": "date-time",
+            "title": "Taken Down At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "taken_down_at",
+          "reason",
+          "reference",
+          "purge_summary",
+          "repeat_purges"
+        ],
+        "title": "TakedownOut",
+        "type": "object"
+      },
+      "TakedownRepeatOut": {
+        "properties": {
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "purged": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Purged",
+            "type": "object"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          }
+        },
+        "required": [
+          "at",
+          "reason",
+          "reference",
+          "actor_user_id",
+          "purged"
+        ],
+        "title": "TakedownRepeatOut",
+        "type": "object"
+      },
+      "TakedownResultOut": {
+        "properties": {
+          "already_taken_down": {
+            "title": "Already Taken Down",
+            "type": "boolean"
+          },
+          "purged": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Purged",
+            "type": "object"
+          },
+          "remaining": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Remaining",
+            "type": "object"
+          },
+          "source_key": {
+            "title": "Source Key",
+            "type": "string"
+          },
+          "taken_down_at": {
+            "format": "date-time",
+            "title": "Taken Down At",
+            "type": "string"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_key",
+          "taken_down_at",
+          "already_taken_down",
+          "purged",
+          "remaining",
+          "verified"
+        ],
+        "title": "TakedownResultOut",
         "type": "object"
       },
       "TelemetryStatusOut": {
@@ -7537,6 +7980,123 @@
           }
         },
         "summary": "Internal Capability Registry",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/data-sources": {
+      "get": {
+        "operationId": "list_data_sources_api_v1_internal_system_data_sources_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataSourcesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Data Sources",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/system/data-sources/{source_key}/takedown": {
+      "post": {
+        "operationId": "take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_key",
+            "required": true,
+            "schema": {
+              "title": "Source Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakedownIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakedownResultOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Take Down Data Source",
         "tags": [
           "internal"
         ]

@@ -80,6 +80,8 @@ from app.tests._auth2_support import (
 API_DIR = Path(__file__).resolve().parents[2]
 PREV = "a452ee007cc2"
 HEAD = "87198ab57b59"
+#: The code head, one revision above AUTH4 (P6-DATA-1/PRIV-4 source takedowns).
+CODE_HEAD = "da25533622b2"
 UNAUTHORIZED = (401, "unauthorized", "Invalid or expired token.")
 ORGANIZATIONS = f"{API}/organizations"
 LIFETIME = timedelta(minutes=720)
@@ -640,14 +642,15 @@ class TestMigration:
         from alembic.script import ScriptDirectory
 
         script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
-        assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
+        assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
+        assert script.get_revision(CODE_HEAD).down_revision == HEAD
         revision = script.get_revision(HEAD)
         assert revision.down_revision == PREV
         assert Path(revision.path).name.endswith("_add_auth_sessions.py")
         result = _alembic(tmp_path / "heads.db", "heads")
         assert result.returncode == 0, result.stderr
         heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
-        assert len(heads) == 1 and HEAD in heads[0], result.stdout
+        assert len(heads) == 1 and CODE_HEAD in heads[0], result.stdout
 
     def test_upgrade_check_downgrade_and_reupgrade(self, tmp_path):
         db_path = tmp_path / "migration.db"

@@ -36,6 +36,9 @@ class RawSignal(Base, _RequestScoped):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     raw_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     is_simulated: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: The live source that produced this signal (``app.connectors.sources``);
+    #: ``None`` for simulated fixture/sandbox signals. Drives source takedown.
+    source_key: Mapped[str | None] = mapped_column(String(64), index=True)
 
 
 class NormalizedSignal(Base, _RequestScoped):
@@ -71,6 +74,7 @@ class NormalizedSignal(Base, _RequestScoped):
 
     is_simulated: Mapped[bool] = mapped_column(Boolean, default=True)
     ingest_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_key: Mapped[str | None] = mapped_column(String(64), index=True)
 
 
 class SignalLocationEvidence(Base, UUIDPrimaryKeyMixin, TimestampMixin):

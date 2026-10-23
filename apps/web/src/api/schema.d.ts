@@ -481,6 +481,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/data-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Data Sources */
+        get: operations["list_data_sources_api_v1_internal_system_data_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/system/data-sources/{source_key}/takedown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Take Down Data Source */
+        post: operations["take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/jobs": {
         parameters: {
             query?: never;
@@ -2328,6 +2362,63 @@ export interface components {
             website?: string | null;
         };
         /**
+         * CoverageReason
+         * @enum {string}
+         */
+        CoverageReason: "live_sources" | "sandbox_feed" | "fixture_library" | "no_source_for_market" | "sources_unavailable";
+        /**
+         * CoverageStatus
+         * @enum {string}
+         */
+        CoverageStatus: "covered" | "not_covered" | "unavailable";
+        /** DataSourceOut */
+        DataSourceOut: {
+            /** Activatable */
+            activatable: boolean;
+            /** Approval Reference */
+            approval_reference: string | null;
+            /** Approved On */
+            approved_on: string | null;
+            /** Connector */
+            connector: string | null;
+            /** Display Name */
+            display_name: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Feed Url */
+            feed_url: string | null;
+            /** Legal Status */
+            legal_status: string | null;
+            /** Markets */
+            markets: string[];
+            /** Publisher */
+            publisher: string | null;
+            /** Robots Disposition */
+            robots_disposition: string | null;
+            /** Robots Url */
+            robots_url: string | null;
+            /** Source Key */
+            source_key: string;
+            /** Stored */
+            stored: {
+                [key: string]: number;
+            };
+            takedown: components["schemas"]["TakedownOut"] | null;
+            /** Tos Url */
+            tos_url: string | null;
+        };
+        /** DataSourcesOut */
+        DataSourcesOut: {
+            /** Kill Switch */
+            kill_switch: boolean;
+            /** Live Egress Enabled */
+            live_egress_enabled: boolean;
+            /** Replay Mode */
+            replay_mode: boolean;
+            /** Sources */
+            sources: components["schemas"]["DataSourceOut"][];
+        };
+        /**
          * DeadLetterJobsOut
          * @description Operator dead-letter summary: total count plus a bounded recent page.
          */
@@ -3709,6 +3800,7 @@ export interface components {
          *     has not completed carries ``stats: null`` rather than fabricated zeros.
          */
         RunStats: {
+            coverage?: components["schemas"]["ScoutCoverage"] | null;
             /** Noise Filtered */
             noise_filtered: number;
             /** Opportunities */
@@ -3837,6 +3929,27 @@ export interface components {
             /** Weight */
             weight: number;
         };
+        /**
+         * ScoutCoverage
+         * @description Why a completed run holds the signals it holds (P6-DATA-2).
+         *
+         *     ``status`` is ``covered`` (a source serves the market; zero opportunities means
+         *     nothing relevant was found), ``not_covered`` (no configured source serves the
+         *     market — running again will not help) or ``unavailable`` (live sources serve the
+         *     market but all failed this run). ``reason`` is the closed code behind it.
+         *     ``is_simulated`` is true when the run consumed simulated data. ``sources`` and
+         *     ``sources_failed`` count the live sources consulted (0 on simulated paths).
+         */
+        ScoutCoverage: {
+            /** Is Simulated */
+            is_simulated: boolean;
+            reason: components["schemas"]["CoverageReason"];
+            /** Sources */
+            sources: number;
+            /** Sources Failed */
+            sources_failed: number;
+            status: components["schemas"]["CoverageStatus"];
+        };
         /** ScoutRequestCreate */
         ScoutRequestCreate: {
             /** Campaign Id */
@@ -3862,6 +3975,7 @@ export interface components {
             brand_id: string;
             /** Campaign Id */
             campaign_id: string | null;
+            coverage?: components["schemas"]["ScoutCoverage"] | null;
             /**
              * Created At
              * Format: date-time
@@ -4035,6 +4149,71 @@ export interface components {
             stale_after_seconds: number;
             /** Stuck Count */
             stuck_count: number;
+        };
+        /** TakedownIn */
+        TakedownIn: {
+            /** Reason */
+            reason: string;
+            /** Reference */
+            reference?: string | null;
+        };
+        /** TakedownOut */
+        TakedownOut: {
+            /** Purge Summary */
+            purge_summary: {
+                [key: string]: number;
+            };
+            /** Reason */
+            reason: string;
+            /** Reference */
+            reference: string | null;
+            /** Repeat Purges */
+            repeat_purges: components["schemas"]["TakedownRepeatOut"][];
+            /**
+             * Taken Down At
+             * Format: date-time
+             */
+            taken_down_at: string;
+        };
+        /** TakedownRepeatOut */
+        TakedownRepeatOut: {
+            /** Actor User Id */
+            actor_user_id: string | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Purged */
+            purged: {
+                [key: string]: number;
+            };
+            /** Reason */
+            reason: string;
+            /** Reference */
+            reference: string | null;
+        };
+        /** TakedownResultOut */
+        TakedownResultOut: {
+            /** Already Taken Down */
+            already_taken_down: boolean;
+            /** Purged */
+            purged: {
+                [key: string]: number;
+            };
+            /** Remaining */
+            remaining: {
+                [key: string]: number;
+            };
+            /** Source Key */
+            source_key: string;
+            /**
+             * Taken Down At
+             * Format: date-time
+             */
+            taken_down_at: string;
+            /** Verified */
+            verified: boolean;
         };
         /**
          * TelemetryStatusOut
@@ -4849,6 +5028,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilityRegistryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_data_sources_api_v1_internal_system_data_sources_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataSourcesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                source_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TakedownIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakedownResultOut"];
                 };
             };
             /** @description Validation Error */

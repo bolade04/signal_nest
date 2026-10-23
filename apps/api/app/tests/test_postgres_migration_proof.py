@@ -14,7 +14,7 @@ dropped by :func:`pg_database`), never against a shared one:
   upgrade-and-verify path and ``check``) against PostgreSQL;
 * an **interrupted / failed migration**, in two forms that prove different things:
 
-  1. *a tracked revision failing partway* — the real head revision
+  1. *a tracked revision failing partway* — the real revision
      (``87198ab57b59``, ``auth_sessions``) is run against a database that already holds
      a relation with its index's name, so ``CREATE TABLE`` succeeds and ``CREATE
      INDEX`` fails inside the same revision. This proves that PostgreSQL's
@@ -58,6 +58,9 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
+#: The code head (P6-DATA-1/PRIV-4 source takedowns) and the tracked revision the
+#: midway-failure proof breaks (``auth_sessions``) with its parent.
+CODE_HEAD = "da25533622b2"
 HEAD = "87198ab57b59"
 PREV = "a452ee007cc2"
 BASE_REVISION = "9a7c614699d8"
@@ -210,7 +213,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert _version(pg_url) == []  # a database of this test's own, empty
 
     _alembic(pg_url, "upgrade", "head")
-    assert _version(pg_url) == [HEAD]
+    assert _version(pg_url) == [CODE_HEAD]
     assert _tables(pg_url) == MAPPED_TABLES | {"alembic_version"}  # no missing, no extra table
     _alembic(pg_url, "check")  # schema drift: the migrated schema matches the models
 
@@ -218,18 +221,18 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     refused = _run(["downgrade", "base"], pg_url)
     assert refused.returncode != 0
     assert "confirm" in (refused.stdout + refused.stderr)
-    assert _version(pg_url) == [HEAD] and "auth_sessions" in _tables(pg_url)
+    assert _version(pg_url) == [CODE_HEAD] and "source_takedowns" in _tables(pg_url)
 
     # One guarded step down; the spent token does not authorize the next step.
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
-    assert _version(pg_url) == [PREV] and "auth_sessions" not in _tables(pg_url)
+    assert _version(pg_url) == [HEAD] and "source_takedowns" not in _tables(pg_url)
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [PREV]
+    assert spent.returncode != 0 and _version(pg_url) == [HEAD]
     # The base token minted at head is likewise refused from the moved source.
     stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [PREV]
+    assert stale.returncode != 0 and _version(pg_url) == [HEAD]
 
     # Base under the guard: minted at the live revision, every table destroyed.
     token = _confirmation(pg_url, "base")
@@ -238,7 +241,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert _tables(pg_url) == {"alembic_version"}  # ... and every mapped table is gone
 
     _alembic(pg_url, "upgrade", "head")
-    assert _version(pg_url) == [HEAD]
+    assert _version(pg_url) == [CODE_HEAD]
     assert _tables(pg_url) == MAPPED_TABLES | {"alembic_version"}
     _alembic(pg_url, "check")
     # The documented residual, by recomputation only: the round trip restored every
@@ -264,8 +267,8 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
     assert bare.returncode == 0, out
     assert "migrate.upgrade_verify.done" in out
     assert _logged(out, "outcome", "success")
-    assert _logged(out, "db_revision", HEAD) and _logged(out, "code_head", HEAD)
-    assert _version(pg_url) == [HEAD]
+    assert _logged(out, "db_revision", CODE_HEAD) and _logged(out, "code_head", CODE_HEAD)
+    assert _version(pg_url) == [CODE_HEAD]
     assert pg_url not in out and "signalnest@" not in out  # the DSN never reaches the logs
 
     check = subprocess.run(
@@ -287,15 +290,16 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
         capture_output=True,
         text=True,
     )
-    assert again.returncode == 0 and _version(pg_url) == [HEAD]
+    assert again.returncode == 0 and _version(pg_url) == [CODE_HEAD]
 
 
 # --------------------------------------------------------------------------- #
 # M2(a) — a TRACKED revision failing partway: no partial object, version unmoved
 # --------------------------------------------------------------------------- #
 def test_tracked_revision_that_fails_midway_leaves_no_partial_schema_and_retries(pg_url):
-    """The head revision creates ``auth_sessions`` and then its index; the index's
-    name is occupied in advance, so the revision fails AFTER its first DDL statement."""
+    """The ``auth_sessions`` revision creates its table and then its index; the index's
+    name is occupied in advance, so the revision fails AFTER its first DDL statement
+    (and the revisions above it never run)."""
     _alembic(pg_url, "upgrade", PREV)
     assert _version(pg_url) == [PREV]
     before = _relations(pg_url)
@@ -326,7 +330,7 @@ def test_tracked_revision_that_fails_midway_leaves_no_partial_schema_and_retries
     finally:
         engine.dispose()
     _alembic(pg_url, "upgrade", "head")
-    assert _version(pg_url) == [HEAD]
+    assert _version(pg_url) == [CODE_HEAD]
     assert {"auth_sessions", "ix_auth_sessions_user_id"} <= _relations(pg_url)
     assert _tables(pg_url) == MAPPED_TABLES | {"alembic_version"}
     _alembic(pg_url, "check")
@@ -365,7 +369,7 @@ def _disposable_tree(tmp_path: Path, *, crash: bool) -> Path:
     shutil.copytree(API_DIR / "alembic", tree, ignore=shutil.ignore_patterns("__pycache__"))
     body = _FIXTURE_TEMPLATE.format(
         rev=FIXTURE_REVISION,
-        down=HEAD,
+        down=CODE_HEAD,
         crash=(
             '    op.execute("SELECT 1/0")  # the crash, after two statements ran\n'
             if crash
@@ -398,7 +402,7 @@ def test_controlled_fixture_revision_crash_is_atomic_and_the_repaired_retry_appl
     assert failed.returncode != 0
     assert "division by zero" in failed.stdout + failed.stderr
     # Interrupted state: the fixture's table and its row are gone, the version is unmoved.
-    assert _version(pg_url) == [HEAD]
+    assert _version(pg_url) == [CODE_HEAD]
     assert _relations(pg_url) == at_head
     assert "ci45_probe" not in _tables(pg_url)
 
@@ -416,9 +420,9 @@ def test_controlled_fixture_revision_crash_is_atomic_and_the_repaired_retry_appl
     assert _version(pg_url) == [FIXTURE_REVISION]
 
     # The fixture steps back down under the guard, bound to the disposable chain.
-    token = _confirmation(pg_url, HEAD, ini=repaired)
-    _alembic(pg_url, "-x", f"confirm={token}", "downgrade", HEAD, ini=repaired)
-    assert _version(pg_url) == [HEAD]
+    token = _confirmation(pg_url, CODE_HEAD, ini=repaired)
+    _alembic(pg_url, "-x", f"confirm={token}", "downgrade", CODE_HEAD, ini=repaired)
+    assert _version(pg_url) == [CODE_HEAD]
     assert _relations(pg_url) == at_head
     _alembic(pg_url, "check")  # back on the real tree: no drift
 
@@ -450,4 +454,4 @@ def test_seed_refuses_the_migrated_postgresql_database_and_writes_nothing(pg_url
             assert conn.execute(text("SELECT count(*) FROM organizations")).scalar_one() == 0
     finally:
         engine.dispose()
-    assert _version(pg_url) == [HEAD]
+    assert _version(pg_url) == [CODE_HEAD]

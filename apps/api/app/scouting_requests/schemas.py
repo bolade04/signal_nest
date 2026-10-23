@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from app.connectors.coverage import CoverageReason, CoverageStatus
 from app.core.enums import ScheduleInterval, ScheduleState
 
 
@@ -27,6 +28,35 @@ class ScoutRequestUpdate(BaseModel):
     notes: str | None = None
 
 
+class ScoutCoverage(BaseModel):
+    """Why a completed run holds the signals it holds (P6-DATA-2).
+
+    ``status`` is ``covered`` (a source serves the market; zero opportunities means
+    nothing relevant was found), ``not_covered`` (no configured source serves the
+    market — running again will not help) or ``unavailable`` (live sources serve the
+    market but all failed this run). ``reason`` is the closed code behind it.
+    ``is_simulated`` is true when the run consumed simulated data. ``sources`` and
+    ``sources_failed`` count the live sources consulted (0 on simulated paths)."""
+
+    status: CoverageStatus
+    reason: CoverageReason
+    is_simulated: bool
+    sources: int
+    sources_failed: int
+
+
+def coverage_from_stats(stats: object) -> ScoutCoverage | None:
+    """The run's coverage outcome from its stats, or ``None`` when it has none
+    (a run that predates coverage recording, or one that has not completed)."""
+    value = stats.get("coverage") if isinstance(stats, dict) else None
+    if not isinstance(value, dict):
+        return None
+    try:
+        return ScoutCoverage.model_validate(value)
+    except ValidationError:
+        return None
+
+
 class ScoutRequestOut(BaseModel):
     id: str
     organization_id: str
@@ -43,10 +73,18 @@ class ScoutRequestOut(BaseModel):
     notes: str | None
     last_run_at: datetime | None
     stats: dict
+    #: The latest completed run's coverage outcome, lifted from ``stats``.
+    coverage: ScoutCoverage | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def _lift_coverage(self) -> ScoutRequestOut:
+        if self.coverage is None:
+            self.coverage = coverage_from_stats(self.stats)
+        return self
 
 
 class ScoutRunResult(BaseModel):
@@ -79,6 +117,7 @@ class RunStats(BaseModel):
     noise_filtered: int
     signals_analyzed: int
     opportunities: int
+    coverage: ScoutCoverage | None = None
 
 
 class RunItem(BaseModel):

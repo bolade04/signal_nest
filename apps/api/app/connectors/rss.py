@@ -1,17 +1,17 @@
-"""RSS / news-feed connector — the first real Phase 3B scouting source.
+"""RSS / news-feed parsing and the sandbox RSS connector.
 
 RSS is publisher-syndicated content with explicit intent to distribute, which
 makes it the lowest legal-risk of the candidate sources in
 ``docs/phase-3-plan.md`` Workstream A and the recommended first connector. This
-module implements the whole connector *except live egress*: it parses a feed's
-bytes into normalized :class:`ConnectorSignal` items with source attribution,
-scoped to the request's market.
+module turns a feed's bytes into normalized :class:`ConnectorSignal` items with
+source attribution, scoped to the request's market.
 
-By default the feed bytes come from a **deterministic sandbox provider** (no
-network). A live HTTP provider is intentionally not wired in this batch — turning
-it on is gated on product-owner approval and connector legal sign-off (Phase 3
-entry criteria). The parse/normalize path is identical either way, so enabling
-live egress later needs no change here.
+:func:`parse_feed` reads RSS 2.0 (and 0.9x), RSS 1.0 (RDF) and Atom 1.0, and is
+shared by the sandbox :class:`RssNewsConnector` (deterministic bundled feed bytes, no
+network) and the live connector in :mod:`app.connectors.live`, whose bytes come
+through the egress guard in :mod:`app.connectors.egress`. Every text field is
+reduced to bounded plain text and every entry link screened
+(:mod:`app.connectors.content`) before it reaches a signal.
 
 Safety: the parser caps the input size before parsing, screens the raw bytes for a
 DOCTYPE/entity declaration, and then parses with ``defusedxml`` — which refuses DTDs,
@@ -24,6 +24,7 @@ P6-CI-6 SAST finding ``use-defused-xml``).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
@@ -41,14 +42,41 @@ from app.connectors.base import (
     FetchScope,
     SourceConnector,
 )
+from app.connectors.content import safe_entry_url, sanitize_text
 from app.connectors.ratelimit import TokenBucket
 from app.connectors.retry import ConnectorFetchError, RetryPolicy, run_with_retry
 from app.connectors.sample_feeds import sample_feed_for_market
 
 #: Reject feeds larger than this before parsing (defensive bound).
 MAX_FEED_BYTES = 2 * 1024 * 1024
+#: Cap on a feed's display title.
+MAX_TITLE_CHARS = 300
 
 FeedProvider = Callable[[str | None], bytes]
+
+_ATOM = "{http://www.w3.org/2005/Atom}"
+_RDF = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+_RSS1 = "{http://purl.org/rss/1.0/}"
+_DC = "{http://purl.org/dc/elements/1.1/}"
+
+
+@dataclass(frozen=True)
+class FeedItem:
+    """One feed entry, already sanitized."""
+
+    title: str
+    link: str | None
+    description: str
+    author: str | None
+    published: datetime | None
+    guid: str | None
+
+
+@dataclass(frozen=True)
+class ParsedFeed:
+    format: str  # "rss" | "rdf" | "atom"
+    title: str
+    items: list[FeedItem]
 
 
 def _assert_safe_xml(data: bytes) -> None:
@@ -62,12 +90,163 @@ def _assert_safe_xml(data: bytes) -> None:
         )
 
 
+def _date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    value = value.strip()
+    parsed: datetime | None = None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _text(el, path: str) -> str:
+    return (el.findtext(path) or "").strip()
+
+
+def _rss_item(el, ns: str = "") -> FeedItem:
+    author = _text(el, f"{ns}author") or _text(el, f"{_DC}creator")
+    return FeedItem(
+        title=sanitize_text(_text(el, f"{ns}title")),
+        link=safe_entry_url(_text(el, f"{ns}link")),
+        description=sanitize_text(_text(el, f"{ns}description")),
+        author=sanitize_text(author, max_chars=200) or None,
+        published=_date(_text(el, f"{ns}pubDate") or _text(el, f"{_DC}date")),
+        guid=sanitize_text(_text(el, f"{ns}guid"), max_chars=500) or None,
+    )
+
+
+def _atom_link(entry) -> str | None:
+    for link in entry.findall(f"{_ATOM}link"):
+        if link.get("rel") in (None, "alternate"):
+            return safe_entry_url(link.get("href"))
+    return None
+
+
+def _atom_item(entry) -> FeedItem:
+    summary = _text(entry, f"{_ATOM}summary") or _text(entry, f"{_ATOM}content")
+    return FeedItem(
+        title=sanitize_text(_text(entry, f"{_ATOM}title")),
+        link=_atom_link(entry),
+        description=sanitize_text(summary),
+        author=sanitize_text(_text(entry, f"{_ATOM}author/{_ATOM}name"), max_chars=200)
+        or None,
+        published=_date(_text(entry, f"{_ATOM}published") or _text(entry, f"{_ATOM}updated")),
+        guid=sanitize_text(_text(entry, f"{_ATOM}id"), max_chars=500) or None,
+    )
+
+
+def parse_feed(data: bytes) -> ParsedFeed:
+    """Parse untrusted feed bytes. Raises :class:`ConnectorFetchError` on any defect."""
+    _assert_safe_xml(data)
+    try:
+        root = DET.fromstring(
+            data, forbid_dtd=True, forbid_entities=True, forbid_external=True
+        )
+    except (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden) as exc:
+        # The byte screen above misses declarations the parser still sees (another
+        # encoding, a declaration past the screened head); defusedxml refuses them.
+        raise ConnectorFetchError(
+            FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
+        ) from exc
+    except DET.ParseError as exc:
+        raise ConnectorFetchError(FailureKind.PARSE_ERROR, "malformed feed XML") from exc
+    except (ValueError, LookupError) as exc:
+        # expat refuses multi-byte declared encodings (Shift_JIS, EUC-JP, UTF-32) with a
+        # bare ValueError and unknown encoding names with LookupError; both are defects of
+        # this one feed, never of the run that reads it.
+        raise ConnectorFetchError(
+            FailureKind.PARSE_ERROR, "unsupported or unknown feed encoding"
+        ) from exc
+
+    if root.tag == "rss":
+        channel = root.find("channel")
+        if channel is None:
+            raise ConnectorFetchError(FailureKind.PARSE_ERROR, "feed has no channel")
+        return ParsedFeed(
+            format="rss",
+            title=sanitize_text(_text(channel, "title"), max_chars=MAX_TITLE_CHARS),
+            items=[_rss_item(el) for el in channel.findall("item")],
+        )
+    if root.tag == f"{_RDF}RDF":
+        channel = root.find(f"{_RSS1}channel")
+        title = _text(channel, f"{_RSS1}title") if channel is not None else ""
+        return ParsedFeed(
+            format="rdf",
+            title=sanitize_text(title, max_chars=MAX_TITLE_CHARS),
+            items=[_rss_item(el, _RSS1) for el in root.findall(f"{_RSS1}item")],
+        )
+    if root.tag == f"{_ATOM}feed":
+        return ParsedFeed(
+            format="atom",
+            title=sanitize_text(_text(root, f"{_ATOM}title"), max_chars=MAX_TITLE_CHARS),
+            items=[_atom_item(el) for el in root.findall(f"{_ATOM}entry")],
+        )
+    raise ConnectorFetchError(FailureKind.PARSE_ERROR, "unsupported feed format")
+
+
+def item_signal(
+    item: FeedItem,
+    *,
+    market: str | None,
+    retrieved_at: datetime,
+    now: datetime,
+    is_simulated: bool,
+    attribution: dict,
+) -> ConnectorSignal:
+    """Normalize one sanitized item into a market-scoped signal with provenance."""
+    content = " ".join(part for part in (item.title, item.description) if part)
+    age_days = 0.0
+    if item.published is not None:
+        age_days = max(0.0, (now - item.published).total_seconds() / 86400.0)
+    geo_evidence: list[tuple[str, str]] = []
+    if market:
+        geo_evidence.append(("local_source", market))
+        city = market.split(",")[0].strip()
+        if city and city.lower() in content.lower():
+            geo_evidence.append(("text_mention", market))
+    return ConnectorSignal(
+        source_type="rss_news",
+        content=content,
+        market=market,
+        source_url=item.link,
+        author=item.author,
+        language="en",
+        topics=["news"],
+        published_days_ago=age_days,
+        news_coverage=True,
+        geo_evidence=geo_evidence,
+        is_simulated=is_simulated,
+        attribution={
+            **attribution,
+            "source_url": item.link,
+            "item_guid": item.guid,
+            "published_at": item.published.isoformat() if item.published else None,
+            "retrieved_at": retrieved_at.isoformat(),
+        },
+    )
+
+
+def keyword_match(signal: ConnectorSignal, keywords: tuple[str, ...]) -> bool:
+    if not keywords:
+        return True
+    haystack = signal.content.lower()
+    return any(k.lower() in haystack for k in keywords)
+
+
 class RssNewsConnector(SourceConnector):
-    """Parse RSS/news feeds into normalized signals, scoped to one market."""
+    """Sandbox RSS connector: bundled deterministic feeds, never the network."""
 
     name = "rss_news"
     source_type = "rss_news"
-    is_simulated = True  # sandbox provider; live egress is a gated follow-up.
+    is_simulated = True  # sandbox provider; live feeds go through app.connectors.live.
 
     def __init__(
         self,
@@ -90,27 +269,27 @@ class RssNewsConnector(SourceConnector):
         )
         try:
             data = self._fetch_bytes(scope.market)
+            feed = parse_feed(data)
         except ConnectorFetchError as exc:
             result.failures.append(exc.failure)
             return result
 
-        try:
-            items = self._parse(data)
-        except ConnectorFetchError as exc:
-            result.failures.append(exc.failure)
-            return result
-
-        keywords = [k.lower() for k in scope.keywords]
-        for item in items[: scope.max_items]:
-            signal = self._normalize(item, scope.market, result.retrieved_at)
-            if keywords:
-                haystack = signal.content.lower()
-                if not any(k in haystack for k in keywords):
-                    continue
-            result.signals.append(signal)
+        for item in feed.items[: scope.max_items]:
+            signal = item_signal(
+                item,
+                market=scope.market,
+                retrieved_at=result.retrieved_at,
+                now=self._now(),
+                is_simulated=self.is_simulated,
+                attribution={
+                    "connector": self.name,
+                    "source_title": feed.title,
+                    "license": "publisher-syndicated RSS",
+                },
+            )
+            if keyword_match(signal, scope.keywords):
+                result.signals.append(signal)
         return result
-
-    # --- fetch + parse ---------------------------------------------------
 
     def _fetch_bytes(self, market: str | None) -> bytes:
         def _once() -> bytes:
@@ -119,82 +298,3 @@ class RssNewsConnector(SourceConnector):
             return self._provider(market)
 
         return run_with_retry(_once, policy=self._retry)
-
-    def _parse(self, data: bytes) -> list[dict]:
-        _assert_safe_xml(data)
-        try:
-            root = DET.fromstring(
-                data, forbid_dtd=True, forbid_entities=True, forbid_external=True
-            )
-        except (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden) as exc:
-            # The byte screen above misses declarations the parser still sees (another
-            # encoding, a declaration past the screened head); defusedxml refuses them.
-            raise ConnectorFetchError(
-                FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
-            ) from exc
-        except DET.ParseError as exc:
-            raise ConnectorFetchError(FailureKind.PARSE_ERROR, "malformed feed XML") from exc
-
-        channel = root.find("channel")
-        if channel is None:
-            raise ConnectorFetchError(FailureKind.PARSE_ERROR, "feed has no channel")
-        source_title = (channel.findtext("title") or "").strip()
-
-        items: list[dict] = []
-        for el in channel.findall("item"):
-            items.append(
-                {
-                    "title": (el.findtext("title") or "").strip(),
-                    "link": (el.findtext("link") or "").strip() or None,
-                    "description": (el.findtext("description") or "").strip(),
-                    "author": (el.findtext("author") or "").strip() or None,
-                    "pubdate": (el.findtext("pubDate") or "").strip() or None,
-                    "source_title": source_title,
-                }
-            )
-        return items
-
-    def _normalize(
-        self, item: dict, market: str | None, retrieved_at: datetime
-    ) -> ConnectorSignal:
-        content = " ".join(part for part in (item["title"], item["description"]) if part)
-        age_days = self._age_days(item["pubdate"])
-        geo_evidence: list[tuple[str, str]] = []
-        if market:
-            geo_evidence.append(("local_source", market))
-            city = market.split(",")[0].strip()
-            if city and city.lower() in content.lower():
-                geo_evidence.append(("text_mention", market))
-
-        return ConnectorSignal(
-            source_type=self.source_type,
-            content=content,
-            market=market,
-            source_url=item["link"],
-            author=item["author"],
-            language="en",
-            topics=["news"],
-            published_days_ago=age_days,
-            news_coverage=True,
-            geo_evidence=geo_evidence,
-            is_simulated=self.is_simulated,
-            attribution={
-                "connector": self.name,
-                "source_title": item["source_title"],
-                "source_url": item["link"],
-                "retrieved_at": retrieved_at.isoformat(),
-                "license": "publisher-syndicated RSS",
-            },
-        )
-
-    def _age_days(self, pubdate: str | None) -> float:
-        if not pubdate:
-            return 0.0
-        try:
-            published = parsedate_to_datetime(pubdate)
-        except (TypeError, ValueError):
-            return 0.0
-        if published.tzinfo is None:
-            published = published.replace(tzinfo=UTC)
-        delta = self._now() - published
-        return max(0.0, delta.total_seconds() / 86400.0)

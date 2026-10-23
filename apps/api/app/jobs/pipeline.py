@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
+from app.connectors.takedown import active_takedowns, without_taken_down
 from app.core.enums import (
     DecisionAction,
     OpportunityStatus,
@@ -55,7 +56,7 @@ from app.scoring.opportunity import (
 from app.scoring.relevance import RELEVANCE_ACTION_FLOOR, score_relevance
 from app.scoring.types import SignalInput
 from app.scoring.validation import score_validation
-from app.scouting_requests.connectors import get_connector
+from app.scouting_requests.connectors import fetch_signals
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import (
     NormalizedSignal,
@@ -67,6 +68,16 @@ from app.signals.models import (
 logger = get_logger("signalnest.pipeline")
 
 DEDUPE_THRESHOLD = 0.92
+
+
+def _signal_is_simulated(signal) -> bool:
+    """Fixture signals carry no flag; anything not explicitly live is simulated."""
+    return bool(getattr(signal, "is_simulated", True))
+
+
+def _card_is_simulated(members) -> bool:
+    """An opportunity is simulated if any member is: one fixture signal makes it so."""
+    return any(m.is_simulated for m in members)
 
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
@@ -124,12 +135,17 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
-    connector = get_connector(source_types=request.source_types or [], market=market)
-    fixtures = connector.fetch(
+    # Source selection records why the run holds what it holds (P6-DATA-2): live
+    # feeds, the simulated sandbox/demo library, or an explicit "not covered".
+    batch = fetch_signals(
         market=market,
         keywords=request.keywords or ctx.keywords,
         source_types=request.source_types or [],
+        takedowns=active_takedowns(db),
     )
+    # A takedown may have committed while the sources were read: re-check under each
+    # source's lock before anything is written (P6-PRIV-4; see app.connectors.takedown).
+    fixtures = without_taken_down(db, batch.signals)
 
     scanned = len(fixtures)
     normalized: list[NormalizedSignal] = []
@@ -139,6 +155,9 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     noise_filtered = 0
 
     for fx in fixtures:
+        simulated = _signal_is_simulated(fx)
+        provenance = dict(getattr(fx, "attribution", None) or {})
+        source_key = provenance.get("source_key")
         raw = RawSignal(
             organization_id=request.organization_id,
             workspace_id=request.workspace_id,
@@ -149,8 +168,13 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
             published_at=datetime.now(UTC),
             language=fx.language,
             content=fx.content,
-            raw_metadata={"topics": fx.topics, "market": fx.market},
-            is_simulated=True,
+            raw_metadata={
+                "topics": fx.topics,
+                "market": fx.market,
+                **({"provenance": provenance} if provenance else {}),
+            },
+            is_simulated=simulated,
+            source_key=source_key,
         )
         db.add(raw)
         db.flush()
@@ -228,12 +252,14 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
             is_noise=is_noise,
             noise_reasons=noise_reasons,
             is_duplicate=is_duplicate,
-            is_simulated=True,
+            is_simulated=simulated,
+            source_key=source_key,
             ingest_metadata={
                 "audience_label": audience_label,
                 "market": fx.market,
                 "engagement": fx.engagement,
                 "intelligence": intelligence_annotation,
+                **({"provenance": provenance} if provenance else {}),
             },
         )
         db.add(norm)
@@ -277,6 +303,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         "noise_filtered": noise_filtered,
         "signals_analyzed": len(normalized),
         "opportunities": len(opportunities),
+        "coverage": batch.coverage.as_stats(),
     }
     db.flush()
     logger.info(
@@ -383,10 +410,7 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             inside_scout_area=geo.inside_scout_area,
             why_it_matters=explanation.get("why_it_matters"),
             who_cares=explanation.get("who_cares"),
-            observed_evidence=[
-                {"source_type": m.source_type, "source_url": m.source_url, "excerpt": m.excerpt}
-                for m in members
-            ],
+            observed_evidence=[_evidence(m) for m in members],
             ai_inference=explanation.get("ai_inference"),
             recommended_action=(
                 explanation.get("recommended_action")
@@ -401,7 +425,7 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             commercial_value="high" if signal_input.has_buying_intent else "medium",
             source_summary=sorted({m.source_type for m in members}),
             status=OpportunityStatus.NEW.value,
-            is_simulated=True,
+            is_simulated=_card_is_simulated(members),
         )
         db.add(opp)
         db.flush()
@@ -485,6 +509,9 @@ def _analyze_candidate(fx, ctx) -> OpportunityCandidate | None:
                 has_active_ads=fx.has_active_ads,
                 news_coverage=fx.news_coverage,
                 search_trend_up=fx.search_trend_up,
+                # A live source's record must not be labelled simulated (the SPA shows
+                # the intelligence record's flag as a badge); fixtures carry no flag.
+                is_simulated=_signal_is_simulated(fx),
             ),
             ctx,
         )
@@ -524,6 +551,21 @@ def _persist_intelligence_record(db, request, norm, candidate: OpportunityCandid
                 }
             },
         )
+
+
+def _evidence(member: NormalizedSignal) -> dict:
+    """One observed-evidence entry; live entries name their source (P6-PRIV-4)."""
+    entry = {
+        "source_type": member.source_type,
+        "source_url": member.source_url,
+        "excerpt": member.excerpt,
+    }
+    provenance = (member.ingest_metadata or {}).get("provenance") or {}
+    if member.source_key:
+        entry["source_key"] = member.source_key
+        entry["publisher"] = provenance.get("publisher")
+        entry["delivery"] = provenance.get("delivery")
+    return entry
 
 
 def _mean_embedding(members) -> list[float]:
