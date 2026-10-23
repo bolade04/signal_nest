@@ -294,7 +294,9 @@ export interface paths {
         put?: never;
         /**
          * Geocode Address
-         * @description Scout Reach helper — geocode an address so a radius can be applied.
+         * @description Scout Reach helper — resolve an address or place to coordinates and a
+         *     normalised city / region / country. A lookup that finds no single place answers
+         *     with an error whose message says how to continue (P6-DATA-3).
          */
         post: operations["geocode_address_api_v1_geocode_post"];
         delete?: never;
@@ -2627,22 +2629,34 @@ export interface components {
             /** Query */
             query: string;
         };
-        /** GeocodeResponse */
+        /**
+         * GeocodeResponse
+         * @description One resolved place. A provider may not know every component (a region-level
+         *     answer has no city), so the text components are nullable.
+         */
         GeocodeResponse: {
             /** City */
-            city: string;
+            city: string | null;
             /** Confidence */
             confidence: number;
             /** Country */
-            country: string;
+            country: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** Label */
+            label?: string | null;
             /** Latitude */
             latitude: number;
             /** Longitude */
             longitude: number;
+            /** Provider */
+            provider: string;
+            /** Region Code */
+            region_code?: string | null;
             /** State Province */
-            state_province: string;
+            state_province: string | null;
             /** Timezone */
-            timezone: string;
+            timezone: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {

@@ -29,6 +29,7 @@ from app.core.enums import (
 )
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
+from app.geography.markets import market_from_parts
 from app.infra.vector import build_index, embed_text
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
@@ -72,10 +73,18 @@ DEDUPE_THRESHOLD = 0.92
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
     market = request.resolved_market
     rule = None
+    home = None
     if request.location_id:
         location = db.get(BusinessLocation, request.location_id)
-        if location and not market:
-            market = f"{location.city}, {location.state_province or location.country}"
+        if location:
+            if not market:
+                market = f"{location.city}, {location.state_province or location.country}"
+            # The location's own market, from its structured fields (P6-DATA-6).
+            home = market_from_parts(
+                city=location.city,
+                region=location.state_province,
+                country=location.country,
+            )
         rule = db.scalar(
             select(GeoCoverageRule).where(GeoCoverageRule.location_id == request.location_id)
         )
@@ -90,9 +99,18 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
             included_markets=tuple(rule.included_markets or ()),
             excluded_markets=tuple(rule.excluded_markets or ()),
             online_global=rule.online_global,
+            home_market=home,
+        )
+    elif request.location_id or market:
+        cov = CoverageRule(
+            coverage_type="radius",
+            included_markets=(market,) if market else (),
+            home_market=home,
         )
     else:
-        cov = CoverageRule(coverage_type="radius", included_markets=(market,) if market else ())
+        # No location and no market: an explicitly unscoped (global/online) request,
+        # which the fixture connector serves across every market.
+        cov = CoverageRule(coverage_type="online", online_global=True)
     return cov, market
 
 

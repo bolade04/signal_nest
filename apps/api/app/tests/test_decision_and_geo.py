@@ -89,8 +89,10 @@ class TestGeography:
         assert is_within_radius(rule, 32.9, -96.9) is None
 
     def test_excluded_market_wins(self):
+        # Bare market names are read in the rule's country (P6-DATA-6).
         rule = CoverageRule(
             coverage_type="city",
+            country="United States",
             included_markets=("dallas",),
             excluded_markets=("plano",),
         )
@@ -102,7 +104,9 @@ class TestGeography:
         assert market_in_coverage(rule, "anywhere") is True
 
     def test_resolve_geo_picks_strongest_evidence(self):
-        rule = CoverageRule(coverage_type="city", included_markets=("dallas",))
+        rule = CoverageRule(
+            coverage_type="city", country="United States", included_markets=("dallas",)
+        )
         res = resolve_geo(
             rule,
             signals=[

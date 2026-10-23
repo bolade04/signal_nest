@@ -1688,8 +1688,21 @@ export const handlers = [
     const body = (await request.json()) as Record<string, unknown>;
     return HttpResponse.json({ ...body, id: 'geo-1', location_id: params.id });
   }),
+  // Shape of GeocodeResponse (apps/api/app/locations/schemas.py), as the fixture geocoder answers "Dallas".
   http.post(P('/geocode'), () =>
-    HttpResponse.json({ latitude: 32.7, longitude: -96.8, city: 'Dallas', state_province: 'TX', country: 'United States', timezone: 'America/Chicago', confidence: 0.95 }),
+    HttpResponse.json({
+      latitude: 32.7767,
+      longitude: -96.797,
+      city: 'Dallas',
+      state_province: 'Texas',
+      country: 'United States',
+      timezone: 'America/Chicago',
+      confidence: 0.95,
+      country_code: 'US',
+      region_code: 'US-TX',
+      label: 'Dallas, Texas, United States',
+      provider: 'fixture',
+    }),
   ),
 
   // ---- Scout requests ----
