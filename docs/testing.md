@@ -267,10 +267,10 @@ dependencies, the three built images, IaC misconfiguration, CycloneDX SBOMs) and
 (Python and TypeScript SAST), each evaluated by `security/gate.py` against the ~~PROPOSED~~
 thresholds in `security/policy.json` *(ADOPTED for merge-path enforcement by the operator order
 of 2026-10-19: a Trivy-selected CRITICAL fails in every covered population with or without a fix; ~~the jobs' installed tooling
-environments are scanned as installed~~ *(corrected 2026-10-23: these two jobs scan as installed the tooling environments
+environments are scanned as installed~~ *(corrected 2026-10-23: these two jobs scan as installed the Python tooling venvs
 they create, `.security-venv` and `.reader-venv`, and Revision reader also its interpreter prefix's installed
-distributions; the interpreter prefixes of the other five jobs are not scanned, see "Populations after this tranche" in
-`security/README.md`)*)*. *(Since 2026-10-20, P6-CI-6 coverage gaps: Frontend quality, Backend
+distributions; the interpreter prefixes of the five jobs other than Revision reader are not scanned, see "Populations
+after this tranche" in `security/README.md`)*)*. *(Since 2026-10-20, P6-CI-6 coverage gaps: Frontend quality, Backend
 quality, Migrations and API contract and Integration smoke also scan ~~the environments they install~~ the Python
 virtualenvs they install *(corrected 2026-10-21: their other installs, `node_modules` and the Playwright browser, are
 not scanned as installed)* (`apps/api/.venv`, and `.locktools` in Backend quality) as installed, with the packages their pip vendors,
