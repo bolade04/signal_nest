@@ -58,7 +58,14 @@ field has `coverage: null`.
 * Parsing: size cap, DOCTYPE/entity refusal and `defusedxml`; RSS 2.0, RSS 1.0 and Atom.
   Text is reduced to bounded plain text (markup, script/style bodies and control characters
   removed; instruction-override phrases bracketed as quoted data); only plain `http(s)`
-  entry links without credentials are kept.
+  entry links without credentials are kept. A feed the parser cannot decode (for example a
+  declared Shift_JIS, EUC-JP, GB18030, Big5 or UTF-32 encoding, an unknown encoding name, or
+  a byte-order mark that contradicts the declaration) is a `parse_error` for that source.
+* Isolation: each source is read on its own. Any failure while fetching, parsing or
+  turning its items into signals is recorded for that source; the other sources of the run
+  still deliver. A body is cached only after it parsed: an unreadable response is never
+  stored, starts a hold-off of one politeness interval (no request meanwhile; a previously
+  cached good body keeps being served), and is fetched again only after it.
 
 ## 3. Onboarding a source (after the operator's decision)
 
@@ -92,17 +99,33 @@ environment (an operator act; staging egress also needs the window and network p
   with `{"reason": "...", "reference": "<public ticket id>"}`. In one transaction it records
   the takedown (the key is never fetched again), purges the source's raw and normalized
   signals, their location evidence and intelligence records **in every tenant**, deletes
-  opportunities built only from that source (with their scores, validation evidence and
-  feedback), removes its entries from mixed opportunities' evidence, and drops its cached
-  feed bytes. The answer carries `purged` counts and `remaining` counts **recounted from the
+  every opportunity built only from that source **together with the customers' feedback on
+  it** (and its scores and validation evidence), removes the source's entries from mixed
+  opportunities' evidence, and writes **one audit entry in each affected workspace**
+  (`data_source.taken_down`: the counts removed there, the ids of the opportunities deleted
+  or redacted, the source key and the public reference — not the operator's free-text
+  reason). The answer carries `purged` counts and `remaining` counts **recounted from the
   database**, and `verified: true` only when every remaining count is zero. Repeating it is
-  safe and re-runs the purge.
+  safe and re-runs the purge; the first purge's counts stay on the record
+  (`purge_summary`) and each repeat is appended to `repeat_purges`.
+* **Cached feed bytes:** the API process that performs the takedown drops the source's
+  cached bytes at once; each worker process drops them at its next scout run, before it
+  fetches anything. Until then they may sit unused in a worker's memory — no run reads a
+  taken-down key.
+* **Runs in flight:** a scout run that started before the takedown re-checks the takedowns
+  under the source's lock before it writes anything, and a takedown takes that lock
+  exclusively (PostgreSQL advisory locks; SQLite serialises writers). Either the run drops
+  the source's signals, or the takedown waits for the run to commit and then purges them —
+  a `verified` takedown is not followed by re-inserted signals.
 * **Verify later:** `GET /api/v1/internal/system/data-sources` lists every record's terms
   record, whether it can run, its takedown, and `stored` counts measured at request time.
 * A takedown is permanent for its key. Re-onboarding the publisher is a new record with a
   new key and a fresh approval.
 * Downgrading below migration `da25533622b2` drops the takedown table. Do not downgrade
-  while live egress is enabled: earlier code would fetch a taken-down source again.
+  while live egress is enabled: earlier code would fetch a taken-down source again. Signals
+  keep their source in their provenance, and upgrading again restores each signal's
+  `source_key` from it, so a takedown still reaches them; the takedown records themselves
+  are lost, so take each such source down again after re-upgrading.
 
 ## 5. Replay corpus and the Integration smoke gate (P6-CI-11)
 
@@ -114,7 +137,11 @@ HTTP when `SMOKE_REAL_DATA` is `replay` or `required`. The replay origin setting
 
 The shipped captures are **synthetic** (`"synthetic": true`, IANA-reserved example
 domains): their signals are stored as simulated, and `SMOKE_REAL_DATA=required` fails on
-them by design. Replacing them with a recorded capture is what makes the gate assert real
+them by design. A recorded capture (`"synthetic": false`) counts as real data only when an
+approved, enabled `APPROVED_SOURCES` record with the same source key and feed URL covers its
+markets; it then replays under that record's own approval and terms. Without one it replays
+as simulated and is reported as an unverified recorded capture. Replacing the synthetic
+captures with a recorded capture of an approved source is what makes the gate assert real
 data:
 
 1. after a source is approved and enabled, the operator runs

@@ -21,11 +21,21 @@ holds, and even then nothing is fetched while ``connector_rss_live_enabled`` is 
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from urllib.parse import urlsplit
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return True
+
 
 #: Stable source identifier: lowercase slug, safe for logs, URLs and a DB column.
 SOURCE_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
@@ -104,6 +114,15 @@ class SourceRecord:
             out.append("feed_url must be an absolute https URL")
         if parts.username or parts.password:
             out.append("feed_url must not embed credentials")
+        # The egress guard refuses both, so such a record could never be fetched.
+        if parts.hostname and _is_ip_literal(parts.hostname):
+            out.append("feed_url must name a host, not an IP address")
+        try:
+            port = parts.port
+        except ValueError:
+            port = -1
+        if port not in (None, 443):
+            out.append("feed_url must use the default https port")
         if not self.markets or not all(normalize_market(m) for m in self.markets):
             out.append("markets must name at least one market")
         if urlsplit(self.tos_url).scheme != "https":

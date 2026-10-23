@@ -4167,11 +4167,31 @@ export interface components {
             reason: string;
             /** Reference */
             reference: string | null;
+            /** Repeat Purges */
+            repeat_purges: components["schemas"]["TakedownRepeatOut"][];
             /**
              * Taken Down At
              * Format: date-time
              */
             taken_down_at: string;
+        };
+        /** TakedownRepeatOut */
+        TakedownRepeatOut: {
+            /** Actor User Id */
+            actor_user_id: string | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Purged */
+            purged: {
+                [key: string]: number;
+            };
+            /** Reason */
+            reason: string;
+            /** Reference */
+            reference: string | null;
         };
         /** TakedownResultOut */
         TakedownResultOut: {

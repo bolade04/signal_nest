@@ -158,6 +158,13 @@ def parse_feed(data: bytes) -> ParsedFeed:
         ) from exc
     except DET.ParseError as exc:
         raise ConnectorFetchError(FailureKind.PARSE_ERROR, "malformed feed XML") from exc
+    except (ValueError, LookupError) as exc:
+        # expat refuses multi-byte declared encodings (Shift_JIS, EUC-JP, UTF-32) with a
+        # bare ValueError and unknown encoding names with LookupError; both are defects of
+        # this one feed, never of the run that reads it.
+        raise ConnectorFetchError(
+            FailureKind.PARSE_ERROR, "unsupported or unknown feed encoding"
+        ) from exc
 
     if root.tag == "rss":
         channel = root.find("channel")

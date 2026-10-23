@@ -6415,6 +6415,13 @@
             ],
             "title": "Reference"
           },
+          "repeat_purges": {
+            "items": {
+              "$ref": "#/components/schemas/TakedownRepeatOut"
+            },
+            "title": "Repeat Purges",
+            "type": "array"
+          },
           "taken_down_at": {
             "format": "date-time",
             "title": "Taken Down At",
@@ -6425,9 +6432,61 @@
           "taken_down_at",
           "reason",
           "reference",
-          "purge_summary"
+          "purge_summary",
+          "repeat_purges"
         ],
         "title": "TakedownOut",
+        "type": "object"
+      },
+      "TakedownRepeatOut": {
+        "properties": {
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "purged": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Purged",
+            "type": "object"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          }
+        },
+        "required": [
+          "at",
+          "reason",
+          "reference",
+          "actor_user_id",
+          "purged"
+        ],
+        "title": "TakedownRepeatOut",
         "type": "object"
       },
       "TakedownResultOut": {

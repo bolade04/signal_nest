@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
-from app.connectors.takedown import active_takedowns
+from app.connectors.takedown import active_takedowns, without_taken_down
 from app.core.enums import (
     DecisionAction,
     OpportunityStatus,
@@ -68,6 +68,16 @@ from app.signals.models import (
 logger = get_logger("signalnest.pipeline")
 
 DEDUPE_THRESHOLD = 0.92
+
+
+def _signal_is_simulated(signal) -> bool:
+    """Fixture signals carry no flag; anything not explicitly live is simulated."""
+    return bool(getattr(signal, "is_simulated", True))
+
+
+def _card_is_simulated(members) -> bool:
+    """An opportunity is simulated if any member is: one fixture signal makes it so."""
+    return any(m.is_simulated for m in members)
 
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
@@ -133,7 +143,9 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         source_types=request.source_types or [],
         takedowns=active_takedowns(db),
     )
-    fixtures = batch.signals
+    # A takedown may have committed while the sources were read: re-check under each
+    # source's lock before anything is written (P6-PRIV-4; see app.connectors.takedown).
+    fixtures = without_taken_down(db, batch.signals)
 
     scanned = len(fixtures)
     normalized: list[NormalizedSignal] = []
@@ -143,8 +155,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     noise_filtered = 0
 
     for fx in fixtures:
-        # Fixture signals carry neither field; anything not explicitly live is simulated.
-        simulated = bool(getattr(fx, "is_simulated", True))
+        simulated = _signal_is_simulated(fx)
         provenance = dict(getattr(fx, "attribution", None) or {})
         source_key = provenance.get("source_key")
         raw = RawSignal(
@@ -414,8 +425,7 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             commercial_value="high" if signal_input.has_buying_intent else "medium",
             source_summary=sorted({m.source_type for m in members}),
             status=OpportunityStatus.NEW.value,
-            # Simulated if any member is: one fixture signal makes the whole card so.
-            is_simulated=any(m.is_simulated for m in members),
+            is_simulated=_card_is_simulated(members),
         )
         db.add(opp)
         db.flush()
@@ -499,6 +509,9 @@ def _analyze_candidate(fx, ctx) -> OpportunityCandidate | None:
                 has_active_ads=fx.has_active_ads,
                 news_coverage=fx.news_coverage,
                 search_trend_up=fx.search_trend_up,
+                # A live source's record must not be labelled simulated (the SPA shows
+                # the intelligence record's flag as a badge); fixtures carry no flag.
+                is_simulated=_signal_is_simulated(fx),
             ),
             ctx,
         )

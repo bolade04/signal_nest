@@ -3,20 +3,27 @@
 Live-data provenance and takedown (Phase 6, P6-DATA-1 / P6-PRIV-4):
 
 * ``source_takedowns`` — one row per live source key an operator has taken down
-  (reason, public reference, acting operator, time, purge counts). While a row exists
-  the source is never fetched; the key is never reused.
+  (reason, public reference, acting operator, time, the first purge's counts and the
+  history of repeated purges). While a row exists the source is never fetched; the key
+  is never reused.
 * ``raw_signals.source_key`` / ``normalized_signals.source_key`` — the approved live
   source that produced a signal, so a takedown can find and purge every signal it
   produced in every tenant. ``NULL`` for simulated fixture and sandbox signals.
 
-Purely **additive and safe on a live database**: one new table with its actor index,
-two nullable indexed columns on existing tables, no backfill (every existing signal is
-simulated and correctly has no source key), nothing dropped or rewritten.
+**Additive and safe on a live database**: one new table with its actor index, two
+nullable indexed columns on existing tables, nothing dropped or rewritten. The upgrade
+backfills ``source_key`` from the provenance every live signal also carries in
+``raw_metadata`` / ``ingest_metadata`` (``provenance.source_key``). On a database that
+never ran live egress no row carries provenance and the backfill changes nothing; after
+a downgrade/upgrade round trip it restores the keys, so a takedown still reaches every
+signal its source produced.
 
 Rollback: ``downgrade`` drops the two indexes and columns and the table. Any recorded
 takedown is lost with it, so a downgrade must not run while live egress is enabled:
 code below this revision does not consult takedowns and would fetch a taken-down
-source again. Signals keep their provenance in ``raw_metadata``/``ingest_metadata``.
+source again. Signals keep their provenance in ``raw_metadata``/``ingest_metadata``,
+which the next upgrade reads back into ``source_key``; the takedown rows themselves
+are not restored, so a taken-down source must be taken down again after re-upgrading.
 
 Revision ID: da25533622b2
 Revises: 87198ab57b59
@@ -24,6 +31,7 @@ Create Date: 2026-10-20 20:56:28.211066
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -46,6 +54,7 @@ def upgrade() -> None:
     sa.Column('actor_user_id', sa.String(length=32), nullable=True),
     sa.Column('taken_down_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('purge_summary', sa.JSON(), nullable=False),
+    sa.Column('repeat_purges', sa.JSON(), nullable=False),
     sa.Column('id', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
@@ -65,6 +74,38 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_raw_signals_source_key'), ['source_key'], unique=False)
 
     # ### end Alembic commands ###
+    _backfill_source_keys('raw_signals', 'raw_metadata')
+    _backfill_source_keys('normalized_signals', 'ingest_metadata')
+
+
+#: The source-key shape (``app.connectors.sources.SOURCE_KEY_PATTERN``), frozen here so
+#: this revision does not change if the application's pattern ever does.
+_SOURCE_KEY = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
+
+
+def _backfill_source_keys(table_name: str, metadata_column: str) -> None:
+    """Set ``source_key`` from ``<metadata>.provenance.source_key`` where it is missing."""
+    table = sa.table(
+        table_name,
+        sa.column('id', sa.String),
+        sa.column(metadata_column, sa.JSON),
+        sa.column('source_key', sa.String),
+    )
+    metadata = table.c[metadata_column]
+    bind = op.get_bind()
+    rows = bind.execute(
+        sa.select(table.c.id, metadata).where(
+            table.c.source_key.is_(None),
+            sa.cast(metadata, sa.Text).like('%provenance%'),
+        )
+    ).all()
+    for row_id, meta in rows:
+        provenance = meta.get('provenance') if isinstance(meta, dict) else None
+        key = provenance.get('source_key') if isinstance(provenance, dict) else None
+        if isinstance(key, str) and _SOURCE_KEY.match(key):
+            bind.execute(
+                table.update().where(table.c.id == row_id).values(source_key=key)
+            )
 
 
 def downgrade() -> None:

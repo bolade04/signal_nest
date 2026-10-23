@@ -30,11 +30,22 @@ from app.organizations.models import User
 router = APIRouter(prefix="/internal/system/data-sources", tags=["internal"])
 
 
+class TakedownRepeatOut(BaseModel):
+    at: datetime
+    reason: str
+    reference: str | None
+    actor_user_id: str | None
+    purged: dict[str, int]
+
+
 class TakedownOut(BaseModel):
     taken_down_at: datetime
     reason: str
     reference: str | None
+    #: What the first takedown removed; never overwritten by a repeat.
     purge_summary: dict[str, int]
+    #: Each repeated takedown, oldest first.
+    repeat_purges: list[TakedownRepeatOut]
 
 
 class DataSourceOut(BaseModel):
@@ -88,6 +99,7 @@ def _takedown_out(row: SourceTakedown | None) -> TakedownOut | None:
         reason=row.reason,
         reference=row.reference,
         purge_summary=dict(row.purge_summary or {}),
+        repeat_purges=[TakedownRepeatOut(**entry) for entry in (row.repeat_purges or [])],
     )
 
 

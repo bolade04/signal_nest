@@ -45,7 +45,7 @@ from app.connectors.egress import (
 )
 from app.connectors.feedcache import CachedFeed, FeedCache, feed_cache
 from app.connectors.retry import ConnectorFetchError
-from app.connectors.rss import item_signal, keyword_match, parse_feed
+from app.connectors.rss import ParsedFeed, item_signal, keyword_match, parse_feed
 from app.connectors.sources import APPROVED_SOURCES, SourceRecord
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
@@ -126,7 +126,12 @@ def build_fetcher(settings: Settings) -> SafeFeedFetcher:
 
 
 class LiveRssConnector(SourceConnector):
-    """Read approved feeds through the egress guard; one result per scout run."""
+    """Read approved feeds through the egress guard; one result per scout run.
+
+    Each source is read in isolation: any failure while fetching, parsing or turning one
+    source's items into signals is recorded for that source and the run continues with
+    the next one.
+    """
 
     name = "rss_news_live"
     source_type = "rss_news"
@@ -162,70 +167,85 @@ class LiveRssConnector(SourceConnector):
             key = target.source.source_key
             started = time.monotonic()
             try:
-                feed = self._feed(target)
-                parsed = parse_feed(feed.body)
+                feed, parsed = self._feed(target)
+                signals, items = self._signals(target, feed, parsed, scope)
             except ConnectorFetchError as exc:
-                self.failed_sources.append(key)
-                result.failures.append(
-                    FetchFailure(kind=exc.failure.kind, detail=f"{key}: {exc.failure.detail}")
-                )
-                logger.warning(
-                    "connector.source_failed",
-                    extra={"extra_fields": {"source_key": key, "kind": exc.failure.kind.value}},
-                )
+                self._record_failure(result, key, exc.failure.kind, exc.failure.detail)
                 continue
-            attribution = {
-                "connector": "rss_news",
-                "delivery": target.delivery,
-                "source_key": key,
-                "publisher": target.source.publisher,
-                "source_title": parsed.title or target.source.display_name,
-                "feed_url": target.source.feed_url,
-                "tos_url": target.source.tos_url,
-                "approval_reference": target.source.approval_reference,
-                "attribution": target.source.attribution,
-                "feed_sha256": feed.sha256,
-                "synthetic": target.is_simulated,
-                **dict(target.provenance),
-            }
-            kept = 0
-            for item in parsed.items[: scope.max_items]:
-                signal = item_signal(
-                    item,
-                    market=scope.market,
-                    retrieved_at=feed.retrieved_at,
-                    now=self._now(),
-                    is_simulated=target.is_simulated,
-                    attribution=attribution,
-                )
-                if keyword_match(signal, scope.keywords):
-                    result.signals.append(signal)
-                    kept += 1
+            except Exception as exc:  # noqa: BLE001 - one source's defect never sinks the run
+                detail = f"unreadable source ({type(exc).__name__})"
+                self._record_failure(result, key, FailureKind.PARSE_ERROR, detail)
+                continue
+            result.signals.extend(signals)
             logger.info(
                 "connector.source_read",
                 extra={
                     "extra_fields": {
                         "source_key": key,
                         "delivery": target.delivery,
-                        "items": len(parsed.items),
-                        "kept": kept,
+                        "items": items,
+                        "kept": len(signals),
                         "duration_ms": round((time.monotonic() - started) * 1000, 1),
                     }
                 },
             )
         return result
 
-    def _feed(self, target: SourceTarget) -> CachedFeed:
+    def _record_failure(
+        self, result: ConnectorResult, key: str, kind: FailureKind, detail: str
+    ) -> None:
+        self.failed_sources.append(key)
+        result.failures.append(FetchFailure(kind=kind, detail=f"{key}: {detail}"))
+        logger.warning(
+            "connector.source_failed",
+            extra={"extra_fields": {"source_key": key, "kind": kind.value}},
+        )
+
+    def _signals(
+        self, target: SourceTarget, feed: CachedFeed, parsed: ParsedFeed, scope: FetchScope
+    ) -> tuple[list, int]:
+        """This source's keyword-matched signals, and how many items its feed held."""
+        attribution = {
+            "connector": "rss_news",
+            "delivery": target.delivery,
+            "source_key": target.source.source_key,
+            "publisher": target.source.publisher,
+            "source_title": parsed.title or target.source.display_name,
+            "feed_url": target.source.feed_url,
+            "tos_url": target.source.tos_url,
+            "approval_reference": target.source.approval_reference,
+            "attribution": target.source.attribution,
+            "feed_sha256": feed.sha256,
+            "synthetic": target.is_simulated,
+            **dict(target.provenance),
+        }
+        signals = []
+        for item in parsed.items[: scope.max_items]:
+            signal = item_signal(
+                item,
+                market=scope.market,
+                retrieved_at=feed.retrieved_at,
+                now=self._now(),
+                is_simulated=target.is_simulated,
+                attribution=attribution,
+            )
+            if keyword_match(signal, scope.keywords):
+                signals.append(signal)
+        return signals, len(parsed.items)
+
+    def _feed(self, target: SourceTarget) -> tuple[CachedFeed, ParsedFeed]:
+        """The source's feed and its parse. A body is cached only after it parsed, so a
+        feed this connector cannot read is never served again from the cache."""
         key = target.source.source_key
         interval = max(self._interval, target.source.min_fetch_interval_seconds or 0.0)
         fresh = self._cache.fresh(key, interval)
         if fresh is not None:
-            return fresh
+            return fresh, parse_feed(fresh.body)
         if self._cache.cooling(key):
             held = self._cache.cached(key)
             if held is not None:
-                return held
-            raise ConnectorFetchError(FailureKind.RATE_LIMITED, "source is cooling down")
+                return held, parse_feed(held.body)
+            raise ConnectorFetchError(*self._cache.cooling_reason(key))
         validators = self._cache.validators(key)
         last: ConnectorFetchError | None = None
         for attempt in range(1, self._attempts + 1):
@@ -246,8 +266,23 @@ class LiveRssConnector(SourceConnector):
                 held = self._cache.revalidated(key, response)
                 if held is None:  # validators are only sent while a body is held
                     raise ConnectorFetchError(FailureKind.UPSTREAM_ERROR, "304 without a body")
-                return held
-            return self._cache.store(key, response)
+                return held, parse_feed(held.body)
+            try:
+                parsed = parse_feed(response.body)
+            except ConnectorFetchError as exc:
+                # Not cached, and not asked for again before the politeness interval
+                # passes: an unreadable feed costs its publisher one request per
+                # interval. A previously cached good body stays available meanwhile.
+                self._cache.cool_down(
+                    key, interval, kind=exc.failure.kind, detail=exc.failure.detail
+                )
+                raise
+            except Exception:
+                self._cache.cool_down(
+                    key, interval, kind=FailureKind.PARSE_ERROR, detail="unreadable feed"
+                )
+                raise
+            return self._cache.store(key, response), parsed
         assert last is not None
         raise last
 
@@ -260,6 +295,10 @@ def live_connector_for(
     settings: Settings | None = None,
 ) -> LiveRssConnector | None:
     settings = settings or get_settings()
+    # The takedown ran in another process (the API); this process drops any bytes it
+    # still holds for a taken-down source before it reads anything (P6-PRIV-4).
+    for key in takedowns:
+        feed_cache.forget(key)
     targets = live_targets_for(
         market=market, source_types=source_types, takedowns=takedowns, settings=settings
     )

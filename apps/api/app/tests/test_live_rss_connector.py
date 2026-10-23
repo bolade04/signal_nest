@@ -7,6 +7,7 @@ politeness interval and cool-downs.
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 from dataclasses import replace
@@ -304,6 +305,150 @@ def test_a_hostile_feed_fails_its_source_only() -> None:
     assert {s.attribution["source_key"] for s in result.signals} == {"source-b"}
 
 
+_DECLARED = (
+    '<?xml version="1.0" encoding="{}"?><rss version="2.0"><channel><title>t</title>'
+    "<item><title>coffee</title></item></channel></rss>"
+)
+#: expat refuses this with a bare ValueError ("multi-byte encodings are not supported").
+SHIFT_JIS = _DECLARED.format("shift_jis").encode()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        SHIFT_JIS,
+        _DECLARED.format("euc-jp").encode(),
+        _DECLARED.format("gb18030").encode(),
+        _DECLARED.format("big5").encode(),
+        _DECLARED.format("utf-32").encode(),
+        _DECLARED.format("bogus-enc").encode(),  # LookupError: unknown encoding
+        _DECLARED.format("utf-16").encode(),  # declared UTF-16, 8-bit bytes
+        codecs.BOM_UTF8 + _DECLARED.format("utf-16").encode(),  # BOM vs declaration
+        codecs.BOM_UTF8 + _DECLARED.format("shift_jis").encode(),
+        ("\ufeff" + _DECLARED.format("utf-8")).encode("utf-16-le"),
+        codecs.BOM_UTF16_LE + _DECLARED.format("utf-8").encode(),
+        codecs.BOM_UTF32_LE + _DECLARED.format("utf-32").encode("utf-32-le"),
+    ],
+    ids=[
+        "shift_jis", "euc-jp", "gb18030", "big5", "utf-32", "unknown-name",
+        "utf-16-declared-8-bit", "utf8-bom-utf16-declared", "utf8-bom-shift_jis-declared",
+        "utf16-bytes-utf8-declared", "utf16-bom-8-bit-body", "utf32-bom",
+    ],
+)
+def test_a_feed_the_parser_cannot_decode_is_a_parse_error(data: bytes) -> None:
+    with pytest.raises(ConnectorFetchError) as err:
+        parse_feed(data)
+    assert err.value.failure.kind is FailureKind.PARSE_ERROR
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        _DECLARED.format("iso-2022-jp").encode(),
+        _DECLARED.format("latin-1").encode(),
+        ("\ufeff" + _DECLARED.split("?>", 1)[1]).encode("utf-16-le"),  # BOM, no declaration
+    ],
+    ids=["iso-2022-jp", "latin-1", "utf16-bom-undeclared"],
+)
+def test_feeds_in_encodings_the_parser_reads_still_parse(data: bytes) -> None:
+    assert [item.title for item in parse_feed(data).items] == ["coffee"]
+
+
+def test_an_undecodable_feed_fails_its_source_only_and_is_never_cached() -> None:
+    bad, good = record("source-bad"), record("source-good")
+    clock = Clock()
+    cache = FeedCache(clock=clock)
+    wire = Wire(
+        {
+            bad.host: [feed_response(SHIFT_JIS), feed_response(SHIFT_JIS)],
+            good.host: [feed_response(etag='"g1"'), feed_response(etag='"g2"')],
+        }
+    )
+    conn = connector([target(bad), target(good)], wire, clock, cache=cache)
+    first = conn.collect(SCOPE)
+    assert conn.failed_sources == ["source-bad"]
+    assert [f.kind for f in first.failures] == [FailureKind.PARSE_ERROR]
+    assert {s.attribution["source_key"] for s in first.signals} == {"source-good"}
+    assert cache.cached("source-bad") is None  # the unreadable body was never stored
+
+    # Inside the politeness interval: not re-served from a cache, not fetched again.
+    clock.t += 899
+    second = conn.collect(SCOPE)
+    assert [f.kind for f in second.failures] == [FailureKind.PARSE_ERROR]
+    assert {s.attribution["source_key"] for s in second.signals} == {"source-good"}
+    assert [r.headers["host"] for r in wire.requests] == [bad.host, good.host]
+
+    # After it, exactly one new request per source.
+    clock.t += 2
+    conn.collect(SCOPE)
+    hosts = [r.headers["host"] for r in wire.requests]
+    assert hosts == [bad.host, good.host, bad.host, good.host]
+    assert cache.cached("source-bad") is None
+
+
+def test_an_unreadable_update_keeps_the_last_good_body_and_holds_off() -> None:
+    src, clock = record(), Clock()
+    wire = Wire({src.host: [feed_response(etag='"e1"'), feed_response(SHIFT_JIS)]})
+    cache = FeedCache(clock=clock)
+    conn = connector([target(src)], wire, clock, cache=cache)
+    good = conn.collect(SCOPE).signals
+    clock.t += 901
+    failed = conn.collect(SCOPE)  # the new body cannot be read: this run records it
+    assert [f.kind for f in failed.failures] == [FailureKind.PARSE_ERROR]
+    assert cache.cached(src.source_key).sha256 == hashlib.sha256(RSS).hexdigest()
+    clock.t += 1
+    held = conn.collect(SCOPE)  # the cool-down serves the last good body, no request
+    assert held.failures == [] and len(wire.requests) == 2
+    assert [s.content for s in held.signals] == [s.content for s in good]
+
+
+def test_an_unexpected_error_in_one_source_is_recorded_for_that_source_alone(
+    monkeypatch,
+) -> None:
+    import app.connectors.live as live_mod
+
+    a, b = record("source-a"), record("source-b")
+    real = live_mod.item_signal
+
+    def explode(item, **kw):
+        if kw["attribution"]["source_key"] == "source-a":
+            raise RuntimeError("defect in one source's items")
+        return real(item, **kw)
+
+    monkeypatch.setattr(live_mod, "item_signal", explode)
+    wire = Wire({a.host: [feed_response()], b.host: [feed_response()]})
+    conn = connector([target(a), target(b)], wire, Clock())
+    result = conn.collect(SCOPE)
+    assert conn.failed_sources == ["source-a"]
+    assert [f.kind for f in result.failures] == [FailureKind.PARSE_ERROR]
+    assert "RuntimeError" in result.failures[0].detail
+    assert {s.attribution["source_key"] for s in result.signals} == {"source-b"}
+
+
+def test_a_scout_run_drops_cached_bytes_of_a_source_taken_down_elsewhere() -> None:
+    """The takedown runs in the API process; the worker's own cache is dropped at its
+    next scout run, before anything is fetched (P6-PRIV-4)."""
+    from app.connectors.feedcache import feed_cache
+    from app.scouting_requests.connectors import fetch_signals
+
+    src = record()
+    feed_cache.clear()
+    try:
+        wire = Wire({src.host: [feed_response()]})
+        connector([target(src)], wire, Clock(), cache=feed_cache).collect(SCOPE)
+        assert feed_cache.cached(src.source_key) is not None
+        fetch_signals(
+            market="Toronto, ON",
+            keywords=[],
+            source_types=[],
+            takedowns=frozenset({src.source_key}),
+            settings=_settings(),
+        )
+        assert feed_cache.cached(src.source_key) is None
+    finally:
+        feed_cache.clear()
+
+
 def test_replay_targets_mark_synthetic_content_simulated() -> None:
     src = record()
     synthetic = SourceTarget(
@@ -386,6 +531,21 @@ def test_source_types_and_takedowns_exclude_a_source() -> None:
     assert gate(s, [target()], source_types=["reddit"]) == []
     assert gate(s, [target()], source_types=["reddit", "rss_news"])
     assert gate(s, [target()], takedowns={"metro-business"}) == []
+
+
+@pytest.mark.parametrize(
+    ("feed_url", "problem"),
+    [
+        ("https://93.184.216.34/rss.xml", "not an IP address"),
+        ("https://[2606:2800:220:1::]/rss.xml", "not an IP address"),
+        ("https://feeds.publisher.test:8443/rss.xml", "default https port"),
+    ],
+)
+def test_a_record_the_egress_guard_could_never_fetch_is_not_activatable(feed_url, problem):
+    src = record(feed_url=feed_url)
+    assert any(problem in p for p in src.problems())
+    assert src.is_activatable() is False
+    assert record(feed_url="https://feeds.publisher.test:443/rss.xml").problems() == []
 
 
 def test_registry_problems_flag_duplicates_and_malformed_records() -> None:
@@ -484,8 +644,20 @@ def test_capture_records_an_approved_source_as_a_loadable_real_capture(tmp_path)
     (tmp_path / "manifest.json").write_text(json.dumps({"captures": [entry]}))
     [capture] = load_corpus(tmp_path)
     assert capture.synthetic is False
-    [replayed] = replay_targets("http://127.0.0.1:9", tmp_path)
+    [replayed] = replay_targets("http://127.0.0.1:9", tmp_path, sources=(src,))
     assert replayed.is_simulated is False and replayed.delivery == "replay"
+    assert replayed.source is src  # the approved record's own approval and terms
+    # Without a matching approved record the same "recorded" capture is not real data.
+    [unvouched] = replay_targets("http://127.0.0.1:9", tmp_path, sources=())
+    assert unvouched.is_simulated is True
+    assert dict(unvouched.provenance)["unverified_recorded_capture"] is True
+    for mismatch in (
+        record(feed_url="https://other.publisher.test/rss.xml"),
+        record(markets=("Ottawa, ON",)),
+        record(legal_status=LegalStatus.PENDING),
+    ):
+        [target_] = replay_targets("http://127.0.0.1:9", tmp_path, sources=(mismatch,))
+        assert target_.is_simulated is True
 
 
 @pytest.mark.parametrize(

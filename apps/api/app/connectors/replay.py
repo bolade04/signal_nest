@@ -15,9 +15,11 @@ refuses outside the development and test environments.
 Each capture in ``captures/manifest.json`` names the source it stands for and is
 SHA-256-pinned. ``"synthetic": true`` marks bytes written for tests (IANA-reserved
 example domains, no real publisher): their signals are stored as **simulated**, so a
-synthetic corpus can never be presented as real data. A recorded capture of an
-approved source (``"synthetic": false``) is what turns the replay into real data;
-committing one needs that source's terms to allow it (see
+synthetic corpus can never be presented as real data. A recorded capture
+(``"synthetic": false``) turns the replay into real data only when an approved, enabled
+:data:`APPROVED_SOURCES` record with the same key and feed URL covers its markets; it
+then carries that record's approval and terms. Without one it replays as simulated.
+Committing a recorded capture needs that source's terms to allow it (see
 ``docs/operations/live-data-sources.md``).
 
 Commands (run from ``apps/api``)::
@@ -135,34 +137,73 @@ def load_corpus(directory: Path | None = None) -> list[Capture]:
     return captures
 
 
-def replay_targets(origin: str, directory: Path | None = None) -> list[SourceTarget]:
-    """One live-connector target per capture, fetched from ``origin``."""
+def approved_record_for(
+    capture: Capture, sources: tuple[SourceRecord, ...]
+) -> SourceRecord | None:
+    """The activatable registry record a recorded capture stands for, if any.
+
+    A capture is real data only when an approved, enabled source with the same key and
+    feed URL is cleared for every market the capture names; the manifest's
+    ``"synthetic": false`` alone proves nothing (anyone can set the flag).
+    """
+    for source in sources:
+        if (
+            source.source_key == capture.source_key
+            and source.feed_url == capture.feed_url
+            and source.is_activatable()
+            and all(source.serves_market(m) for m in capture.markets)
+        ):
+            return source
+    return None
+
+
+def replay_targets(
+    origin: str,
+    directory: Path | None = None,
+    *,
+    sources: tuple[SourceRecord, ...] | None = None,
+) -> list[SourceTarget]:
+    """One live-connector target per capture, fetched from ``origin``.
+
+    A recorded capture that matches an approved source (:func:`approved_record_for`)
+    replays as real data under that source's own record: its approval reference, date,
+    terms and attribution. Every other capture — synthetic, or marked recorded without
+    a matching approved source — replays as **simulated** under a test record.
+    """
+    sources = APPROVED_SOURCES if sources is None else sources
     targets: list[SourceTarget] = []
     for capture in load_corpus(directory):
-        record = SourceRecord(
-            source_key=capture.source_key,
-            connector="rss_news",
-            display_name=capture.display_name,
-            publisher=capture.publisher,
-            feed_url=capture.feed_url,
-            markets=capture.markets,
-            tos_url=capture.tos_url,
-            approval_reference=TEST_APPROVAL_REFERENCE,
-            approved_on=_TEST_APPROVED_ON,
-            legal_status=LegalStatus.APPROVED,
-            enabled=True,
-            attribution=f"Replayed capture {capture.capture_id}",
+        approved = None if capture.synthetic else approved_record_for(capture, sources)
+        provenance: tuple[tuple[str, object], ...] = (
+            ("capture_id", capture.capture_id),
+            ("captured_at", capture.captured_at),
         )
+        if approved is not None:
+            record = approved
+        else:
+            record = SourceRecord(
+                source_key=capture.source_key,
+                connector="rss_news",
+                display_name=capture.display_name,
+                publisher=capture.publisher,
+                feed_url=capture.feed_url,
+                markets=capture.markets,
+                tos_url=capture.tos_url,
+                approval_reference=TEST_APPROVAL_REFERENCE,
+                approved_on=_TEST_APPROVED_ON,
+                legal_status=LegalStatus.APPROVED,
+                enabled=True,
+                attribution=f"Replayed capture {capture.capture_id}",
+            )
+            if not capture.synthetic:
+                provenance += (("unverified_recorded_capture", True),)
         targets.append(
             SourceTarget(
                 source=record,
                 fetch_url=f"{origin.rstrip('/')}/captures/{capture.capture_id}",
                 delivery="replay",
-                is_simulated=capture.synthetic,
-                provenance=(
-                    ("capture_id", capture.capture_id),
-                    ("captured_at", capture.captured_at),
-                ),
+                is_simulated=approved is None,
+                provenance=provenance,
             )
         )
     return targets
@@ -428,6 +469,11 @@ def main(argv: list[str] | None = None) -> int:
     corpus_markets = {m for c in captures for m in c.markets}
     problems = _seed_problems(summary, corpus_markets)
     synthetic = sorted(c.capture_id for c in captures if c.synthetic)
+    unverified = sorted(
+        c.capture_id
+        for c in captures
+        if not c.synthetic and approved_record_for(c, APPROVED_SOURCES) is None
+    )
     print(
         json.dumps(
             {
@@ -435,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                 "replay_requests": len(hits),
                 "synthetic_captures": synthetic,
                 "recorded_captures": sorted(c.capture_id for c in captures if not c.synthetic),
+                "unverified_recorded_captures": unverified,
                 "problems": problems,
             },
             indent=2,
@@ -445,6 +492,12 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "NOTICE: the replay corpus holds synthetic captures; their signals are "
             "simulated, so this replay proves the live code path, not real data.",
+            file=sys.stderr,
+        )
+    if unverified:
+        print(
+            "NOTICE: recorded captures without a matching approved source replay as "
+            f"simulated: {', '.join(unverified)}",
             file=sys.stderr,
         )
     return 1 if problems or not hits else 0

@@ -9,11 +9,17 @@ One entry per source key holds the last good feed body with its ``ETag`` /
   body — validators are only ever sent while their body is held, so a 304 can always
   be answered;
 * a ``429`` / ``503`` with ``Retry-After`` starts a cool-down during which the source
-  is not contacted.
+  is not contacted;
+* a body the connector cannot read is never stored, and starts a cool-down of one
+  politeness interval, so an unreadable feed is neither re-served nor re-fetched on
+  every run.
 
 The cache is process-local and bounded; each worker process is polite on its own.
-A takedown drops the source's entry (:meth:`FeedCache.forget`) so no cached
-publisher bytes outlive it in memory.
+A source's entry is dropped (:meth:`FeedCache.forget`) by the process that performs
+its takedown, and by every other process (the worker that runs scouts) at its next
+scout run, before any fetch (:func:`app.connectors.live.live_connector_for`). Until
+then a taken-down source's bytes may sit in another process's memory, unused: no run
+reads a taken-down key.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.connectors.base import FailureKind
 from app.connectors.egress import FeedResponse, Validators
 
 #: Longest cool-down honoured from a source's Retry-After (a day).
@@ -48,6 +55,7 @@ class FeedCache:
     ) -> None:
         self._feeds: OrderedDict[str, CachedFeed] = OrderedDict()
         self._cool_until: dict[str, float] = {}
+        self._cool_reason: dict[str, tuple[FailureKind, str]] = {}
         self._max = max_entries
         self._clock = clock
         self._lock = threading.Lock()
@@ -85,6 +93,7 @@ class FeedCache:
             while len(self._feeds) > self._max:
                 self._feeds.popitem(last=False)
             self._cool_until.pop(key, None)
+            self._cool_reason.pop(key, None)
         return feed
 
     def revalidated(self, key: str, response: FeedResponse) -> CachedFeed | None:
@@ -106,24 +115,39 @@ class FeedCache:
             self._feeds.move_to_end(key)
             return feed
 
-    def cool_down(self, key: str, seconds: float) -> None:
+    def cool_down(
+        self,
+        key: str,
+        seconds: float,
+        *,
+        kind: FailureKind = FailureKind.RATE_LIMITED,
+        detail: str = "source is cooling down",
+    ) -> None:
+        """Do not contact ``key`` for ``seconds``; ``kind``/``detail`` say why."""
         with self._lock:
             self._cool_until[key] = self._clock() + min(max(seconds, 0.0), MAX_COOL_DOWN_SECONDS)
+            self._cool_reason[key] = (kind, detail)
 
     def cooling(self, key: str) -> bool:
         with self._lock:
             until = self._cool_until.get(key)
             return until is not None and self._clock() < until
 
+    def cooling_reason(self, key: str) -> tuple[FailureKind, str]:
+        with self._lock:
+            return self._cool_reason.get(key, (FailureKind.RATE_LIMITED, "source is cooling down"))
+
     def clear(self) -> None:
         with self._lock:
             self._feeds.clear()
             self._cool_until.clear()
+            self._cool_reason.clear()
 
     def forget(self, key: str) -> None:
         with self._lock:
             self._feeds.pop(key, None)
             self._cool_until.pop(key, None)
+            self._cool_reason.pop(key, None)
 
 
 #: The process-wide cache used by the live connector.

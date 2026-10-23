@@ -9,23 +9,39 @@ transaction it:
 2. purges every signal the source produced, in **every** tenant: raw and normalized
    signals, their location evidence and intelligence records;
 3. deletes each opportunity built only from that source's signals (with its scores,
-   validation evidence and feedback) and, for an opportunity that also cites other
-   sources, removes the source's entries from its observed evidence;
-4. drops the source's feed bytes from this process's cache.
+   validation evidence and the customers' feedback on it) and, for an opportunity that
+   also cites other sources, removes the source's entries from its observed evidence;
+4. writes one audit entry in every affected workspace, naming what was removed there;
+5. drops the source's feed bytes from this process's cache (a worker process drops
+   them at its next scout run).
 
 The result is **verifiable**: the remaining counts are recounted from the database
 after the purge, not derived from what was deleted, and :func:`source_signal_counts`
 answers the same question at any later time. A takedown is permanent for its key and
-idempotent — repeating it re-runs the purge and reports the same zero remainder.
+idempotent — repeating it re-runs the purge and reports the same zero remainder; the
+first purge's counts are kept and each repeat is appended to the record's history.
+
+**Runs in flight.** A scout run reads takedowns when it starts, then fetches. Before it
+writes any live signal it takes each source's lock and re-reads the takedowns
+(:func:`without_taken_down`); a takedown takes the same lock exclusively. On
+PostgreSQL this is a per-key transaction-scoped advisory lock, so a takedown either
+commits before the run's re-check (the run drops that source's signals) or waits until
+the run has committed (the purge then sees and removes them). SQLite serialises all
+writers, and a run holds the write lock from its start, which gives the same order.
 """
 
 from __future__ import annotations
 
+import hashlib
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from sqlalchemy import Text, cast, delete, func, select
+from sqlalchemy import Text, cast, delete, func, select, text
 from sqlalchemy.orm import Session
 
+from app.audit.service import record_audit
 from app.connectors.feedcache import feed_cache
 from app.connectors.models import SourceTakedown
 from app.connectors.sources import APPROVED_SOURCES, SOURCE_KEY_PATTERN
@@ -44,6 +60,14 @@ from app.signals.models import (
 logger = get_logger("signalnest.connectors.takedown")
 
 _CHUNK = 500
+#: Audit action written in each workspace a takedown removed something from.
+AUDIT_ACTION = "data_source.taken_down"
+_AUDIT_REASON = (
+    "The platform operator took down a data source; content it supplied was removed "
+    "from this workspace."
+)
+#: Most opportunity ids one audit entry lists per kind (the counts are always exact).
+_AUDIT_MAX_IDS = 500
 
 
 def _chunks(ids: list[str]):
@@ -53,6 +77,51 @@ def _chunks(ids: list[str]):
 
 def active_takedowns(db: Session) -> frozenset[str]:
     return frozenset(db.scalars(select(SourceTakedown.source_key)))
+
+
+def _lock_id(source_key: str) -> int:
+    digest = hashlib.sha256(f"signalnest.source-takedown:{source_key}".encode()).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def lock_sources(db: Session, keys: Iterable[str], *, exclusive: bool) -> None:
+    """Hold each source's takedown lock until this transaction ends (PostgreSQL).
+
+    Shared for a scout run writing a source's signals, exclusive for a takedown. Keys
+    are locked in sorted order, so two runs never deadlock. SQLite needs nothing here:
+    it admits one writer at a time, and a run is a writer from its first statement.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    function = "pg_advisory_xact_lock" if exclusive else "pg_advisory_xact_lock_shared"
+    for key in sorted(set(keys)):
+        db.execute(text(f"SELECT {function}(:lock_id)"), {"lock_id": _lock_id(key)})
+
+
+def _signal_source_key(signal: object) -> str | None:
+    return (getattr(signal, "attribution", None) or {}).get("source_key")
+
+
+def without_taken_down(db: Session, signals: list) -> list:
+    """``signals`` minus those of any source taken down since the run read takedowns.
+
+    Takes each live source's shared lock first and keeps it until the run's transaction
+    ends, so a takedown cannot slip between this re-check and the run's commit.
+    """
+    keys = {k for k in map(_signal_source_key, signals) if k}
+    if not keys:
+        return list(signals)
+    lock_sources(db, keys, exclusive=False)
+    gone = set(
+        db.scalars(select(SourceTakedown.source_key).where(SourceTakedown.source_key.in_(keys)))
+    )
+    if not gone:
+        return list(signals)
+    for key in sorted(gone):
+        logger.warning(
+            "connector.source_dropped_after_takedown", extra={"extra_fields": {"source_key": key}}
+        )
+    return [s for s in signals if _signal_source_key(s) not in gone]
 
 
 def _evidence_cites(evidence: object, source_key: str) -> bool:
@@ -101,15 +170,49 @@ class TakedownResult:
         return all(v == 0 for v in self.remaining.values())
 
 
-def _purge(db: Session, source_key: str) -> dict[str, int]:
-    raw_ids = list(db.scalars(select(RawSignal.id).where(RawSignal.source_key == source_key)))
-    norm_cols = select(NormalizedSignal.id, NormalizedSignal.cluster_id)
+_TenantKey = tuple[str, str]  # (organization_id, workspace_id)
+
+
+def _tenant_counts() -> dict:
+    return {
+        "raw_signals": 0,
+        "normalized_signals": 0,
+        "opportunities_deleted": 0,
+        "opportunities_redacted": 0,
+        "feedback_removed": 0,
+    }
+
+
+def _purge(db: Session, source_key: str) -> tuple[dict[str, int], dict[_TenantKey, dict]]:
+    """Remove the source's data everywhere; return the totals and a per-tenant split."""
+    tenants: dict[_TenantKey, dict] = defaultdict(
+        lambda: {**_tenant_counts(), "deleted_ids": [], "redacted_ids": []}
+    )
+    raw_rows = list(
+        db.execute(
+            select(RawSignal.id, RawSignal.organization_id, RawSignal.workspace_id).where(
+                RawSignal.source_key == source_key
+            )
+        )
+    )
+    raw_ids = [r for r, _, _ in raw_rows]
+    for _, org, ws in raw_rows:
+        tenants[(org, ws)]["raw_signals"] += 1
+    norm_cols = select(
+        NormalizedSignal.id,
+        NormalizedSignal.cluster_id,
+        NormalizedSignal.organization_id,
+        NormalizedSignal.workspace_id,
+    )
     norm_rows = list(db.execute(norm_cols.where(NormalizedSignal.source_key == source_key)))
     for chunk in _chunks(raw_ids):
         norm_rows.extend(db.execute(norm_cols.where(NormalizedSignal.raw_signal_id.in_(chunk))))
-    norm_ids = sorted({n for n, _ in norm_rows})
+    norm_by_id = {n: (org, ws) for n, _, org, ws in norm_rows}
+    norm_ids = sorted(norm_by_id)
+    for org, ws in norm_by_id.values():
+        tenants[(org, ws)]["normalized_signals"] += 1
     purged_norm = set(norm_ids)
-    cluster_ids = sorted({c for _, c in norm_rows if c})
+    cluster_ids = sorted({c for _, c, _, _ in norm_rows if c})
 
     counts = {
         "raw_signals": len(raw_ids),
@@ -132,6 +235,9 @@ def _purge(db: Session, source_key: str) -> dict[str, int]:
             )
             if members <= purged_norm:
                 doomed.append(opp.id)
+                tenant = tenants[(opp.organization_id, opp.workspace_id)]
+                tenant["opportunities_deleted"] += 1
+                tenant["deleted_ids"].append(opp.id)
     for opp in _opportunities_citing(db, source_key):
         if opp.id in doomed:
             continue
@@ -141,15 +247,20 @@ def _purge(db: Session, source_key: str) -> dict[str, int]:
             if not (isinstance(e, dict) and e.get("source_key") == source_key)
         ]
         redacted.add(opp.id)
+        tenant = tenants[(opp.organization_id, opp.workspace_id)]
+        tenant["opportunities_redacted"] += 1
+        tenant["redacted_ids"].append(opp.id)
     for chunk in _chunks(doomed):
-        counts["feedback_removed"] += (
-            db.scalar(
-                select(func.count())
-                .select_from(OpportunityFeedback)
-                .where(OpportunityFeedback.opportunity_id.in_(chunk))
+        feedback = list(
+            db.execute(
+                select(OpportunityFeedback.organization_id, OpportunityFeedback.workspace_id).where(
+                    OpportunityFeedback.opportunity_id.in_(chunk)
+                )
             )
-            or 0
         )
+        counts["feedback_removed"] += len(feedback)
+        for org, ws in feedback:
+            tenants[(org, ws)]["feedback_removed"] += 1
         db.execute(
             delete(OpportunityFeedback).where(OpportunityFeedback.opportunity_id.in_(chunk))
         )
@@ -186,7 +297,44 @@ def _purge(db: Session, source_key: str) -> dict[str, int]:
                 )
                 counts["clusters_deleted"] += 1
     db.flush()
-    return counts
+    return counts, dict(tenants)
+
+
+def _audit_tenants(
+    db: Session,
+    tenants: dict[_TenantKey, dict],
+    *,
+    takedown: SourceTakedown,
+    reference: str | None,
+    actor_user_id: str | None,
+    repeat: bool,
+) -> int:
+    """One audit entry per workspace the purge removed something from."""
+    written = 0
+    for (org, ws), tenant in sorted(tenants.items()):
+        removed = {k: tenant[k] for k in _tenant_counts()}
+        if not any(removed.values()):
+            continue
+        record_audit(
+            db,
+            organization_id=org,
+            workspace_id=ws,
+            actor_user_id=actor_user_id,
+            action=AUDIT_ACTION,
+            entity_type="source_takedown",
+            entity_id=takedown.id,
+            reason=_AUDIT_REASON,
+            new_state=removed,
+            context={
+                "source_key": takedown.source_key,
+                "reference": reference,
+                "repeat": repeat,
+                "opportunities_deleted": tenant["deleted_ids"][:_AUDIT_MAX_IDS],
+                "opportunities_redacted": tenant["redacted_ids"][:_AUDIT_MAX_IDS],
+            },
+        )
+        written += 1
+    return written
 
 
 def takedown_source(
@@ -202,6 +350,8 @@ def takedown_source(
     reason = reason.strip()
     if not reason:
         raise ValidationDomainError("A takedown reason is required.")
+    reference = (reference or "").strip() or None
+    lock_sources(db, [source_key], exclusive=True)  # waits for runs writing this source
     existing = db.scalar(select(SourceTakedown).where(SourceTakedown.source_key == source_key))
     known = existing is not None or any(s.source_key == source_key for s in known_sources())
     if not known and not db.scalar(
@@ -214,13 +364,35 @@ def takedown_source(
         takedown = SourceTakedown(
             source_key=source_key,
             reason=reason,
-            reference=(reference or "").strip() or None,
+            reference=reference,
             actor_user_id=actor_user_id,
         )
         db.add(takedown)
         db.flush()
-    purged = _purge(db, source_key)
-    takedown.purge_summary = purged
+    purged, tenants = _purge(db, source_key)
+    if existing is None:
+        takedown.purge_summary = purged
+    else:
+        # The first purge's counts are the record of what the takedown removed; a
+        # repeat is appended, never written over them.
+        takedown.repeat_purges = [
+            *(takedown.repeat_purges or []),
+            {
+                "at": datetime.now(UTC).isoformat(),
+                "reason": reason,
+                "reference": reference,
+                "actor_user_id": actor_user_id,
+                "purged": purged,
+            },
+        ]
+    audited = _audit_tenants(
+        db,
+        tenants,
+        takedown=takedown,
+        reference=reference,
+        actor_user_id=actor_user_id,
+        repeat=existing is not None,
+    )
     db.flush()
     feed_cache.forget(source_key)
     remaining = source_signal_counts(db, source_key)
@@ -230,6 +402,7 @@ def takedown_source(
             "extra_fields": {
                 "source_key": source_key,
                 "repeat": existing is not None,
+                "audited_workspaces": audited,
                 **{f"purged_{k}": v for k, v in purged.items()},
                 **{f"remaining_{k}": v for k, v in remaining.items()},
             }

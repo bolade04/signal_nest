@@ -20,14 +20,15 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from app.brands.models import Brand
 from app.connectors.feedcache import feed_cache
 from app.connectors.models import SourceTakedown
 from app.connectors.replay import ReplayServer
-from app.connectors.takedown import source_signal_counts, takedown_source
+from app.connectors.takedown import lock_sources, source_signal_counts, takedown_source
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.jobs.pipeline import _run
@@ -161,3 +162,37 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
         s.commit()
     assert again.already_taken_down and again.verified
     assert all(v == 0 for v in again.purged.values())
+
+
+def _lock_timeout(session) -> None:
+    session.execute(text("SET LOCAL lock_timeout = '300ms'"))
+
+
+def test_a_takedown_waits_for_a_run_that_is_writing_the_source(pg_factory):
+    """The shared per-source lock a scout run takes before writing a live source's
+    signals (``without_taken_down``) holds a takedown of that source until the run
+    commits, so the purge always sees the run's rows; other sources and other runs are
+    not held up."""
+    run, other_run, take = pg_factory(), pg_factory(), pg_factory()
+    try:
+        lock_sources(run, [TAKEN], exclusive=False)  # a run mid-write, transaction open
+        lock_sources(other_run, [TAKEN], exclusive=False)  # runs share the lock
+        other_run.rollback()
+
+        _lock_timeout(take)
+        with pytest.raises(DBAPIError) as held:
+            lock_sources(take, [TAKEN], exclusive=True)
+        assert getattr(held.value.orig, "sqlstate", None) == "55P03"  # lock_not_available
+        take.rollback()
+
+        _lock_timeout(take)
+        lock_sources(take, [KEPT], exclusive=True)  # another source: not held
+        take.rollback()
+
+        run.commit()  # the run's write is durable; its lock is released with it
+        _lock_timeout(take)
+        lock_sources(take, [TAKEN], exclusive=True)
+        take.rollback()
+    finally:
+        for session in (run, other_run, take):
+            session.close()

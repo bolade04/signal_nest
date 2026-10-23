@@ -15,9 +15,11 @@ class SourceTakedown(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """A source key an operator has taken down. Permanent for that key.
 
     While a row exists the source is never fetched, whatever its registry record
-    says, and its signals have been purged (``purge_summary`` holds the counts of the
-    latest purge). Re-onboarding the publisher means a new source record with a new
-    key and a fresh approval.
+    says, and its signals have been purged. ``purge_summary`` holds the counts of the
+    first purge (what the takedown removed) and is never overwritten; each repeated
+    takedown appends ``{at, reason, reference, actor_user_id, purged}`` to
+    ``repeat_purges``. Re-onboarding the publisher means a new source record with a
+    new key and a fresh approval.
     """
 
     __tablename__ = "source_takedowns"
@@ -33,3 +35,4 @@ class SourceTakedown(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     purge_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    repeat_purges: Mapped[list] = mapped_column(JSON, default=list)

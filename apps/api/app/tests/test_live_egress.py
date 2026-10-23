@@ -407,6 +407,46 @@ def test_ambient_proxy_settings_are_ignored(monkeypatch) -> None:
     assert rec.requests[0].url.host == PUBLIC_V4
 
 
+def test_ambient_proxies_never_reroute_the_real_transport(monkeypatch) -> None:
+    """The production path (no injected transport): httpx would honour proxy variables
+    if the client trusted the environment, so the pinned dial would go to the proxy.
+    Every connection attempt is refused here before it leaves the process."""
+    import socket
+
+    dialled: list[tuple[str, int]] = []
+
+    def refuse(address, *args, **kwargs):
+        dialled.append((address[0], address[1]))
+        raise OSError(101, "test guard: no network")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    for scheme in ("HTTPS", "HTTP", "ALL"):
+        for name in (f"{scheme}_PROXY", f"{scheme.lower()}_proxy"):
+            monkeypatch.setenv(name, "http://10.0.0.9:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    refused(lambda: fetcher().fetch(FEED, allowed_hosts=ALLOWED), FailureKind.NETWORK)
+    assert dialled == [(PUBLIC_V4, 443)]  # the checked address, never the proxy
+
+
+@pytest.mark.parametrize(
+    ("url", "hosts"),
+    [
+        (f"https://{PUBLIC_V4}/rss.xml", {PUBLIC_V4}),
+        (f"https://[{PUBLIC_V6}]/rss.xml", {PUBLIC_V6}),
+    ],
+)
+def test_a_raw_ip_host_is_refused_even_when_allow_listed(url, hosts) -> None:
+    calls: list[str] = []
+    rec = Recorder(ok())
+    error = refused(
+        lambda: fetcher(rec, calls=calls).fetch(url, allowed_hosts=frozenset(hosts)),
+        FailureKind.EGRESS_BLOCKED,
+    )
+    assert "raw IP" in error.failure.detail
+    assert calls == [] and rec.requests == []
+
+
 def test_user_agent_names_the_contact_page() -> None:
     assert build_user_agent("1.2.3", "https://op.test/bot") == "SignalNestBot/1.2.3 (+https://op.test/bot)"
     assert "contact-not-configured" in build_user_agent("1.2.3", None)

@@ -17,11 +17,13 @@ through the unmodified scout pipeline. Nothing leaves the machine.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.audit.models import AuditLog
 from app.brands.models import Brand
 from app.connectors import replay as replay_mod
 from app.connectors.coverage import CoverageReason
@@ -41,11 +44,14 @@ from app.connectors.replay import (
     load_corpus,
     seed_replay,
 )
+from app.connectors.sources import LegalStatus, SourceRecord
 from app.core.config import Settings, get_settings
 from app.core.enums import Role, ScoutRequestStatus
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
+from app.intelligence.records import SignalIntelligenceRecord
+from app.jobs import pipeline as pipeline_mod
 from app.jobs.models import Job
 from app.jobs.pipeline import _run
 from app.locations.models import BusinessLocation
@@ -264,12 +270,37 @@ def _relabelled_corpus(dst: Path) -> None:
     (dst / "manifest.json").write_text(json.dumps(manifest))
 
 
+def _approving_records(corpus: Path) -> tuple[SourceRecord, ...]:
+    """TEST-ONLY approved registry records for a relabelled corpus's sources."""
+    manifest = json.loads((corpus / "manifest.json").read_text())
+    return tuple(
+        SourceRecord(
+            source_key=e["source_key"],
+            connector="rss_news",
+            display_name=e["display_name"],
+            publisher=e["publisher"],
+            feed_url=e["feed_url"],
+            markets=tuple(e["markets"]),
+            tos_url=e["tos_url"],
+            approval_reference=f"DEC-TEST-{e['source_key']}",
+            approved_on=date(2026, 10, 22),
+            legal_status=LegalStatus.APPROVED,
+            enabled=True,
+            attribution=f"{e['publisher']} (test)",
+        )
+        for e in manifest["captures"]
+    )
+
+
 def test_a_recorded_capture_flows_through_as_real_data(tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     _relabelled_corpus(corpus)
+    approved = _approving_records(corpus)
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(replay_mod, "CORPUS_DIR", corpus)
+        # A recorded capture is real only under an approved record for its source.
+        mp.setattr(replay_mod, "APPROVED_SOURCES", approved)
         with _world(tmp_path) as w:
             by_market = w.requests_by_market()
             coverage = by_market[REPLAY_MARKET]["coverage"]
@@ -278,14 +309,50 @@ def test_a_recorded_capture_flows_through_as_real_data(tmp_path):
             rows = w.get(f"/workspaces/{w.ws}/opportunities", location_id=loc["id"])
             assert rows and all(r["is_simulated"] is False for r in rows)
             with w.factory() as s:
-                raws = s.scalars(select(RawSignal).where(RawSignal.source_key.is_not(None)))
+                raws = s.scalars(select(RawSignal).where(RawSignal.source_key.is_not(None))).all()
                 assert {r.is_simulated for r in raws} == {False}
+                by_key = {a.source_key: a for a in approved}
+                for raw in raws:  # stamped with the approving record, not a test value
+                    p = raw.raw_metadata["provenance"]
+                    assert p["approval_reference"] == by_key[raw.source_key].approval_reference
+                    assert p["tos_url"] == by_key[raw.source_key].tos_url
+                    assert "unverified_recorded_capture" not in p
                 norms = s.scalars(
                     select(NormalizedSignal).where(NormalizedSignal.source_key.is_not(None))
-                )
+                ).all()
                 assert {n.is_simulated for n in norms} == {False}
+                # The intelligence read of a live signal is not labelled simulated either
+                # (the SPA renders that flag as a badge).
+                assert {n.ingest_metadata["intelligence"]["is_simulated"] for n in norms} == {False}
+                records = s.scalars(
+                    select(SignalIntelligenceRecord).where(
+                        SignalIntelligenceRecord.normalized_signal_id.in_([n.id for n in norms])
+                    )
+                ).all()
+                assert records and {r.is_simulated for r in records} == {False}
             # The demo markets stay simulated alongside.
             assert by_market["Dallas, TX"]["coverage"]["is_simulated"] is True
+
+
+def test_a_recorded_capture_without_an_approved_source_replays_as_simulated(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    _relabelled_corpus(corpus)  # marked recorded, but no APPROVED_SOURCES record vouches
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(replay_mod, "CORPUS_DIR", corpus)
+        with _world(tmp_path) as w:
+            coverage = w.requests_by_market()[REPLAY_MARKET]["coverage"]
+            assert coverage["reason"] == "live_sources" and coverage["is_simulated"] is True
+            loc = w.location(REPLAY_MARKET)
+            rows = w.get(f"/workspaces/{w.ws}/opportunities", location_id=loc["id"])
+            assert rows and all(r["is_simulated"] is True for r in rows)
+            with w.factory() as s:
+                raws = s.scalars(select(RawSignal).where(RawSignal.source_key.is_not(None))).all()
+                assert raws and {r.is_simulated for r in raws} == {True}
+                for raw in raws:
+                    p = raw.raw_metadata["provenance"]
+                    assert p["unverified_recorded_capture"] is True
+                    assert p["approval_reference"] == replay_mod.TEST_APPROVAL_REFERENCE
 
 
 def test_the_replay_cli_reads_one_corpus_on_both_sides(tmp_path):
@@ -315,8 +382,23 @@ def test_the_replay_cli_reads_one_corpus_on_both_sides(tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
     out = json.loads(done.stdout)
     assert out["synthetic_captures"] == [] and len(out["recorded_captures"]) == len(CORPUS)
+    # No approved source vouches for them, so they replay as simulated (MINOR-5) ...
+    assert sorted(out["unverified_recorded_captures"]) == sorted(out["recorded_captures"])
     coverage = out["summary"][REPLAY_MARKET]["coverage"]
-    assert coverage["reason"] == "live_sources" and coverage["is_simulated"] is False
+    assert coverage["reason"] == "live_sources" and coverage["is_simulated"] is True
+    # ... and the connector read THIS corpus, not the bundled synthetic one: only a
+    # relabelled capture carries the "unverified recorded capture" marker.
+    import sqlite3
+
+    with sqlite3.connect(tmp_path / "cli.db") as conn:
+        stored = [
+            json.loads(meta)["provenance"]
+            for (meta,) in conn.execute(
+                "SELECT raw_metadata FROM raw_signals WHERE source_key IS NOT NULL"
+            )
+        ]
+    assert stored and all(p["unverified_recorded_capture"] is True for p in stored)
+    assert {p["capture_id"] for p in stored} == {c.capture_id for c in CORPUS}
 
 
 def test_run_history_stats_carry_the_coverage_reason() -> None:
@@ -383,6 +465,52 @@ def test_live_sources_that_all_fail_report_unavailable_not_empty():
     assert batch.coverage.reason is CoverageReason.SOURCES_UNAVAILABLE
     assert batch.coverage.status.value == "unavailable"
     assert (batch.coverage.sources, batch.coverage.sources_failed) == (2, 2)
+
+
+def test_an_undecodable_capture_fails_its_source_only_end_to_end(tmp_path):
+    """The reviewer's shape: one capture re-declared Shift_JIS, served over loopback."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    manifest = json.loads((replay_mod.CORPUS_DIR / "manifest.json").read_text())
+    bad, good = manifest["captures"][0], manifest["captures"][1]
+    for entry in manifest["captures"]:
+        data = (replay_mod.CORPUS_DIR / entry["file"]).read_bytes()
+        if entry is bad:
+            data = data.replace(b'encoding="UTF-8"', b'encoding="shift_jis"', 1)
+            assert b"shift_jis" in data
+            entry["sha256"] = hashlib.sha256(data).hexdigest()
+        (corpus / entry["file"]).write_bytes(data)
+    (corpus / "manifest.json").write_text(json.dumps(manifest))
+    feed_cache.clear()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(replay_mod, "CORPUS_DIR", corpus)
+        with ReplayServer(corpus) as server:
+            settings = _settings(
+                connector_rss_live_enabled=True, connector_rss_replay_origin=server.origin
+            )
+            batch = fetch_signals(
+                market=REPLAY_MARKET, keywords=list(good["keywords"]), source_types=[],
+                settings=settings,
+            )
+            requested = sorted(p for p, _s, _u in server.hits)
+    assert batch.coverage.reason is CoverageReason.LIVE_SOURCES
+    assert (batch.coverage.sources, batch.coverage.sources_failed) == (2, 1)
+    assert batch.signals
+    assert {s.attribution["source_key"] for s in batch.signals} == {good["source_key"]}
+    assert requested == sorted(f"/captures/{c['capture_id']}" for c in (bad, good))
+    assert feed_cache.cached(bad["source_key"]) is None  # never cached
+    feed_cache.clear()
+
+
+def test_an_opportunity_is_simulated_if_any_member_is():
+    from types import SimpleNamespace
+
+    live, simulated = SimpleNamespace(is_simulated=False), SimpleNamespace(is_simulated=True)
+    assert pipeline_mod._card_is_simulated([live, simulated]) is True
+    assert pipeline_mod._card_is_simulated([simulated, live]) is True
+    assert pipeline_mod._card_is_simulated([live, live]) is False
+    assert pipeline_mod._signal_is_simulated(SimpleNamespace()) is True  # fixtures: no flag
+    assert pipeline_mod._signal_is_simulated(live) is False
 
 
 def test_the_kill_switch_returns_a_live_market_to_not_covered():
@@ -528,9 +656,84 @@ def test_takedown_is_idempotent_and_permanent(replay_world):
     assert second["already_taken_down"] is True and second["verified"] is True
     assert second["taken_down_at"] == first["taken_down_at"]
     assert all(v == 0 for v in second["purged"].values())
+    assert first["purged"]["raw_signals"] > 0
     with w.factory() as s:
         [row] = s.scalars(select(SourceTakedown)).all()
         assert row.reason == "Publisher request"  # the original record stands
+        # The first purge's evidence is kept; the repeat is appended, not written over it.
+        assert row.purge_summary == first["purged"]
+        [repeat] = row.repeat_purges
+        assert repeat["reason"] == "again" and repeat["actor_user_id"] == seed_mod.sid("user")
+        assert repeat["purged"] == second["purged"]
+    entry = {e["source_key"]: e for e in w.get("/internal/system/data-sources")["sources"]}[TAKEN]
+    assert entry["takedown"]["purge_summary"] == first["purged"]
+    assert [r["reason"] for r in entry["takedown"]["repeat_purges"]] == ["again"]
+
+
+def test_a_run_in_flight_never_reinserts_a_source_taken_down_meanwhile(replay_world, monkeypatch):
+    """A run that read the takedowns before a takedown committed (emulated: its
+    start-of-run read returns nothing) must not write the source back after the purge
+    answered verified."""
+    w = replay_world
+    url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
+    done = w.client.post(url, headers=w.auth, json={"reason": "Publisher request"}).json()
+    assert done["verified"] is True and _count(w.factory, RawSignal, TAKEN) == 0
+    kept_before = _count(w.factory, RawSignal, KEPT)
+    monkeypatch.setattr(pipeline_mod, "active_takedowns", lambda db: frozenset())
+    feed_cache.clear()
+    hits_before = len(w.server.hits)
+    with w.factory() as s:
+        req = s.scalar(select(ScoutRequest).where(ScoutRequest.resolved_market == REPLAY_MARKET))
+        _run(s, req.id)
+        s.commit()
+    fetched = [p for p, _s, _u in w.server.hits[hits_before:]]
+    assert any("business" in p for p in fetched)  # the stale read did fetch the source
+    assert _count(w.factory, RawSignal, TAKEN) == 0
+    assert _count(w.factory, NormalizedSignal, TAKEN) == 0
+    assert _count(w.factory, RawSignal, KEPT) > kept_before  # the other source still lands
+    entry = {e["source_key"]: e for e in w.get("/internal/system/data-sources")["sources"]}[TAKEN]
+    assert entry["stored"] == {"raw_signals": 0, "normalized_signals": 0, "opportunities_citing": 0}
+
+
+def test_takedown_writes_one_audit_entry_in_each_affected_workspace(replay_world):
+    w = replay_world
+    other_org = _second_tenant_toronto_run(w.factory)
+    url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
+    body = w.client.post(
+        url, headers=w.auth, json={"reason": "Publisher request", "reference": "TKD-9"}
+    ).json()
+    with w.factory() as s:
+        takedown = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == TAKEN))
+        entries = s.scalars(
+            select(AuditLog).where(AuditLog.action == "data_source.taken_down")
+        ).all()
+        assert {e.organization_id for e in entries} == {seed_mod.sid("org"), other_org}
+        assert len({(e.organization_id, e.workspace_id) for e in entries}) == len(entries)
+        for e in entries:
+            assert e.entity_type == "source_takedown" and e.entity_id == takedown.id
+            assert e.actor_user_id == seed_mod.sid("user")
+            assert e.context["source_key"] == TAKEN and e.context["reference"] == "TKD-9"
+            assert e.context["repeat"] is False
+            assert len(e.context["opportunities_deleted"]) == e.new_state["opportunities_deleted"]
+            assert len(e.context["opportunities_redacted"]) == e.new_state["opportunities_redacted"]
+        # The per-workspace entries add up to exactly what the takedown removed.
+        for kind in (
+            "raw_signals", "normalized_signals", "opportunities_deleted",
+            "opportunities_redacted", "feedback_removed",
+        ):
+            assert sum(e.new_state[kind] for e in entries) == body["purged"][kind], kind
+    # The customer sees it in their own audit log.
+    logs = w.get(f"/workspaces/{w.ws}/audit-logs")
+    assert any(r["action"] == "data_source.taken_down" for r in logs)
+    # A repeat that removes nothing writes no further tenant entry.
+    w.client.post(url, headers=w.auth, json={"reason": "again"})
+    with w.factory() as s:
+        count = s.scalar(
+            select(func.count()).select_from(AuditLog).where(
+                AuditLog.action == "data_source.taken_down"
+            )
+        )
+    assert count == len(entries)
 
 
 def test_takedown_requires_an_operator_and_changes_nothing_otherwise(replay_world):
