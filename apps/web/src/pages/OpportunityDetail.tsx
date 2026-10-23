@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   ArrowLeft,
   Bookmark,
   BrainCircuit,
@@ -136,6 +137,9 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               <ConfidenceBadge level={o.confidence_level} />
               <StatusBadge value={o.status} />
               {o.is_simulated ? <SimulatedBadge /> : null}
+              {o.explanation_source === 'degraded' ? (
+                <Badge intent="warning">AI explanation unavailable</Badge>
+              ) : null}
             </div>
             <h1 className="text-2xl font-semibold tracking-tight">{o.title}</h1>
             <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
@@ -252,6 +256,28 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               </p>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
+              {o.explanation_source === 'degraded' ? (
+                <div
+                  role="note"
+                  className="flex gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2"
+                >
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+                  <p>
+                    <span className="font-medium">AI explanation unavailable for this run.</span>{' '}
+                    <span className="text-muted-foreground">
+                      The AI provider did not return a usable response, so the explanation text
+                      on this page is placeholder copy, not AI reasoning.
+                    </span>
+                  </p>
+                </div>
+              ) : null}
+              {o.explanation_source === 'rule_based' ? (
+                <p role="note" className="text-xs text-muted-foreground">
+                  Rule-based summary: this opportunity is below the relevance threshold, so no AI
+                  explanation was generated for it. Its signals were still classified by the AI
+                  model.
+                </p>
+              ) : null}
               {o.ai_inference ? (
                 <p>{o.ai_inference}</p>
               ) : (

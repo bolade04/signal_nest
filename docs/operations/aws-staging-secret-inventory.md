@@ -182,7 +182,9 @@ exporter fields, added after the §3.7 count was taken), `tracing_enabled`
 
 **LLM (non-secret):** `llm_provider` (`LLM_PROVIDER`, staging=`openai`|`anthropic`),
 `llm_model` (`LLM_MODEL`), `llm_timeout_seconds` (`LLM_TIMEOUT_SECONDS`),
-`llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`).
+`llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`),
+`llm_max_output_tokens` (`LLM_MAX_OUTPUT_TOKENS`), `llm_retry_after_cap_seconds`
+(`LLM_RETRY_AFTER_CAP_SECONDS`).
 
 **Readiness probes:** `readiness_probe_timeout_seconds`
 (`READINESS_PROBE_TIMEOUT_SECONDS`), `readiness_total_timeout_seconds`

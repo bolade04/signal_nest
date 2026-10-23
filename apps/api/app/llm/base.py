@@ -21,7 +21,11 @@ class LLMTimeoutError(LLMError):
 
 
 class LLMRateLimitError(LLMError):
-    pass
+    """HTTP 429. ``retry_after`` is the provider's ``retry-after`` in seconds, if sent."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class LLMRefusalError(LLMError):
@@ -33,7 +37,11 @@ class LLMMalformedError(LLMError):
 
 
 class LLMProviderError(LLMError):
-    pass
+    """The provider rejected the request (bad key, unknown model, invalid request)."""
+
+
+class LLMUnavailableError(LLMProviderError):
+    """Transient provider-side failure (5xx, 529 overloaded, connection error)."""
 
 
 class LLMRequest(BaseModel):
