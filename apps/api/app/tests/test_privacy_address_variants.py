@@ -355,12 +355,13 @@ def test_an_address_without_ascii_still_selects_only_its_own_rows(env: PrivacyEn
     assert everything == env.count(AuditLog)
 
 
-def test_a_casing_the_bounded_request_misses_is_still_found_by_the_verifier(env: PrivacyEnv):
+@pytest.mark.parametrize("odd", ["иваН@пример.рф", "иВАН@пример.рф"])
+def test_a_casing_the_bounded_request_misses_is_still_found_by_the_verifier(env: PrivacyEnv, odd):
     """The recorded limit of the bounded in-request filter: a mixed casing of a non-ASCII-only
     address (``иваН@…``) in a text column is not selected on SQLite, so the deletion leaves it. The
     operator's verification reads every row for such an address and reports it as a finding
-    (exit 1), never as verified. (So is ``иВАН``: ``В`` is also the upper case of ``ᲀ``, but no
-    ``иᲀан`` address exists here, so it is the subject's; fix pass 6.)"""
+    (exit 1), never as verified. So does ``иВАН``: ``В`` is also the upper case of ``ᲀ``, but the
+    verifier's own lookup finds no ``иᲀан`` address, so the copy is the subject's (fix pass 6)."""
     r = env.client.post(
         f"{API}/auth/register",
         json={"email": IVAN, "full_name": "I", "password": "ivan-pass-123",
@@ -368,7 +369,6 @@ def test_a_casing_the_bounded_request_misses_is_still_found_by_the_verifier(env:
     )
     assert r.status_code == 201, r.text
     uid, headers = r.json()["user"]["id"], {"Authorization": f"Bearer {r.json()['access_token']}"}
-    odd = "иваН@пример.рф"
     with env.engine.begin() as conn:
         conn.execute(
             update(User.__table__).where(User.id == uid)
