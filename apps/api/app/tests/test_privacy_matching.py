@@ -213,6 +213,9 @@ def test_the_confirmation_finds_every_form(address):
         (f"Note: {L}(@){D}", AMBIGUOUS),
         (f"Ticket by {L}; domain {D}", NONE),
         (f"{L} wrote about {D} yesterday", NONE),
+        # A longer local part ending in hers is someone else's, separator or not.
+        (f"Note: x{L} [at] {D}", NONE),
+        (f"Note: j.{L}&#64;{D}", NONE),
     ],
 )
 def test_the_local_part_and_domain_apart_are_undecided_and_flagged(text, expected):
