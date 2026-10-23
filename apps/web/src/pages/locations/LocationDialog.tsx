@@ -75,6 +75,10 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
   const [form, setForm] = useState<LocationBase>(emptyLocation);
   const [coverage, setCoverage] = useState<GeoCoverageBase>(emptyCoverage);
   const [error, setError] = useState<string | null>(null);
+  // Why the last address lookup found no single place, and how to continue. Kept on
+  // screen (not only a toast): the location can still be saved with its city,
+  // state / province and country typed in, which is what scouting matches on.
+  const [geocodeNote, setGeocodeNote] = useState<string | null>(null);
 
   const coverageQuery = useQuery({
     queryKey: location ? queryKeys.geoCoverage(workspaceId, location.id) : ['geo', 'none'],
@@ -94,6 +98,7 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
     setDialogFor({ open, id: location?.id ?? null });
     if (open) {
       setError(null);
+      setGeocodeNote(null);
       if (location) {
         setForm({
           name: location.name,
@@ -138,6 +143,7 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
   const geocodeMutation = useMutation({
     mutationFn: () => api.geocode({ query: [form.address, form.city, form.country].filter(Boolean).join(', ') }),
     onSuccess: (res) => {
+      setGeocodeNote(null);
       setForm((f) => ({
         ...f,
         latitude: res.latitude,
@@ -147,18 +153,20 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
         country: f.country || res.country,
         timezone: f.timezone || res.timezone,
       }));
+      const place = res.label ?? [res.city, res.state_province, res.country].filter(Boolean).join(', ');
       toast({
         title: 'Location resolved',
-        description: `${res.city}, ${res.country} · confidence ${Math.round(res.confidence * 100)}%`,
+        description: [place, `confidence ${Math.round(res.confidence * 100)}%`].filter(Boolean).join(' · '),
         intent: 'success',
       });
     },
+    // The API's message says why and how to continue (P6-DATA-3); show it in place.
     onError: (err) =>
-      toast({
-        title: 'Could not geocode address',
-        description: err instanceof Error ? err.message : undefined,
-        intent: 'error',
-      }),
+      setGeocodeNote(
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Address lookup failed. You can still save this location: enter its city, state or province and country, which is what scouting uses.',
+      ),
   });
 
   const save = useMutation({
@@ -253,13 +261,20 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
               </Field>
               <Field label="Coordinates" description={readOnly ? undefined : 'Auto-filled by geocoding.'} className="sm:col-span-2">
                 {() => (
-                  <p className="text-sm text-muted-foreground">
-                    {form.latitude != null && form.longitude != null
-                      ? `${form.latitude.toFixed(4)}, ${form.longitude.toFixed(4)}`
-                      : readOnly
-                        ? 'Not set.'
-                        : 'Not set — enter an address and geocode.'}
-                  </p>
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">
+                      {form.latitude != null && form.longitude != null
+                        ? `${form.latitude.toFixed(4)}, ${form.longitude.toFixed(4)}`
+                        : readOnly
+                          ? 'Not set.'
+                          : 'Not set — enter an address and geocode.'}
+                    </p>
+                    {geocodeNote && !readOnly ? (
+                      <p role="status" className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+                        {geocodeNote}
+                      </p>
+                    ) : null}
+                  </div>
                 )}
               </Field>
               <Field label="Local competitors" className="sm:col-span-2">

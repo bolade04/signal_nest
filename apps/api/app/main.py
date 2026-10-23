@@ -15,14 +15,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
-from app.core.lifecycle import graceful_shutdown
+from app.core.lifecycle import close_redis_client, graceful_shutdown
 from app.core.logging import configure_logging, get_logger
-from app.core.metrics import SERVICE_SHUTDOWNS_TOTAL, SERVICE_STARTUPS_TOTAL, get_metrics
+from app.core.metrics import (
+    SERVICE_SHUTDOWNS_TOTAL,
+    SERVICE_STARTUPS_TOTAL,
+    configure_metrics_from_settings,
+    get_metrics,
+)
 from app.core.middleware import (
     CorrelationMiddleware,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
     html_docs_paths,
+    rate_limit_middleware_options,
 )
 from app.core.tracing import configure_tracing_from_settings
 
@@ -37,6 +43,9 @@ async def lifespan(app: FastAPI):
     # no-op unless tracing is enabled, and fails closed (a missing collector/SDK
     # degrades to no-op) so it can never block startup.
     configure_tracing_from_settings(settings)
+    # The metrics exporter likewise: a no-op unless metrics are enabled with an
+    # exporter selected (P6-INF-5), and it never blocks startup.
+    configure_metrics_from_settings(settings)
 
     # Schema-compatibility gate (verify, never mutate). Migrations are owned by a
     # single actor (``python -m app.db.migrate``); replicas never migrate. Fails
@@ -78,6 +87,7 @@ async def lifespan(app: FastAPI):
             outcome="clean",
         )
         graceful_shutdown(settings)
+        close_redis_client(getattr(app.state, "rate_limit_redis_client", None))
 
 
 def create_app() -> FastAPI:
@@ -92,7 +102,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(RateLimitMiddleware)
+    # P6-PLAT-3: per process in memory (development/test), or shared in Redis. The
+    # Redis client is kept on app.state so shutdown can close its pool.
+    rate_limit_options = rate_limit_middleware_options(settings)
+    app.state.rate_limit_redis_client = rate_limit_options.get("redis_client")
+    app.add_middleware(RateLimitMiddleware, **rate_limit_options)
     app.add_middleware(CorrelationMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -100,7 +114,9 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["x-request-id"],
+        # The paging headers of the customer lists (P6-PLAT-12) must be readable by a
+        # browser client on another origin, as the request id already is.
+        expose_headers=["x-request-id", "x-total-count", "x-next-cursor"],
     )
     # Added last, so it is the outermost user middleware and also covers CORS
     # preflight answers and rate-limit 429s (P6-AUTH-5).

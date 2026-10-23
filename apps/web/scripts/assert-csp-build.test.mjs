@@ -54,6 +54,9 @@ function bundle(extra = '') {
     text:
       'var n="http://www.w3.org/1999/xlink",r="https://reactjs.org/docs/error-decoder.html?invariant=",' +
       'p="http://fb.me/use-check-prop-types",q={placeholder:"https://example.com"};' +
+      // React Router 7's messages and URL-parsing bases (P6-CI-7), as the real bundle holds them.
+      'var m=`${e} must be used within a data router.  See https://reactrouter.com/en/main/routers/picking-a-router.`,' +
+      'u="a polyfill such as https://github.com/ungap/url-search-params.",l="http://localhost",d=new URL("http://localhost");' +
       'var g=e||t||Function("return this")();MSApp.execUnsafeLocalFunction(function(){});' +
       extra,
   };
@@ -254,6 +257,22 @@ describe('checkBuild — connect-src equals the compiled API origin, both ways, 
       const csp = policy(null).replace("connect-src 'self'", `connect-src 'self' ${source}`);
       expect(checkBuild({ indexHtml: html({ csp }), scripts: [withApi()] }).join('\n')).toMatch(/differs/);
     }
+  });
+
+  // P6-CI-7: a never-fetched origin is only left out of the API-origin inference; it can never
+  // enter the policy, and an API base equal to one fails the build instead of passing unnamed.
+  it('never lets a never-fetched origin into connect-src', () => {
+    for (const origin of ['https://reactrouter.com', 'https://github.com', 'http://localhost']) {
+      const built = { indexHtml: html({ csp: policy(origin) }), scripts: [bundle()] };
+      expect(checkBuild(built).join('\n')).toMatch(/differs/);
+    }
+  });
+
+  it('fails closed for an API base equal to a never-fetched origin', () => {
+    const built = { indexHtml: html({ csp: policy('http://localhost') }), scripts: [withApi('http://localhost')] };
+    expect(checkBuild(built).join('\n')).toMatch(/differs/);
+    const other = { indexHtml: html({ csp: policy('http://localhost:8000') }), scripts: [withApi('http://localhost:8000')] };
+    expect(checkBuild(other)).toEqual([]);
   });
 });
 

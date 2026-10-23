@@ -1,0 +1,7 @@
+{
+  "_comment": "Inert negative-control inventory in the shape of `pip inspect` (version 1) for security/controls/vendored-env, which holds metadata only (no code): a pip dist-info and the pip/_vendor/vendor.txt that names a known-vulnerable PyYAML, for the vendored-pin scan control (P6-CI-6 coverage gaps). metadata_location is relative to the repository root, the working directory of the CI gate steps.",
+  "version": "1",
+  "installed": [
+    {"metadata": {"name": "pip", "version": "25.0.1"}, "metadata_location": "security/controls/vendored-env/lib/python3.12/site-packages/pip-25.0.1.dist-info"}
+  ]
+}

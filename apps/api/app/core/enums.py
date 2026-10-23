@@ -70,11 +70,16 @@ class ScheduleState(StrEnum):
     * ``activation_required`` — enabled but not yet started. A schedule created while
       the feature was dark (or before the flag was turned on) is intentionally *not*
       auto-seeded; it stays here until an explicit resume/activate action starts it.
+    * ``stalled`` — enabled, but the recurring chain stopped because its last
+      finished tick *failed* and could not be re-seeded (P6-PLAT-6). Kept distinct
+      from ``activation_required`` so a broken chain is visible as a failure; an
+      explicit resume/activate restarts it.
     """
 
     PAUSED = "paused"
     ACTIVE = "active"
     ACTIVATION_REQUIRED = "activation_required"
+    STALLED = "stalled"
 
 
 class SourceType(StrEnum):
