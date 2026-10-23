@@ -202,6 +202,36 @@ export interface RequestOptions {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return (await send<T>(path, options)).payload;
+}
+
+/** One page of a cursor-paginated list (P6-PLAT-12): the body plus the paging headers. */
+export interface ApiPage<T> {
+  items: T[];
+  /** `X-Total-Count`: rows matching the filters, whatever the page size. Null if absent. */
+  total: number | null;
+  /** `X-Next-Cursor`: send back as `cursor` for the next page; null on the last page. */
+  nextCursor: string | null;
+}
+
+export async function apiRequestPage<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<ApiPage<T>> {
+  const { payload, headers } = await send<T[]>(path, options);
+  const rawTotal = headers.get('x-total-count');
+  const total = rawTotal !== null && /^\d+$/.test(rawTotal) ? Number(rawTotal) : null;
+  return {
+    items: Array.isArray(payload) ? payload : [],
+    total,
+    nextCursor: headers.get('x-next-cursor') || null,
+  };
+}
+
+async function send<T>(
+  path: string,
+  options: RequestOptions,
+): Promise<{ payload: T; headers: Headers }> {
   const { method = 'GET', body, query, signal, prefixed = true } = options;
 
   const basePath = prefixed ? `${API_PREFIX}${path}` : path;
@@ -239,7 +269,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const responseId = response.headers.get('x-request-id') ?? correlationId;
 
   if (response.status === 204) {
-    return undefined as T;
+    return { payload: undefined as T, headers: response.headers };
   }
 
   const isJson = response.headers.get('content-type')?.includes('application/json');
@@ -252,5 +282,5 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new ApiError(errorMessage(payload, response.status), response.status, payload, responseId);
   }
 
-  return payload as T;
+  return { payload: payload as T, headers: response.headers };
 }

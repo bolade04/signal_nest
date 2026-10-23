@@ -19,9 +19,11 @@ from app.core.config import get_settings
 from app.core.enums import Role, ScoutRequestStatus
 from app.core.errors import CapabilityUnavailableError, NotFoundError, ValidationDomainError
 from app.core.logging import trace_id_ctx
+from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
 from app.db.session import get_db
 from app.jobs.service import enqueue_scout_request
 from app.locations.models import BusinessLocation
+from app.locations.service import ensure_location_active
 from app.scouting_requests import schedules as schedule_service
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.scouting_requests.run_history import (
@@ -92,18 +94,37 @@ def _schedule_out(db: Session, schedule: ScoutSchedule) -> ScoutScheduleOut:
     )
 
 
-@router.get("/workspaces/{workspace_id}/scout-requests", response_model=list[ScoutRequestOut])
+@router.get(
+    "/workspaces/{workspace_id}/scout-requests",
+    response_model=list[ScoutRequestOut],
+    responses=PAGINATION_RESPONSES,
+)
 def list_scout_requests(
     workspace_id: str,
+    response: Response,
     location_id: str | None = None,
+    # No limit by default, as before P6-PLAT-12; a client that pages sends one.
+    limit: int | None = Query(default=None, ge=1, le=MAX_PAGE_SIZE),
+    cursor: str | None = Query(default=None, max_length=1024),
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> list[ScoutRequest]:
     stmt = select(ScoutRequest).where(ScoutRequest.workspace_id == workspace_id)
     if location_id:
         stmt = stmt.where(ScoutRequest.location_id == location_id)
-    stmt = stmt.order_by(ScoutRequest.created_at.desc())
-    return list(db.execute(stmt).scalars())
+    page = paginate(
+        db,
+        stmt,
+        order=(ScoutRequest.created_at, ScoutRequest.id),
+        descending=True,
+        scope="scout-requests",
+        workspace_id=workspace_id,
+        filters={"location_id": location_id},
+        cursor=cursor,
+        limit=limit,
+    )
+    page.apply_headers(response)
+    return page.rows
 
 
 @router.post(
@@ -126,6 +147,7 @@ def create_scout_request(
         location = db.get(BusinessLocation, body.location_id)
         if not location or location.workspace_id != workspace_id:
             raise NotFoundError("Location not found in this workspace.")
+        ensure_location_active(db, location.id)
         if not resolved_market:
             resolved_market = f"{location.city}, {location.state_province or location.country}"
 
@@ -270,6 +292,7 @@ def run_scout_request_endpoint(
         raise ValidationDomainError("Request is already queued or running.")
     if observed == ScoutRequestStatus.PAUSED.value:
         raise ValidationDomainError("Resume the request before running it.")
+    ensure_location_active(db, request.location_id)
 
     # Atomic claim of the run: only the caller that flips the observed status to
     # QUEUED proceeds to enqueue; a lost race is reported rather than duplicated.
@@ -388,6 +411,7 @@ def create_scout_schedule(
     """
     _require_scheduling_feature()
     request = _get_scoped(db, workspace_id, request_id)
+    ensure_location_active(db, request.location_id)
     schedule = schedule_service.create_schedule(
         db,
         request=request,
@@ -434,6 +458,7 @@ def resume_scout_schedule(
     """
     _require_scheduling_feature()
     request = _get_scoped(db, workspace_id, request_id)
+    ensure_location_active(db, request.location_id)
     schedule = schedule_service.resume_schedule(
         db, schedule=_get_schedule(db, request), actor_user_id=ctx.user.id
     )

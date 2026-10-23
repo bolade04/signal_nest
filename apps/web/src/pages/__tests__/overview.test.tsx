@@ -1,7 +1,9 @@
 import { http, HttpResponse } from 'msw';
+import { waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
+import { pagedJson } from '@/test/handlers';
 import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
 
@@ -160,5 +162,93 @@ describe('Overview — scout request tile (P6-UI-020)', () => {
     seedScouts([{ status: 'draft', stats: {}, last_run_at: null }]);
     const screen = renderApp(<App />, { route: '/' });
     expect(await screen.findByText(/none run yet/)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------------
+// The Opportunities tile counted the rows of a 200-row page, so a workspace with more
+// than 200 opportunities read "200" — the same defect class as P6-UI-022. The count is
+// now the API's X-Total-Count (P6-PLAT-12); the figures derived from the rows say they
+// describe only the rows shown.
+// ---------------------------------------------------------------------------------
+
+function opportunities(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `opp-${i}`,
+    title: `Opportunity ${i}`,
+    classification: 'validated',
+    decision: 'monitor',
+    opportunity_score: 70,
+    confidence_score: 60,
+    confidence_level: 'medium',
+    priority_score: 50,
+    relevance_score: 80,
+    risk_level: 'low',
+    resolved_market: 'Dallas, TX',
+    inside_scout_area: true,
+    why_it_matters: null,
+    recommended_action: null,
+    audience_fit: null,
+    urgency: null,
+    commercial_value: null,
+    source_summary: [],
+    status: 'new',
+    location_id: 'loc-dallas',
+    campaign_id: null,
+    scout_request_id: 'scout-loc-dallas',
+    is_simulated: true,
+    created_at: '2026-06-01T09:00:00Z',
+  }));
+}
+
+/** The value of the stat tile whose label is exactly `label`. */
+async function tileValue(screen: ReturnType<typeof renderApp>, label: string): Promise<string> {
+  await screen.findAllByText(label);
+  const caption = screen
+    .getAllByText(label)
+    .find((el) => el.tagName === 'P' && el.nextElementSibling?.classList.contains('text-2xl'));
+  if (!caption) throw new Error(`no stat tile labelled ${label}`);
+  return caption.nextElementSibling!.textContent ?? '';
+}
+
+describe('Overview — opportunity count is the total, not the page (same class as P6-UI-022)', () => {
+  it('shows the X-Total-Count total when there are more rows than the page', async () => {
+    const seen: URL[] = [];
+    server.use(
+      http.get(P('/workspaces/:ws/opportunities'), ({ request }) => {
+        const url = new URL(request.url);
+        seen.push(url);
+        return pagedJson(opportunities(250), url);
+      }),
+    );
+    const screen = renderApp(<App />, { route: '/' });
+    await waitFor(async () => expect(await tileValue(screen, 'Opportunities')).toBe('250'));
+    expect(screen.getByText('1 markets in the 200 shown')).toBeInTheDocument();
+    expect(
+      screen.getByText(/computed from the 200\s+highest-priority opportunities of 250\./),
+    ).toBeInTheDocument();
+    expect(seen[0]!.searchParams.get('limit')).toBe('200');
+  });
+
+  it('says "200+" — never "200" — when more rows follow but no total is reported', async () => {
+    server.use(
+      http.get(P('/workspaces/:ws/opportunities'), () =>
+        HttpResponse.json(opportunities(200), { headers: { 'X-Next-Cursor': 'opaque' } }),
+      ),
+    );
+    const screen = renderApp(<App />, { route: '/' });
+    await waitFor(async () => expect(await tileValue(screen, 'Opportunities')).toBe('200+'));
+  });
+
+  it('shows the exact count, with no sampling note, when the page is the whole result', async () => {
+    server.use(
+      http.get(P('/workspaces/:ws/opportunities'), ({ request }) =>
+        pagedJson(opportunities(12), new URL(request.url)),
+      ),
+    );
+    const screen = renderApp(<App />, { route: '/' });
+    await waitFor(async () => expect(await tileValue(screen, 'Opportunities')).toBe('12'));
+    expect(screen.getByText('1 markets')).toBeInTheDocument();
+    expect(screen.queryByText(/computed from the/)).not.toBeInTheDocument();
   });
 });

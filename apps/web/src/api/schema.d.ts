@@ -1337,6 +1337,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate Location
+         * @description Retire a location without deleting it or any of its history (P6-UI-023).
+         *
+         *     See :mod:`app.locations.service` for why this is a deactivation and what it stops.
+         *     Deactivating an already-deactivated location changes nothing and answers 200.
+         */
+        post: operations["deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage": {
         parameters: {
             query?: never;
@@ -1349,6 +1372,26 @@ export interface paths {
         /** Upsert Geo Coverage */
         put: operations["upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reactivate Location
+         * @description Return a deactivated location to service; a no-op (200) when already active.
+         */
+        post: operations["reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5644,7 +5687,10 @@ export interface operations {
     };
     list_audiences_api_v1_workspaces__workspace_id__audiences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5658,6 +5704,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5792,6 +5842,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -5806,6 +5857,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5827,7 +5882,10 @@ export interface operations {
     };
     list_brand_voice_api_v1_workspaces__workspace_id__brand_voice_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5841,6 +5899,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6076,7 +6138,10 @@ export interface operations {
     };
     list_campaigns_api_v1_workspaces__workspace_id__campaigns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6090,6 +6155,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6222,7 +6291,10 @@ export interface operations {
     };
     list_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6236,6 +6308,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6368,7 +6444,10 @@ export interface operations {
     };
     list_claims_api_v1_workspaces__workspace_id__claims_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6382,6 +6461,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6514,7 +6597,10 @@ export interface operations {
     };
     list_competitors_api_v1_workspaces__workspace_id__competitors_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6528,6 +6614,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6940,6 +7030,40 @@ export interface operations {
             };
         };
     };
+    deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_get: {
         parameters: {
             query?: never;
@@ -7012,9 +7136,46 @@ export interface operations {
             };
         };
     };
-    list_offers_api_v1_workspaces__workspace_id__offers_get: {
+    reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post: {
         parameters: {
             query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_offers_api_v1_workspaces__workspace_id__offers_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -7028,6 +7189,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7208,9 +7373,10 @@ export interface operations {
                 market?: string | null;
                 min_score?: number;
                 search?: string | null;
-                sort?: string;
+                sort?: "priority" | "opportunity" | "confidence" | "relevance" | "created";
                 order?: string;
                 limit?: number;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7225,6 +7391,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7425,7 +7595,10 @@ export interface operations {
     };
     list_products_api_v1_workspaces__workspace_id__products_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -7439,6 +7612,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7573,6 +7750,8 @@ export interface operations {
         parameters: {
             query?: {
                 location_id?: string | null;
+                limit?: number | null;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7587,6 +7766,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -8026,7 +8209,10 @@ export interface operations {
     };
     list_source_preferences_api_v1_workspaces__workspace_id__source_preferences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -8040,6 +8226,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {

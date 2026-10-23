@@ -1,15 +1,17 @@
-import { useQuery } from '@tanstack/react-query';
-import { Eye, MapPin, Pencil, Plus } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Archive, ArchiveRestore, Eye, MapPin, Pencil, Plus } from 'lucide-react';
 import { useState } from 'react';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
 import type { LocationOut } from '@/api/types';
+import { ConfirmDialog } from '@/components/common/confirm-dialog';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
 import { PageHeader } from '@/components/layout/page-header';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useToast } from '@/components/ui/toast';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { LocationDialog } from './locations/LocationDialog';
@@ -22,6 +24,9 @@ function LocationsInner({ workspaceId }: { workspaceId: string }) {
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<LocationOut | null>(null);
+  const [toDeactivate, setToDeactivate] = useState<LocationOut | null>(null);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   // Close any open dialog when the role gate closes. A create dialog has nothing
   // to show read-only, and an edit dialog may hold unsaved input that the
@@ -31,7 +36,27 @@ function LocationsInner({ workspaceId }: { workspaceId: string }) {
   if (gateWasOpen !== canEdit) {
     setGateWasOpen(canEdit);
     if (!canEdit && dialogOpen) setDialogOpen(false);
+    if (!canEdit) setToDeactivate(null);
   }
+
+  // P6-UI-023: a location is deactivated, never deleted. Its opportunities, scouts and
+  // service area are kept and stay readable; only new scouting for it stops.
+  const lifecycle = useMutation({
+    mutationFn: ({ loc, active }: { loc: LocationOut; active: boolean }) =>
+      active
+        ? api.reactivateLocation(workspaceId, loc.id)
+        : api.deactivateLocation(workspaceId, loc.id),
+    onSuccess: async (loc) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.locations(workspaceId) });
+      toast({ title: `${loc.name} ${loc.is_active ? 'reactivated' : 'deactivated'}`, intent: 'success' });
+    },
+    onError: (err) =>
+      toast({
+        title: 'Could not change the location',
+        description: err instanceof Error ? err.message : undefined,
+        intent: 'error',
+      }),
+  });
 
   const locationsQuery = useQuery({
     queryKey: queryKeys.locations(workspaceId),
@@ -80,7 +105,7 @@ function LocationsInner({ workspaceId }: { workspaceId: string }) {
                   </p>
                 </div>
                 <Badge intent={loc.is_active ? 'success' : 'muted'}>
-                  {loc.is_active ? 'Active' : 'Inactive'}
+                  {loc.is_active ? 'Active' : 'Deactivated'}
                 </Badge>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
@@ -97,17 +122,40 @@ function LocationsInner({ workspaceId }: { workspaceId: string }) {
                 {loc.local_notes ? (
                   <p className="line-clamp-2 text-muted-foreground">{loc.local_notes}</p>
                 ) : null}
-                <Button variant="outline" size="sm" onClick={() => openEdit(loc)}>
+                {loc.is_active ? null : (
+                  <p className="text-muted-foreground">
+                    No new scouts run here. Its opportunities and history are kept.
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => openEdit(loc)}>
+                    {canEdit ? (
+                      <>
+                        <Pencil className="size-4" /> Edit &amp; service area
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="size-4" /> View details &amp; service area
+                      </>
+                    )}
+                  </Button>
                   {canEdit ? (
-                    <>
-                      <Pencil className="size-4" /> Edit &amp; service area
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="size-4" /> View details &amp; service area
-                    </>
-                  )}
-                </Button>
+                    loc.is_active ? (
+                      <Button variant="ghost" size="sm" onClick={() => setToDeactivate(loc)}>
+                        <Archive className="size-4" /> Deactivate
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={lifecycle.isPending}
+                        onClick={() => lifecycle.mutate({ loc, active: true })}
+                      >
+                        <ArchiveRestore className="size-4" /> Reactivate
+                      </Button>
+                    )
+                  ) : null}
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -130,6 +178,23 @@ function LocationsInner({ workspaceId }: { workspaceId: string }) {
           }
         />
       )}
+
+      {canEdit ? (
+        <ConfirmDialog
+          open={Boolean(toDeactivate)}
+          onOpenChange={(o) => !o && setToDeactivate(null)}
+          title={toDeactivate ? `Deactivate ${toDeactivate.name}?` : 'Deactivate location?'}
+          description="No new scouts can be created or run for it until you reactivate it. Its opportunities, scout history and service area are kept. Pause its scheduled scouts first."
+          confirmLabel="Deactivate"
+          onConfirm={async () => {
+            // A refusal (e.g. 409: a scheduled scout is still enabled) is shown by onError.
+            if (toDeactivate) {
+              await lifecycle.mutateAsync({ loc: toDeactivate, active: false }).catch(() => undefined);
+            }
+            setToDeactivate(null);
+          }}
+        />
+      ) : null}
 
       <LocationDialog
         workspaceId={workspaceId}

@@ -114,7 +114,9 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["x-request-id"],
+        # The paging headers of the customer lists (P6-PLAT-12) must be readable by a
+        # browser client on another origin, as the request id already is.
+        expose_headers=["x-request-id", "x-total-count", "x-next-cursor"],
     )
     # Added last, so it is the outermost user middleware and also covers CORS
     # preflight answers and rate-limit 429s (P6-AUTH-5).
