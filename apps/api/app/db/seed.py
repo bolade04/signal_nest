@@ -8,6 +8,11 @@ Everything created here is clearly flagged as simulated (``is_simulated=True`` o
 signals/opportunities). Root entities use stable, deterministic IDs derived from a
 fixed namespace so re-seeding produces identical primary keys.
 
+Each scout request is run the way a customer's "Run now" runs it (P6-UI-009): the
+request is queued with a durable ``scout_request.execute`` job, and the worker's own
+execution path claims, runs and completes that job. A seeded request therefore has
+the same job and run history as one a customer ran.
+
 Scenario: one specialty-coffee brand ("Brew & Bean") operating four fully
 independent locations — Dallas TX, London UK, Lagos NG, Nairobi KE. Each location
 has its own geo-coverage rule, local competitors, a per-location promotion and a
@@ -19,15 +24,15 @@ Dallas opportunities are built only from Dallas signals, and so on.
 from __future__ import annotations
 
 import argparse
+import time
 import uuid
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-# Importing the pipeline module registers the ``run_scout_request`` job and gives
-# us direct access to the synchronous runner used below.
 from app.brands.models import Brand, BusinessProfile
 from app.campaign_context.models import (
     AudienceProfile,
@@ -53,7 +58,8 @@ from app.core.security import hash_password
 from app.db.models import Base
 from app.db.session import SessionLocal, engine
 from app.geography.geocoder import fixture_geocode
-from app.jobs.pipeline import _run
+from app.jobs.models import Job
+from app.jobs.status import TERMINAL_STATUSES, JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.models import Opportunity
 from app.organizations.models import (
@@ -622,24 +628,166 @@ def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
 
         db.flush()
 
-        # --- Run the pipeline per request (isolated by market) -------------
-        for c, req in requests:
-            stats = _run(db, req.id)
-            logger.info(
-                "seed.scout_completed",
-                extra={"extra_fields": {"market": c["market"], **stats}},
-            )
+        # --- Queue each request's run, as "Run now" does (P6-UI-009) ---------
+        # The run route leaves the request QUEUED (as created above) and enqueues a
+        # durable scout_request.execute job in the same transaction. So does the
+        # seed: the configuration and the queued runs commit together or not at all.
+        # Imported here, not at module scope: the enqueue service registers every job
+        # handler on import, and importing this module must not (test_worker_bootstrap
+        # relies on the worker's own bootstrap being the only thing that does).
+        from app.jobs.service import enqueue_scout_request
 
+        seed_job_ids = [
+            enqueue_scout_request(
+                db,
+                organization_id=org.id,
+                workspace_id=ws.id,
+                scout_request_id=req.id,
+                location_id=req.location_id,
+                campaign_id=req.campaign_id,
+                request_id=req.id,
+                now=now,
+            ).id
+            for _c, req in requests
+        ]
         db.commit()
-        counts = _counts(db)
-        logger.info("seed.done", extra={"extra_fields": counts})
-        _print_summary(db, counts)
-        return counts
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+    # --- Run them on the worker's own execution path (isolated by market) --
+    if not _execute_seed_runs(seed_job_ids):
+        # Draining the queue here would also run someone else's work. The seed's
+        # runs that had not run yet stay queued for the worker, which processes
+        # them like any other.
+        logger.info("seed.runs_left_queued")
+        print(
+            "Other unfinished jobs are waiting in this database, so the seeded scout "
+            "runs that have not finished were left queued for the worker (`npm run dev` "
+            "starts one). Use --reset for a self-contained demo."
+        )
+
+    db = SessionLocal()
+    try:
+        counts = _counts(db)
+        logger.info("seed.done", extra={"extra_fields": counts})
+        _print_summary(db, counts)
+        return counts
+    finally:
+        db.close()
+
+
+#: The worker id the seed's own runner claims under; visible only in job internals.
+_SEED_WORKER_ID: Final = "demo-seed"
+
+#: How long the seed waits for runs another worker holds to settle (`npm run dev`
+#: starts a worker that polls every second), and how often it looks meanwhile.
+_SEED_RUNS_WAIT_SECONDS: Final = 60.0
+_SEED_RUNS_POLL_SECONDS: Final = 0.2
+
+_TERMINAL_STATUS_VALUES: Final = frozenset(s.value for s in TERMINAL_STATUSES)
+
+#: A seed run needs nothing more from this process once it is terminal, or waiting
+#: out a retry backoff (the worker retries it later).
+_SETTLED_STATUSES: Final = _TERMINAL_STATUS_VALUES | {JobStatus.RETRY_WAIT.value}
+
+
+class SeedRunError(RuntimeError):
+    """A seeded scout run did not succeed; the worker recorded why on its job."""
+
+
+def _unfinished_jobs_besides(db: Session, job_ids: list[str]) -> int:
+    """How many jobs other than ``job_ids`` are not yet in a terminal state."""
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.id.not_in(job_ids),
+                Job.status.not_in([s.value for s in TERMINAL_STATUSES]),
+            )
+        )
+        or 0
+    )
+
+
+def _seed_run_state(job_ids: list[str]) -> tuple[dict[str, str], int]:
+    """The seed's runs by status, and how many other jobs are unfinished."""
+    db = SessionLocal()
+    try:
+        statuses = dict(db.execute(select(Job.id, Job.status).where(Job.id.in_(job_ids))).all())
+        return statuses, _unfinished_jobs_besides(db, job_ids)
+    finally:
+        db.close()
+
+
+def _execute_seed_runs(job_ids: list[str]) -> bool:
+    """Run the seed's queued jobs on the durable worker's own execution path.
+
+    Guarded in its own right, as ``_reset`` is: the leading underscore is a
+    convention, not an access control, and this drives a real worker loop (lease
+    recovery and claiming) through whatever ``SessionLocal`` is bound to.
+
+    A real :class:`~app.jobs.worker.JobRunner` claims, runs and completes each job in
+    its own transaction, so a run's status, attempt, timestamps, events and result
+    summary are written by the worker's code, none by the seed.
+
+    What is guaranteed, and what is not. ``JobRunner`` cannot claim by job id, so
+    before every claim this re-checks that nothing but the seed's own jobs is
+    unfinished, and stops claiming as soon as anything else is: the seed's runs that
+    have not finished then stay queued for the worker. That narrows, but cannot
+    close, the window in which a job another process enqueues between that check
+    and the claim is claimed here; on the development/test SQLite databases the
+    target guard admits, such a job runs exactly as the worker would run it.
+
+    The outcome is judged by the final state of the seed's own jobs, whichever
+    worker ran them (``npm run dev`` starts one that may take some), waiting up to
+    ``_SEED_RUNS_WAIT_SECONDS`` for runs held elsewhere. Returns True when every run
+    succeeded, and False when claiming stopped for someone else's job while none of
+    the seed's own runs has failed outright; raises :class:`SeedRunError` otherwise,
+    the outcome staying recorded on each job.
+    """
+    _require_safe_seed_target()
+    # Imported here: the worker module bootstraps the process (handler registry,
+    # full ORM metadata), which only this step needs.
+    from app.jobs.worker import JobRunner
+
+    runner = JobRunner(settings=get_settings(), session_factory=SessionLocal)
+    deadline = time.monotonic() + _SEED_RUNS_WAIT_SECONDS
+    left_queued = False
+    while True:
+        statuses, others_unfinished = _seed_run_state(job_ids)
+        if all(status in _SETTLED_STATUSES for status in statuses.values()):
+            break
+        if others_unfinished:
+            left_queued = True
+            break
+        if runner.poll_once(worker_id=_SEED_WORKER_ID):
+            continue
+        # Nothing claimable: another worker holds what is left.
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_SEED_RUNS_POLL_SECONDS)
+
+    statuses, _ = _seed_run_state(job_ids)
+    succeeded = sum(1 for status in statuses.values() if status == JobStatus.SUCCEEDED.value)
+    if succeeded == len(job_ids):
+        logger.info("seed.runs_completed", extra={"extra_fields": {"runs": succeeded}})
+        return True
+    failed_outright = any(
+        status in _TERMINAL_STATUS_VALUES and status != JobStatus.SUCCEEDED.value
+        for status in statuses.values()
+    )
+    if left_queued and not failed_outright:
+        return False
+    others = Counter(s for s in statuses.values() if s != JobStatus.SUCCEEDED.value)
+    breakdown = ", ".join(f"{n} {status}" for status, n in sorted(others.items()))
+    raise SeedRunError(
+        f"{succeeded} of {len(job_ids)} seeded scout runs succeeded ({breakdown}); "
+        "each job records its outcome."
+    )
 
 
 def _print_summary(db: Session, counts: dict[str, int]) -> None:
@@ -689,7 +837,15 @@ def main() -> None:
             "  npm run migrate        # or: npm run demo:setup (migrate + seed)"
         )
 
-    seed(reset=args.reset)
+    try:
+        seed(reset=args.reset)
+    except SeedRunError as exc:
+        # One line, no traceback: the outcome is recorded on each job.
+        raise SystemExit(
+            f"Demo seed incomplete: {exc} If `npm run dev` or `npm run worker` is running, "
+            "a run may still be finishing there: check Background jobs on the scout "
+            "requests. Otherwise fix the cause, then rebuild with `npm run seed:reset`."
+        ) from None
 
 
 if __name__ == "__main__":

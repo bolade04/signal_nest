@@ -57,6 +57,7 @@ from app.core.metrics import (
     JOBS_RETRIED_TOTAL,
     WORKER_LEASE_RECOVERED_TOTAL,
     WORKER_POLL_TOTAL,
+    configure_metrics_from_settings,
     get_metrics,
 )
 from app.core.tracing import (
@@ -111,6 +112,11 @@ Clock = Callable[[], datetime]
 #: Sentinel returned when a mutation is rejected because the lease was reclaimed
 #: by another worker. The losing worker simply stops; the new owner drives on.
 LEASE_LOST = "lease_lost"
+
+#: The classification the store records when a lease expires with no attempts
+#: left (``DurableJobStore._recover_one``); handed to the terminal-failure hook for
+#: a dead-letter that happened inside lease recovery rather than in ``_fail``.
+_LEASE_EXHAUSTED = JobError(JobErrorCode.TIMEOUT, "lease expired and attempts exhausted")
 
 #: Terminal non-success status -> the counter that records it. Bounded set.
 _FAIL_METRIC = {
@@ -475,7 +481,19 @@ class JobRunner:
                     kind="internal",
                     attributes={"component": "jobs", "worker.type": worker_type},
                 ) as recover_span:
-                    recovered = self._store.recover_expired_leases(db, now=self._clock())
+                    # A lease that expired with no attempts left dead-letters inside
+                    # recovery, not in ``_fail``. It is just as final, so the job
+                    # type's terminal-failure hook runs here too (in this same
+                    # transaction), and the dead-letter is counted like any other.
+                    dead_lettered: list[str] = []
+
+                    def _settle_dead_letter(job: Job) -> None:
+                        dead_lettered.append(job.job_type)
+                        self._run_terminal_failure_hook(db, job, _LEASE_EXHAUSTED)
+
+                    recovered = self._store.recover_expired_leases(
+                        db, now=self._clock(), on_dead_lettered=_settle_dead_letter
+                    )
                     db.commit()
                     recover_span.set_attribute("recovered", bool(recovered))
                     recover_span.set_attribute(
@@ -484,6 +502,13 @@ class JobRunner:
                 if recovered:
                     m.increment(
                         WORKER_LEASE_RECOVERED_TOTAL, worker_type=worker_type, amount=recovered
+                    )
+                # Only after the recovery transaction is committed, mirroring ``_fail``.
+                for dead_type in dead_lettered:
+                    m.increment(
+                        JOBS_DEAD_LETTERED_TOTAL,
+                        job_type=dead_type,
+                        error_class=_LEASE_EXHAUSTED.code.value,
                     )
                 with start_span(
                     JOB_CLAIM,
@@ -858,6 +883,7 @@ class Worker:
 def main() -> None:
     settings = get_settings()
     configure_logging("DEBUG" if settings.debug else "INFO")
+    configure_metrics_from_settings(settings)
     Worker(settings=settings).run()
 
 

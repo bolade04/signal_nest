@@ -52,6 +52,54 @@
         "title": "AudienceIn",
         "type": "object"
       },
+      "AudiencePatch": {
+        "properties": {
+          "demographics": {
+            "additionalProperties": true,
+            "title": "Demographics",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "motivations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Motivations",
+            "type": "array"
+          },
+          "objections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Objections",
+            "type": "array"
+          }
+        },
+        "title": "AudiencePatch",
+        "type": "object"
+      },
       "BrandOut": {
         "properties": {
           "business_type": {
@@ -137,6 +185,51 @@
           }
         },
         "title": "BrandVoiceIn",
+        "type": "object"
+      },
+      "BrandVoicePatch": {
+        "properties": {
+          "avoid": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Avoid",
+            "type": "array"
+          },
+          "do_use": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Do Use",
+            "type": "array"
+          },
+          "example_copy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Copy"
+          },
+          "personality": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Personality",
+            "type": "array"
+          },
+          "tone": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tone",
+            "type": "array"
+          }
+        },
+        "title": "BrandVoicePatch",
         "type": "object"
       },
       "BusinessProfileBase": {
@@ -665,6 +758,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
             "title": "Location Ids",
             "type": "array"
           },
@@ -688,6 +782,44 @@
           "name"
         ],
         "title": "CampaignIn",
+        "type": "object"
+      },
+      "CampaignPatch": {
+        "properties": {
+          "goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Location Ids",
+            "type": "array"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "CampaignPatch",
         "type": "object"
       },
       "CapabilitiesOut": {
@@ -1153,6 +1285,31 @@
         "title": "ChannelPrefIn",
         "type": "object"
       },
+      "ChannelPrefPatch": {
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "weekly_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Volume"
+          }
+        },
+        "title": "ChannelPrefPatch",
+        "type": "object"
+      },
       "ClaimIn": {
         "properties": {
           "category": {
@@ -1199,6 +1356,47 @@
         "title": "ClaimIn",
         "type": "object"
       },
+      "ClaimPatch": {
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "title": "ClaimPatch",
+        "type": "object"
+      },
       "CompetitorIn": {
         "properties": {
           "known_weaknesses": {
@@ -1240,6 +1438,46 @@
           "name"
         ],
         "title": "CompetitorIn",
+        "type": "object"
+      },
+      "CompetitorPatch": {
+        "properties": {
+          "known_weaknesses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Known Weaknesses",
+            "type": "array"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          }
+        },
+        "title": "CompetitorPatch",
         "type": "object"
       },
       "DeadLetterJobsOut": {
@@ -1310,7 +1548,7 @@
         "type": "object"
       },
       "FeatureFlagsOut": {
-        "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of raw server feature flags \u2014 never a customer-settable\ntoggle. Secret-free: only booleans, never backend topology or configuration\nvalues.\n\nThey answer \"is this flag on?\", NOT \"is this capability available to my\nworkspace?\". For ``scout_scheduling`` and ``connector_rss`` those coincide,\nbecause enforcement reads the raw flag. For ``opportunity_feedback`` they do\nnot: an honored workspace override outranks the flag, so this field can read\n``false`` while the feedback endpoints serve normally. The customer-facing,\nworkspace-effective answer lives on its own route,\n``GET /workspaces/{workspace_id}/feedback-capability``.",
+        "description": "Coarse, read-only product-capability booleans.\n\nThese are *reflections* of raw server feature flags \u2014 never a customer-settable\ntoggle. Secret-free: only booleans, never backend topology or configuration\nvalues.\n\nThey answer \"is this flag on?\", NOT \"is this capability available to my\nworkspace?\". Since P6-CAP-1 those differ for every capability: enforcement is the\ncapability resolver's per-workspace decision, in which a workspace override (or\nthe safety ceiling) outranks the flag. The customer-facing, workspace-effective\nanswers live on their own routes \u2014\n``GET /workspaces/{workspace_id}/feedback-capability`` and\n``GET /workspaces/{workspace_id}/scheduling-capability`` \u2014 and the customer UI\nreads those, not these.",
         "properties": {
           "connector_rss_enabled": {
             "title": "Connector Rss Enabled",
@@ -3594,6 +3832,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
             "title": "Eligible Location Ids",
             "type": "array"
           },
@@ -3724,6 +3963,163 @@
           "name"
         ],
         "title": "OfferIn",
+        "type": "object"
+      },
+      "OfferPatch": {
+        "properties": {
+          "cta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta"
+          },
+          "discount_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discount Amount"
+          },
+          "eligible_location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Eligible Location Ids",
+            "type": "array"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "landing_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landing Url"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "percentage_discount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentage Discount"
+          },
+          "product_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Service"
+          },
+          "promo_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promo Code"
+          },
+          "regular_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regular Price"
+          },
+          "required_disclaimer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Disclaimer"
+          },
+          "sale_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sale Price"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terms"
+          }
+        },
+        "title": "OfferPatch",
         "type": "object"
       },
       "OnboardingRequest": {
@@ -4569,6 +4965,83 @@
         "title": "ProductIn",
         "type": "object"
       },
+      "ProductPatch": {
+        "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "claims_rules": {
+            "additionalProperties": true,
+            "title": "Claims Rules",
+            "type": "object"
+          },
+          "competitors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "exclusion_rules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusion Rules",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pain_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pain Points",
+            "type": "array"
+          },
+          "relevance_weight": {
+            "title": "Relevance Weight",
+            "type": "number"
+          },
+          "use_cases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Use Cases",
+            "type": "array"
+          }
+        },
+        "title": "ProductPatch",
+        "type": "object"
+      },
       "ReadinessCheckOut": {
         "properties": {
           "name": {
@@ -4986,7 +5459,7 @@
         "type": "string"
       },
       "ScheduleOperatorOut": {
-        "description": "Operator view of one scouting schedule with its derived lifecycle state.\n\n``state`` is computed live from the row plus the live tick chain\n(:func:`derive_schedule_state`) so it can never drift from reality. Carries\nonly safe scope ids and lifecycle timestamps \u2014 never any secret.",
+        "description": "Operator view of one scouting schedule with its derived lifecycle state.\n\n``state`` is computed live from the row plus the live tick chain\n(:func:`derive_schedule_state`) so it can never drift from reality. The\n``last_tick_*`` failure fields come from the same tick-job evidence\n(:func:`last_tick_failure`, P6-PLAT-6). Carries only safe scope ids, lifecycle\ntimestamps and the stable job error classification \u2014 never any secret.",
         "properties": {
           "created_at": {
             "format": "date-time",
@@ -5015,6 +5488,29 @@
               }
             ],
             "title": "Last Tick At"
+          },
+          "last_tick_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick Error Code"
+          },
+          "last_tick_failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick Failed At"
           },
           "location_id": {
             "anyOf": [
@@ -5071,6 +5567,8 @@
           "state",
           "next_run_at",
           "last_tick_at",
+          "last_tick_failed_at",
+          "last_tick_error_code",
           "created_at",
           "updated_at"
         ],
@@ -5078,11 +5576,12 @@
         "type": "object"
       },
       "ScheduleState": {
-        "description": "Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).\n\nNever persisted \u2014 always computed from the row plus the live job state so it can\nnever drift from reality:\n\n* ``paused`` \u2014 disabled; drives no work.\n* ``active`` \u2014 enabled and a live tick chain is actually fanning out runs.\n* ``activation_required`` \u2014 enabled but not yet started. A schedule created while\n  the feature was dark (or before the flag was turned on) is intentionally *not*\n  auto-seeded; it stays here until an explicit resume/activate action starts it.",
+        "description": "Derived lifecycle state of a scouting schedule surfaced to the customer (SB-C).\n\nNever persisted \u2014 always computed from the row plus the live job state so it can\nnever drift from reality:\n\n* ``paused`` \u2014 disabled; drives no work.\n* ``active`` \u2014 enabled and a live tick chain is actually fanning out runs.\n* ``activation_required`` \u2014 enabled but not yet started. A schedule created while\n  the feature was dark (or before the flag was turned on) is intentionally *not*\n  auto-seeded; it stays here until an explicit resume/activate action starts it.\n* ``stalled`` \u2014 enabled, but the recurring chain stopped because its last\n  finished tick *failed* and could not be re-seeded (P6-PLAT-6). Kept distinct\n  from ``activation_required`` so a broken chain is visible as a failure; an\n  explicit resume/activate restarts it.",
         "enum": [
           "paused",
           "active",
-          "activation_required"
+          "activation_required",
+          "stalled"
         ],
         "title": "ScheduleState",
         "type": "string"
@@ -5106,6 +5605,20 @@
           "state_counts"
         ],
         "title": "SchedulesOverviewOut",
+        "type": "object"
+      },
+      "SchedulingCapabilityOut": {
+        "description": "Customer-visible scout-scheduling availability for one workspace (P6-UI-006).\n\nExactly one field, decided by the same resolver call the schedule mutation gate\nenforces with. The operator endpoint's ``decided_by`` / ``global_flag`` /\n``has_override`` / ``override_value`` are governance metadata and are deliberately\nabsent: a customer needs only whether the feature is available to them.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SchedulingCapabilityOut",
         "type": "object"
       },
       "ScoreBreakdown": {
@@ -5520,6 +6033,18 @@
             ],
             "title": "Last Tick At"
           },
+          "last_tick_failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick Failed At"
+          },
           "location_id": {
             "anyOf": [
               {
@@ -5565,6 +6090,7 @@
           "enabled",
           "next_run_at",
           "last_tick_at",
+          "last_tick_failed_at",
           "created_at",
           "updated_at"
         ],
@@ -5622,6 +6148,25 @@
           "source_type"
         ],
         "title": "SourcePrefIn",
+        "type": "object"
+      },
+      "SourcePrefPatch": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "title": "SourcePrefPatch",
         "type": "object"
       },
       "StuckJobsOut": {
@@ -6757,7 +7302,7 @@
     },
     "/api/v1/internal/system/capabilities/effective": {
       "get": {
-        "description": "Return the effective state of each capability for one workspace.\n\nThe route is a thin adapter over the merged deny-biased resolver: it validates the\noperator-supplied tenant scope, then delegates every precedence decision to\n:func:`resolve_capability` (safety ceiling \u2192 honored workspace override \u2192 global\nconfiguration \u2192 secure default) and projects each :class:`CapabilityResolution`.\nIt implements no precedence of its own, opens no transaction, writes no row, and\nflips no flag.\n\n``capability`` is an optional filter: absent, the response covers every capability\nin :func:`iter_capabilities` (canonical order); supplied, it narrows to that one.\nAn unknown ``capability`` value is rejected as 422 by the typed enum before any\nresolution. A cross-tenant or absent workspace is a non-enumerating 404.\n\nWith shipped defaults (all three global flags ``False``) and no real override row,\nevery capability resolves disabled via ``global_configuration`` \u2014 the surface is\ndark. A persisted enable on a ``workspace_enableable`` capability would show\n``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``\nwhile ``global_flag`` stays ``False``. No GLOBAL flag is changed \u2014 but whether a live\ngate consumes that decision depends on the capability: ``opportunity_feedback`` has one\n(Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``\nand ``connector_rss`` do not, so their enforcement still reads the raw flag. For those\ntwo this surface can report ``effective_enabled=true`` while the endpoints still 503.",
+        "description": "Return the effective state of each capability for one workspace.\n\nThe route is a thin adapter over the merged deny-biased resolver: it validates the\noperator-supplied tenant scope, then delegates every precedence decision to\n:func:`resolve_capability` (safety ceiling \u2192 honored workspace override \u2192 global\nconfiguration \u2192 secure default) and projects each :class:`CapabilityResolution`.\nIt implements no precedence of its own, opens no transaction, writes no row, and\nflips no flag.\n\n``capability`` is an optional filter: absent, the response covers every capability\nin :func:`iter_capabilities` (canonical order); supplied, it narrows to that one.\nAn unknown ``capability`` value is rejected as 422 by the typed enum before any\nresolution. A cross-tenant or absent workspace is a non-enumerating 404.\n\nWith shipped defaults (all three global flags ``False``) and no real override row,\nevery capability resolves disabled via ``global_configuration`` \u2014 the surface is\ndark. A persisted enable on a ``workspace_enableable`` capability would show\n``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``\nwhile ``global_flag`` stays ``False``. No GLOBAL flag is changed, and every capability's\nlive enforcement consumes this same decision: ``opportunity_feedback`` since Phase\n4B-A, ``scout_scheduling`` (schedule mutations, tick seeding and the tick itself) and\n``connector_rss`` (connector selection) since P6-CAP-1. What this surface reports for\na workspace is therefore what that workspace's endpoints and worker do (P6-UI-006).",
         "operationId": "internal_capability_effective_api_v1_internal_system_capabilities_effective_get",
         "parameters": [
           {
@@ -7730,7 +8275,7 @@
     },
     "/api/v1/internal/system/schedules": {
       "get": {
-        "description": "Schedule visibility with live-derived lifecycle state (cross-tenant).\n\nOperator-gated and read-only. Each row's ``state`` is derived from the live\ntick chain via :func:`derive_schedule_state`, so it reflects the real\npaused / active / activation-required lifecycle rather than a persisted guess.",
+        "description": "Schedule visibility with live-derived lifecycle state (cross-tenant).\n\nOperator-gated and read-only. Each row's ``state`` is derived from the live\ntick chain via :func:`derive_schedule_state`, so it reflects the real\npaused / active / activation-required / stalled lifecycle rather than a\npersisted guess.",
         "operationId": "internal_schedules_api_v1_internal_system_schedules_get",
         "parameters": [
           {
@@ -8660,6 +9205,41 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -8690,7 +9270,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -8838,6 +9432,84 @@
           "campaign-context",
           "audiences"
         ]
+      },
+      "patch": {
+        "operationId": "update_audiences_api_v1_workspaces__workspace_id__audiences__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudiencePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Audiences Api V1 Workspaces  Workspace Id  Audiences  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Audiences",
+        "tags": [
+          "campaign-context",
+          "audiences"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/audit-logs": {
@@ -8860,8 +9532,26 @@
             "schema": {
               "default": 100,
               "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -8895,7 +9585,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -8925,6 +9629,41 @@
             "schema": {
               "title": "Workspace Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -8958,7 +9697,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -9102,6 +9855,84 @@
           }
         },
         "summary": "Delete Brand-Voice",
+        "tags": [
+          "campaign-context",
+          "brand-voice"
+        ]
+      },
+      "patch": {
+        "operationId": "update_brand_voice_api_v1_workspaces__workspace_id__brand_voice__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandVoicePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Brand Voice Api V1 Workspaces  Workspace Id  Brand Voice  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Brand-Voice",
         "tags": [
           "campaign-context",
           "brand-voice"
@@ -9308,6 +10139,41 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -9338,7 +10204,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -9486,6 +10366,84 @@
           "campaign-context",
           "campaigns"
         ]
+      },
+      "patch": {
+        "operationId": "update_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Campaigns Api V1 Workspaces  Workspace Id  Campaigns  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Campaigns",
+        "tags": [
+          "campaign-context",
+          "campaigns"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/channel-preferences": {
@@ -9499,6 +10457,41 @@
             "schema": {
               "title": "Workspace Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -9532,7 +10525,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -9680,6 +10687,84 @@
           "campaign-context",
           "channels"
         ]
+      },
+      "patch": {
+        "operationId": "update_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelPrefPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Channel Preferences Api V1 Workspaces  Workspace Id  Channel Preferences  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Channel-Preferences",
+        "tags": [
+          "campaign-context",
+          "channels"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/claims": {
@@ -9693,6 +10778,41 @@
             "schema": {
               "title": "Workspace Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -9726,7 +10846,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -9874,6 +11008,84 @@
           "campaign-context",
           "claims"
         ]
+      },
+      "patch": {
+        "operationId": "update_claims_api_v1_workspaces__workspace_id__claims__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Claims Api V1 Workspaces  Workspace Id  Claims  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Claims",
+        "tags": [
+          "campaign-context",
+          "claims"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/competitors": {
@@ -9887,6 +11099,41 @@
             "schema": {
               "title": "Workspace Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -9920,7 +11167,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -10064,6 +11325,84 @@
           }
         },
         "summary": "Delete Competitors",
+        "tags": [
+          "campaign-context",
+          "competitors"
+        ]
+      },
+      "patch": {
+        "operationId": "update_competitors_api_v1_workspaces__workspace_id__competitors__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompetitorPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Competitors Api V1 Workspaces  Workspace Id  Competitors  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Competitors",
         "tags": [
           "campaign-context",
           "competitors"
@@ -10669,6 +12008,74 @@
         ]
       }
     },
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/deactivate": {
+      "post": {
+        "description": "Retire a location without deleting it or any of its history (P6-UI-023).\n\nSee :mod:`app.locations.service` for why this is a deactivation and what it stops.\nDeactivating an already-deactivated location changes nothing and answers 200.",
+        "operationId": "deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deactivate Location",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage": {
       "get": {
         "operationId": "get_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_get",
@@ -10811,6 +12218,74 @@
         ]
       }
     },
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/reactivate": {
+      "post": {
+        "description": "Return a deactivated location to service; a no-op (200) when already active.",
+        "operationId": "reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reactivate Location",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/offers": {
       "get": {
         "operationId": "list_offers_api_v1_workspaces__workspace_id__offers_get",
@@ -10822,6 +12297,41 @@
             "schema": {
               "title": "Workspace Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -10855,7 +12365,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -10999,6 +12523,84 @@
           }
         },
         "summary": "Delete Offers",
+        "tags": [
+          "campaign-context",
+          "offers"
+        ]
+      },
+      "patch": {
+        "operationId": "update_offers_api_v1_workspaces__workspace_id__offers__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfferPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Offers Api V1 Workspaces  Workspace Id  Offers  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Offers",
         "tags": [
           "campaign-context",
           "offers"
@@ -11248,6 +12850,13 @@
             "required": false,
             "schema": {
               "default": "priority",
+              "enum": [
+                "priority",
+                "opportunity",
+                "confidence",
+                "relevance",
+                "created"
+              ],
               "title": "Sort",
               "type": "string"
             }
@@ -11273,6 +12882,23 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -11305,7 +12931,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -11717,6 +13357,41 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -11747,7 +13422,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -11895,6 +13584,143 @@
           "campaign-context",
           "products"
         ]
+      },
+      "patch": {
+        "operationId": "update_products_api_v1_workspaces__workspace_id__products__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Products Api V1 Workspaces  Workspace Id  Products  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Products",
+        "tags": [
+          "campaign-context",
+          "products"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/scheduling-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective scheduling availability (P6-UI-006).\n\nThe mirror of ``GET /workspaces/{workspace_id}/feedback-capability`` (P6-UI-005):\none boolean, decided by the same resolver call the schedule mutation gate uses, so\nthe UI offers schedule controls exactly when the server will accept them.\n\nMember-gated rather than editor-gated, matching the schedule *read*: a view-only\nmember still sees a schedule, and the panel needs this answer to describe it\ntruthfully (an ``active`` row is reported as unavailable while the capability is\noff). It discloses nothing beyond that boolean for the caller's own workspace.\n\nAdvisory only, and deliberately not capability-gated (that would make it useless):\nthe mutation routes re-decide independently and answer 503 when unavailable.",
+        "operationId": "read_scheduling_capability_api_v1_workspaces__workspace_id__scheduling_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulingCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether scout scheduling is available for this workspace",
+        "tags": [
+          "scout-requests"
+        ]
       }
     },
     "/api/v1/workspaces/{workspace_id}/scout-requests": {
@@ -11927,6 +13753,41 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -11956,7 +13817,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -12537,7 +14412,7 @@
         ]
       },
       "get": {
-        "description": "Read the request's schedule. Any workspace member may read it.\n\nAvailable even while the feature is dark, so the UI can surface an existing\nrecord and its derived ``state`` (including ``activation_required``). Returns 404\nwhen the request has no schedule.",
+        "description": "Read the request's schedule. Any workspace member may read it.\n\nAvailable even while the capability is dark, so the UI can surface an existing\nrecord, its derived ``state`` (including ``activation_required`` and ``stalled``)\nand ``last_tick_failed_at``. Returns 404 when the request has no schedule.",
         "operationId": "get_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_get",
         "parameters": [
           {
@@ -12749,7 +14624,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/schedule/resume": {
       "post": {
-        "description": "Resume or activate the schedule, recomputing the next run from now.\n\nAlso the explicit activation for a schedule left in ``activation_required``.\nRe-enabling is subject to the four-active cap (409 when full); an already-running\nschedule is returned unchanged.",
+        "description": "Resume or activate the schedule, recomputing the next run from now.\n\nAlso the explicit activation for a schedule left in ``activation_required`` and\nthe restart for one left ``stalled`` by a failed tick. Re-enabling is subject to\nthe four-active cap (409 when full); an already-running schedule is returned\nunchanged.",
         "operationId": "resume_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_resume_post",
         "parameters": [
           {
@@ -12829,6 +14704,41 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -12859,7 +14769,21 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Total-Count": {
+                "description": "Rows matching the filters, independent of the page.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -13003,6 +14927,84 @@
           }
         },
         "summary": "Delete Source-Preferences",
+        "tags": [
+          "campaign-context",
+          "sources"
+        ]
+      },
+      "patch": {
+        "operationId": "update_source_preferences_api_v1_workspaces__workspace_id__source_preferences__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePrefPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Source Preferences Api V1 Workspaces  Workspace Id  Source Preferences  Item Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Source-Preferences",
         "tags": [
           "campaign-context",
           "sources"

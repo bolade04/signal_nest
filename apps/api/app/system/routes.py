@@ -45,12 +45,13 @@ class FeatureFlagsOut(BaseModel):
     values.
 
     They answer "is this flag on?", NOT "is this capability available to my
-    workspace?". For ``scout_scheduling`` and ``connector_rss`` those coincide,
-    because enforcement reads the raw flag. For ``opportunity_feedback`` they do
-    not: an honored workspace override outranks the flag, so this field can read
-    ``false`` while the feedback endpoints serve normally. The customer-facing,
-    workspace-effective answer lives on its own route,
-    ``GET /workspaces/{workspace_id}/feedback-capability``.
+    workspace?". Since P6-CAP-1 those differ for every capability: enforcement is the
+    capability resolver's per-workspace decision, in which a workspace override (or
+    the safety ceiling) outranks the flag. The customer-facing, workspace-effective
+    answers live on their own routes —
+    ``GET /workspaces/{workspace_id}/feedback-capability`` and
+    ``GET /workspaces/{workspace_id}/scheduling-capability`` — and the customer UI
+    reads those, not these.
     """
 
     #: The RAW global opportunity-feedback flag. It does NOT decide availability
@@ -60,16 +61,17 @@ class FeatureFlagsOut(BaseModel):
     #: ``GET /workspaces/{workspace_id}/feedback-capability`` (P6-UI-005).
     opportunity_feedback_enabled: bool
 
-    #: Whether scout scheduling is enabled server-side. While false the schedule
-    #: *mutation* endpoints answer 503 while the schedule *read* stays available,
-    #: so the UI keeps an existing schedule visible and withholds only the
-    #: mutation affordances.
+    #: The RAW global scout-scheduling flag. Since P6-CAP-1 it does NOT decide
+    #: availability for a workspace holding an honored override; the schedule panel
+    #: reads the workspace-effective reflection at
+    #: ``GET /workspaces/{workspace_id}/scheduling-capability`` instead (P6-UI-006).
     scout_scheduling_enabled: bool
 
-    #: Whether the RSS connector is enabled server-side. Reflected for parity
-    #: with the capability registry so a client can tell the capability is dark
-    #: without probing; reflection alone selects no connector and performs no
-    #: fetch.
+    #: The RAW global RSS-connector flag, reflected for parity with the capability
+    #: registry. Since P6-CAP-1 connector selection is the resolver's per-workspace
+    #: decision (a disable override or the ceiling can turn RSS off for one
+    #: workspace even while this reads ``true``); reflection alone selects no
+    #: connector and performs no fetch.
     connector_rss_enabled: bool
 
 
@@ -112,17 +114,17 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
     report = build_runtime_report(settings)
     return RuntimeSummaryOut(
         **report.to_summary_dict(),
-        # Raw global flags, one field per registered capability. Deliberately NOT
-        # resolver-derived, and this is settled rather than pending: scheduling
-        # enforcement reads the raw setting, so a per-workspace effective value
-        # here would not describe what the mutation endpoints actually do.
+        # Raw global flags, one field per registered capability (P6-CAP-2).
+        # Deliberately NOT resolver-derived: this endpoint has no workspace context,
+        # so it cannot express a per-workspace decision.
         #
-        # `P6-UI-005` shipped in 6U-1H and deliberately did NOT convert these
-        # fields. The customer workspace-effective feedback reflection lives on
-        # its own route (`GET /workspaces/{workspace_id}/feedback-capability`),
-        # precisely so this endpoint could keep raw-global meaning for a key the
-        # UI already consumes. Making scheduling resolver-backed is a different
-        # problem — `P6-UI-006` / `P6-CAP-1` — and remains open.
+        # Since P6-CAP-1 every capability *enforces* per workspace through the
+        # resolver, so these keys are no longer what any gate decides on. The
+        # customer UI reads the workspace-effective routes instead —
+        # `GET /workspaces/{workspace_id}/feedback-capability` (P6-UI-005) and
+        # `GET /workspaces/{workspace_id}/scheduling-capability` (P6-UI-006) — which
+        # share one resolver call site with their gates. These fields keep their
+        # raw-global meaning so no existing reader is silently repurposed.
         features=FeatureFlagsOut(
             opportunity_feedback_enabled=settings.opportunity_feedback_enabled,
             scout_scheduling_enabled=settings.scout_scheduling_enabled,

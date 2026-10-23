@@ -1,7 +1,8 @@
 """Scout request pipeline orchestration.
 
-Implements the Phase 2 job chain in-process (default). Full mode enqueues
-``run_scout_request`` onto Redis for the worker; the body is identical.
+Implements the Phase 2 job chain. A scout run is a durable ``scout_request.execute``
+job: the API enqueues it in the database job store and a worker runs :func:`_run`
+through the handler in :mod:`app.jobs.handlers`.
 
 Chain: ingest -> normalize -> classify -> dedupe/cluster -> noise filter ->
 relevance -> geo-relevance -> validate -> opportunity/confidence score -> decide ->
@@ -29,14 +30,12 @@ from app.core.enums import (
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
 from app.geography.markets import market_from_parts
-from app.infra.queue import register_job
-from app.infra.vector import cosine, embed_text
+from app.infra.vector import build_index, embed_text
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
 from app.intelligence.models import AnalysisInput, OpportunityCandidate
 from app.intelligence.persistence import attach_opportunity, persist_intelligence
 from app.jobs.context import ExecutionContext, JobContextError, scope_matches
-from app.jobs.contracts import unwrap
 from app.llm.base import LLMError
 from app.llm.service import llm_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -115,29 +114,6 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
     return cov, market
 
 
-@register_job("run_scout_request")
-def run_scout_request(payload: dict) -> dict:
-    """Job entrypoint.
-
-    Accepts either a versioned :class:`~app.jobs.contracts.JobEnvelope` mapping or the
-    legacy bare ``{"scout_request_id": ...}`` payload, so existing callers and in-flight
-    messages keep working while new callers carry an explicit tenant execution context.
-    """
-    from app.db.session import SessionLocal
-
-    context, body = unwrap(payload)
-    db = SessionLocal()
-    try:
-        result = _run(db, body["scout_request_id"], context)
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
 def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = None) -> dict:
     request = db.get(ScoutRequest, scout_request_id)
     if not request:
@@ -166,7 +142,14 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
-    connector = get_connector(source_types=request.source_types or [], market=market)
+    # P6-CAP-1: the request's own tenant scope decides RSS through the resolver.
+    connector = get_connector(
+        source_types=request.source_types or [],
+        market=market,
+        db=db,
+        organization_id=request.organization_id,
+        workspace_id=request.workspace_id,
+    )
     fixtures = connector.fetch(
         market=market,
         keywords=request.keywords or ctx.keywords,
@@ -175,7 +158,9 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
 
     scanned = len(fixtures)
     normalized: list[NormalizedSignal] = []
-    seen_embeddings: list[tuple[str, list[float]]] = []
+    # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
+    # index is the configured vector backend (P6-PLAT-1); there is no fallback.
+    kept_index = build_index()
     noise_filtered = 0
 
     for fx in fixtures:
@@ -214,10 +199,9 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         content_hash = hashlib.sha256(fx.content.strip().lower().encode()).hexdigest()[:64]
         embedding = embed_text(fx.content)
 
-        # Dedupe against already-seen signals in this request.
-        is_duplicate = any(
-            cosine(embedding, emb) >= DEDUPE_THRESHOLD for _, emb in seen_embeddings
-        )
+        # Dedupe against already-kept signals in this request.
+        nearest = kept_index.search(embedding, top_k=1)
+        is_duplicate = bool(nearest) and nearest[0][1] >= DEDUPE_THRESHOLD
 
         signal_type = None
         pain_dna = None
@@ -305,7 +289,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         if is_duplicate:
             continue
 
-        seen_embeddings.append((norm.id, embedding))
+        kept_index.add(norm.id, embedding)
         normalized.append(norm)
 
     # Cluster non-noise signals by pain-point DNA (simple, explainable clustering).

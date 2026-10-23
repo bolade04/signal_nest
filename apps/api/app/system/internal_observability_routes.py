@@ -52,7 +52,7 @@ from app.jobs.stuck import count_stuck, list_stuck
 from app.jobs.worker_registry import worker_registry
 from app.organizations.models import User
 from app.scouting_requests.models import ScoutSchedule
-from app.scouting_requests.schedules import derive_schedule_state
+from app.scouting_requests.schedules import derive_schedule_state, last_tick_failure
 
 router = APIRouter(prefix="/internal/system", tags=["internal"])
 
@@ -64,8 +64,10 @@ class ScheduleOperatorOut(BaseModel):
     """Operator view of one scouting schedule with its derived lifecycle state.
 
     ``state`` is computed live from the row plus the live tick chain
-    (:func:`derive_schedule_state`) so it can never drift from reality. Carries
-    only safe scope ids and lifecycle timestamps — never any secret.
+    (:func:`derive_schedule_state`) so it can never drift from reality. The
+    ``last_tick_*`` failure fields come from the same tick-job evidence
+    (:func:`last_tick_failure`, P6-PLAT-6). Carries only safe scope ids, lifecycle
+    timestamps and the stable job error classification — never any secret.
     """
 
     id: str
@@ -78,6 +80,11 @@ class ScheduleOperatorOut(BaseModel):
     state: ScheduleState
     next_run_at: datetime | None
     last_tick_at: datetime | None
+    #: When the most recently finished tick failed, else ``None`` (clears once a later
+    #: tick succeeds).
+    last_tick_failed_at: datetime | None
+    #: That failed tick's stable ``JobErrorCode`` value (e.g. ``timeout``), else ``None``.
+    last_tick_error_code: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -154,14 +161,16 @@ def _schedule_state_counts(db: Session) -> tuple[int, dict[str, int]]:
             select(ScoutSchedule).where(ScoutSchedule.enabled.is_(True))
         ).scalars()
     )
-    active = sum(
-        1 for s in enabled_rows if derive_schedule_state(db, s) is ScheduleState.ACTIVE
-    )
-    activation_required = len(enabled_rows) - active
+    derived = [derive_schedule_state(db, s) for s in enabled_rows]
     counts = {
         ScheduleState.PAUSED.value: paused,
-        ScheduleState.ACTIVE.value: active,
-        ScheduleState.ACTIVATION_REQUIRED.value: activation_required,
+        ScheduleState.ACTIVE.value: derived.count(ScheduleState.ACTIVE),
+        ScheduleState.ACTIVATION_REQUIRED.value: derived.count(
+            ScheduleState.ACTIVATION_REQUIRED
+        ),
+        # A recurring chain that a failed tick stopped (P6-PLAT-6): non-zero means a
+        # customer's schedule is not running and needs a resume.
+        ScheduleState.STALLED.value: derived.count(ScheduleState.STALLED),
     }
     return paused + len(enabled_rows), counts
 
@@ -370,7 +379,8 @@ def internal_schedules(
 
     Operator-gated and read-only. Each row's ``state`` is derived from the live
     tick chain via :func:`derive_schedule_state`, so it reflects the real
-    paused / active / activation-required lifecycle rather than a persisted guess.
+    paused / active / activation-required / stalled lifecycle rather than a
+    persisted guess.
     """
     base = select(ScoutSchedule)
     if workspace_id:
@@ -384,21 +394,25 @@ def internal_schedules(
             .offset(offset)
         ).scalars()
     )
-    items = [
-        ScheduleOperatorOut(
-            id=s.id,
-            organization_id=s.organization_id,
-            workspace_id=s.workspace_id,
-            location_id=s.location_id,
-            scout_request_id=s.scout_request_id,
-            interval=s.interval_enum(),
-            enabled=s.enabled,
-            state=derive_schedule_state(db, s),
-            next_run_at=s.next_run_at,
-            last_tick_at=s.last_tick_at,
-            created_at=s.created_at,
-            updated_at=s.updated_at,
-        )
-        for s in rows
-    ]
+    items = [_schedule_operator_out(db, s) for s in rows]
     return ScheduleFleetOut(total=total, limit=limit, offset=offset, items=items)
+
+
+def _schedule_operator_out(db: Session, s: ScoutSchedule) -> ScheduleOperatorOut:
+    failure = last_tick_failure(db, s)
+    return ScheduleOperatorOut(
+        id=s.id,
+        organization_id=s.organization_id,
+        workspace_id=s.workspace_id,
+        location_id=s.location_id,
+        scout_request_id=s.scout_request_id,
+        interval=s.interval_enum(),
+        enabled=s.enabled,
+        state=derive_schedule_state(db, s),
+        next_run_at=s.next_run_at,
+        last_tick_at=s.last_tick_at,
+        last_tick_failed_at=failure.failed_at if failure is not None else None,
+        last_tick_error_code=failure.error_code if failure is not None else None,
+        created_at=s.created_at,
+        updated_at=s.updated_at,
+    )

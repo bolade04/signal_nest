@@ -48,6 +48,7 @@ from app.organizations.models import User
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, SignalLocationEvidence
 from app.tests._auth2_support import live_bearer
+from app.tests._platform_support import pgvector_build
 
 API = get_settings().api_prefix
 
@@ -79,6 +80,7 @@ _PRODUCTION_STACK = {
     "storage_backend": "s3",
     "s3_bucket": "unused",
     "vector_backend": "pgvector",
+    "rate_limit_backend": "redis",
 }
 
 
@@ -90,7 +92,9 @@ def _settings(environment: str, **overrides) -> Settings:
     if environment == "production":
         kwargs |= _PRODUCTION_STACK
     kwargs.update(overrides)
-    return Settings(**kwargs)
+    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
+    with pgvector_build():
+        return Settings(**kwargs)
 
 
 class TestGeocoderSettings:

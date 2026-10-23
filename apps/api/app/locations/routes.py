@@ -16,6 +16,7 @@ from app.core.errors import (
 )
 from app.db.session import get_db
 from app.geography.geocoder import GeocodeFailure, GeocodingService, get_geocoding_service
+from app.locations import service as location_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.locations.schemas import (
     GeocodeRequest,
@@ -27,6 +28,15 @@ from app.locations.schemas import (
 )
 
 router = APIRouter(tags=["locations"])
+
+EDITORS = require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)
+
+
+def _get_scoped(db: Session, workspace_id: str, location_id: str) -> BusinessLocation:
+    location = db.get(BusinessLocation, location_id)
+    if not location or location.workspace_id != workspace_id:
+        raise NotFoundError("Location not found in this workspace.")
+    return location
 
 
 class GeocodeRateLimitedError(SignalNestError):
@@ -155,6 +165,58 @@ def update_location(
         setattr(location, key, value)
     db.add(location)
     db.flush()
+    return location
+
+
+def _record_lifecycle(
+    db: Session, ctx: TenantContext, location: BusinessLocation, action: str
+) -> None:
+    record_audit(
+        db,
+        organization_id=ctx.organization.id,
+        workspace_id=location.workspace_id,
+        actor_user_id=ctx.user.id,
+        action=action,
+        entity_type="business_location",
+        entity_id=location.id,
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/locations/{location_id}/deactivate",
+    response_model=LocationOut,
+)
+def deactivate_location(
+    workspace_id: str,
+    location_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> BusinessLocation:
+    """Retire a location without deleting it or any of its history (P6-UI-023).
+
+    See :mod:`app.locations.service` for why this is a deactivation and what it stops.
+    Deactivating an already-deactivated location changes nothing and answers 200.
+    """
+    location = _get_scoped(db, workspace_id, location_id)
+    if location_service.deactivate(db, location):
+        _record_lifecycle(db, ctx, location, "location.deactivated")
+    return location
+
+
+@router.post(
+    "/workspaces/{workspace_id}/locations/{location_id}/reactivate",
+    response_model=LocationOut,
+)
+def reactivate_location(
+    workspace_id: str,
+    location_id: str,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(EDITORS),
+) -> BusinessLocation:
+    """Return a deactivated location to service; a no-op (200) when already active."""
+    location = _get_scoped(db, workspace_id, location_id)
+    if location_service.reactivate(db, location):
+        _record_lifecycle(db, ctx, location, "location.reactivated")
     return location
 
 
