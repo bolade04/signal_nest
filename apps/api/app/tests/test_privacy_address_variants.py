@@ -28,10 +28,10 @@ upper-case spellings belong to two registrable addresses: ``ΣΣ`` is the upper 
 of ``σς``, ``IA`` of ``ia`` and ``ıa``, ``STRASSE`` of ``strasse`` and ``straße``, and ``JOSÉ``
 of ``josé`` and ``joſé``. When the product holds the other one (an account's e-mail or an
 invitation's address), such an occurrence is flagged and never exported or erased, for either
-twin. When it holds no twin, the occurrence is the subject's and is erased. Only a spelling
-without lower-case letters may relate through the upper case: one with a lower-case letter is the
-subject's only when its lower case is the subject's canonical form, so ``strasse@…`` and
-``Strasse@…`` are another person's address for ``straße`` (fix pass 7). **Registration's own
+twin. When it holds no twin, the occurrence is the subject's and is erased. Capital positions
+are ambiguous and lower-case positions exact (fix pass 8): ``Irmak@…`` relates to ``ırmak`` and
+``StraSSe@…`` to ``straße``, while ``strasse@…`` and ``Strasse@…`` are another person's address
+for ``straße`` (fix pass 7). **Registration's own
 domain
 mapping counts** (R5-2): ``privacy。example``, fullwidth and mathematical letters are the same
 domain to registration, so they are found too. A fullwidth ``＠`` is an explicit separator
@@ -63,10 +63,12 @@ from app.privacy.erasure import ERASED
 from app.privacy.matching import existing_addresses
 from app.privacy.verification import verify_subject_erased
 from app.tests._privacy_support import (
+    ALICE,
     API,
     BOB,
     CAROL,
     EMAIL,
+    ORG_A,
     ORG_B,
     PASSWORD,
     PrivacyEnv,
@@ -197,14 +199,15 @@ def _register(env: PrivacyEnv, address: str, *, verified: bool) -> tuple[str, st
     }
 
 
-def _plant_twin(env: PrivacyEnv, kind: str, address: str) -> None:
+def _plant_twin(env: PrivacyEnv, kind: str, address: str, *, by: str = BOB) -> None:
     """Make the product hold ``address``: as an (unverified) account, or as an invitation BOB
-    sends into organization B."""
+    sends into organization B (or ALICE into A)."""
     if kind == "account":
         _register(env, address, verified=False)
     elif kind == "invitation":
+        organization = ORG_B if by == BOB else ORG_A
         sent = env.client.post(
-            f"{API}/organizations/{ORG_B}/invitations", headers=env.auth(BOB),
+            f"{API}/organizations/{organization}/invitations", headers=env.auth(by),
             json={"email": address, "role": "viewer"},
         )
         assert sent.status_code == 201, sent.text
@@ -489,44 +492,97 @@ def test_a_single_holder_takes_the_shared_spelling_only_as_its_canonical_form(
         assert code == cli.EXIT_REVIEW
 
 
-#: (subject, the text BOB's audit record holds, the twin address, route). The coordinator's cases.
-#: "twin": an ordinary all-capitals spelling (or the subject's own lower case with a shared capital)
-#: is the subject's unless the product holds its twin. "none" (fix pass 7): a spelling with a
-#: lower-case letter whose lower case is not the subject's canonical form is another person's
-#: address, and is never touched, flagged or counted, with or without the twin.
+#: (subject, the text BOB's audit record holds, the twin address, outcome without a twin, outcome
+#: with one). "erased": the text is the subject's (exit 0). "flagged": a twin exists (exit 4).
+#: "left": a lower-case letter contradicts the subject, so it is another person's address, never
+#: touched or flagged (fix pass 7). "finding": the subject's, but an address without an ASCII run
+#: whose mixed casing the bounded request does not select (the R4-2 limit), so the verifier reports
+#: the copy left (exit 1). Capital positions are ambiguous, lower-case positions exact (fix pass 8),
+#: with every spelling of adversarial review r6 cap 196.
 TWINS = [
-    ("sales@privacy.example", "SALES@PRIVACY.EXAMPLE", "ſales@privacy.example", "twin"),
-    ("info@privacy.example", "INFO@privacy.example", "ınfo@privacy.example", "twin"),
-    ("josé@privacy.example", "JOSÉ@privacy.example", "joſé@privacy.example", "twin"),
-    ("иван@пример.рф", "ИВАН@пример.рф", "иᲀан@пример.рф", "twin"),
-    ("straße@privacy.example", "STRASSE@privacy.example", "strasse@privacy.example", "twin"),
-    ("strasse@privacy.example", "STRASSE@privacy.example", "straße@privacy.example", "twin"),
-    ("strasse@privacy.example", "Strasse@privacy.example", "straße@privacy.example", "twin"),
-    ("σσ@privacy.example", "ΣΣ@privacy.example", "σς@privacy.example", "twin"),
-    ("σς@privacy.example", "ΣΣ@privacy.example", "σσ@privacy.example", "twin"),
-    ("ia@privacy.example", "Ia@privacy.example", "ıa@privacy.example", "twin"),
-    ("straße@privacy.example", "strasse@privacy.example", "strasse@privacy.example", "none"),
-    ("straße@privacy.example", "Strasse@privacy.example", "strasse@privacy.example", "none"),
-    ("strasse@privacy.example", "Straße@privacy.example", "straße@privacy.example", "none"),
-    ("σσ@privacy.example", "σς@privacy.example", "σς@privacy.example", "none"),
-    ("σς@privacy.example", "Σσ@privacy.example", "σσ@privacy.example", "none"),
-    ("ia@privacy.example", "ıa@privacy.example", "ıa@privacy.example", "none"),
-    ("ıa@privacy.example", "Ia@privacy.example", "ia@privacy.example", "none"),
+    ("sales@privacy.example", "SALES@PRIVACY.EXAMPLE", "ſales@privacy.example", "erased",
+     "flagged"),
+    ("info@privacy.example", "INFO@privacy.example", "ınfo@privacy.example", "erased", "flagged"),
+    ("josé@privacy.example", "JOSÉ@privacy.example", "joſé@privacy.example", "erased", "flagged"),
+    ("иван@пример.рф", "ИВАН@пример.рф", "иᲀан@пример.рф", "erased", "flagged"),
+    ("straße@privacy.example", "STRASSE@privacy.example", "strasse@privacy.example", "erased",
+     "flagged"),
+    ("strasse@privacy.example", "STRASSE@privacy.example", "straße@privacy.example", "erased",
+     "flagged"),
+    ("strasse@privacy.example", "Strasse@privacy.example", "straße@privacy.example", "erased",
+     "flagged"),
+    ("σσ@privacy.example", "ΣΣ@privacy.example", "σς@privacy.example", "erased", "flagged"),
+    ("σς@privacy.example", "ΣΣ@privacy.example", "σσ@privacy.example", "erased", "flagged"),
+    ("ia@privacy.example", "Ia@privacy.example", "ıa@privacy.example", "erased", "flagged"),
+    ("ıa@privacy.example", "Ia@privacy.example", "ia@privacy.example", "erased", "flagged"),
+    # Review r6 cap 196: capitals that stand for the subject's letters, lower case exact.
+    ("ırmak@privacy.example", "Irmak@privacy.example", "irmak@privacy.example", "erased",
+     "flagged"),
+    ("irmak@privacy.example", "Irmak@privacy.example", "ırmak@privacy.example", "erased",
+     "flagged"),
+    ("ılgaz@privacy.example", "Ilgaz@privacy.example", "ilgaz@privacy.example", "erased",
+     "flagged"),
+    ("straße@privacy.example", "StraSSe@privacy.example", "strasse@privacy.example", "erased",
+     "flagged"),
+    ("strasse@privacy.example", "StraSSe@privacy.example", "straße@privacy.example", "erased",
+     "flagged"),
+    ("ſales@privacy.example", "Sales@privacy.example", "sales@privacy.example", "erased",
+     "flagged"),
+    ("ſales@privacy.example", "SaLES@privacy.example", "sales@privacy.example", "erased",
+     "flagged"),
+    ("σς@privacy.example", "σΣ@privacy.example", "σσ@privacy.example", "finding", "flagged"),
+    ("σσ@privacy.example", "σΣ@privacy.example", "σς@privacy.example", "finding", "flagged"),
+    # Contradictions: another person's address, with or without the twin.
+    ("straße@privacy.example", "strasse@privacy.example", "strasse@privacy.example", "left",
+     "left"),
+    ("straße@privacy.example", "Strasse@privacy.example", "strasse@privacy.example", "left",
+     "left"),
+    ("strasse@privacy.example", "Straße@privacy.example", "straße@privacy.example", "left",
+     "left"),
+    ("σσ@privacy.example", "σς@privacy.example", "σς@privacy.example", "left", "left"),
+    ("σς@privacy.example", "Σσ@privacy.example", "σσ@privacy.example", "left", "left"),
+    ("ia@privacy.example", "ıa@privacy.example", "ıa@privacy.example", "left", "left"),
+    ("ırmak@privacy.example", "irmak@privacy.example", "irmak@privacy.example", "left", "left"),
+    ("ſales@privacy.example", "saLES@privacy.example", "sales@privacy.example", "left", "left"),
 ]
-_TWIN_CASES = [(*t, kind) for t in TWINS for kind in TWIN_KINDS]
+_TWIN_CASES = [
+    (subject, text, twin, kind, alone if kind == "no-twin" else paired)
+    for subject, text, twin, alone, paired in TWINS
+    for kind in TWIN_KINDS
+]
+
+
+def _expect(row: dict, code: int, printed: dict, text: str, outcome: str) -> None:
+    """Assert ``outcome`` for BOB's audit record holding ``text``."""
+    flagged = {(f["table"], f["column"]) for f in printed["content_ambiguous"]}
+    found = {(f["table"], f["column"]) for f in printed["content_findings"]}
+    columns = {("audit_logs", "reason"), ("audit_logs", "new_state")}
+    if outcome == "erased":
+        assert (row["reason"], row["new_state"]) == (None, {"v": ERASED})
+        assert code == cli.EXIT_OK, printed
+        return
+    assert (row["reason"], row["new_state"]) == (f"Note: {text}", {"v": text})
+    if outcome == "left":
+        assert code == cli.EXIT_OK, printed
+        assert not found and not flagged, printed
+    elif outcome == "flagged":
+        assert code == cli.EXIT_REVIEW, printed
+        assert columns <= flagged, printed
+    else:
+        assert code == cli.EXIT_FINDINGS, printed
+        assert columns <= found, printed
 
 
 @pytest.mark.parametrize(
-    ("subject", "text", "twin", "route", "kind"),
+    ("subject", "text", "twin", "kind", "outcome"),
     _TWIN_CASES,
-    ids=[f"{s}-{text}-{kind}" for s, text, _, _, kind in _TWIN_CASES],
+    ids=[f"{s}-{text}-{kind}" for s, text, _, kind, _ in _TWIN_CASES],
 )
 def test_a_shared_letter_case_is_erased_unless_a_twin_exists(
-    env: PrivacyEnv, capsys, subject, text, twin, route, kind
+    env: PrivacyEnv, capsys, subject, text, twin, kind, outcome
 ):
-    """"twin" route: erased with the subject when the product holds no twin (exit 0); left and
-    flagged when an account or an invitation holds the twin (exit 4). "none" route: left, never
-    flagged, exit 0. The twin's own rows are never touched."""
+    """BOB's audit record holds the text; the verified subject deletes itself. The outcome is
+    the table's, and the twin's own rows are never touched."""
     uid, stored, headers = _register(env, subject, verified=True)
     _plant_twin(env, kind, twin)
     twin_rows = {"users": env.rows(User), "invitations": env.rows(OrganizationInvitation)}
@@ -547,19 +603,7 @@ def test_a_shared_letter_case_is_erased_unless_a_twin_exists(
     assert r.status_code == 200, r.text
     [row] = env.rows(AuditLog, AuditLog.id == "pl-twin")
     code = cli.main(["verify-account", "--user-id", uid, "--email", stored])
-    printed = json.loads(capsys.readouterr().out)
-    flagged = {(f["table"], f["column"]) for f in printed["content_ambiguous"]}
-    if route == "twin" and kind == "no-twin":
-        assert (row["reason"], row["new_state"]) == (None, {"v": ERASED})
-        assert code == cli.EXIT_OK, printed
-        return
-    assert (row["reason"], row["new_state"]) == (f"Note: {text}", {"v": text})
-    if route == "none":
-        assert code == cli.EXIT_OK, printed
-        assert printed["content_findings"] == [] and flagged == set()
-    else:
-        assert code == cli.EXIT_REVIEW, printed
-        assert {("audit_logs", "reason"), ("audit_logs", "new_state")} <= flagged
+    _expect(row, code, json.loads(capsys.readouterr().out), text, outcome)
     if kind != "no-twin":
         users = [u for u in twin_rows["users"] if u["email"] == twin]
         invitations = [i for i in twin_rows["invitations"] if i["email"] == twin]
@@ -568,6 +612,74 @@ def test_a_shared_letter_case_is_erased_unless_a_twin_exists(
             i for i in env.rows(OrganizationInvitation) if i["email"] == twin
         ]
         assert len(users) + len(invitations) == 1
+
+
+#: (holder, the spelling BOB invites into B, the twin, outcome without a twin, outcome with one)
+#: through the product's invitation writer (review r6 cap 196 B). The invitation is stored as
+#: typed, and its own canonical form is its letter-by-letter lower case (coordinator decision
+#: (a)): ``Irmak`` reads ``irmak``. So for ``ırmak`` the invitation is itself a twin and is
+#: flagged, never silent; for ``irmak`` it is taken unless the other twin exists. Registration
+#: stores ``Sales@`` as ``sales@`` (RFC 2142), another address than ``ſales@``. The sigma rows
+#: meet the bounded request (R4-2): the invitation is not selected in the request, and the
+#: verifier flags it or reports it as a finding.
+WRITER = [
+    ("ırmak@privacy.example", "Irmak@privacy.example", "irmak@privacy.example", "flagged",
+     "flagged"),
+    ("irmak@privacy.example", "Irmak@privacy.example", "ırmak@privacy.example", "taken",
+     "flagged"),
+    ("ılgaz@privacy.example", "Ilgaz@privacy.example", "ilgaz@privacy.example", "flagged",
+     "flagged"),
+    ("ilgaz@privacy.example", "Ilgaz@privacy.example", "ılgaz@privacy.example", "taken",
+     "flagged"),
+    ("straße@privacy.example", "StraSSe@privacy.example", "strasse@privacy.example", "flagged",
+     "flagged"),
+    ("strasse@privacy.example", "StraSSe@privacy.example", "straße@privacy.example", "taken",
+     "flagged"),
+    ("σς@privacy.example", "σΣ@privacy.example", "σσ@privacy.example", "flagged", "flagged"),
+    ("σσ@privacy.example", "σΣ@privacy.example", "σς@privacy.example", "finding", "flagged"),
+    ("ſales@privacy.example", "Sales@privacy.example", "sales@privacy.example", "left", "left"),
+    ("ſales@privacy.example", "SaLES@privacy.example", "sales@privacy.example", "left", "left"),
+]
+_WRITER_CASES = [
+    (holder, invited, twin, kind, alone if kind == "no-twin" else paired)
+    for holder, invited, twin, alone, paired in WRITER
+    for kind in TWIN_KINDS
+]
+
+
+@pytest.mark.parametrize(
+    ("holder", "invited", "twin", "kind", "outcome"),
+    _WRITER_CASES,
+    ids=[f"{h}-{i}-{k}" for h, i, _, k, _ in _WRITER_CASES],
+)
+def test_a_capitalised_invitation_follows_the_capital_rule(
+    env: PrivacyEnv, capsys, holder, invited, twin, kind, outcome
+):
+    uid, stored, headers = _register(env, holder, verified=True)
+    _plant_twin(env, kind, twin, by=ALICE)
+
+    invitation_id, record, export = _invite_export_delete(env, headers, invited)
+
+    exported = [i["id"] for i in export["invitations_received"]]
+    left = env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id)
+    [after] = env.rows(AuditLog, AuditLog.id == record["id"])
+    code = cli.main(["verify-account", "--user-id", uid, "--email", stored])
+    printed = json.loads(capsys.readouterr().out)
+    columns = {("organization_invitations", "email"), ("audit_logs", "new_state")}
+    if outcome == "taken":
+        assert (exported, left, after["new_state"]["email"]) == ([invitation_id], 0, ERASED)
+        assert code == cli.EXIT_OK, printed
+        return
+    assert (exported, left, after) == ([], 1, record)
+    if outcome == "flagged":
+        assert code == cli.EXIT_REVIEW, printed
+        assert columns <= {(f["table"], f["column"]) for f in printed["content_ambiguous"]}
+    elif outcome == "finding":
+        assert code == cli.EXIT_FINDINGS, printed
+        assert columns <= {(f["table"], f["column"]) for f in printed["content_findings"]}
+    else:
+        assert code == cli.EXIT_OK, printed
+        assert printed["content_findings"] == [] and printed["content_ambiguous"] == []
 
 
 def test_the_twin_lookup_selects_only_its_upper_case(env: PrivacyEnv):

@@ -400,47 +400,68 @@ def test_with_a_twin_a_shared_letter_case_stays_ambiguous(subject, text, twin):
     assert mention(f"Note: {twin}.", Subject(addresses=(subject,), existing=held)) is NONE
 
 
-#: (subject, spelling, route) for fix pass 7. "none": the spelling has a lower-case letter and
-#: its lower case is not the subject's canonical form, so it is another address. "twin": it relates
-#: through a shared letter case, and the twin rule decides. Both directions, mixed case included.
+#: (subject, spelling, route). Capital positions are ambiguous, lower-case positions are exact
+#: (fix pass 8; fix pass 7 related only all-capitals spellings). "none": a lower-case letter
+#: contradicts the subject, so it is another address. "twin": the spelling relates through a
+#: shared capital, and the twin rule decides. Both directions, mixed case included, and every
+#: spelling of adversarial review r6 cap 196.
 SPELLINGS = [
     ("straße@privacy.example", "strasse", "none"),
     ("straße@privacy.example", "Strasse", "none"),
-    ("straße@privacy.example", "sTRASSE", "none"),
+    ("straße@privacy.example", "sTRASSE", "twin"),
     ("straße@privacy.example", "STRASSE", "twin"),
+    ("straße@privacy.example", "StraSSe", "twin"),
     ("straße@privacy.example", "Straße", "twin"),
     ("strasse@privacy.example", "straße", "none"),
     ("strasse@privacy.example", "Straße", "none"),
     ("strasse@privacy.example", "STRASSE", "twin"),
     ("strasse@privacy.example", "Strasse", "twin"),
+    ("strasse@privacy.example", "StraSSe", "twin"),
     ("σσ@privacy.example", "σς", "none"),
     ("σσ@privacy.example", "Σς", "none"),
     ("σσ@privacy.example", "ΣΣ", "twin"),
     ("σσ@privacy.example", "Σσ", "twin"),
+    ("σσ@privacy.example", "σΣ", "twin"),
     ("σς@privacy.example", "σσ", "none"),
     ("σς@privacy.example", "Σσ", "none"),
     ("σς@privacy.example", "ΣΣ", "twin"),
     ("σς@privacy.example", "Σς", "twin"),
+    ("σς@privacy.example", "σΣ", "twin"),
     ("ia@privacy.example", "ıa", "none"),
     ("ia@privacy.example", "ıA", "none"),
     ("ia@privacy.example", "IA", "twin"),
     ("ia@privacy.example", "Ia", "twin"),
     ("ıa@privacy.example", "ia", "none"),
-    ("ıa@privacy.example", "Ia", "none"),
+    ("ıa@privacy.example", "Ia", "twin"),
     ("ıa@privacy.example", "IA", "twin"),
+    ("ırmak@privacy.example", "Irmak", "twin"),
+    ("ırmak@privacy.example", "irmak", "none"),
+    ("irmak@privacy.example", "Irmak", "twin"),
+    ("irmak@privacy.example", "ırmak", "none"),
+    ("ılgaz@privacy.example", "Ilgaz", "twin"),
+    ("ilgaz@privacy.example", "Ilgaz", "twin"),
+    ("ſales@privacy.example", "Sales", "twin"),
+    ("ſales@privacy.example", "SaLES", "twin"),
+    ("ſales@privacy.example", "sales", "none"),
+    ("ſales@privacy.example", "saLES", "none"),
+    ("sales@privacy.example", "Sales", "twin"),
+    ("sales@privacy.example", "ſales", "none"),
 ]
 _TWIN_OF = {
     "straße": "strasse", "strasse": "straße", "σσ": "σς", "σς": "σσ", "ia": "ıa", "ıa": "ia",
+    "ırmak": "irmak", "irmak": "ırmak", "ılgaz": "ilgaz", "ilgaz": "ılgaz",
+    "ſales": "sales", "sales": "ſales",
 }
 
 
 @pytest.mark.parametrize(("subject", "spelling", "route"), SPELLINGS)
-def test_a_spelling_with_a_lower_case_letter_is_decided_by_its_lower_case(
+def test_capital_positions_are_ambiguous_and_lower_case_positions_exact(
     subject, spelling, route
 ):
-    """Fix pass 7: only a spelling without any lower-case letter may relate to the subject through
-    a shared upper case; one with a lower-case letter is the subject's only when its lower case is
-    the subject's canonical form."""
+    """Fix pass 8 (adversarial review r6 R6-1): a spelling relates to the subject when every
+    lower-case letter is the subject's letter there and every capital is the upper case of the
+    subject's letter (or letters: ``ß`` is ``SS``) there. It is then the subject's unless a twin
+    exists; a contradicting lower-case letter makes it another address."""
     local, _, domain = subject.rpartition("@")
     twin = f"{_TWIN_OF[local]}@{domain}"
     text = f"Note: {spelling}@{domain}."
@@ -454,7 +475,9 @@ def test_a_spelling_with_a_lower_case_letter_is_decided_by_its_lower_case(
         mention(text, Subject(addresses=(subject,), existing=alone)),
         mention(text, Subject(addresses=(subject,), existing=paired)),
     ) == expected
-    assert same_address(f"{spelling}@{domain}", subject, alone) is (route == "twin")
+    # A stored value is read as registration stores it (it lower-cases the RFC 2142 role names).
+    if validate_email(f"{spelling}@{domain}", check_deliverability=False).local_part == spelling:
+        assert same_address(f"{spelling}@{domain}", subject, alone) is (route == "twin")
 
 
 def test_an_address_with_the_subjects_canonical_form_is_no_twin():

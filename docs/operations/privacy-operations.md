@@ -73,13 +73,17 @@ Rules the code enforces:
       `joſé`, `ſales`, `ınfo` and `иᲀан` too. The matcher computes which upper-case spellings
       Unicode lets two letters of different lower case share (`S`, `I`, `Σ`, `Μ`, Cyrillic `В`,
       `О`, `С`, `Т`, sequences such as `SS`, `FF`, `ST`).
-      - An occurrence relates to the account only through such a spelling when it is written
-        with one (other than the account's own exact spelling), or matches only the account's
-        upper case while holding no lower-case letter.
-      - A spelling with a lower-case letter is decided by its lower case: it is the account's
-        only when that lower case is the account's canonical form. So for `straße@…`, the
-        spellings `strasse@…` and `Strasse@…` are another person's address and are never
-        touched, while `STRASSE@…` relates to both (fix pass 7).
+      - **Capital positions are ambiguous, lower-case positions are exact** (fix pass 8). A
+        spelling relates to the account when every lower-case letter in it is the account's
+        letter at that position, and every capital is the upper case of the account's letter
+        (or letters) there. One letter's upper case may be longer (`ß` is `SS`), and `σ` and
+        `ς` share `Σ`.
+      - It relates only through such a shared spelling when it is written with one (other than
+        the account's own exact spelling), or when its lower case is another address's. For
+        `straße@…` that is `STRASSE@…` or `StraSSe@…`; for `ırmak@…`, `Irmak@…`; for `σς@…`,
+        `σΣ@…`; for `ſales@…`, `Sales@…` or `SaLES@…`.
+      - A spelling whose lower-case letters contradict the account is another person's address
+        and is never touched: for `straße@…`, `strasse@…` and `Strasse@…`.
       - Such an occurrence is `AMBIGUOUS` when a **twin** exists in the product when the
         deletion, export or verification runs: an account's e-mail or an invitation's address
         with the occurrence's upper case and another canonical form (NFC, lower-cased letter
@@ -94,6 +98,18 @@ Rules the code enforces:
         addresses, half at the same domain, select none.
       - The account's own exact spelling, a lower-case spelling, and capitals without such
         letters (`CAROL_X@…`) are `WHOLE` without a lookup.
+      - Recorded consequences of this rule (adversarial review r6):
+        - **R6-2.** The RFC 2142 role names (`info`, `marketing`, `sales`, `support`, `abuse`,
+          `noc`, `security`, `postmaster`, `hostmaster`, `usenet`, `news`, `webmaster`, `www`,
+          `uucp`, `ftp`) are one address to registration in any letter case: it stores
+          `SALES@x` as `sales@x`. The twin rule does not know that. For a verified `ſales@x` or
+          `ınfo@x`, with no `sales@x` or `info@x` account or invitation in the product, an
+          all-capitals `SALES@x` or `INFO@x` in text is taken as that account's and erased.
+        - **R6-3.** With no twin in the product, a spelling that relates through a shared
+          capital is the account's. For a verified `straße@x`, `STRASSE@x` is erased although
+          it is equally the upper case of `strasse@x`, a person who may exist only in text and
+          hold no account or invitation. This is over-erasure of that person's mention, by the
+          coordinator's rule; it is recorded for `D-PRIV-7` and the operator.
   - **Every form of the address is looked for:**
     - Unicode NFC and NFD;
     - another letter case, non-ASCII letters included (lower-cased; a letter case shared with

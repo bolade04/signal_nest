@@ -33,11 +33,14 @@ several forms:
     (:func:`shares_upper_case`):
     ``ΣΣ`` is the upper case of ``σσ`` and of ``σς``; ``IA`` of ``ia`` and ``ıa``; ``JOSÉ`` of
     ``josé`` and ``joſé``.
-  - An occurrence relates to the subject only through such a spelling when it is written with
-    one (other than the subject's exact spelling) or, holding no lower-case letter, matches only
-    the subject's upper case (:func:`_local_case`). A spelling with a lower-case letter is decided
-    by its lower case: ``strasse`` and ``Strasse`` are another address than ``straße`` (``NONE``),
-    while ``STRASSE`` relates to both (fix pass 7).
+  - Capital positions are ambiguous, lower-case positions are exact (fix pass 8). An occurrence
+    relates to the subject when it spells the subject letter by letter, each letter either
+    exactly or as its whole upper case (``ß`` as ``SS``; ``σ`` and ``ς`` both as ``Σ``):
+    :func:`_spells`. It relates only through a shared spelling when it is written with one
+    (other than the subject's exact spelling), or when its lower case is another address's:
+    ``STRASSE``, ``StraSSe`` for ``straße``, ``Irmak`` for ``ırmak``, ``σΣ`` for ``σς``
+    (:func:`_local_case`). A spelling whose lower-case letters contradict the subject is
+    another address (``NONE``): ``strasse`` and ``Strasse`` are never ``straße``.
   - Such an occurrence is ``AMBIGUOUS`` when a *twin* exists in the product: an account's e-mail
     or an invitation's address with the occurrence's upper case and another canonical form (NFC,
     lower-cased letter by letter, the domain as registration stores it). It is then never
@@ -216,23 +219,45 @@ def shares_upper_case(text: str) -> bool:
 def _local_case(written: str, own: str) -> Mention:
     """Whether a local part written in a text is the subject's own ``own`` (NFC both).
 
+    Capital positions are ambiguous, lower-case positions are exact (fix pass 8).
+
     ``WHOLE``: its exact spelling, or a letter case of it that no other registrable address
     shares. ``AMBIGUOUS``: a case it shares with another registrable address (``ΣΣ`` is the upper
-    case of both ``σσ`` and ``σς``), or, written without any lower-case letter, one that matches
-    only its upper case (``STRASSE`` for ``straße``); :func:`_twin_case` then decides with the
-    addresses the product holds. ``NONE``: neither. A spelling with a lower-case letter is decided
-    by its lower case, so ``strasse`` and ``Strasse`` are never ``straße`` (fix pass 7).
+    case of both ``σσ`` and ``σς``), or a spelling that :func:`_spells` relates to it although its
+    lower case is another address's (``STRASSE``, ``StraSSe`` or ``Irmak`` for ``straße`` and
+    ``ırmak``); :func:`_twin_case` then decides with the addresses the product holds. ``NONE``:
+    a spelling whose lower-case letters contradict it (``strasse`` and ``Strasse`` are never
+    ``straße``).
     """
     if written == own:
         return Mention.WHOLE
     same_lower = _lower(written) == _lower(own)
     if same_lower and not shares_upper_case(written):
         return Mention.WHOLE
-    if same_lower:
+    if same_lower or _spells(written, own):
         return Mention.AMBIGUOUS
     if _upper(written) == _upper(own) and not _has_lower_case(written):
         return Mention.AMBIGUOUS
     return Mention.NONE
+
+
+def _spells(written: str, own: str) -> bool:
+    """Whether ``written`` spells ``own`` letter by letter: each of ``own``'s letters (lower-cased)
+    is written either exactly as itself or as its whole upper case, which may be longer (``ß`` as
+    ``SS``) and is shared by the sigma forms (``σ`` and ``ς`` as ``Σ``). So every lower-case
+    letter written is ``own``'s letter there, and every capital is its upper case."""
+    reach = {0}
+    for letter in _lower(own):
+        image = letter.upper()
+        reach = {
+            start + len(form)
+            for start in reach
+            for form in {letter, image}
+            if written.startswith(form, start)
+        }
+        if not reach:
+            return False
+    return len(written) in reach
 
 
 def _has_lower_case(text: str) -> bool:
