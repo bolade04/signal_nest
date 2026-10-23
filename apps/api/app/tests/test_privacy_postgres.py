@@ -31,7 +31,7 @@ from app.organizations.models import User
 from app.privacy import retention
 from app.privacy.erasure import delete_account
 from app.privacy.inventory import RetentionClass
-from app.privacy.verification import verify_subject_erased
+from app.privacy.verification import verify_organization_erased, verify_subject_erased
 from app.tests._auth2_support import require_postgres
 from app.tests._privacy_support import (
     ALICE,
@@ -42,6 +42,7 @@ from app.tests._privacy_support import (
     ORG_A,
     ORG_B,
     PASSWORD,
+    WORKSPACES,
     PrivacyEnv,
     belongs_to,
     privacy_world,
@@ -89,6 +90,10 @@ def test_organization_deletion_on_postgres(env: PrivacyEnv):
     ]
     remaining = env.snapshot(belongs_to(ORG_A))
     assert {name for name, rows in remaining.items() if rows} == {"audit_logs"}
+    with env.session() as s:  # the full verification, content scan included, on PostgreSQL
+        assert verify_organization_erased(
+            s, organization_id=ORG_A, workspace_ids=WORKSPACES[ORG_A]
+        ).verified
 
 
 def test_the_verifier_searches_json_case_insensitively_on_postgres(env: PrivacyEnv):

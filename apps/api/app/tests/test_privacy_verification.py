@@ -10,11 +10,13 @@ while correctly anonymised ones are reported as retained and pass.
 The verifier reflects the live schema: a table the ORM does not know (created here with raw
 DDL) is checked too.
 
-The content scan matches an identifier only where it stands whole: the address at the end of a
-sentence or in angle brackets is a finding, while a longer address that contains it
-(``xcarol_x@…``) or extends its domain (``carol_x@….org``) belongs to someone else and is not.
-The operator command runs the full scan (references and content); the deletion routes run only
-the reference check (``content=False``).
+The content scan uses the deletion's own matcher (``app.privacy.matching``). A ``WHOLE`` mention
+is a finding: the address at the end of a sentence, in angle brackets, or after a JSON escape
+such as a newline (JSON is decoded first). An ``AMBIGUOUS`` one is not a finding but is
+reported under ``content_ambiguous`` with ``needs_review``. That covers a longer address that
+contains hers (``xcarol_x@…``) or extends its domain (``carol_x@….org``), and her own after
+``email=``. The operator command exits 4 for such a report. It runs the full scan (references
+and content); the deletion routes run only the reference check (``content=False``).
 """
 
 from __future__ import annotations
@@ -150,8 +152,9 @@ def test_each_planted_copy_is_found(carol_deleted: PrivacyEnv, plant, finding):
         (f"failed for <{EMAIL[CAROL]}>", True),
         (f"failed for x{EMAIL[CAROL]}", False),
         (f"failed for {EMAIL[CAROL]}.org", False),
+        (f"failed for email={EMAIL[CAROL]}", False),
     ],
-    ids=["end-of-sentence", "angle-brackets", "longer-local-part", "longer-domain"],
+    ids=["end-of-sentence", "angle-brackets", "longer-local-part", "longer-domain", "key-equals"],
 )
 def test_the_content_scan_matches_whole_addresses_only(carol_deleted: PrivacyEnv, value, found):
     with carol_deleted.engine.begin() as conn:
@@ -161,6 +164,38 @@ def test_the_content_scan_matches_whole_addresses_only(carol_deleted: PrivacyEnv
     report = _account_report(carol_deleted)
     assert (("jobs", "last_error_summary") in _findings(report)) is found, report.as_dict()
     assert report.verified is not found
+    # What is not a finding is still reported, never passed over in silence.
+    ambiguous = {(f.table, f.column) for f in report.content_ambiguous}
+    assert (("jobs", "last_error_summary") in ambiguous) is not found
+    assert report.needs_review is not found
+
+
+def test_a_json_escape_does_not_hide_a_whole_mention(carol_deleted: PrivacyEnv):
+    """In JSON text a newline is ``\\n``, so the raw text would read ``ncarol_x@…``, an
+    ambiguous neighbour. The verifier decodes JSON first, as the deletion reads it."""
+    with carol_deleted.engine.begin() as conn:
+        conn.execute(
+            update(Job.__table__).where(Job.id == "b1-job")
+            .values(result_summary={"note": f"line one\n{EMAIL[CAROL]}"})
+        )
+    report = _account_report(carol_deleted)
+    assert not report.verified
+    assert ("jobs", "result_summary") in _findings(report)
+
+
+def test_the_operator_command_asks_for_review_of_ambiguous_text(carol_deleted: PrivacyEnv, capsys):
+    with carol_deleted.engine.begin() as conn:
+        conn.execute(
+            update(Job.__table__).where(Job.id == "b1-job")
+            .values(last_error_summary=f"failed for users/{EMAIL[CAROL]}")
+        )
+    argv = ["verify-account", "--user-id", CAROL, "--email", EMAIL[CAROL]]
+    assert cli.main(argv) == cli.EXIT_REVIEW
+    printed = json.loads(capsys.readouterr().out)
+    assert (printed["verified"], printed["needs_review"]) == (True, True)
+    assert printed["content_ambiguous"] == [
+        {"table": "jobs", "column": "last_error_summary", "rows": 1}
+    ]
 
 
 def test_the_reference_check_alone_scans_no_content(carol_deleted: PrivacyEnv):

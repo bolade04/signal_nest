@@ -4,8 +4,10 @@ Phase-6 demonstration E10 ("A data-deletion request has been serviced end to end
 implemented mechanism") must be independently verifiable and may not rest on audit
 records, because audit coverage (``P6-PRIV-5``) is P1. So this module does not read the
 audit trail, does not read :mod:`app.privacy.inventory` and does not call
-:mod:`app.privacy.erasure`. It **reflects the live database schema** and asks the database
-two questions about the subject:
+:mod:`app.privacy.erasure`. It shares one thing with the deletion code, by design: the
+matcher (:mod:`app.privacy.matching`) that decides whether a text names the subject, so a
+record the deletion should have cleared can never pass as clean here. It **reflects the live
+database schema** and asks the database two questions about the subject:
 
 1. **References.** Every column that can point at the subject — any column with a foreign
    key to ``users.id`` / ``organizations.id`` / ``workspaces.id``, any column *named*
@@ -13,9 +15,14 @@ two questions about the subject:
    not), and the subject table's own ``id`` — is counted for the subject's ids.
 2. **Content.** Every text or JSON column of every table is scanned, case-insensitively,
    for the subject's identifiers (the account id and email address; or the organization
-   and workspace ids), so a copy left in free text or a JSON payload is found too. An
-   identifier counts only where it stands whole: a longer address that contains the
-   subject's (``xcarol@…``) or extends its domain (``carol@….au``) is someone else's.
+   and workspace ids), so a copy left in free text or a JSON payload is found too. A JSON
+   value is decoded and every string in it, object keys included, is judged as the deletion
+   judges it. A ``WHOLE`` mention is a finding. An ``AMBIGUOUS`` one is a text where some
+   registrable address could contain the identifier. That may be another person's address
+   (``xcarol@…``, ``o'carol@…``) or the subject's own in a context such as ``email=`` or
+   ``users/``. It is not a finding, and it is not passed over in silence either: it is
+   reported in ``content_ambiguous``, and :attr:`ErasureReport.needs_review` asks an
+   operator to look.
 
 A report is ``verified`` only when the content was scanned and both come back empty. The
 single declared exception is the organization's own audit records, which ``O-6`` keeps after
@@ -35,12 +42,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, MetaData, String, Table, Text, cast, func, inspect, or_, select
 from sqlalchemy.orm import Session
+
+from app.privacy.matching import Mention, Subject, mention, mention_in_json
 
 _SKIPPED_TABLES = frozenset({"alembic_version"})
 
@@ -66,6 +74,8 @@ class ErasureReport:
     content_columns_checked: int = 0
     reference_findings: list[Finding] = field(default_factory=list)
     content_findings: list[Finding] = field(default_factory=list)
+    #: Rows holding an identifier only where a registrable address could contain it.
+    content_ambiguous: list[Finding] = field(default_factory=list)
     retained_anonymised: list[Finding] = field(default_factory=list)
     generated_at: str = ""
 
@@ -78,10 +88,16 @@ class ErasureReport:
         """Both questions answered and empty. A report without the content scan never is."""
         return self.content_scanned and self.references_cleared and not self.content_findings
 
+    @property
+    def needs_review(self) -> bool:
+        """Ambiguous mentions remain: an operator decides whose they are."""
+        return bool(self.content_ambiguous)
+
     def as_dict(self) -> dict:
         out = asdict(self)
         out["references_cleared"] = self.references_cleared
         out["verified"] = self.verified
+        out["needs_review"] = self.needs_review
         return out
 
 
@@ -114,29 +130,22 @@ def _reference_columns(table: Table, target_table: str, names: tuple[str, ...]) 
     return list(dict.fromkeys(out))
 
 
+def _is_json(column) -> bool:
+    return isinstance(column.type, JSON) or column.type.__class__.__name__ in {"JSONB", "JSON"}
+
+
 def _is_text(column) -> bool:
-    return isinstance(column.type, String | JSON) or column.type.__class__.__name__ in {
-        "JSONB",
-        "JSON",
-    }
+    return isinstance(column.type, String) or _is_json(column)
 
 
-def _needles(value: str) -> tuple[str, ...]:
-    lowered = value.lower()
-    escaped = json.dumps(lowered)[1:-1]
-    return (lowered,) if escaped == lowered else (lowered, escaped)
-
-
-# Whole-identifier matching. Written here, not imported from the deletion code, so the
-# verifier keeps its own reading of what "contains the subject" means. Before the
-# identifier: no character of an address's local part (RFC 5322 atext and the dot, not the
-# apostrophe); after it: no domain-label character, and no dot starting another label.
-_BEFORE = r"(?<![A-Za-z0-9!#$%&*+/=?^_`{|}~.-])"
-_AFTER = r"(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9])"
-
-
-def _whole(needle: str) -> re.Pattern[str]:
-    return re.compile(_BEFORE + re.escape(needle) + _AFTER, re.IGNORECASE)
+def _mention(value: str, subject: Subject, *, as_json: bool) -> Mention:
+    """A JSON value is decoded first, so escapes cannot hide a boundary or forge one."""
+    if as_json:
+        try:
+            return mention_in_json(json.loads(value), subject)
+        except ValueError:
+            pass
+    return mention(value, subject)
 
 
 def _count(db: Session, table: Table, *where) -> int:
@@ -144,28 +153,32 @@ def _count(db: Session, table: Table, *where) -> int:
 
 
 def _content_findings(
-    db: Session, tables: list[Table], identifiers: list[str], *, skip: set[tuple[str, str]]
-) -> tuple[int, list[Finding]]:
-    needles = tuple(n for value in identifiers for n in _needles(value))
-    patterns = tuple(_whole(n) for n in needles)
-    checked, findings = 0, []
+    db: Session, tables: list[Table], subject: Subject, *, skip: set[tuple[str, str]]
+) -> tuple[int, list[Finding], list[Finding]]:
+    """Columns checked, ``WHOLE`` findings and ``AMBIGUOUS`` rows, per column."""
+    needles = subject.sql_needles()
+    checked, findings, ambiguous = 0, [], []
     for table in tables:
         for column in table.columns:
             if not _is_text(column) or (table.name, column.name) in skip:
                 continue
             checked += 1
-            # The database narrows to values that contain a needle; each is then read and
-            # counted only where an identifier stands whole.
+            # The database narrows to values that contain a needle; the shared matcher then
+            # decides, for each, whether it names the subject.
             text = func.lower(cast(column, Text))
             values = db.execute(
                 select(cast(column, Text))
                 .select_from(table)
                 .where(or_(*(text.contains(n, autoescape=True) for n in needles)))
             ).scalars()
-            rows = sum(1 for v in values if v and any(p.search(v) for p in patterns))
-            if rows:
-                findings.append(Finding(table.name, column.name, rows))
-    return checked, findings
+            mentions = [_mention(v, subject, as_json=_is_json(column)) for v in values if v]
+            whole = sum(1 for m in mentions if m is Mention.WHOLE)
+            unsure = sum(1 for m in mentions if m is Mention.AMBIGUOUS)
+            if whole:
+                findings.append(Finding(table.name, column.name, whole))
+            if unsure:
+                ambiguous.append(Finding(table.name, column.name, unsure))
+    return checked, findings, ambiguous
 
 
 def _stamp(report: ErasureReport, tables: list[Table]) -> ErasureReport:
@@ -198,10 +211,12 @@ def verify_subject_erased(
                 if rows:
                     report.reference_findings.append(Finding(table.name, column.name, rows))
     if content:
-        identifiers = [v for v in (user_id, email) if v]
-        report.content_columns_checked, report.content_findings = _content_findings(
-            db, tables, identifiers, skip=set()
-        )
+        subject = Subject(ids=(user_id,) if user_id else (), addresses=(email,) if email else ())
+        (
+            report.content_columns_checked,
+            report.content_findings,
+            report.content_ambiguous,
+        ) = _content_findings(db, tables, subject, skip=set())
     else:
         report.content_scanned = False
     return _stamp(report, tables)
@@ -270,9 +285,12 @@ def verify_organization_erased(
         if rows:
             report.reference_findings.append(Finding("audit_logs", "context", rows))
     if content:
-        report.content_columns_checked, report.content_findings = _content_findings(
-            db, tables, [organization_id, *workspace_ids], skip=skip
-        )
+        subject = Subject(ids=(organization_id, *workspace_ids))
+        (
+            report.content_columns_checked,
+            report.content_findings,
+            report.content_ambiguous,
+        ) = _content_findings(db, tables, subject, skip=skip)
     else:
         report.content_scanned = False
     return _stamp(report, tables)

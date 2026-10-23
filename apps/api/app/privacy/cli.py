@@ -7,10 +7,13 @@
     python -m app.privacy.cli erase-email --email ADDRESS --confirm
 
 Every command prints one JSON document to stdout and runs against the configured
-``DATABASE_URL``. Exit status: ``0`` success (and, for a verification, ``verified``);
-``1`` a verification found something; ``2`` the sweep met a class whose retention
-duration is not configured (nothing of that class was purged); ``3`` the request was
-refused (for example an account holds the email being erased).
+``DATABASE_URL``. Exit status: ``0`` success (and, for a verification, ``verified`` with
+nothing to review); ``1`` a verification found something; ``2`` the sweep met a class whose
+retention duration is not configured (nothing of that class was purged); ``3`` the request
+was refused (for example an account with that verified email exists); ``4`` a verification
+is ``verified`` but ``content_ambiguous`` lists text where some registrable address could
+contain the subject's identifier, so an operator must decide whose it is
+(:mod:`app.privacy.matching`).
 
 An address given on the command line can be visible to whoever can read the process
 list or the task definition's overrides; prefer running these where that is acceptable.
@@ -28,14 +31,24 @@ from app.db.session import SessionLocal
 from app.privacy import retention
 from app.privacy.erasure import erase_invitee_email
 from app.privacy.inventory import RetentionClass
-from app.privacy.verification import verify_organization_erased, verify_subject_erased
+from app.privacy.verification import (
+    ErasureReport,
+    verify_organization_erased,
+    verify_subject_erased,
+)
 
-EXIT_OK, EXIT_FINDINGS, EXIT_POLICY_UNSET, EXIT_REFUSED = 0, 1, 2, 3
+EXIT_OK, EXIT_FINDINGS, EXIT_POLICY_UNSET, EXIT_REFUSED, EXIT_REVIEW = 0, 1, 2, 3, 4
 
 
 def _print(document: object) -> None:
     json.dump(document, sys.stdout, indent=2, sort_keys=True, default=str)
     sys.stdout.write("\n")
+
+
+def _verdict(report: ErasureReport) -> int:
+    if not report.verified:
+        return EXIT_FINDINGS
+    return EXIT_REVIEW if report.needs_review else EXIT_OK
 
 
 def _sweep(args: argparse.Namespace) -> int:
@@ -49,14 +62,14 @@ def _verify_account(args: argparse.Namespace) -> int:
     with SessionLocal() as db:
         report = verify_subject_erased(db, user_id=args.user_id, email=args.email)
     _print(report.as_dict())
-    return EXIT_OK if report.verified else EXIT_FINDINGS
+    return _verdict(report)
 
 
 def _verify_email(args: argparse.Namespace) -> int:
     with SessionLocal() as db:
         report = verify_subject_erased(db, email=args.email)
     _print(report.as_dict())
-    return EXIT_OK if report.verified else EXIT_FINDINGS
+    return _verdict(report)
 
 
 def _verify_organization(args: argparse.Namespace) -> int:
@@ -65,7 +78,7 @@ def _verify_organization(args: argparse.Namespace) -> int:
             db, organization_id=args.organization_id, workspace_ids=tuple(args.workspace_id)
         )
     _print(report.as_dict())
-    return EXIT_OK if report.verified else EXIT_FINDINGS
+    return _verdict(report)
 
 
 def _erase_email(args: argparse.Namespace) -> int:
@@ -82,7 +95,7 @@ def _erase_email(args: argparse.Namespace) -> int:
         db.commit()
         report = verify_subject_erased(db, email=args.email)
     _print({"counts": counts.as_dict(), "verification": report.as_dict()})
-    return EXIT_OK if report.verified else EXIT_FINDINGS
+    return _verdict(report)
 
 
 def build_parser() -> argparse.ArgumentParser:

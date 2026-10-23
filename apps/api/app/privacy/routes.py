@@ -72,23 +72,25 @@ def _counts(counts: ErasureCounts) -> ErasureCountsOut:
 
 _PREVIEW_NOTE = {
     EmailScope.INCLUDED: (
-        "Your email address is verified, so invitations addressed to it and audit records "
-        "that name it will be erased too."
+        "Your email address is verified, so every invitation addressed to it and the audit "
+        "records that name it will be erased too."
     ),
     EmailScope.EXCLUDED_UNVERIFIED: (
-        "Your email address is not verified, so invitations addressed to it and audit records "
-        "that name it will not be erased: nothing proves the address is yours. Verify it "
-        "first to include them."
+        "Your email address is not verified. The invitations you accepted, and your address in "
+        "the records about them, will be erased; other invitations addressed to it and other "
+        "records that name it will not, because nothing proves the address is yours. Verify "
+        "it first to include them."
     ),
 }
 _RECEIPT_NOTE = {
     EmailScope.INCLUDED: (
-        "Your email address was verified, so invitations addressed to it and audit records "
-        "that named it were erased too."
+        "Your email address was verified, so every invitation addressed to it and the audit "
+        "records that named it were erased too."
     ),
     EmailScope.EXCLUDED_UNVERIFIED: (
-        "Your email address was not verified, so invitations addressed to it and audit "
-        "records that name it were not erased: nothing proved the address was yours."
+        "Your email address was not verified. The invitations you accepted, and your address "
+        "in the records about them, were erased; other invitations addressed to it and other "
+        "records that name it were not, because nothing proved the address was yours."
     ),
 }
 
@@ -152,9 +154,9 @@ def delete_my_account(
     The only OWNER of an organization that has other members is refused with 409
     ``account_deletion_sole_owner``. Organizations in which the account is the only
     member are deleted with it. On success every token of the account stops working,
-    because the account no longer exists. Invitations addressed to the account's email and
-    audit values naming it are erased only when the address is verified
-    (``email_keyed_data``).
+    because the account no longer exists. The invitations the account accepted are erased
+    with it; other invitations addressed to its email and other audit values naming it are
+    erased only when the address is verified (``email_keyed_data``).
     """
     result = erasure.delete_account(db, user=user, current_password=body.current_password)
     db.commit()
@@ -163,6 +165,7 @@ def delete_my_account(
         "privacy.account.deleted",
         outcome="success",
         user_id=result.user_id,
+        email_scope=result.email_scope.value,
         organizations_deleted=[o.organization_id for o in result.deleted_organizations],
         rows_deleted=sum(result.counts.deleted.values()),
     )

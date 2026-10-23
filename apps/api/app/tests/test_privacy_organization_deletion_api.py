@@ -36,7 +36,7 @@ from app.core.errors import PermissionDeniedError
 from app.jobs.models import Job
 from app.organizations.models import Organization, OrganizationMember, User
 from app.privacy import erasure, verification
-from app.privacy.verification import verify_organization_erased
+from app.privacy.verification import verify_organization_erased, verify_subject_erased
 from app.tests._privacy_support import (
     ALICE,
     API,
@@ -129,6 +129,8 @@ def test_a_member_left_without_organizations_can_still_delete_their_account(env:
         json={"current_password": PASSWORD, "confirmation": "DELETE"},
     )
     assert r.status_code == 200 and r.json()["verification"]["references_cleared"] is True
+    with env.session() as s:  # the operator's full verification agrees
+        assert verify_subject_erased(s, user_id=CAROL, email=EMAIL[CAROL]).verified
 
 
 @pytest.mark.parametrize(
@@ -200,6 +202,10 @@ def test_deleting_another_organization_by_its_own_owner_leaves_a_untouched(env: 
     )
     assert r.status_code == 200 and r.json()["verification"]["references_cleared"] is True
     assert env.snapshot(belongs_to(ORG_A)) == a_rows
+    with env.session() as s:  # the operator's full verification agrees
+        assert verify_organization_erased(
+            s, organization_id=ORG_C, workspace_ids=WORKSPACES[ORG_C]
+        ).verified
 
 
 def test_the_request_runs_no_content_scan(env: PrivacyEnv, monkeypatch):

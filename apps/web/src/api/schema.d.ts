@@ -21,9 +21,9 @@ export interface paths {
          *     The only OWNER of an organization that has other members is refused with 409
          *     ``account_deletion_sole_owner``. Organizations in which the account is the only
          *     member are deleted with it. On success every token of the account stops working,
-         *     because the account no longer exists. Invitations addressed to the account's email and
-         *     audit values naming it are erased only when the address is verified
-         *     (``email_keyed_data``).
+         *     because the account no longer exists. The invitations the account accepted are erased
+         *     with it; other invitations addressed to its email and other audit values naming it are
+         *     erased only when the address is verified (``email_keyed_data``).
          */
         post: operations["delete_my_account_api_v1_account_delete_post"];
         delete?: never;
@@ -2490,7 +2490,8 @@ export interface components {
          *     deletion, audit values naming it) are exported or erased with the account.
          *     ``excluded_unverified``: the address was never verified, so nothing proves it is the
          *     account's; that data is neither exported nor erased, because it may be another
-         *     person's. ``note`` says the same in words.
+         *     person's. The invitations the account accepted are bound to it by id and are exported
+         *     and erased in both cases. ``note`` says the same in words.
          */
         EmailKeyedDataOut: {
             /** Note */

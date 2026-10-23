@@ -88,6 +88,7 @@ from app.organizations.models import (
     OrganizationMember,
     Workspace,
 )
+from app.privacy.verification import verify_organization_erased
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 
 API = get_settings().api_prefix
@@ -1179,6 +1180,10 @@ class TestOrganizationPrivacy:
         )
         assert r.status_code == 200, r.text
         assert r.json()["verification"]["references_cleared"] is True
+        with sessionmaker(bind=world.witness)() as s:  # the full verification agrees
+            assert verify_organization_erased(
+                s, organization_id=org_id, workspace_ids=r.json()["workspace_ids"]
+            ).verified
         # The throwaway owner was never a member of A or B: both are intact.
         for t in (world.a, world.b):
             assert world.count(Workspace, organization_id=t.org_id) == workspaces[t.org_id]

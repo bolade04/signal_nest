@@ -52,7 +52,8 @@ class EmailKeyedDataOut(BaseModel):
     deletion, audit values naming it) are exported or erased with the account.
     ``excluded_unverified``: the address was never verified, so nothing proves it is the
     account's; that data is neither exported nor erased, because it may be another
-    person's. ``note`` says the same in words.
+    person's. The invitations the account accepted are bound to it by id and are exported
+    and erased in both cases. ``note`` says the same in words.
     """
 
     status: Literal["included", "excluded_unverified"]

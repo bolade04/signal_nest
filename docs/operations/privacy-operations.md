@@ -11,7 +11,7 @@ been executed against a deployed environment. Retention **durations** are undeci
 | An account holder who can sign in | Settings → Account → **Delete account** (current password, type `DELETE`); or `POST /api/v1/account/delete` | the receipt's reference check (`references_cleared: true`), then the operator's full verification (§2) |
 | An account holder who cannot sign in | password reset first, then the self-serve path (the operator never deletes an account on someone's word alone) | as above |
 | An organization (its OWNER) | Settings → **Delete organization** (current password, the organization's exact name); or `POST /api/v1/organizations/{id}/delete` | the receipt's reference check; keep `workspace_ids` for the operator's full verification (§2) |
-| A person with no account (an invitee) | operator: `python -m app.privacy.cli erase-email --email <address> --confirm` | the command's `verification` report |
+| A person with no account (an invitee), or the data an unverified, deleted account left under its address | operator, on out-of-band proof of the address: `python -m app.privacy.cli erase-email --email <address> --confirm` | the command's `verification` report |
 
 Rules the code enforces:
 
@@ -24,16 +24,32 @@ Rules the code enforces:
   `organization_jobs_active`); retry when the job ends.
 - **Members of a deleted organization** keep their accounts; they lose access to that
   organization only.
-- **Data found only by an email address** (invitations addressed to it, audit values naming
-  it) is erased with an account, and listed in its export, only when the account has
+- **Invitations the account accepted** are bound to it by id (`accepted_by_user_id`;
+  acceptance required its exact address). They are erased with it, and listed in its export,
+  whether or not the address is verified. Its address is also cleared from the audit records
+  about exactly those invitations. An account that joined by invitation stays unverified
+  until it verifies, so this is what keeps its address out of the organization it joined.
+- **Other data found only by an email address** (invitations addressed to it, audit values
+  naming it) is erased with an account, and listed in its export, only when the account has
   **verified** that address. Registration does not prove an address, and account identity is
   exact while these matches ignore letter case, so an unverified address may be another
-  person's. An unverified account is erased by its id alone; the preview, the receipt and the
-  export say so (`email_keyed_data`). To erase that data for a person whose account is gone,
-  prove the address out of band and run `erase-email` (refused while any account holds the
-  address in any letter case).
-- **Whole values only.** An audit value is erased when it holds the account's id or address as
-  a whole value, never because a longer address contains it (`xcarol@…`, `carol@….au`).
+  person's. An unverified account is erased by id (and by what it accepted), and the preview,
+  the receipt and the export say so (`email_keyed_data`). To erase that data for a person whose
+  account is gone, prove the address out of band and run `erase-email`. That command is refused
+  only while an account with a **verified** address holds it, in any letter case. An unverified
+  account holding it does not block it, and is reported by the command's own verification.
+- **Which occurrences are erased.** The deletion and the verifier share one matcher
+  (`app.privacy.matching`), judged by the product's own address grammar, the validator
+  registration uses. An occurrence of the address is `WHOLE` when no registrable address could
+  contain it: `mailto:a@b.co`, `<a@b.co>`, `"a@b.co"`, `(a@b.co)`, in capitals, or before a
+  sentence-ending dot. It is erased. It is `AMBIGUOUS` when one could. That includes other
+  people's addresses (`xa@b.co`, `o'a@b.co`, `ía@b.co`, `a@b.co.org`), and also the account's
+  own address after `email=`, `users/`, `#`, `{`, `|`, `'`, `’` or `«`, or before `.Word`,
+  because registration accepts all of those characters in an address. An ambiguous occurrence
+  is left, since erasing it could destroy another person's data, and the verifier reports it
+  (§2). Not found at all: a URL-encoded address (`a%40b.co`), and an address in a different
+  Unicode normalization form. JSON object keys are never rewritten, so a key that names the
+  account makes the verification fail.
 
 After a deletion, also: remove the address from the **SES account-level suppression list** if it
 is there (AWS-side, operator), and note the request in the operator's own request log.
@@ -43,8 +59,11 @@ is there (AWS-side, operator), and note the request in the operator's own reques
 E10 — "A data-deletion request has been serviced end to end by an implemented mechanism" — must
 be independently verifiable and must not rely on audit records (`P6-PRIV-5` is P1). The verifier
 (`app.privacy.verification`) reflects the **live schema** and reports every remaining reference
-to the subject and every text/JSON value that still contains its identifiers as a whole value.
-It does not read the audit trail, the inventory module or the deletion code.
+to the subject and every text/JSON value that still names it `WHOLE`, judged by the deletion's
+own matcher (§1; JSON is decoded first, keys included). It also lists, under
+`content_ambiguous`, every row with an `AMBIGUOUS` occurrence. It does not read the audit
+trail or the inventory module, and it does not call the deletion code. It shares only the
+matcher with it, so a record the deletion should have cleared can never pass as clean.
 
 A deletion request runs only the verifier's **reference check** before it answers (one equality
 count per column that can point at the subject; the receipt lists only rows that point at the
@@ -57,14 +76,34 @@ python -m app.privacy.cli verify-email --email <address>
 python -m app.privacy.cli verify-organization --organization-id <id> --workspace-id <id> ...
 ```
 
-Exit `0` = verified; `1` = findings (each names table, column and row count). The report carries
-the SHA-256 of the email, not the email, so it can be kept as evidence. For an organization, its
-audit records are reported under `retained_anonymised` (kept by `O-6`) and each must have every
-identifying column cleared, or it is a finding.
+Exit codes:
+- `0` = verified, nothing to review.
+- `1` = findings (each names table, column and row count).
+- `4` = verified, but `content_ambiguous` lists rows that may hold the subject's identifier in a
+  context the address grammar cannot attribute. An operator reads those rows and records whose
+  they are. Erase a row by hand only if it is the subject's.
 
-A recorded E10 demonstration needs, in an authorized environment: the request (self-serve), the
-receipt, an operator re-run of the verifier with exit `0`, and the time of each. None has been
-recorded yet.
+The report carries the SHA-256 of the email, not the email, so it can be kept as evidence. For an
+organization, its audit records are reported under `retained_anonymised` (kept by `O-6`), and
+each must have every identifying column cleared, or it is a finding.
+
+**Which run applies to an account deletion.** The receipt's `email_keyed_data.status` says it,
+and so does the `email_scope` field of the `privacy.account.deleted` log event.
+- `included`: run `verify-account --user-id <id> --email <address>`. Exit `0`, or `4` after
+  review, is the proof.
+- `excluded_unverified`: run `verify-account --user-id <id>` (exit `0` or `4`). With `--email`,
+  findings are expected: the address-keyed data that was deliberately left, such as an
+  invitation the account never accepted. They stay until `erase-email` (§1) on out-of-band
+  proof. Then `verify-account --user-id <id> --email <address>` exits `0` or `4`, or reports
+  only another account that holds the address.
+
+A recorded E10 demonstration needs, in an authorized environment:
+- the request (self-serve);
+- the receipt;
+- an operator re-run of the verifier with exit `0`, or exit `4` with the reviewed rows recorded;
+- the time of each.
+
+None has been recorded yet.
 
 ## 3. Retention purge
 

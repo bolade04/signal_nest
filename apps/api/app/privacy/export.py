@@ -7,9 +7,10 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   account-token history, invitations addressed to it, invitations it sent (without the
   invitee's address, which is someone else's data), feedback it submitted, capability
   overrides it set and the audit events it performed. No credential, token or digest.
-  Invitations are found by the account's email address, so they are listed only when that
-  address is verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says
-  which, in words.
+  The invitations it accepted are bound to it by id and always listed; the others addressed
+  to its email address are found by that address, so they are listed only when it is
+  verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says which, in
+  words.
 * **Organization export** — every table the inventory marks exported, restricted to the
   organization (by ``organization_id``, or by its workspaces for the tables that carry
   only ``workspace_id``), minus the columns the inventory excludes (token digests and
@@ -22,7 +23,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import Table, func, select
+from sqlalchemy import Table, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditLog
@@ -63,11 +64,12 @@ def _now() -> str:
 
 _EMAIL_KEYED_NOTE = {
     EmailScope.INCLUDED: (
-        "Your email address is verified, so invitations addressed to it are included."
+        "Your email address is verified, so every invitation addressed to it is included."
     ),
     EmailScope.EXCLUDED_UNVERIFIED: (
-        "Your email address is not verified, so invitations addressed to it are not included: "
-        "nothing proves the address is yours. Verify it, then download your data again."
+        "Your email address is not verified, so only the invitations you accepted are "
+        "included; other invitations addressed to it are not, because nothing proves the "
+        "address is yours. Verify it, then download your data again."
     ),
 }
 
@@ -144,11 +146,16 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
                 OrganizationInvitation.revoked_at,
             )
             .join(Organization, Organization.id == OrganizationInvitation.organization_id)
-            .where(func.lower(OrganizationInvitation.email) == email)
+            .where(
+                or_(
+                    OrganizationInvitation.accepted_by_user_id == uid,
+                    func.lower(OrganizationInvitation.email) == email,
+                )
+                if scope is EmailScope.INCLUDED
+                else OrganizationInvitation.accepted_by_user_id == uid
+            )
             .order_by(OrganizationInvitation.created_at, OrganizationInvitation.id),
-        )
-        if scope is EmailScope.INCLUDED
-        else [],
+        ),
         "invitations_sent": _rows(
             db,
             select(

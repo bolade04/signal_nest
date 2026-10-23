@@ -257,6 +257,11 @@ def test_owner_deletion_after_handing_over_deletes_her_sole_member_organization(
     assert deleted["organization_id"] == ORG_C
     assert deleted["workspace_ids"] == list(WORKSPACES[ORG_C])
     assert deleted["verification"]["references_cleared"] is True
+    with env.session() as s:  # the operator's full verification of both subjects agrees
+        assert verify_subject_erased(s, user_id=ALICE, email=EMAIL[ALICE]).verified
+        assert verify_organization_erased(
+            s, organization_id=ORG_C, workspace_ids=WORKSPACES[ORG_C]
+        ).verified
     assert deleted["verification"]["retained_anonymised"] == [
         {"table": "audit_logs", "column": "organization_id", "rows": 1}
     ]

@@ -1516,7 +1516,7 @@
         "type": "object"
       },
       "EmailKeyedDataOut": {
-        "description": "Whether data found only by the account's email address counts as the account's.\n\n``included``: the address is verified, so invitations addressed to it (and, for a\ndeletion, audit values naming it) are exported or erased with the account.\n``excluded_unverified``: the address was never verified, so nothing proves it is the\naccount's; that data is neither exported nor erased, because it may be another\nperson's. ``note`` says the same in words.",
+        "description": "Whether data found only by the account's email address counts as the account's.\n\n``included``: the address is verified, so invitations addressed to it (and, for a\ndeletion, audit values naming it) are exported or erased with the account.\n``excluded_unverified``: the address was never verified, so nothing proves it is the\naccount's; that data is neither exported nor erased, because it may be another\nperson's. The invitations the account accepted are bound to it by id and are exported\nand erased in both cases. ``note`` says the same in words.",
         "properties": {
           "note": {
             "title": "Note",
@@ -6571,7 +6571,7 @@
   "paths": {
     "/api/v1/account/delete": {
       "post": {
-        "description": "Delete the signed-in account and everything that is only its own.\n\nA wrong current password is 422 ``current_password_incorrect`` and changes nothing.\nThe only OWNER of an organization that has other members is refused with 409\n``account_deletion_sole_owner``. Organizations in which the account is the only\nmember are deleted with it. On success every token of the account stops working,\nbecause the account no longer exists. Invitations addressed to the account's email and\naudit values naming it are erased only when the address is verified\n(``email_keyed_data``).",
+        "description": "Delete the signed-in account and everything that is only its own.\n\nA wrong current password is 422 ``current_password_incorrect`` and changes nothing.\nThe only OWNER of an organization that has other members is refused with 409\n``account_deletion_sole_owner``. Organizations in which the account is the only\nmember are deleted with it. On success every token of the account stops working,\nbecause the account no longer exists. The invitations the account accepted are erased\nwith it; other invitations addressed to its email and other audit values naming it are\nerased only when the address is verified (``email_keyed_data``).",
         "operationId": "delete_my_account_api_v1_account_delete_post",
         "parameters": [
           {

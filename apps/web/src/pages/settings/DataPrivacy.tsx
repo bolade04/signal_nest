@@ -55,9 +55,10 @@ function failureMessage(error: unknown, fallback: string): string {
 }
 
 // The account's address is unverified, so the API leaves data found only by that address
-// (invitations addressed to it, audit records naming it): it may be another person's.
+// (invitations addressed to it that it did not accept, audit records naming it): it may be
+// another person's. Invitations the account accepted are its own by id and always go.
 const UNVERIFIED_EMAIL_COPY =
-  'Your email address is not verified, so invitations sent to it and records that name it will not be deleted. Verify your address first to include them.';
+  'Your email address is not verified. Invitations you accepted will be deleted with your account, but other invitations sent to it and other records that name it will not. Verify your address first to include them.';
 
 const IMPACT_COPY: Record<MembershipImpactOut['outcome'], (name: string) => string> = {
   membership_removed: (name) => `You will leave ${name}.`,
