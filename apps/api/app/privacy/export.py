@@ -41,7 +41,7 @@ from app.organizations.models import (
 )
 from app.privacy.erasure import EmailScope, email_scope
 from app.privacy.inventory import TABLES
-from app.privacy.matching import Subject, prefilter, same_address
+from app.privacy.matching import Subject, existing_addresses, prefilter, same_address
 
 EXPORT_SCHEMA_VERSION = 1
 ORGANIZATION_EXPORT_ROW_CAP = 5000
@@ -99,10 +99,11 @@ def _invitations_received(db: Session, *, user: User, scope: EmailScope) -> list
         .order_by(OrganizationInvitation.created_at, OrganizationInvitation.id)
     ).all()
     out = []
+    existing = existing_addresses(db)
     for row in rows:
         values = {k: _jsonable(v) for k, v in row._mapping.items()}
         addressed_to, accepted_by = values.pop("addressed_to"), values.pop("accepted_by")
-        if accepted_by == user.id or same_address(addressed_to, user.email):
+        if accepted_by == user.id or same_address(addressed_to, user.email, existing):
             out.append(values)
     return out
 

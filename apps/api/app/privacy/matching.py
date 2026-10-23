@@ -27,14 +27,22 @@ several forms:
   apart. Erasure and export still match an account's own address in another letter case, gated
   on its verification: a recorded engineering decision. Making account e-mail identity
   case-insensitive instead is left open as operator decisions packet row 5.1 (F2).
-- **A letter case shared with another account decides nothing** (reviews r5, R5-1).
+- **A letter case shared with another address decides only when that address exists** (reviews
+  r5 R5-1; coordinator decision, fix pass 6).
   - Some upper-case spellings are shared by letters of different lower case
     (:func:`shares_upper_case`):
     ``ΣΣ`` is the upper case of ``σσ`` and of ``σς``; ``IA`` of ``ia`` and ``ıa``; ``JOSÉ`` of
     ``josé`` and ``joſé``.
-  - An occurrence written with one of them is ``AMBIGUOUS`` (:func:`_local_case`), unless it is
-    the account's own exact spelling. So is one that matches only the account's upper case.
-  - Such an occurrence is never exported or erased for either twin.
+  - An occurrence relates to the subject only through such a spelling when it is written with
+    one (other than the subject's exact spelling) or matches only the subject's upper case
+    (:func:`_local_case`). It is ``AMBIGUOUS`` when a *twin* exists in the product: an account's
+    e-mail or an invitation's address with the occurrence's upper case and another canonical
+    form (NFC, lower-cased letter by letter, the domain as registration stores it). It is then
+    never exported or erased for either twin. When no twin exists, it is the subject's:
+    ``WHOLE`` (:func:`_twin_case`).
+  - The lookup (:func:`existing_addresses`) runs only for such an occurrence, once per spelling,
+    and selects with a ``LIKE`` pattern built from that upper case (:func:`_twin_pattern`).
+    Without a lookup (:attr:`Subject.existing` unset) every such occurrence stays ``AMBIGUOUS``.
 
 Two steps cover every form:
 
@@ -110,15 +118,18 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from enum import IntEnum
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Any
 from urllib.parse import quote, unquote
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import Text, and_, cast, func, or_, true
+from sqlalchemy import Text, and_, cast, func, or_, select, true
+from sqlalchemy.orm import Session
+
+from app.organizations.models import OrganizationInvitation, User
 
 #: How far the search for a longer address reaches on each side. These are search bounds, not
 #: validity rules: the validator accepts longer local parts than RFC 5321's 64 characters, but
@@ -205,7 +216,8 @@ def _local_case(written: str, own: str) -> Mention:
     ``WHOLE``: its exact spelling, or a letter case of it that no other registrable address
     shares. ``AMBIGUOUS``: a case it shares with another registrable address (``ΣΣ`` is the upper
     case of both ``σσ`` and ``σς``), or one that matches only its upper case (``straße`` for
-    ``strasse``): flagged, never taken for either twin. ``NONE``: neither.
+    ``strasse``); :func:`_twin_case` then decides with the addresses the product holds.
+    ``NONE``: neither.
     """
     if written == own:
         return Mention.WHOLE
@@ -215,6 +227,22 @@ def _local_case(written: str, own: str) -> Mention:
     if same_lower or _upper(written) == _upper(own):
         return Mention.AMBIGUOUS
     return Mention.NONE
+
+
+#: Looks up the local parts of the addresses the product holds (account e-mails, invitation
+#: addresses) whose letter-by-letter upper case is the first argument, at the domain given second.
+Existing = Callable[[str, str], frozenset[str]]
+
+
+def _twin_case(written: str, own: _Parts, existing: Existing | None) -> Mention:
+    """For an occurrence :func:`_local_case` calls ``AMBIGUOUS``: ``AMBIGUOUS`` if a twin exists,
+    an address the product holds with the occurrence's upper case and another canonical form
+    than ``own``; ``WHOLE`` if none does. Without a lookup, ``AMBIGUOUS``."""
+    if existing is None:
+        return Mention.AMBIGUOUS
+    canonical = _lower(own.local)
+    twins = [local for local in existing(_upper(written), own.domain) if _lower(local) != canonical]
+    return Mention.AMBIGUOUS if twins else Mention.WHOLE
 
 
 @dataclass(frozen=True)
@@ -330,6 +358,9 @@ class Subject:
 
     ids: tuple[str, ...] = ()
     addresses: tuple[str, ...] = ()
+    #: The product's addresses, for an occurrence related to an address only through a shared
+    #: letter case (:func:`existing_addresses`). ``None``: such an occurrence stays ``AMBIGUOUS``.
+    existing: Existing | None = field(default=None, compare=False, repr=False)
 
     def __bool__(self) -> bool:
         return bool(self.ids or self.addresses)
@@ -376,14 +407,104 @@ def prefilter(column: Any, subject: Subject, *, exhaustive: bool = False) -> Any
     return or_(*alternatives)
 
 
-def same_address(value: str | None, address: str) -> bool:
+def same_address(value: str | None, address: str, existing: Existing | None = None) -> bool:
     """Whether ``value`` is ``address`` itself: the same domain as registration stores it (NFC,
     case, U-/A-label, UTS46 spellings) and a local part :func:`_local_case` calls ``WHOLE``. A
-    letter case another registrable address shares is not enough (review r5 R5-1)."""
+    letter case another registrable address shares is enough only when no twin exists
+    (:func:`_twin_case`; review r5 R5-1, fix pass 6)."""
     if not value:
         return False
     theirs, ours = _parts(value.strip()), _parts(address)
-    return theirs.domain == ours.domain and _local_case(theirs.local, ours.local) is Mention.WHOLE
+    if theirs.domain != ours.domain:
+        return False
+    case = _local_case(theirs.local, ours.local)
+    if case is Mention.AMBIGUOUS:
+        case = _twin_case(theirs.local, ours, existing)
+    return case is Mention.WHOLE
+
+
+# --------------------------------------------------------------------------- #
+# The product's own addresses (twins of a shared letter case)
+# --------------------------------------------------------------------------- #
+@lru_cache(maxsize=1)
+def _upper_images() -> tuple[frozenset[str], tuple[str, ...]]:
+    """The ASCII characters a non-ASCII letter upper-cases to on its own (``ſ``→``S``,
+    ``ı``→``I``), and every upper-case image longer than one character (``ß``→``SS``,
+    ``ﬃ``→``FFI``, ``ŉ``→``ʼN``), from Unicode's own case mappings."""
+    single, multi = set(), set()
+    for code in range(0x110000):
+        letter = chr(code)
+        upper = letter.upper()
+        if len(upper) > 1:
+            multi.add(upper)
+        elif upper.isascii() and not letter.isascii():
+            single.add(upper)
+    return frozenset(single), tuple(sorted(multi))
+
+
+def _like_escape(text: str) -> str:
+    return re.sub(r"([\\%_])", r"\\\1", text)
+
+
+def _twin_pattern(upper_local: str) -> str:
+    """A ``LIKE`` pattern, in ASCII lower case, that every local part whose letter-by-letter upper
+    case is ``upper_local`` matches. A character inside an image longer than one character
+    (``SS``, ``ST``, ``FFI``) may come from one letter or several: any run. An ASCII character
+    no other letter upper-cases to is itself, in either case. Any other is exactly one
+    character."""
+    single, multi = _upper_images()
+    spanned = [False] * len(upper_local)
+    for image in multi:
+        start = upper_local.find(image)
+        while start != -1:
+            spanned[start : start + len(image)] = [True] * len(image)
+            start = upper_local.find(image, start + 1)
+    out: list[str] = []
+    for char, inside in zip(upper_local, spanned, strict=True):
+        if inside:
+            piece = "%"
+        elif char.isascii() and char not in single:
+            piece = _like_escape(char.lower())
+        else:
+            piece = "_"
+        if not (piece == "%" and out and out[-1] == "%"):
+            out.append(piece)
+    return "".join(out)
+
+
+def _domain_forms(domain: str) -> tuple[str, ...]:
+    """``domain`` as registration stores it (U-label) and as its IDNA A-label."""
+    try:
+        ascii_domain = validate_email(f"a@{domain}", check_deliverability=False).ascii_domain
+    except EmailNotValidError:
+        ascii_domain = None
+    return tuple(dict.fromkeys(d for d in (domain, ascii_domain) if d))
+
+
+def existing_addresses(db: Session) -> Existing:
+    """A lookup, for :attr:`Subject.existing`, of the addresses the product holds: every account's
+    e-mail and every invitation's address, in any state. Each distinct upper case is looked up
+    once, with a ``LIKE`` per column that only addresses of that upper case at that domain (and
+    few others) satisfy; Python then compares exactly."""
+    columns = (User.email, OrganizationInvitation.email)
+
+    @cache
+    def find(upper_local: str, domain: str) -> frozenset[str]:
+        local = _twin_pattern(upper_local)
+        patterns = [f"{local}@{_like_escape(_ascii_lower(d))}" for d in _domain_forms(domain)]
+        found: set[str] = set()
+        for column in columns:
+            text = func.lower(cast(column, Text))
+            values = db.execute(
+                select(column).where(or_(*(text.like(p, escape="\\") for p in patterns)))
+            ).scalars()
+            for value in values:
+                parts = _parts(value.strip())
+                if parts.domain == domain and _upper(parts.local) == upper_local:
+                    found.add(parts.local)
+        return frozenset(found)
+
+    return find
 
 
 # --------------------------------------------------------------------------- #
@@ -501,7 +622,7 @@ def _undecided(view: str, start: int, stop: int, domain: str) -> bool:
     return not (_DOMAIN_TOUCH.match(after[0]) or (after[0] == "." and after[1:].isalnum()))
 
 
-def _address_in_view(view: str, parts: _Parts) -> Mention:
+def _address_in_view(view: str, parts: _Parts, existing: Existing | None) -> Mention:
     best = Mention.NONE
     spans = {
         *_spans(view, _lower(parts.local), str.lower),
@@ -515,7 +636,9 @@ def _address_in_view(view: str, parts: _Parts) -> Mention:
             end = _domain_end(view, stop + 1, parts.domain)
             if end is not None:
                 found = _address_mention(view, start, end)
-                best = max(best, Mention.AMBIGUOUS if case is Mention.AMBIGUOUS else found)
+                if case is Mention.AMBIGUOUS and found is Mention.WHOLE:
+                    found = _twin_case(view[start:stop], parts, existing)
+                best = max(best, found)
                 if best is Mention.WHOLE:
                     return best
                 continue
@@ -537,7 +660,7 @@ def mention(text: str, subject: Subject) -> Mention:
     for address in subject.addresses:
         parts = _parts(address)
         for view in views:
-            best = max(best, _address_in_view(view, parts))
+            best = max(best, _address_in_view(view, parts, subject.existing))
             if best is Mention.WHOLE:
                 return best
     return best
@@ -566,6 +689,7 @@ __all__ = [
     "Subject",
     "address_forms",
     "encoded_forms",
+    "existing_addresses",
     "mention",
     "mention_in_json",
     "prefilter",

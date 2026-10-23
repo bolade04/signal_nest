@@ -23,10 +23,13 @@ Each case below plants one bystander audit record in organization B, holding the
 deletes itself, and the operator's full verification and its exit status are read. R3-1 also
 runs through the product's own invitation writer.
 
-**A shared upper case decides nothing** (reviews r5, R5-1). Some upper-case spellings belong to
-two accounts: ``ΣΣ`` is the upper case of ``σσ`` and of ``σς``, ``IA`` of ``ia`` and ``ıa``,
-``STRASSE`` of ``strasse`` and ``straße``, and ``JOSÉ`` of ``josé`` and ``joſé``. Such an
-occurrence is flagged and never exported or erased, for either twin. **Registration's own domain
+**A shared upper case decides only when a twin exists** (reviews r5 R5-1; fix pass 6). Some
+upper-case spellings belong to two registrable addresses: ``ΣΣ`` is the upper case of ``σσ`` and
+of ``σς``, ``IA`` of ``ia`` and ``ıa``, ``STRASSE`` of ``strasse`` and ``straße``, and ``JOSÉ``
+of ``josé`` and ``joſé``. When the product holds the other one (an account's e-mail or an
+invitation's address), such an occurrence is flagged and never exported or erased, for either
+twin. When it holds no twin, the occurrence is the subject's and is erased. **Registration's own
+domain
 mapping counts** (R5-2): ``privacy。example``, fullwidth and mathematical letters are the same
 domain to registration, so they are found too. A fullwidth ``＠`` is an explicit separator
 (R5-3).
@@ -48,12 +51,13 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 import pytest
-from sqlalchemy import insert, update
+from sqlalchemy import Text, cast, event, func, insert, select, update
 
 from app.audit.models import AuditLog
 from app.organizations.models import OrganizationInvitation, User
 from app.privacy import cli
 from app.privacy.erasure import ERASED
+from app.privacy.matching import existing_addresses
 from app.privacy.verification import verify_subject_erased
 from app.tests._privacy_support import (
     API,
@@ -105,15 +109,15 @@ def _subject(env: PrivacyEnv, who: str) -> tuple[str, str, dict[str, str], str]:
 CASES = [
     ("u7-url-encoded-at", "carol", f"Note: {_L}%40{_D}", "erased"),
     ("url-encoded-all", "jose", f"Note: {quote(JOSE, safe='')}", "erased"),
-    # JOSÉ is also the upper case of joſé, another registrable account: flagged (R5-1).
-    ("j2-non-ascii-capitals", "jose", f"Note: {JOSE.upper()}", "flagged"),
+    # JOSÉ is also the upper case of joſé; no joſé address exists here, so it is josé's (fix 6).
+    ("j2-non-ascii-capitals", "jose", f"Note: {JOSE.upper()}", "erased"),
     ("j3-nfd", "jose", f"Note: {unicodedata.normalize('NFD', JOSE)}", "erased"),
     ("i2-idna-a-label", "idn", "Note: carol@xn--exmple-cua.com", "erased"),
     ("idna-a-label-capitals", "idn", "Note: carol@XN--EXMPLE-CUA.COM", "erased"),
     ("i3-idn-capitals", "idn", "Note: carol@EXÄMPLE.COM", "erased"),
     ("json-escape-in-text", "jose", 'Note: {"email": "jos\\u00e9@privacy.example"}', "erased"),
     ("json-escape-capitals-in-text", "jose", 'Note: {"email": "JOS\\u00c9@privacy.example"}',
-     "flagged"),
+     "erased"),
     # Review r5 R5-2: domain spellings registration maps to the same domain (UTS46).
     ("ideographic-full-stop", "carol", f"Note: {_L}@privacy\u3002example", "erased"),
     ("fullwidth-full-stop", "carol", f"Note: {_L}@privacy\uff0eexample", "erased"),
@@ -170,13 +174,52 @@ def test_every_reachable_variant_is_erased_or_flagged(
     capsys.readouterr()
 
 
-def test_a_capitalised_non_ascii_invitation_is_flagged_not_taken(env: PrivacyEnv, capsys):
+def _register(env: PrivacyEnv, address: str, *, verified: bool) -> tuple[str, str, dict[str, str]]:
+    """(user id, stored address, bearer header) of a new account at ``address``."""
+    r = env.client.post(
+        f"{API}/auth/register",
+        json={"email": address, "full_name": "H", "password": "holder-pass-1",
+              "organization_name": f"Org {address}"},
+    )
+    assert r.status_code == 201, r.text
+    uid = r.json()["user"]["id"]
+    if verified:
+        with env.engine.begin() as conn:
+            conn.execute(
+                update(User.__table__).where(User.id == uid)
+                .values(email_verified_at=datetime.now(UTC))
+            )
+    return uid, r.json()["user"]["email"], {
+        "Authorization": f"Bearer {r.json()['access_token']}"
+    }
+
+
+def _plant_twin(env: PrivacyEnv, kind: str, address: str) -> None:
+    """Make the product hold ``address``: as an (unverified) account, or as an invitation BOB
+    sends into organization B."""
+    if kind == "account":
+        _register(env, address, verified=False)
+    elif kind == "invitation":
+        sent = env.client.post(
+            f"{API}/organizations/{ORG_B}/invitations", headers=env.auth(BOB),
+            json={"email": address, "role": "viewer"},
+        )
+        assert sent.status_code == 201, sent.text
+
+
+TWIN_KINDS = ["no-twin", "account", "invitation"]
+
+
+@pytest.mark.parametrize("twin", TWIN_KINDS)
+def test_a_capitalised_non_ascii_invitation_goes_with_its_owner_unless_a_twin_exists(
+    env: PrivacyEnv, capsys, twin
+):
     """Review r3 R3-1 through the product: BOB invites ``JOSÉ@…`` (the local part keeps its
-    case). It is no longer silent (review r3), and since review r5 it is not taken either:
-    ``JOSÉ`` is also the upper case of ``joſé``, another registrable account. So the verified
-    owner of ``josé@…`` neither deletes it nor erases its audit value, and the verification
-    flags both for review."""
+    case). ``JOSÉ`` is also the upper case of ``joſé``. With no ``joſé`` address in the product,
+    the invitation is the verified owner's of ``josé@…``: deleted, its audit value erased, exit 0
+    (fix pass 6). With a ``joſé`` account or invitation, it is left and both are flagged (r5)."""
     uid, address, headers, password = _subject(env, "jose")
+    _plant_twin(env, twin, "joſé@privacy.example")
     invited = env.client.post(
         f"{API}/organizations/{ORG_B}/invitations", headers=env.auth(BOB),
         json={"email": JOSE.upper(), "role": "viewer"},
@@ -192,14 +235,22 @@ def test_a_capitalised_non_ascii_invitation_is_flagged_not_taken(env: PrivacyEnv
     )
 
     assert r.status_code == 200, r.text
-    assert env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id) == 1
-    assert env.rows(AuditLog, AuditLog.id == record["id"]) == [record]
-    assert cli.main(["verify-account", "--user-id", uid, "--email", address]) == cli.EXIT_REVIEW
+    left = env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id)
+    [after] = env.rows(AuditLog, AuditLog.id == record["id"])
+    code = cli.main(["verify-account", "--user-id", uid, "--email", address])
     printed = json.loads(capsys.readouterr().out)
     assert printed["content_findings"] == []
-    assert {("organization_invitations", "email"), ("audit_logs", "new_state")} <= {
-        (f["table"], f["column"]) for f in printed["content_ambiguous"]
-    }
+    if twin == "no-twin":
+        assert left == 0
+        assert after["new_state"]["email"] == ERASED
+        assert code == cli.EXIT_OK
+    else:
+        assert left == 1
+        assert after == record
+        assert code == cli.EXIT_REVIEW
+        assert {("organization_invitations", "email"), ("audit_logs", "new_state")} <= {
+            (f["table"], f["column"]) for f in printed["content_ambiguous"]
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -308,8 +359,8 @@ def test_a_casing_the_bounded_request_misses_is_still_found_by_the_verifier(env:
     """The recorded limit of the bounded in-request filter: a mixed casing of a non-ASCII-only
     address (``иваН@…``) in a text column is not selected on SQLite, so the deletion leaves it. The
     operator's verification reads every row for such an address and reports it as a finding
-    (exit 1), never as verified. (``иВАН`` would be flagged instead: ``В`` is also the upper case
-    of ``ᲀ``, review r5.)"""
+    (exit 1), never as verified. (So is ``иВАН``: ``В`` is also the upper case of ``ᲀ``, but no
+    ``иᲀан`` address exists here, so it is the subject's; fix pass 6.)"""
     r = env.client.post(
         f"{API}/auth/register",
         json={"email": IVAN, "full_name": "I", "password": "ivan-pass-123",
@@ -345,39 +396,18 @@ def test_a_casing_the_bounded_request_misses_is_still_found_by_the_verifier(env:
 
 
 # --------------------------------------------------------------------------- #
-# A shared upper case decides nothing (reviews r5, R5-1)
+# A shared upper case decides only when a twin exists (reviews r5 R5-1; fix pass 6)
 # --------------------------------------------------------------------------- #
-#: (holder, the upper-case spelling BOB invites). Each spelling is the upper case of the holder's
-#: address AND of a distinct registrable twin (σσ/σς, ia/ıa, strasse/straße).
+#: (twin, twin, the upper-case spelling BOB invites): the spelling is the upper case of both.
 SHARED_UPPER = [
-    ("σσ@privacy.example", "ΣΣ@privacy.example"),
-    ("σς@privacy.example", "ΣΣ@privacy.example"),
-    ("ia@privacy.example", "IA@privacy.example"),
-    ("ıa@privacy.example", "IA@privacy.example"),
-    ("straße@privacy.example", "STRASSE@privacy.example"),
-    ("strasse@privacy.example", "STRASSE@privacy.example"),
+    ("σσ@privacy.example", "σς@privacy.example", "ΣΣ@privacy.example"),
+    ("ia@privacy.example", "ıa@privacy.example", "IA@privacy.example"),
+    ("strasse@privacy.example", "straße@privacy.example", "STRASSE@privacy.example"),
 ]
+_BOTH = [(a, b, i) for a, b, i in SHARED_UPPER] + [(b, a, i) for a, b, i in SHARED_UPPER]
 
 
-@pytest.mark.parametrize(
-    ("holder", "invited"), SHARED_UPPER, ids=[f"{h}-{i}" for h, i in SHARED_UPPER]
-)
-def test_a_shared_upper_case_is_flagged_and_never_taken(env: PrivacyEnv, capsys, holder, invited):
-    """Review r5 cap 170, both twins: neither exports or deletes B's invitation to the shared
-    upper-case spelling, neither erases B's audit value, and both verifications flag it."""
-    r = env.client.post(
-        f"{API}/auth/register",
-        json={"email": holder, "full_name": "H", "password": "holder-pass-1",
-              "organization_name": "H Org"},
-    )
-    assert r.status_code == 201, r.text
-    uid, headers = r.json()["user"]["id"], {"Authorization": f"Bearer {r.json()['access_token']}"}
-    stored = r.json()["user"]["email"]
-    with env.engine.begin() as conn:
-        conn.execute(
-            update(User.__table__).where(User.id == uid)
-            .values(email_verified_at=datetime.now(UTC))
-        )
+def _invite_export_delete(env: PrivacyEnv, headers: dict[str, str], invited: str):
     sent = env.client.post(
         f"{API}/organizations/{ORG_B}/invitations", headers=env.auth(BOB),
         json={"email": invited, "role": "viewer"},
@@ -385,15 +415,30 @@ def test_a_shared_upper_case_is_flagged_and_never_taken(env: PrivacyEnv, capsys,
     assert sent.status_code == 201, sent.text
     invitation_id = sent.json()["id"]
     [record] = [a for a in env.rows(AuditLog) if a["entity_id"] == invitation_id]
-
     export = env.client.get(f"{API}/account/export", headers=headers).json()
     deleted = env.client.post(
         f"{API}/account/delete", headers=headers,
         json={"current_password": "holder-pass-1", "confirmation": "DELETE"},
     )
+    assert deleted.status_code == 200, deleted.text
+    return invitation_id, record, export
+
+
+@pytest.mark.parametrize(
+    ("holder", "twin", "invited"), _BOTH, ids=[f"{h}-with-{t}" for h, t, _ in _BOTH]
+)
+def test_with_both_twins_present_neither_takes_the_shared_spelling(
+    env: PrivacyEnv, capsys, holder, twin, invited
+):
+    """Review r5 cap 170, both directions: both twins hold verified accounts. Neither exports or
+    deletes B's invitation to the shared upper-case spelling, neither erases B's audit value, and
+    each one's verification flags both."""
+    uid, stored, headers = _register(env, holder, verified=True)
+    _register(env, twin, verified=True)
+
+    invitation_id, record, export = _invite_export_delete(env, headers, invited)
 
     assert [i["id"] for i in export["invitations_received"]] == []
-    assert deleted.status_code == 200, deleted.text
     assert env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id) == 1
     assert env.rows(AuditLog, AuditLog.id == record["id"]) == [record]
     assert cli.main(["verify-account", "--user-id", uid, "--email", stored]) == cli.EXIT_REVIEW
@@ -401,6 +446,158 @@ def test_a_shared_upper_case_is_flagged_and_never_taken(env: PrivacyEnv, capsys,
     assert {("organization_invitations", "email"), ("audit_logs", "new_state")} <= {
         (f["table"], f["column"]) for f in printed["content_ambiguous"]
     }
+
+
+#: (the only holder, the spelling BOB invites, outcome). The stored spelling's own canonical form
+#: (lower-cased letter by letter: ``ΣΣ``→``σσ``, ``IA``→``ia``, ``STRASSE``→``strasse``) is one
+#: of the two twins. For that twin no other address exists, so the invitation is its own. For the
+#: other, the invitation itself is an address the product holds with another canonical form: a
+#: twin, so it is flagged, never taken.
+SINGLE_HOLDER = [
+    ("σσ@privacy.example", "ΣΣ@privacy.example", "taken"),
+    ("σς@privacy.example", "ΣΣ@privacy.example", "flagged"),
+    ("ia@privacy.example", "IA@privacy.example", "taken"),
+    ("ıa@privacy.example", "IA@privacy.example", "flagged"),
+    ("strasse@privacy.example", "STRASSE@privacy.example", "taken"),
+    ("straße@privacy.example", "STRASSE@privacy.example", "flagged"),
+]
+
+
+@pytest.mark.parametrize(
+    ("holder", "invited", "outcome"), SINGLE_HOLDER, ids=[h for h, _, _ in SINGLE_HOLDER]
+)
+def test_a_single_holder_takes_the_shared_spelling_only_as_its_canonical_form(
+    env: PrivacyEnv, capsys, holder, invited, outcome
+):
+    uid, stored, headers = _register(env, holder, verified=True)
+
+    invitation_id, record, export = _invite_export_delete(env, headers, invited)
+
+    exported = [i["id"] for i in export["invitations_received"]]
+    left = env.count(OrganizationInvitation, OrganizationInvitation.id == invitation_id)
+    [after] = env.rows(AuditLog, AuditLog.id == record["id"])
+    code = cli.main(["verify-account", "--user-id", uid, "--email", stored])
+    capsys.readouterr()
+    if outcome == "taken":
+        assert (exported, left, after["new_state"]["email"]) == ([invitation_id], 0, ERASED)
+        assert code == cli.EXIT_OK
+    else:
+        assert (exported, left, after) == ([], 1, record)
+        assert code == cli.EXIT_REVIEW
+
+
+#: (subject, the text BOB's audit record holds, the twin address). The coordinator's cases: an
+#: ordinary all-capitals spelling is the subject's unless the product holds its twin.
+TWINS = [
+    ("sales@privacy.example", "SALES@PRIVACY.EXAMPLE", "ſales@privacy.example"),
+    ("info@privacy.example", "INFO@privacy.example", "ınfo@privacy.example"),
+    ("josé@privacy.example", "JOSÉ@privacy.example", "joſé@privacy.example"),
+    ("иван@пример.рф", "ИВАН@пример.рф", "иᲀан@пример.рф"),
+    ("straße@privacy.example", "STRASSE@privacy.example", "strasse@privacy.example"),
+    ("strasse@privacy.example", "STRASSE@privacy.example", "straße@privacy.example"),
+    # The twin's own lower-case spelling matches the subject only through the upper case.
+    ("straße@privacy.example", "strasse@privacy.example", "strasse@privacy.example"),
+]
+_TWIN_CASES = [(*t, kind) for t in TWINS for kind in TWIN_KINDS]
+
+
+@pytest.mark.parametrize(
+    ("subject", "text", "twin", "kind"),
+    _TWIN_CASES,
+    ids=[f"{text}-{kind}" for _, text, _, kind in _TWIN_CASES],
+)
+def test_a_shared_letter_case_is_erased_unless_a_twin_exists(
+    env: PrivacyEnv, capsys, subject, text, twin, kind
+):
+    """Erased with the subject when the product holds no twin (exit 0); left and flagged when an
+    account or an invitation holds the twin (exit 4). The twin's own rows are never touched."""
+    uid, stored, headers = _register(env, subject, verified=True)
+    _plant_twin(env, kind, twin)
+    twin_rows = {"users": env.rows(User), "invitations": env.rows(OrganizationInvitation)}
+    with env.engine.begin() as conn:
+        conn.execute(
+            insert(AuditLog.__table__).values(
+                id="pl-twin", organization_id=ORG_B, actor_user_id=BOB,
+                action="note.created", entity_type="note", entity_id="n-twin",
+                reason=f"Note: {text}", new_state={"v": text}, context={},
+            )
+        )
+
+    r = env.client.post(
+        f"{API}/account/delete", headers=headers,
+        json={"current_password": "holder-pass-1", "confirmation": "DELETE"},
+    )
+
+    assert r.status_code == 200, r.text
+    [row] = env.rows(AuditLog, AuditLog.id == "pl-twin")
+    code = cli.main(["verify-account", "--user-id", uid, "--email", stored])
+    printed = json.loads(capsys.readouterr().out)
+    if kind == "no-twin":
+        assert (row["reason"], row["new_state"]) == (None, {"v": ERASED})
+        assert code == cli.EXIT_OK, printed
+    else:
+        assert (row["reason"], row["new_state"]) == (f"Note: {text}", {"v": text})
+        assert code == cli.EXIT_REVIEW, printed
+        assert {("audit_logs", "reason"), ("audit_logs", "new_state")} <= {
+            (f["table"], f["column"]) for f in printed["content_ambiguous"]
+        }
+        users = [u for u in twin_rows["users"] if u["email"] == twin]
+        invitations = [i for i in twin_rows["invitations"] if i["email"] == twin]
+        assert users == [u for u in env.rows(User) if u["email"] == twin]
+        assert invitations == [
+            i for i in env.rows(OrganizationInvitation) if i["email"] == twin
+        ]
+        assert len(users) + len(invitations) == 1
+
+
+def test_the_twin_lookup_selects_only_its_upper_case(env: PrivacyEnv):
+    """The lookup runs only for an occurrence related through a shared letter case, once per
+    spelling, and its ``LIKE`` selects the twins and few others: 20,000 unrelated invitations,
+    half of them at the subject's own domain, select none."""
+    with env.engine.begin() as conn:
+        conn.execute(
+            insert(OrganizationInvitation.__table__),
+            [
+                {
+                    "id": f"inv-noise-{n}", "organization_id": ORG_B,
+                    "email": f"user{n}@{'privacy.example' if n % 2 else 'other.example'}",
+                    "role": "viewer", "token_hash": f"noise-{n}",
+                    "expires_at": datetime(2099, 1, 1, tzinfo=UTC),
+                }
+                for n in range(20_000)
+            ],
+        )
+    _plant_twin(env, "invitation", "ſales@privacy.example")
+    _plant_twin(env, "account", "Sales@privacy.example")
+    statements: list[str] = []
+
+    def count(conn, cursor, statement, *args):
+        if "organization_invitations" in statement or "FROM users" in statement:
+            statements.append(statement)
+
+    event.listen(env.engine, "before_cursor_execute", count)
+    try:
+        with env.session() as s:
+            find = existing_addresses(s)
+            # The account registered as "Sales@" is stored as "sales@": email_validator
+            # lower-cases a few well-known mailbox names (RFC 2142), "sales" among them.
+            assert find("SALES", "privacy.example") == {"ſales", "sales"}
+            assert find("SALES", "privacy.example") == {"ſales", "sales"}  # cached
+            rows = sum(
+                s.execute(
+                    select(func.count()).select_from(table).where(
+                        func.lower(cast(column, Text)).like("_ale_@privacy.example", escape="\\")
+                    )
+                ).scalar_one()
+                for table, column in (
+                    (User.__table__, User.email),
+                    (OrganizationInvitation.__table__, OrganizationInvitation.email),
+                )
+            )
+    finally:
+        event.remove(env.engine, "before_cursor_execute", count)
+    assert len(statements) == 2 + 2  # one lookup per column, then the two counts above
+    assert rows == 2  # the two twins, of 20,000 noise rows at both domains
 
 
 def test_a_percent_encoded_copy_without_ascii_is_erased_in_the_request(env: PrivacyEnv, capsys):

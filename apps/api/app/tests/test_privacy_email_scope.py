@@ -506,12 +506,13 @@ def test_an_unverified_account_does_not_block_erase_email(env: PrivacyEnv, capsy
 
     # It runs; its own verification then reports, honestly, the one copy it does not touch:
     # the registrant's account, which holds the address in capitals. ``INVITEE`` could also be the
-    # upper case of another address (``I`` is ``ı``'s too), so it is flagged for review (review r5).
-    assert cli.main(["erase-email", "--email", INVITEE, "--confirm"]) == cli.EXIT_REVIEW
+    # upper case of another address (``I`` is ``ı``'s too), but the product holds none, so the copy
+    # is the address's own: a finding (reviews r5; fix pass 6).
+    assert cli.main(["erase-email", "--email", INVITEE, "--confirm"]) == cli.EXIT_FINDINGS
 
     printed = json.loads(capsys.readouterr().out)
     assert printed["counts"]["deleted"] == {"organization_invitations": 1}
-    assert printed["verification"]["content_ambiguous"] == [
+    assert printed["verification"]["content_findings"] == [
         {"table": "users", "column": "email", "rows": 1}
     ]
     assert env.count(OrganizationInvitation, OrganizationInvitation.email == INVITEE) == 0

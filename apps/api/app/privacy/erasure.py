@@ -65,7 +65,14 @@ from app.organizations.models import (
     User,
     Workspace,
 )
-from app.privacy.matching import Mention, Subject, mention, prefilter, same_address
+from app.privacy.matching import (
+    Mention,
+    Subject,
+    existing_addresses,
+    mention,
+    prefilter,
+    same_address,
+)
 
 #: Ids per statement. Well under SQLite's bound-parameter limit.
 CHUNK = 500
@@ -225,7 +232,11 @@ def anonymise_audit_for_subject(
     records changed, each counted once.
     """
     invitations = dict(invitations or {})
-    base = Subject(ids=(user_id,) if user_id else (), addresses=(email,) if email else ())
+    base = Subject(
+        ids=(user_id,) if user_id else (),
+        addresses=(email,) if email else (),
+        existing=existing_addresses(db),
+    )
     if not base and not invitations:
         return 0
     columns = (AuditLog.reason, AuditLog.previous_state, AuditLog.new_state, AuditLog.context)
@@ -260,7 +271,11 @@ def anonymise_audit_for_subject(
             and row.entity_type == _INVITATION_ENTITY
             and invitation.organization_id == row.organization_id
         ):
-            subject = Subject(ids=base.ids, addresses=(*base.addresses, invitation.email))
+            subject = Subject(
+                ids=base.ids,
+                addresses=(*base.addresses, invitation.email),
+                existing=base.existing,
+            )
         values: dict[str, Any] = {}
         if user_id and row.actor_user_id == user_id:
             values["actor_user_id"] = None
@@ -489,7 +504,8 @@ def _invitations_addressed_to(db: Session, email: str) -> list[str]:
             prefilter(OrganizationInvitation.email, Subject(addresses=(email,)))
         )
     ).all()
-    return [row.id for row in rows if same_address(row.email, email)]
+    existing = existing_addresses(db)
+    return [row.id for row in rows if same_address(row.email, email, existing)]
 
 
 def erase_invitations_addressed_to(db: Session, *, email: str) -> ErasureCounts:
@@ -586,8 +602,9 @@ def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
             prefilter(User.email, Subject(addresses=(email,))),
             User.email_verified_at.is_not(None),
         )
-    ).scalars()
-    if any(same_address(holder, email) for holder in holders):
+    ).scalars().all()
+    existing = existing_addresses(db)
+    if any(same_address(holder, email, existing) for holder in holders):
         raise ConflictError(
             "An account with this verified email address exists; delete the account instead.",
             code="erasure_account_exists",

@@ -66,24 +66,34 @@ Rules the code enforces:
       decision. The alternative, making account e-mail identity case-insensitive (`Kate` and
       `kate` one account; a migration and a sign-in change), is left open as operator
       decisions packet row 5.1 (F2).
-    - **A letter case shared with another account decides nothing.** Some upper-case spellings
-      belong to two accounts: `ΣΣ` is the upper case of `σσ` and of `σς`, `IA` of `ia` and
-      `ıa`, `STRASSE` of `strasse` and `straße`, `OFFICE` of `office` and `oﬃce`. The matcher
-      computes which upper-case spellings Unicode lets two letters of different lower case share
-      (`S`, `I`, `Σ`, `Μ`, Cyrillic `В`, `О`, `С`, `Т`, sequences such as `SS`, `FF`, `ST`).
-      - An occurrence written with one of them, other than the account's own exact spelling, is
-        `AMBIGUOUS`.
-      - So is a spelling that matches only the account's upper case.
-      - Such an occurrence is never exported or erased for either twin, and the verifier flags it
-        (exit 4).
-      - This also covers ordinary all-capitals spellings such as `JOSÉ@…`, `SALES@…`,
-        `INFO@…` or `ИВАН@…`, because `joſé`, `ſales`, `ınfo` and `иᲀан` are registrable too.
+    - **A letter case shared with another address decides only when that address exists.**
+      Some upper-case spellings belong to two registrable addresses: `ΣΣ` is the upper case of
+      `σσ` and of `σς`, `IA` of `ia` and `ıa`, `STRASSE` of `strasse` and `straße`, `OFFICE` of
+      `office` and `oﬃce`, and ordinary capitals such as `JOSÉ`, `SALES`, `INFO` or `ИВАН` of
+      `joſé`, `ſales`, `ınfo` and `иᲀан` too. The matcher computes which upper-case spellings
+      Unicode lets two letters of different lower case share (`S`, `I`, `Σ`, `Μ`, Cyrillic `В`,
+      `О`, `С`, `Т`, sequences such as `SS`, `FF`, `ST`).
+      - An occurrence relates to the account only through such a spelling when it is written
+        with one (other than the account's own exact spelling), or matches only the account's
+        upper case.
+      - Such an occurrence is `AMBIGUOUS` when a **twin** exists in the product when the
+        deletion, export or verification runs: an account's e-mail or an invitation's address
+        with the occurrence's upper case and another canonical form (NFC, lower-cased letter
+        by letter, the domain as registration stores it). It is then never exported or erased
+        for either twin, and the verifier flags it (exit 4).
+      - When no twin exists, it is the account's (`WHOLE`): erased, exported and counted.
+      - A stored spelling's canonical form is its own lower case: `ΣΣ` reads `σσ`, `IA` reads
+        `ia`, `STRASSE` reads `strasse`. So an invitation to `ΣΣ@…` with no other address is the
+        `σσ` account's; for a `σς` account it is itself a twin, and flagged.
+      - The lookup runs only for such an occurrence, once per spelling. It selects with a
+        `LIKE` pattern built from that upper case (`SALES` → `_ale_@domain`): 20,000 unrelated
+        addresses, half at the same domain, select none.
       - The account's own exact spelling, a lower-case spelling, and capitals without such
-        letters (`CAROL_X@…`) are `WHOLE`.
+        letters (`CAROL_X@…`) are `WHOLE` without a lookup.
   - **Every form of the address is looked for:**
     - Unicode NFC and NFD;
     - another letter case, non-ASCII letters included (lower-cased; a letter case shared with
-      another account is flagged, see above);
+      a twin the product holds is flagged, see above);
     - inside JSON `\uXXXX` escapes, up to three layers;
     - percent-encoded, one layer (also on top of each JSON layer);
     - with the domain as the IDNA A-label (`xn--…`), as the U-label, or in any spelling the
@@ -105,8 +115,8 @@ Rules the code enforces:
     ASCII address. It has a limit: other mixed casings of such an address (`иваН@…`) are not
     erased in the request on SQLite, nor in a JSON column on either engine. The operator's
     verification reads every row for such an address, so it reports any copy left as a
-    finding (exit 1), or flags it (exit 4) when the casing is shared with another account
-    (`иВАН@…`); it is never passed. For an address with an ASCII run, the filter also selects
+    finding (exit 1), or flags it (exit 4) when the casing is shared with a twin the product
+    holds (`иВАН@…` with an `иᲀан@…` address); it is never passed. For an address with an ASCII run, the filter also selects
     the local part followed by `@`, `%40`, `＠` or `﹫` (raw or JSON-escaped), so domain
     spellings without an ASCII fragment are read too.
   - Each occurrence is judged by the product's own address grammar, the validator registration
@@ -179,8 +189,8 @@ without `needs_review`:
 
 Exactly the texts described under "Not detected" in §1 pass unseen. Everything else is
 erased, reported as a finding (exit 1), or flagged (exit 4). That includes a letter case shared
-with another account, and a copy of an address without an ASCII fragment in a casing the request
-does not select (§1).
+with a twin the product holds, and a copy of an address without an ASCII fragment in a casing the
+request does not select (§1).
 
 A deletion request runs only the verifier's **reference check** before it answers (one equality
 count per column that can point at the subject; the receipt lists only rows that point at the

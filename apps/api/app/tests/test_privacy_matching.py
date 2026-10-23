@@ -26,6 +26,11 @@ subject's own in a context the grammar cannot tell apart from one.
   no form of the address, is undecided, so it is flagged. Mere co-occurrence is not (review r4).
 * **No folding joins two distinct addresses** (review r4). ``ß``/``ss``, ``ſ``/``s``, ``ﬃ``/``ffi``
   and ``ς``/``σ`` stay apart, as registration keeps them.
+* **A shared upper case decides only when a twin exists** (review r5; fix pass 6). Without a
+  lookup of the product's addresses such an occurrence is ``AMBIGUOUS``. With one, it is
+  ``AMBIGUOUS`` only if the product holds an address of that upper case with another canonical
+  form, and ``WHOLE`` otherwise. The lookup's ``LIKE`` pattern selects every spelling of an upper
+  case.
 * **Opaque ids** are whole unless an id character touches them.
 * **JSON** is judged string by string, object keys included.
 """
@@ -33,9 +38,11 @@ subject's own in a context the grammar cannot tell apart from one.
 from __future__ import annotations
 
 import json
+import sqlite3
 import unicodedata
 
 import pytest
+from email_validator import validate_email
 
 from app.auth.schemas import RegisterRequest
 from app.privacy.matching import (
@@ -49,6 +56,7 @@ from app.privacy.matching import (
     same_address,
     shares_upper_case,
 )
+from app.privacy.matching import _twin_pattern as twin_pattern
 from app.tests._privacy_support import CAROL, EMAIL
 
 E = EMAIL[CAROL]  # carol_x@privacy.example
@@ -296,7 +304,7 @@ def test_same_address_compares_every_form():
 
 
 # --------------------------------------------------------------------------- #
-# A shared upper case decides nothing (reviews r5, R5-1)
+# A shared upper case, without a lookup of the product's addresses (reviews r5, R5-1)
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     ("subject", "text"),
@@ -341,6 +349,125 @@ def test_the_shared_upper_case_spellings_are_the_unicode_ones():
     for single in ("K", "C", "A", "X", "Ẑ", "ẞ", "И"):
         assert not shares_upper_case(single), single
     assert not shares_upper_case("josé")  # lower case shares nothing
+
+
+# --------------------------------------------------------------------------- #
+# ... and with one: AMBIGUOUS only when a twin exists (fix pass 6)
+# --------------------------------------------------------------------------- #
+def _holding(*addresses: str):
+    """A stand-in for ``existing_addresses``: the product holds exactly ``addresses``."""
+
+    def find(upper_local: str, domain: str) -> frozenset[str]:
+        found = set()
+        for address in addresses:
+            local, _, at = address.rpartition("@")
+            if at == domain and "".join(c.upper() for c in local) == upper_local:
+                found.add(local)
+        return frozenset(found)
+
+    return find
+
+
+#: (subject, text, twin): the text's local part is the upper case of both addresses.
+TWINS = [
+    ("σσ@privacy.example", "ΣΣ@privacy.example", "σς@privacy.example"),
+    ("σς@privacy.example", "ΣΣ@privacy.example", "σσ@privacy.example"),
+    ("ia@privacy.example", "IA@privacy.example", "ıa@privacy.example"),
+    ("ıa@privacy.example", "IA@privacy.example", "ia@privacy.example"),
+    ("straße@privacy.example", "STRASSE@privacy.example", "strasse@privacy.example"),
+    ("strasse@privacy.example", "STRASSE@privacy.example", "straße@privacy.example"),
+    ("straße@privacy.example", "strasse@privacy.example", "strasse@privacy.example"),
+    ("oﬃce@privacy.example", "OFFICE@privacy.example", "office@privacy.example"),
+    ("office@privacy.example", "OFFICE@privacy.example", "oﬃce@privacy.example"),
+    (JOSE, "JOSÉ@privacy.example", "joſé@privacy.example"),
+    ("sales@privacy.example", "SALES@privacy.example", "ſales@privacy.example"),
+    ("иван@пример.рф", "ИВАН@пример.рф", "иᲀан@пример.рф"),
+]
+
+
+@pytest.mark.parametrize(("subject", "text", "twin"), TWINS)
+def test_without_a_twin_a_shared_letter_case_is_the_subjects(subject, text, twin):
+    held = _holding(subject, "bob@privacy.example")
+    assert mention(f"Note: {text}.", Subject(addresses=(subject,), existing=held)) is WHOLE
+    assert same_address(text, subject, held)
+
+
+@pytest.mark.parametrize(("subject", "text", "twin"), TWINS)
+def test_with_a_twin_a_shared_letter_case_stays_ambiguous(subject, text, twin):
+    held = _holding(subject, twin)
+    assert mention(f"Note: {text}.", Subject(addresses=(subject,), existing=held)) is AMBIGUOUS
+    # Registration lower-cases a few well-known mailbox names (RFC 2142), so it stores SALES@ as
+    # sales@, the subject's own address; every other spelling here it keeps as written.
+    stored = validate_email(text, check_deliverability=False).normalized
+    assert same_address(text, subject, held) is (stored == subject)
+    # The twin's own exact spelling is never the subject's, with or without the lookup.
+    assert mention(f"Note: {twin}.", Subject(addresses=(subject,), existing=held)) is AMBIGUOUS
+
+
+def test_an_address_with_the_subjects_canonical_form_is_no_twin():
+    """Another account at the subject's address in another letter case (the recorded policy,
+    decisions packet row 5.1) is not a twin: its canonical form is the subject's."""
+    held = _holding(JOSE, "JOSÉ@privacy.example", "José@privacy.example")
+    assert mention("Note: JOSÉ@privacy.example.", Subject(addresses=(JOSE,), existing=held)) is (
+        WHOLE
+    )
+
+
+def test_the_lookup_runs_only_for_a_shared_letter_case():
+    asked: list[tuple[str, str]] = []
+
+    def find(upper_local: str, domain: str) -> frozenset[str]:
+        asked.append((upper_local, domain))
+        return frozenset()
+
+    subject = Subject(addresses=(E, "sales@privacy.example"), existing=find)
+    for text in (f"Note: {E}", "Note: CAROL_X@PRIVACY.EXAMPLE", "Note: xcarol_x@privacy.example"):
+        mention(text, subject)
+    assert asked == []
+    assert mention("Note: SALES@privacy.example", subject) is WHOLE
+    assert asked == [("SALES", "privacy.example")]
+
+
+def _like(value: str, pattern: str) -> bool:
+    """SQL ``lower(value) LIKE pattern ESCAPE '\\'``, as SQLite evaluates it."""
+    with sqlite3.connect(":memory:") as conn:
+        row = conn.execute("SELECT lower(?) LIKE ? ESCAPE '\\'", (value, pattern)).fetchone()
+    return row[0] == 1
+
+
+@pytest.mark.parametrize(
+    ("upper_local", "spellings"),
+    [
+        ("SALES", ["sales", "ſales", "SALES", "Sales", "ſaleſ"]),
+        ("IA", ["ia", "ıa", "IA"]),
+        ("ΣΣ", ["σσ", "σς", "ΣΣ", "Σς"]),
+        ("STRASSE", ["strasse", "straße", "STRASSE", "ſtraße", "ﬆrasse", "ﬅraße"]),
+        ("OFFICE", ["office", "oﬃce", "oﬀice", "OFFICE"]),
+        ("JOSÉ", ["josé", "joſé", "JOSÉ"]),
+        ("ИВАН", ["иван", "иᲀан", "ИВАН"]),
+        ("CAROL_X", ["carol_x", "CAROL_X", "Carol_X"]),
+        ("A%B_C", ["a%b_c", "A%B_C"]),
+    ],
+)
+def test_the_twin_pattern_selects_every_spelling_of_that_upper_case(upper_local, spellings):
+    pattern = twin_pattern(upper_local) + "@privacy.example"
+    for spelling in spellings:
+        assert "".join(c.upper() for c in spelling) == upper_local, spelling
+        assert _like(f"{spelling}@privacy.example", pattern), (spelling, pattern)
+
+
+@pytest.mark.parametrize(
+    ("upper_local", "other"),
+    [
+        ("SALES", "sale"),
+        ("SALES", "xsales"),
+        ("CAROL_X", "carolxx"),  # "_" is escaped: no wildcard
+        ("A%B_C", "aXbYc"),
+        ("IA", "iaa"),
+    ],
+)
+def test_the_twin_pattern_leaves_other_local_parts_out(upper_local, other):
+    assert not _like(f"{other}@privacy.example", twin_pattern(upper_local) + "@privacy.example")
 
 
 @pytest.mark.parametrize(

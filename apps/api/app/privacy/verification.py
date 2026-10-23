@@ -48,7 +48,14 @@ from datetime import UTC, datetime
 from sqlalchemy import JSON, MetaData, String, Table, Text, cast, func, inspect, select
 from sqlalchemy.orm import Session
 
-from app.privacy.matching import Mention, Subject, mention, mention_in_json, prefilter
+from app.privacy.matching import (
+    Mention,
+    Subject,
+    existing_addresses,
+    mention,
+    mention_in_json,
+    prefilter,
+)
 
 _SKIPPED_TABLES = frozenset({"alembic_version"})
 
@@ -169,7 +176,7 @@ def _content_findings(
                 select(cast(column, Text))
                 .select_from(table)
                 .where(prefilter(column, subject, exhaustive=True))
-            ).scalars()
+            ).scalars().all()
             mentions = [_mention(v, subject, as_json=_is_json(column)) for v in values if v]
             whole = sum(1 for m in mentions if m is Mention.WHOLE)
             unsure = sum(1 for m in mentions if m is Mention.AMBIGUOUS)
@@ -210,7 +217,11 @@ def verify_subject_erased(
                 if rows:
                     report.reference_findings.append(Finding(table.name, column.name, rows))
     if content:
-        subject = Subject(ids=(user_id,) if user_id else (), addresses=(email,) if email else ())
+        subject = Subject(
+            ids=(user_id,) if user_id else (),
+            addresses=(email,) if email else (),
+            existing=existing_addresses(db),
+        )
         (
             report.content_columns_checked,
             report.content_findings,
