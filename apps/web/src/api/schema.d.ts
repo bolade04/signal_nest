@@ -347,11 +347,11 @@ export interface paths {
          *     every capability resolves disabled via ``global_configuration`` — the surface is
          *     dark. A persisted enable on a ``workspace_enableable`` capability would show
          *     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
-         *     while ``global_flag`` stays ``False``. No GLOBAL flag is changed — but whether a live
-         *     gate consumes that decision depends on the capability: ``opportunity_feedback`` has one
-         *     (Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``
-         *     and ``connector_rss`` do not, so their enforcement still reads the raw flag. For those
-         *     two this surface can report ``effective_enabled=true`` while the endpoints still 503.
+         *     while ``global_flag`` stays ``False``. No GLOBAL flag is changed, and every capability's
+         *     live enforcement consumes this same decision: ``opportunity_feedback`` since Phase
+         *     4B-A, ``scout_scheduling`` (schedule mutations, tick seeding and the tick itself) and
+         *     ``connector_rss`` (connector selection) since P6-CAP-1. What this surface reports for
+         *     a workspace is therefore what that workspace's endpoints and worker do (P6-UI-006).
          */
         get: operations["internal_capability_effective_api_v1_internal_system_capabilities_effective_get"];
         put?: never;
@@ -679,7 +679,8 @@ export interface paths {
          *
          *     Operator-gated and read-only. Each row's ``state`` is derived from the live
          *     tick chain via :func:`derive_schedule_state`, so it reflects the real
-         *     paused / active / activation-required lifecycle rather than a persisted guess.
+         *     paused / active / activation-required / stalled lifecycle rather than a
+         *     persisted guess.
          */
         get: operations["internal_schedules_api_v1_internal_system_schedules_get"];
         put?: never;
@@ -1596,6 +1597,38 @@ export interface paths {
         patch: operations["update_products_api_v1_workspaces__workspace_id__products__item_id__patch"];
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/scheduling-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether scout scheduling is available for this workspace
+         * @description Customer-facing, workspace-effective scheduling availability (P6-UI-006).
+         *
+         *     The mirror of ``GET /workspaces/{workspace_id}/feedback-capability`` (P6-UI-005):
+         *     one boolean, decided by the same resolver call the schedule mutation gate uses, so
+         *     the UI offers schedule controls exactly when the server will accept them.
+         *
+         *     Member-gated rather than editor-gated, matching the schedule *read*: a view-only
+         *     member still sees a schedule, and the panel needs this answer to describe it
+         *     truthfully (an ``active`` row is reported as unavailable while the capability is
+         *     off). It discloses nothing beyond that boolean for the caller's own workspace.
+         *
+         *     Advisory only, and deliberately not capability-gated (that would make it useless):
+         *     the mutation routes re-decide independently and answer 503 when unavailable.
+         */
+        get: operations["read_scheduling_capability_api_v1_workspaces__workspace_id__scheduling_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/scout-requests": {
         parameters: {
             query?: never;
@@ -1729,9 +1762,9 @@ export interface paths {
          * Get Scout Schedule
          * @description Read the request's schedule. Any workspace member may read it.
          *
-         *     Available even while the feature is dark, so the UI can surface an existing
-         *     record and its derived ``state`` (including ``activation_required``). Returns 404
-         *     when the request has no schedule.
+         *     Available even while the capability is dark, so the UI can surface an existing
+         *     record, its derived ``state`` (including ``activation_required`` and ``stalled``)
+         *     and ``last_tick_failed_at``. Returns 404 when the request has no schedule.
          */
         get: operations["get_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_get"];
         put?: never;
@@ -1787,9 +1820,10 @@ export interface paths {
          * Resume Scout Schedule
          * @description Resume or activate the schedule, recomputing the next run from now.
          *
-         *     Also the explicit activation for a schedule left in ``activation_required``.
-         *     Re-enabling is subject to the four-active cap (409 when full); an already-running
-         *     schedule is returned unchanged.
+         *     Also the explicit activation for a schedule left in ``activation_required`` and
+         *     the restart for one left ``stalled`` by a failed tick. Re-enabling is subject to
+         *     the four-active cap (409 when full); an already-running schedule is returned
+         *     unchanged.
          */
         post: operations["resume_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_resume_post"];
         delete?: never;
@@ -2422,12 +2456,13 @@ export interface components {
          *     values.
          *
          *     They answer "is this flag on?", NOT "is this capability available to my
-         *     workspace?". For ``scout_scheduling`` and ``connector_rss`` those coincide,
-         *     because enforcement reads the raw flag. For ``opportunity_feedback`` they do
-         *     not: an honored workspace override outranks the flag, so this field can read
-         *     ``false`` while the feedback endpoints serve normally. The customer-facing,
-         *     workspace-effective answer lives on its own route,
-         *     ``GET /workspaces/{workspace_id}/feedback-capability``.
+         *     workspace?". Since P6-CAP-1 those differ for every capability: enforcement is the
+         *     capability resolver's per-workspace decision, in which a workspace override (or
+         *     the safety ceiling) outranks the flag. The customer-facing, workspace-effective
+         *     answers live on their own routes —
+         *     ``GET /workspaces/{workspace_id}/feedback-capability`` and
+         *     ``GET /workspaces/{workspace_id}/scheduling-capability`` — and the customer UI
+         *     reads those, not these.
          */
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
@@ -3803,8 +3838,10 @@ export interface components {
          * @description Operator view of one scouting schedule with its derived lifecycle state.
          *
          *     ``state`` is computed live from the row plus the live tick chain
-         *     (:func:`derive_schedule_state`) so it can never drift from reality. Carries
-         *     only safe scope ids and lifecycle timestamps — never any secret.
+         *     (:func:`derive_schedule_state`) so it can never drift from reality. The
+         *     ``last_tick_*`` failure fields come from the same tick-job evidence
+         *     (:func:`last_tick_failure`, P6-PLAT-6). Carries only safe scope ids, lifecycle
+         *     timestamps and the stable job error classification — never any secret.
          */
         ScheduleOperatorOut: {
             /**
@@ -3819,6 +3856,10 @@ export interface components {
             interval: components["schemas"]["ScheduleInterval"];
             /** Last Tick At */
             last_tick_at: string | null;
+            /** Last Tick Error Code */
+            last_tick_error_code: string | null;
+            /** Last Tick Failed At */
+            last_tick_failed_at: string | null;
             /** Location Id */
             location_id: string | null;
             /** Next Run At */
@@ -3848,9 +3889,13 @@ export interface components {
          *     * ``activation_required`` — enabled but not yet started. A schedule created while
          *       the feature was dark (or before the flag was turned on) is intentionally *not*
          *       auto-seeded; it stays here until an explicit resume/activate action starts it.
+         *     * ``stalled`` — enabled, but the recurring chain stopped because its last
+         *       finished tick *failed* and could not be re-seeded (P6-PLAT-6). Kept distinct
+         *       from ``activation_required`` so a broken chain is visible as a failure; an
+         *       explicit resume/activate restarts it.
          * @enum {string}
          */
-        ScheduleState: "paused" | "active" | "activation_required";
+        ScheduleState: "paused" | "active" | "activation_required" | "stalled";
         /** SchedulesOverviewOut */
         SchedulesOverviewOut: {
             /** State Counts */
@@ -3859,6 +3904,19 @@ export interface components {
             };
             /** Total */
             total: number;
+        };
+        /**
+         * SchedulingCapabilityOut
+         * @description Customer-visible scout-scheduling availability for one workspace (P6-UI-006).
+         *
+         *     Exactly one field, decided by the same resolver call the schedule mutation gate
+         *     enforces with. The operator endpoint's ``decided_by`` / ``global_flag`` /
+         *     ``has_override`` / ``override_value`` are governance metadata and are deliberately
+         *     absent: a customer needs only whether the feature is available to them.
+         */
+        SchedulingCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** ScoreBreakdown */
         ScoreBreakdown: {
@@ -4003,6 +4061,8 @@ export interface components {
             interval: components["schemas"]["ScheduleInterval"];
             /** Last Tick At */
             last_tick_at: string | null;
+            /** Last Tick Failed At */
+            last_tick_failed_at: string | null;
             /** Location Id */
             location_id: string | null;
             /** Next Run At */
@@ -7733,6 +7793,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_scheduling_capability_api_v1_workspaces__workspace_id__scheduling_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulingCapabilityOut"];
                 };
             };
             /** @description Validation Error */

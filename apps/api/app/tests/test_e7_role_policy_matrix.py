@@ -181,8 +181,9 @@ _O = "/organizations/{organization_id}"
 
 #: The explicit policy table. 55 role-gated rows (39 that existed before 6B-3A + 5 new
 #: OWNER/ADMIN routes + 9 context-collection PATCH routes from P6-PLAT-9 + the location
-#: deactivate/reactivate pair of P6-UI-023), 25 membership-only rows (24 workspace + 1 new
-#: organization route), and the 2 GET routes whose membership check is inside the handler.
+#: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
+#: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route), and
+#: the 2 GET routes whose membership check is inside the handler.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -332,6 +333,9 @@ E7_POLICY: tuple[Policy, ...] = (
         _row("GET", f"{_W}/{c}", "workspace", ALL_ROLES, MEMBER_WS, OK_200)
         for c in ("brands", "locations", "scout-requests", "opportunities", "jobs")
     ),
+    # P6-UI-006: the workspace-effective scheduling reflection is member-gated like the
+    # schedule read it describes (feedback's reflection, above, is editor-gated).
+    _row("GET", f"{_W}/scheduling-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
     _row(
         "GET",
         f"{_W}/business-profile",
@@ -541,7 +545,7 @@ class TestPolicyTableCompleteness:
         }
         assert counts == {
             "role_gated": 55,
-            MEMBER_WS: 24,
+            MEMBER_WS: 25,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -554,7 +558,7 @@ class TestPolicyTableCompleteness:
             RANK_FLOOR: 48,
             WS_EXACT: 1,
             ORG_EXACT: 6,
-            MEMBER_WS: 24,
+            MEMBER_WS: 25,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -575,7 +579,9 @@ class TestPolicyTableCompleteness:
         # row above.
         # 115 -> 117 (P6-UI-023): POST .../locations/{location_id}/deactivate and
         # .../reactivate, each a RANK_FLOOR row above.
-        assert len(served) == 117
+        # 117 -> 118 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability, a
+        # membership-only workspace route.
+        assert len(served) == 118
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -583,7 +589,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 82
+        assert len(rows) == 83
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

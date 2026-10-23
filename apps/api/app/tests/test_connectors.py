@@ -379,7 +379,8 @@ def test_registry_returns_none_when_disabled() -> None:
     resolved = resolve_connector(
         source_types=("rss_news",),
         market="Dallas, TX",
-        settings=_settings(connector_rss_enabled=False),
+        rss_enabled=False,
+        settings=_settings(),
     )
     assert resolved is None
 
@@ -390,9 +391,34 @@ def test_registry_builds_rss_when_enabled_and_permitted() -> None:
     resolved = resolve_connector(
         source_types=("rss_news",),
         market="Dallas, TX",
-        settings=_settings(connector_rss_enabled=True),
+        rss_enabled=True,
+        settings=_settings(),
     )
     assert isinstance(resolved, RssNewsConnector)
+
+
+def test_registry_ignores_the_raw_global_flag() -> None:
+    """P6-CAP-1: the resolver's decision switches RSS, never the raw setting."""
+    from app.connectors.registry import resolve_connector
+
+    assert (
+        resolve_connector(
+            source_types=("rss_news",),
+            market="Dallas, TX",
+            rss_enabled=False,
+            settings=_settings(connector_rss_enabled=True),
+        )
+        is None
+    )
+    assert isinstance(
+        resolve_connector(
+            source_types=("rss_news",),
+            market="Dallas, TX",
+            rss_enabled=True,
+            settings=_settings(connector_rss_enabled=False),
+        ),
+        RssNewsConnector,
+    )
 
 
 def test_registry_respects_source_type_and_jurisdiction() -> None:
@@ -403,7 +429,8 @@ def test_registry_respects_source_type_and_jurisdiction() -> None:
         resolve_connector(
             source_types=("reddit",),
             market="Dallas, TX",
-            settings=_settings(connector_rss_enabled=True),
+            rss_enabled=True,
+            settings=_settings(),
         )
         is None
     )
@@ -412,10 +439,8 @@ def test_registry_respects_source_type_and_jurisdiction() -> None:
         resolve_connector(
             source_types=("rss_news",),
             market="London, UK",
-            settings=_settings(
-                connector_rss_enabled=True,
-                connector_rss_markets=["Dallas, TX"],
-            ),
+            rss_enabled=True,
+            settings=_settings(connector_rss_markets=["Dallas, TX"]),
         )
         is None
     )
@@ -428,16 +453,16 @@ def test_get_connector_defaults_to_fixture_connector() -> None:
     assert isinstance(conn, FixtureConnector)
 
 
-def test_get_connector_uses_live_connector_when_enabled(monkeypatch) -> None:
-    import app.connectors.registry as registry
+def test_get_connector_without_tenant_scope_never_reads_the_raw_flag(monkeypatch) -> None:
+    """No session/tenant scope means no workspace to decide for: fixture, even with the
+    global flag on (deny-biased). The live path, with a real resolver and override rows,
+    is covered in ``test_capability_enforcement.py``."""
+    from app.core.config import get_settings
+    from app.scouting_requests.connectors import FixtureConnector, get_connector
 
-    monkeypatch.setattr(
-        registry, "get_settings", lambda: _settings(connector_rss_enabled=True)
-    )
-    from app.scouting_requests.connectors import get_connector
-
+    monkeypatch.setattr(get_settings(), "connector_rss_enabled", True)
     conn = get_connector(source_types=["rss_news"], market="Dallas, TX")
-    assert isinstance(conn, RssNewsConnector)
+    assert isinstance(conn, FixtureConnector)
 
 
 # --------------------------------------------------------------------------- #

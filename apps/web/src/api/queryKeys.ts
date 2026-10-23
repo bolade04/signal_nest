@@ -96,5 +96,11 @@ export const queryKeys = {
   feedbackCapability: (workspaceId: string) =>
     ['workspaces', workspaceId, 'feedback-capability'] as const,
 
+  // Workspace-effective scheduling availability (P6-UI-006) — the same reasoning as
+  // `feedbackCapability`: a per-workspace answer must never share the raw-global
+  // `runtimeSummary` entry.
+  schedulingCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'scheduling-capability'] as const,
+
   auditLogs: (workspaceId: string) => ['workspaces', workspaceId, 'audit-logs'] as const,
 } as const;

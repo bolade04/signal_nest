@@ -64,6 +64,7 @@ export type ScoutScheduleOut = S['ScoutScheduleOut'];
 export type ScoutScheduleCreate = S['ScoutScheduleCreate'];
 export type ScheduleInterval = S['ScheduleInterval'];
 export type ScheduleState = S['ScheduleState'];
+export type SchedulingCapability = S['SchedulingCapabilityOut'];
 
 export type JobOut = S['JobOut'];
 export type JobListOut = S['JobListOut'];

@@ -63,24 +63,46 @@ function msg(err: unknown): string | undefined {
 }
 
 /**
- * Authoritative, *pre-request* capability gate for scout scheduling.
+ * Authoritative, *pre-request* capability gate for scout scheduling —
+ * **workspace-effective** (P6-UI-006).
  *
- * The coarse runtime summary (`GET /system/capabilities`, shared app-wide and
- * cached) reflects the raw server `scout_scheduling_enabled` flag — the same
- * value the schedule *mutation* endpoints gate on. Schedule *reads* are not
- * gated, so this never hides an existing schedule; it only decides whether the
- * mutation affordances may be offered.
+ * Since P6-CAP-1 the schedule mutation gate decides per workspace through the
+ * capability resolver, so a workspace override can enable scheduling while the
+ * global flag is off, or disable it while the flag is on. The coarse runtime
+ * summary (`GET /system/capabilities`) deliberately reflects the **raw global**
+ * flag and can no longer answer this question; reading it here would repeat the
+ * P6-UI-005 defect for scheduling. This asks the server the same question the gate
+ * asks, scoped to the same workspace. Schedule *reads* are not gated, so this never
+ * hides an existing schedule; it decides whether mutation affordances may be
+ * offered and whether a row's live state may be shown as live.
  *
- * `=== true` on purpose: loading, `undefined`, `null` and a missing key must all
- * read as dark. The server 503 remains the enforcement boundary for a stale or
- * hand-rolled client; this gate exists so the UI stops claiming a capability is
- * available when the server will refuse it.
+ * Tri-state like `useFeedbackCapability`: `status` separates "not yet resolved"
+ * from a settled denial so tests can tell them apart; the panel consumes only
+ * `isEnabled`, and loading renders exactly as dark.
+ *
+ * `=== true` on purpose: loading, an error, `undefined`, `null`, a missing key and
+ * a non-boolean all read as dark. The server 503 remains the enforcement boundary
+ * for a stale or hand-rolled client.
  */
-export function useScheduleCapability() {
+export type ScheduleCapabilityStatus = 'loading' | 'enabled' | 'disabled';
+
+export function useScheduleCapability(workspaceId: string) {
   const query = useQuery({
-    queryKey: queryKeys.runtimeSummary,
-    queryFn: ({ signal }) => api.getRuntimeSummary(signal),
+    queryKey: queryKeys.schedulingCapability(workspaceId),
+    queryFn: ({ signal }) => api.getSchedulingCapability(workspaceId, signal),
     staleTime: 60_000,
+    // Unknown must not present controls the server would refuse, and retrying would
+    // only widen the window in which the panel looks dark for the wrong reason. An
+    // errored query holds no data, so a later mount re-probes (see
+    // `useFeedbackCapability` for the accepted cost).
+    retry: false,
   });
-  return { isEnabled: query.data?.features?.scout_scheduling_enabled === true };
+
+  const status: ScheduleCapabilityStatus = query.isPending
+    ? 'loading'
+    : query.data?.enabled === true
+      ? 'enabled'
+      : 'disabled';
+
+  return { status, isEnabled: status === 'enabled' };
 }

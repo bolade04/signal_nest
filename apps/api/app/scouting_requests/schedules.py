@@ -15,22 +15,35 @@ This module owns the *backend* recurrence foundation for a scouting request:
   ``scout_schedule.tick`` job.
 * **Fan-out plumbing** (:func:`enqueue_schedule_tick`, :func:`has_active_execution`)
   reused by the tick handler.
+* **Failure survival** (:func:`recover_after_tick_failure`, P6-PLAT-6) — a tick that
+  fails for the last time (``failed`` / ``dead_lettered``) no longer ends the
+  recurrence silently: the worker's terminal-failure hook re-seeds the next
+  occurrence and records a structured failure event, and the failure stays visible
+  in the derived schedule state (:func:`derive_schedule_state`,
+  :func:`last_tick_failure`).
 
-Everything here is dark by default: unless ``scout_scheduling_enabled`` is on, no
-tick is ever enqueued, so no scheduled scouting run can occur. The service never
-touches the manual-run, cancellation or lease semantics of the durable-job system;
-it only *enqueues* work through the existing service seam.
+Everything here is dark by default. Whether scheduling is available is decided per
+workspace by the capability resolver (:func:`resolve_scheduling_capability`, P6-CAP-1)
+— the same decision the HTTP gate enforces and the customer reflection reports — so
+with the shipped ``scout_scheduling_enabled=False`` and no workspace override no tick
+is ever enqueued and no scheduled scouting run can occur. The service never touches
+the manual-run, cancellation or lease semantics of the durable-job system; it only
+*enqueues* work through the existing service seam.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
+from app.capabilities.registry import Capability
+from app.capabilities.resolver import CapabilityResolution, resolve_capability
 from app.core.config import get_settings
 from app.core.enums import ScheduleInterval, ScheduleState
 from app.core.errors import ConflictError, ValidationDomainError
@@ -39,7 +52,7 @@ from app.db.base import utcnow
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.service import enqueue_job, enqueue_scout_request
-from app.jobs.status import ACTIVE_STATUSES, ENQUEUED_STATUSES, JobType
+from app.jobs.status import ACTIVE_STATUSES, ENQUEUED_STATUSES, JobStatus, JobType
 from app.organizations.models import Workspace
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 
@@ -64,6 +77,61 @@ SCHEDULED_TRIGGER = "scheduled"
 _INFLIGHT_STATUSES = frozenset(
     s.value for s in (ACTIVE_STATUSES | ENQUEUED_STATUSES)
 )
+
+#: Terminal statuses that mean a tick will never run again *and* it failed. A
+#: cancelled tick is an operator's deliberate stop, not a failure, so it is absent.
+_FAILED_TICK_STATUSES = frozenset(
+    {JobStatus.FAILED.value, JobStatus.DEAD_LETTERED.value}
+)
+
+#: Terminal statuses that carry a ``completed_at``: the ticks that actually finished.
+_FINISHED_TICK_STATUSES = _FAILED_TICK_STATUSES | {JobStatus.SUCCEEDED.value}
+
+
+def resolve_scheduling_capability(
+    db: Session, *, organization_id: str, workspace_id: str
+) -> CapabilityResolution:
+    """The one place scheduling availability is decided for a workspace (P6-CAP-1).
+
+    Every scheduling enforcement point calls this — the HTTP mutation gate, the
+    customer reflection, the tick's own feature gate and the tick seeding on create /
+    resume / failure recovery — so a workspace override and the safety ceiling apply
+    to all of them identically, and what the UI shows is the decision the backend
+    enforces. The tenant identity is always server-derived: the authenticated
+    tenant context for a route, the durable schedule row for the worker.
+
+    A dependency failure is logged and re-raised, never converted into a decision: a
+    coerced ``False`` would be indistinguishable from a genuine governance denial and
+    would turn an outage into an apparent policy.
+    """
+    try:
+        return resolve_capability(
+            session=db,
+            settings=get_settings(),
+            capability=Capability.SCOUT_SCHEDULING,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        log_event(
+            logger,
+            "scout_scheduling_gate_failed",
+            level=logging.ERROR,
+            outcome="error",
+            capability=Capability.SCOUT_SCHEDULING.value,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+        )
+        raise
+
+
+def _scheduling_enabled_for(db: Session, schedule: ScoutSchedule) -> bool:
+    """Whether scheduling is effectively enabled for the schedule's own workspace."""
+    return resolve_scheduling_capability(
+        db,
+        organization_id=schedule.organization_id,
+        workspace_id=schedule.workspace_id,
+    ).effective_enabled
 
 
 def interval_delta(interval: ScheduleInterval) -> timedelta:
@@ -166,22 +234,81 @@ def _has_pending_tick(db: Session, *, schedule: ScoutSchedule) -> bool:
     return found is not None
 
 
+@dataclass(frozen=True, slots=True)
+class TickFailure:
+    """The most recently finished tick of a schedule, when that tick failed.
+
+    Carries only a timestamp and the stable, secret-free error classification the job
+    store already recorded — never a payload, summary text or job id.
+    """
+
+    failed_at: datetime
+    job_status: str
+    error_code: str | None
+
+
+def last_tick_failure(db: Session, schedule: ScoutSchedule) -> TickFailure | None:
+    """Return the schedule's last *finished* tick if it failed, else ``None``.
+
+    "Finished" means the tick reached ``succeeded``, ``failed`` or ``dead_lettered``;
+    the newest of those by ``completed_at`` decides. A failure is therefore reported
+    until a later tick of the same schedule succeeds — the moment recurrence is
+    healthy again the signal clears on its own, with nothing persisted to reset.
+
+    Scoped to *this* schedule through the tick idempotency key
+    (``schedule-tick:{schedule_id}:…``), not merely the request, so a schedule that
+    was deleted and re-created for the same request never inherits its
+    predecessor's failures. Tenant columns are matched too.
+    """
+    row = db.execute(
+        select(Job.status, Job.completed_at, Job.last_error_code)
+        .where(
+            Job.organization_id == schedule.organization_id,
+            Job.workspace_id == schedule.workspace_id,
+            Job.scout_request_id == schedule.scout_request_id,
+            Job.job_type == JobType.SCOUT_SCHEDULE_TICK.value,
+            Job.idempotency_key.startswith(f"schedule-tick:{schedule.id}:", autoescape=True),
+            Job.status.in_(_FINISHED_TICK_STATUSES),
+            Job.completed_at.is_not(None),
+        )
+        .order_by(Job.completed_at.desc(), Job.created_at.desc())
+        .limit(1)
+    ).first()
+    if row is None or row.status not in _FAILED_TICK_STATUSES:
+        return None
+    return TickFailure(
+        failed_at=row.completed_at,
+        job_status=row.status,
+        error_code=row.last_error_code,
+    )
+
+
 def derive_schedule_state(db: Session, schedule: ScoutSchedule) -> ScheduleState:
     """Classify a schedule's lifecycle state honestly from observed evidence.
 
     * ``paused`` — the row is disabled and drives no work.
     * ``active`` — enabled *and* a live tick chain exists, so runs are really being
       fanned out.
+    * ``stalled`` — enabled, no live tick chain, and the last tick that finished
+      *failed* (P6-PLAT-6). The failure hook normally re-seeds the next occurrence,
+      so a schedule only lands here when it could not (the capability was off for
+      the workspace at the time, or the re-seed itself failed). It is distinct from
+      ``activation_required`` so a broken chain is never mistaken for one that was
+      simply never started; resume/activate restarts it.
     * ``activation_required`` — enabled but no live tick exists yet. This is the
-      dark-deploy / restart-safe state: a schedule created while the feature flag was
-      off (or before it was turned on) is intentionally *not* auto-seeded; it stays
-      inert until an explicit resume/activate action starts the chain. The state is
-      derived, never persisted, so it can never disagree with the actual job state.
+      dark-deploy / restart-safe state: a schedule created while scheduling was
+      unavailable for its workspace is intentionally *not* auto-seeded; it stays
+      inert until an explicit resume/activate action starts the chain.
+
+    The state is derived, never persisted, so it can never disagree with the actual
+    job state.
     """
     if not schedule.enabled:
         return ScheduleState.PAUSED
     if _has_pending_tick(db, schedule=schedule):
         return ScheduleState.ACTIVE
+    if last_tick_failure(db, schedule) is not None:
+        return ScheduleState.STALLED
     return ScheduleState.ACTIVATION_REQUIRED
 
 
@@ -262,9 +389,11 @@ def run_schedule_tick(
 
     1. **Load** the schedule. A missing row (hard-deleted) stops the chain — no run,
        no successor tick.
-    2. **Feature gate.** While ``scout_scheduling_enabled`` is off the tick is a
-       self-terminating no-op: no run, no successor. This is the dark-deploy
-       guarantee — zero recurring work until the flag is turned on.
+    2. **Capability gate.** While scheduling resolves disabled for the schedule's
+       workspace (:func:`resolve_scheduling_capability` — the shipped default) the
+       tick is a self-terminating no-op: no run, no successor. This is the
+       dark-deploy guarantee — zero recurring work until the capability is enabled
+       for that workspace.
     3. **Enabled gate.** A paused schedule likewise stops the chain.
     4. **Cancellation.** An operator-cancelled tick stops the chain.
     5. **Overlap coalescing.** If the request already has an execution in flight the
@@ -281,7 +410,7 @@ def run_schedule_tick(
     schedule = db.get(ScoutSchedule, schedule_id)
     if schedule is None:
         return {"outcome": "schedule_missing", "run_enqueued": False, "chained": False}
-    if not get_settings().scout_scheduling_enabled:
+    if not _scheduling_enabled_for(db, schedule):
         return {"outcome": "feature_disabled", "run_enqueued": False, "chained": False}
     if not schedule.enabled:
         return {"outcome": "disabled", "run_enqueued": False, "chained": False}
@@ -338,6 +467,92 @@ def run_schedule_tick(
     }
 
 
+def recover_after_tick_failure(
+    db: Session,
+    *,
+    schedule_id: str,
+    occurrence_at: datetime,
+    organization_id: str,
+    workspace_id: str,
+    job_status: str,
+    error_code: str,
+    now: datetime | None = None,
+) -> dict:
+    """Keep a recurring schedule alive after one of its ticks failed for good (P6-PLAT-6).
+
+    Called from the ``scout_schedule.tick`` terminal-failure hook once a tick reached
+    ``failed`` or ``dead_lettered`` — on either dead-letter path, a handler that
+    exhausted its retries or a lease that expired with no attempts left. Without
+    this, the chain is self-propagating with no external cron: the failed tick
+    never enqueued its successor, so the schedule would stop forever without a
+    trace.
+
+    The failed occurrence itself is **skipped, never back-filled** (the same rule as
+    every other missed boundary): the successor is the first interval boundary after
+    ``occurrence_at`` that is strictly in the future, enqueued with the ordinary
+    per-occurrence idempotency key, so a repeated hook can never fork the chain. The
+    successor is seeded only when the schedule still exists in the job's own tenant
+    scope, is enabled, has no live tick already, and scheduling resolves enabled for
+    its workspace — exactly the conditions under which a healthy tick would have
+    chained. ``last_tick_at`` is not advanced: no occurrence fired.
+
+    Every call emits ``scout_schedule_tick_failed`` at ERROR (a scheduled occurrence
+    was lost) with ``chained`` saying whether recurrence survived; the job-level
+    ``jobs_failed_total`` / ``jobs_dead_lettered_total`` counters carry the matching
+    ``job_type`` for metric alarms. The function writes and flushes, never commits —
+    the worker owns the transaction.
+    """
+    now = now or utcnow()
+    schedule = db.get(ScoutSchedule, schedule_id)
+    chained = False
+    next_occurrence: datetime | None = None
+    if (
+        schedule is None
+        or schedule.organization_id != organization_id
+        or schedule.workspace_id != workspace_id
+    ):
+        # Missing, or a row the job's durable tenant scope does not own: never touch it.
+        outcome = "schedule_missing"
+        schedule = None
+    elif not schedule.enabled:
+        outcome = "disabled"
+    elif _has_pending_tick(db, schedule=schedule):
+        # A live chain already exists (e.g. re-activated meanwhile); never fork it.
+        outcome = "chain_live"
+        chained = True
+    elif not _scheduling_enabled_for(db, schedule):
+        outcome = "feature_disabled"
+    else:
+        next_occurrence = next_future_occurrence(
+            occurrence_at, schedule.interval_enum(), now
+        )
+        enqueue_schedule_tick(
+            db, schedule=schedule, occurrence_at=next_occurrence, now=now
+        )
+        schedule.next_run_at = next_occurrence
+        db.add(schedule)
+        db.flush()
+        outcome = "reseeded"
+        chained = True
+
+    log_event(
+        logger,
+        "scout_schedule_tick_failed",
+        level=logging.ERROR,
+        outcome=outcome,
+        chained=chained,
+        job_status=job_status,
+        error_class=error_code,
+        workspace_id=schedule.workspace_id if schedule is not None else workspace_id,
+        scout_request_id=schedule.scout_request_id if schedule is not None else None,
+    )
+    return {
+        "outcome": outcome,
+        "chained": chained,
+        "next_run_at": next_occurrence.isoformat() if next_occurrence else None,
+    }
+
+
 def create_schedule(
     db: Session,
     *,
@@ -351,7 +566,8 @@ def create_schedule(
 
     Enforces the two product limits (one schedule per request; four enabled per
     workspace), writes the ``scout_schedule.created`` audit record, and — only when
-    ``enabled`` and the feature flag is live — seeds the first tick one interval out.
+    ``enabled`` and scheduling resolves enabled for the request's workspace — seeds the
+    first tick one interval out.
     ``next_run_at`` is ``enabled_at + interval`` (pure interval-from-enable).
     """
     now = now or utcnow()
@@ -389,7 +605,7 @@ def create_schedule(
     db.add(schedule)
     db.flush()
 
-    if enabled and next_run_at is not None and get_settings().scout_scheduling_enabled:
+    if enabled and next_run_at is not None and _scheduling_enabled_for(db, schedule):
         enqueue_schedule_tick(db, schedule=schedule, occurrence_at=next_run_at, now=now)
 
     record_audit(
@@ -461,8 +677,9 @@ def resume_schedule(
     """Resume (or activate) a schedule, recomputing the next occurrence from *now*.
 
     This is also the explicit *activation* path for a schedule that was created while
-    the feature was dark: such a row is ``enabled`` yet has no live tick chain, and is
-    never auto-started when the flag flips on — the customer must resume/activate it.
+    the capability was dark: such a row is ``enabled`` yet has no live tick chain, and
+    is never auto-started when the capability turns on — the customer must
+    resume/activate it.
 
     Behaviour by state:
 
@@ -473,7 +690,8 @@ def resume_schedule(
       resume moment (``now + interval``); the pause gap is never back-filled. The
       per-workspace active cap is re-checked under a workspace row lock, excluding this
       schedule from the count so it can never self-count. A fresh tick is seeded only
-      while the feature flag is live *and* no tick chain already exists.
+      while scheduling resolves enabled for the workspace *and* no tick chain already
+      exists. This is also the explicit restart for a ``stalled`` schedule.
     """
     now = now or utcnow()
 
@@ -496,7 +714,7 @@ def resume_schedule(
     db.add(schedule)
     db.flush()
 
-    if get_settings().scout_scheduling_enabled and not _has_pending_tick(db, schedule=schedule):
+    if _scheduling_enabled_for(db, schedule) and not _has_pending_tick(db, schedule=schedule):
         enqueue_schedule_tick(
             db, schedule=schedule, occurrence_at=schedule.next_run_at, now=now
         )
@@ -556,14 +774,18 @@ def delete_schedule(
 __all__ = [
     "MAX_ACTIVE_SCHEDULES_PER_WORKSPACE",
     "SCHEDULED_TRIGGER",
+    "TickFailure",
     "create_schedule",
     "delete_schedule",
     "derive_schedule_state",
     "enqueue_schedule_tick",
     "has_active_execution",
     "interval_delta",
+    "last_tick_failure",
     "next_future_occurrence",
     "pause_schedule",
+    "recover_after_tick_failure",
+    "resolve_scheduling_capability",
     "resume_schedule",
     "run_schedule_tick",
 ]

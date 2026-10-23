@@ -1171,6 +1171,11 @@ export const handlers = [
   http.get(P('/workspaces/:workspaceId/feedback-capability'), () =>
     HttpResponse.json({ enabled: false }),
   ),
+  // Workspace-effective scheduling availability (P6-UI-006). Dark by default for the
+  // same reason, with the same trade-off, as the feedback handler above.
+  http.get(P('/workspaces/:workspaceId/scheduling-capability'), () =>
+    HttpResponse.json({ enabled: false }),
+  ),
 
   // Coarse summary for any authenticated caller (no per-capability topology).
   // Raw global flags only — NOT the workspace-effective answer above.
