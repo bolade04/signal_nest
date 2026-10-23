@@ -105,7 +105,12 @@ uploaded as a workflow artifact (`security-reports-container-build`,
     the two above and `CVE-2025-69720` in `libncursesw6`/`libtinfo6` of all three images (two
     vendors CRITICAL, Trivy HIGH, no fix: `EXCLUDED`). In all, 166 report rows carry some vendor
     rating above Trivy's selection; the complete list is kept in the review-request evidence
-    record.
+    record. *(Re-measured 2026-10-23 in push run 39859641559 on `main` `831cc2ea`, counted over every
+    `trivy-*vuln.json` report in that run's `security-reports-*` artifacts: six distinct CVEs that some vendor rates
+    CRITICAL are selected lower — the three above and, in the OpenTofu binary, `CVE-2026-39821` (`golang.org/x/net`
+    and `stdlib`, selected HIGH), `CVE-2026-56857` (`stdlib`, LOW) and `CVE-2026-78663` (`golang.org/x/net` and
+    `stdlib`, MEDIUM); 187 report rows carry some vendor rating above Trivy's selection. Neither count is a
+    resolution of the earlier ones; the set changes with Trivy's database.)*
   - **UNKNOWN.** A valid `UNKNOWN` severity means unscored. The finding stays reported for
     triage (the summary lists it with the reported severities, tagged `[UNKNOWN]`); it is not
     LOW, resolved or proof of safety. A missing or unrecognized severity, a malformed report, an
@@ -719,6 +724,15 @@ scope of the environment that contains them.)*
    | `CVE-2026-78667` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
    | `CVE-2026-78669` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
    | `CVE-2026-97031` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
+
+   *(Re-measured 2026-10-23 in push run 39859641559 on `main` `831cc2ea`, Trivy 0.76.0 with that run's database; the
+   table above stays the record of run 39514455981.)* OpenTofu v1.12.5: 30 HIGH rows, 27 distinct advisories, each
+   with a published fix — the 28 rows above and two more, `CVE-2026-63209` (`github.com/klauspost/compress` v1.18.5,
+   fixed in 1.18.7) and `CVE-2026-111943` (`stdlib` v1.26.5, fixed in 1.26.10, 1.27.3); also 30 MEDIUM rows (23
+   distinct), 6 LOW (3 distinct) and the same UNKNOWN. Trivy v0.76.0 now has one HIGH, `CVE-2026-111943` (`stdlib`
+   v1.27.2, fixed in 1.26.10, 1.27.3), in every job, besides its one UNKNOWN. Each HIGH row is `REPORTED` at the
+   development scope in that run's `scanner-binaries.summary.txt` gate summaries (the lower severities are listed as
+   `lower`), and all six end `RESULT: PASS`; none is resolved by this record.
 
 **Population floors, re-derived from measured inventories** (local measurements on macOS builds of
 the same locks, which carry no environment markers; the pull request's exact-head CI run is the
