@@ -153,7 +153,7 @@ def test_consolidated_bh_a_universe():
     381 = 256 + 125 (Gate 4N-I28BH-B added 6 assurance-validator collections, disjoint from BH-A)."""
     import itertools, critical_list_inventory as cli
     allids = {c["id"] for c in cli.discover_collections()}
-    assert len(allids) == 426  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): +3 (gen_operator_policies KEY_APPLY_WRITES/KEY_APPLY_SCOPED_CAPABILITIES, action_classifier KEY_APPLY_METADATA)  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +6 (gen_operator_policies WINDOW_TRANSITION_WRITES/WINDOW_READ_ADDITIONS/WINDOW_SCOPED_CAPABILITIES, policy_inventory DISCOVERY_ARGS, action_classifier WINDOW_TRANSITION_METADATA, allow_model WINDOW_CONTEXT)  # INFRA-9-B3 apply-identity: +3 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES, TASK_DEFINITION_FAMILY_ARNS)  # INFRA-9-B3: +3 (root_wiring_check.py BATTERY/CACHE_ROOTS/_CONTRACT_REQUIRED_KEYS)  # BH-C-E1: +1 (collection_completeness::COMPLETENESS_REQUIRING_KINDS, NON_SECURITY)  # BH-C F8: +29 discovery-recovered collections (derived/comprehension forms)
+    assert len(allids) == 427  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): +1 (deny_requirements _REQUIREMENT_AMENDMENT_RULINGS)  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): +3 (gen_operator_policies KEY_APPLY_WRITES/KEY_APPLY_SCOPED_CAPABILITIES, action_classifier KEY_APPLY_METADATA)  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +6 (gen_operator_policies WINDOW_TRANSITION_WRITES/WINDOW_READ_ADDITIONS/WINDOW_SCOPED_CAPABILITIES, policy_inventory DISCOVERY_ARGS, action_classifier WINDOW_TRANSITION_METADATA, allow_model WINDOW_CONTEXT)  # INFRA-9-B3 apply-identity: +3 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES, TASK_DEFINITION_FAMILY_ARNS)  # INFRA-9-B3: +3 (root_wiring_check.py BATTERY/CACHE_ROOTS/_CONTRACT_REQUIRED_KEYS)  # BH-C-E1: +1 (collection_completeness::COMPLETENESS_REQUIRING_KINDS, NON_SECURITY)  # BH-C F8: +29 discovery-recovered collections (derived/comprehension forms)
     sets = {
         "A1": set(CONTRACT["a1a_adjudication"]) | set(CONTRACT["a1b_adjudication"]) | set(CONTRACT["a1c_adjudication"]),
         "A2": set(CONTRACT["a2a_adjudication"]) | set(CONTRACT["a2b_adjudication"]) | set(CONTRACT["a2c_adjudication"]),
@@ -161,11 +161,11 @@ def test_consolidated_bh_a_universe():
         "A4": set(CONTRACT["a4_adjudication"]),
         "A5": set(CONTRACT["a5_adjudication"]),
     }
-    assert [len(sets[k]) for k in ("A1", "A2", "A3", "A4", "A5")] == [86, 43, 25, 5, 3]  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): A1 84+2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): A1 81+3  # INFRA-9-B3 apply-identity: A1 79+2
+    assert [len(sets[k]) for k in ("A1", "A2", "A3", "A4", "A5")] == [87, 43, 25, 5, 3]  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): A1 86+1  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): A1 84+2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): A1 81+3  # INFRA-9-B3 apply-identity: A1 79+2
     for a, b in itertools.combinations(sets, 2):
         assert not (sets[a] & sets[b]), (a, b, sets[a] & sets[b])
     union = set().union(*sets.values())
-    assert len(union) == 162 and union <= allids  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): 160+2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): 157+3  # INFRA-9-B3 apply-identity: 155+2
+    assert len(union) == 163 and union <= allids  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): 162+1  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): 160+2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): 157+3  # INFRA-9-B3 apply-identity: 155+2
     # The B0a-SLICE2 framework-landing tranche: exactly 119 completeness_framework.py collections,
     # disjoint from the BH-A universe, all classified.
     framework_new = {i for i in allids if i.startswith("completeness_framework.py::")}
@@ -183,7 +183,7 @@ def test_bh_a_open_findings_preserved():
 
 
 def test_a1_a2_a3_a4_non_regression():
-    assert [len(CONTRACT[b]) for b in ("a1a_adjudication", "a1b_adjudication", "a1c_adjudication")] == [41, 22, 23]  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): a1a +2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): a1a +3  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
+    assert [len(CONTRACT[b]) for b in ("a1a_adjudication", "a1b_adjudication", "a1c_adjudication")] == [41, 22, 24]  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): a1c +1  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): a1a +2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): a1a +3  # INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES)
     assert [len(CONTRACT[b]) for b in ("a2a_adjudication", "a2b_adjudication", "a2c_adjudication")] == [10, 15, 18]
     assert len(CONTRACT["a3_adjudication"]) == 25 and len(CONTRACT["a4_adjudication"]) == 5
 
@@ -239,9 +239,9 @@ def test_A5_20_consolidated_universe_drop_detected():
     union = (set(CONTRACT["a1a_adjudication"]) | set(CONTRACT["a1b_adjudication"]) | set(CONTRACT["a1c_adjudication"])
              | set(CONTRACT["a2a_adjudication"]) | set(CONTRACT["a2b_adjudication"]) | set(CONTRACT["a2c_adjudication"])
              | set(CONTRACT["a3_adjudication"]) | set(CONTRACT["a4_adjudication"]) | set(CONTRACT["a5_adjudication"]))
-    assert len(union) == 162                        # the authored roster is complete  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): 160+2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): 157+3  # INFRA-9-B3 apply-identity: 155+2
+    assert len(union) == 163                        # the authored roster is complete  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): 162+1  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): 160+2  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): 157+3  # INFRA-9-B3 apply-identity: 155+2
     tampered = union - {CA_CL}                      # drop one collection from the roster
-    assert len(tampered) == 161 != 162              # reconciliation notices the missing member  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE)  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS)  # INFRA-9-B3 apply-identity
+    assert len(tampered) == 162 != 163              # reconciliation notices the missing member  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT)  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE)  # P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS)  # INFRA-9-B3 apply-identity
 
 
 def test_A5_30_ownership_disjoint():

@@ -86,11 +86,11 @@ def validate_a1c(adj, classifications, present_ids) -> list:
 
 
 # ---- structural ----
-def test_a1c_scope_is_exactly_23_adjudicated_ids():
+def test_a1c_scope_is_exactly_24_adjudicated_ids():
     import critical_list_inventory as cli
     disc = {c["id"] for c in cli.discover_collections()}
     assert A1C_IDS <= disc
-    assert len(ADJ) == 23
+    assert len(ADJ) == 24  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): +1 (deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS)
 
 
 def test_a1c_adjudication_well_formed():
@@ -100,10 +100,10 @@ def test_a1c_adjudication_well_formed():
 def test_a1c_distribution():
     from collections import Counter
     d = Counter(r["cls"] for r in ADJ.values())
-    assert d["SECURITY_CRITICAL_SOURCE"] == 12
+    assert d["SECURITY_CRITICAL_SOURCE"] == 13  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): +1 (_REQUIREMENT_AMENDMENT_RULINGS)
     assert d["TEST_ONLY_LOAD_BEARING"] == 10
     assert d["NON_SECURITY_CONFIGURATION"] == 1
-    assert sum(d.values()) == 23
+    assert sum(d.values()) == 24  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): +1
 
 
 def test_a1c_no_downward_reclassification():
@@ -305,6 +305,6 @@ def test_battery_has_28_arms():
 # ---- consolidated A1 reconciliation ----
 def test_consolidated_a1_union_is_exactly_79():
     a1a = set(CONTRACT["a1a_adjudication"]); a1b = set(CONTRACT["a1b_adjudication"]); a1c = set(ADJ)
-    assert len(a1a) == 41 and len(a1b) == 22 and len(a1c) == 23  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): a1a +2; INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES); P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): a1a +3
+    assert len(a1a) == 41 and len(a1b) == 22 and len(a1c) == 24  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): a1c +1 (_REQUIREMENT_AMENDMENT_RULINGS); P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): a1a +2; INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES); P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): a1a +3
     assert a1a & a1b == set() and a1a & a1c == set() and a1b & a1c == set(), "no overlap between sub-gates"
-    assert len(a1a | a1b | a1c) == 86, "A1a ∪ A1b ∪ A1c must equal the full 86-member A1 scope"  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): 84+2; INFRA-9-B3 apply-identity: 79+2; P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +3
+    assert len(a1a | a1b | a1c) == 87, "A1a ∪ A1b ∪ A1c must equal the full 87-member A1 scope"  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): 86+1  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): 84+2; INFRA-9-B3 apply-identity: 79+2; P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): +3

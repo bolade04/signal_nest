@@ -33,6 +33,8 @@ Exit: 0 iff every requirement is REQUIRED_AND_PRESENT.
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import re
 import os
@@ -51,6 +53,9 @@ LEDGER_PATH = None
 # genuinely different rows from the in-repo architecture invariants.
 REQUIREMENTS_V2_PATH = None
 SYNTHETIC_REQUIREMENTS = REPO_ROOT / "tests" / "fixtures" / "synthetic-requirements.json"
+# Operator ruling 2026-10-23 (O11 option 1): requirement AMENDMENTS live in their own record, beside — never inside —
+# the requirement source, so the original requirement and any sealed external copy stay byte-for-byte unchanged.
+SYNTHETIC_REQUIREMENT_AMENDMENTS = REPO_ROOT / "tests" / "fixtures" / "synthetic-requirement-amendments.json"
 SINGLE_GROUNDED = "SINGLE_GROUNDED"
 
 REQUIRED_AND_PRESENT = "REQUIRED_AND_PRESENT"
@@ -287,6 +292,8 @@ def principals_actually_deny_their_requirements() -> list[str]:
     import iam_eval
 
     problems: list[str] = []
+    amended, amendment_findings = _active_amendments()
+    problems.extend(amendment_findings)
     for entry in external_requirements()["entries"]:
         principal = str(entry.get("principal") or "").strip()
         scope = _PRINCIPAL_SCOPES.get(principal)
@@ -299,6 +306,13 @@ def principals_actually_deny_their_requirements() -> list[str]:
             continue
         for action in entry.get("actions", []):
             for name, document in _principal_documents().items():
+                amendment_id = amended.get((entry["outcome_id"], name, action))
+                if amendment_id is not None:
+                    # The ruled amendment REPLACES the universal "*" probe for this one pair with the
+                    # independently grounded expectations of the ruling; it never skips the pair.
+                    problems.extend(_amended_pair_problems(entry["outcome_id"], amendment_id, name,
+                                                           document, action))
+                    continue
                 decision = iam_eval.decide(document, action, "*", _PROBE_CONTEXT).decision
                 if decision is not iam_eval.Decision.EXPLICIT_DENY:
                     problems.append(
@@ -328,6 +342,173 @@ _PRINCIPAL_SCOPES = {
 
 
 _PROBE_CONTEXT = {"aws:CurrentTime": "2026-08-01T18:00:00Z", "aws:RequestedRegion": "us-east-1"}
+
+
+# --- OPERATOR RULING 2026-10-23: the O11 amendment for the key-apply principal's kms:PutKeyPolicy ---------------------
+#
+# O11 (SOURCE 1 v2, gate 4N-H1, permanent; "the keys protecting state and secrets are used, delegated, or destroyed")
+# binds "any principal in the SignalNest design", and principals_actually_deny_their_requirements() enforced it as an
+# EXPLICIT_DENY of every O11 action at Resource "*" for every designed principal. The operator decided D-K1-3 = (b-wide)
+# (the key-apply principal holds an expiring, region-conditioned Allow of kms:PutKeyPolicy on "*" for the CreateKey
+# policy-lockout check) and then, on 2026-10-23, authorized "option 1": a NARROWLY SCOPED REQUIREMENT AMENDMENT for that
+# one principal and that one action. THIS CHANGES THE PREVIOUS UNIVERSAL Resource "*" ENFORCEMENT for exactly the pair
+# (key_apply, kms:PutKeyPolicy); every other principal and every other O11 action keeps the "*" check unchanged.
+#
+# Two keys must agree before the exception applies (fail-closed in both directions):
+#   1. this AUTHORED ruling table (code, review-pinned), written from the ruling text — not from any fixture value and
+#      not from the generated policy;
+#   2. an ACTIVE, provenance-carrying amendment record (tests/fixtures/synthetic-requirement-amendments.json, or the
+#      external record named by SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH) whose every provenance field equals this table.
+# An amendment for any other (outcome, principal, action), or one with missing or mismatching provenance, is a finding
+# and is not applied. A ruling with no matching record applies nothing, so the "*" probe — and its finding — stands.
+_REQUIREMENT_AMENDMENT_RULINGS = {
+  "rulings": {
+    "O11-AMEND-2026-10-23-KEY-APPLY-PUTKEYPOLICY": {
+        "amends_outcome_id": "O11",
+        "principal": "key_apply",
+        "action": "kms:PutKeyPolicy",
+        "ruling_date": "2026-10-23",
+        "ruled_by": "operator",
+        "ruling_record": "P6-W6-INFRABRIEF-01/decision/OPERATOR-REPLY-2026-10-23-2-verbatim.md section 1",
+        "ruling_sha256": "e2a963e32d1aac0f1424c7749a29aa6511be8b38cf6d7f4a87d7356b11fa80a5",
+        # The ruling's "two protected state/secrets keys", named by their identity-module role (never by a policy Sid).
+        "protected_keys": ("state_cmk", "secrets_cmk"),
+    },
+  },
+  # Every amendment record must carry all of these (non-blank; `retains` a non-empty list) or it is refused.
+  "provenance_fields": ("amendment_id", "amends_outcome_id", "amends_action_set_sha256", "principal", "action",
+                        "ruling_date", "ruled_by", "ruling_record", "ruling_sha256", "status", "replaces", "retains",
+                        "context"),
+  "statuses": ("ACTIVE", "SUPERSEDED"),
+}
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def requirement_amendments(path: Path | None = None) -> dict:
+    """The requirement-amendment record. Explicit SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH, else — only while the
+    requirement source itself is the tracked synthetic set — the tracked synthetic amendments fixture. An EXTERNAL
+    requirement source never inherits a repository-controlled amendment (that would let a repository file relax SOURCE
+    1): without an explicit external amendment record it carries no amendment at all, so the original check applies."""
+    if path is None:
+        explicit = os.environ.get("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH")
+        if explicit:
+            path = Path(explicit)
+        elif os.environ.get("SIGNALNEST_REQUIREMENTS_PATH"):
+            return {"version": "1", "amendments": []}
+        else:
+            path = SYNTHETIC_REQUIREMENT_AMENDMENTS
+    path = Path(path)
+    if not path.exists():
+        raise AnchorUnavailable(f"requirement amendment record missing at {path}. FAIL-CLOSED.")
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    _declared_version(doc, "version", ("1",), path)
+    _declared_utc(doc, "created_utc", path)
+    _declared_count(doc, "amendment_count", len(doc.get("amendments") or []), path)
+    return doc
+
+
+def _action_set_sha256(actions) -> str:
+    return hashlib.sha256(json.dumps(sorted(actions), separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _active_amendments() -> tuple[dict, list[str]]:
+    """{(outcome_id, principal, action): amendment_id} for every VALID, ACTIVE amendment, plus the findings."""
+    problems: list[str] = []
+    active: dict = {}
+    base = {e.get("outcome_id"): e for e in external_requirements()["entries"]}
+    principals = set(_principal_documents())
+    seen: set = set()
+    for record in requirement_amendments().get("amendments") or []:
+        aid = str(record.get("amendment_id") or "").strip() or "<no amendment_id>"
+        missing = [f for f in _REQUIREMENT_AMENDMENT_RULINGS["provenance_fields"] if f != "retains"
+                   and not str(record.get(f) or "").strip()]
+        retains = record.get("retains")
+        if not isinstance(retains, list) or not retains or not all(str(r).strip() for r in retains):
+            missing.append("retains")
+        if missing:
+            problems.append(f"amendment {aid}: missing provenance field(s) {missing}; not applied")
+            continue
+        if aid in seen:
+            problems.append(f"amendment {aid}: duplicate amendment_id; not applied")
+            continue
+        seen.add(aid)
+        ruling = _REQUIREMENT_AMENDMENT_RULINGS["rulings"].get(aid)
+        if ruling is None:
+            problems.append(f"amendment {aid}: no operator ruling authorizes it (authored rulings: "
+                            f"{sorted(_REQUIREMENT_AMENDMENT_RULINGS['rulings'])}); not applied")
+            continue
+        wrong = [f for f in ("amends_outcome_id", "principal", "action", "ruling_date", "ruled_by", "ruling_record",
+                             "ruling_sha256") if record.get(f) != ruling[f]]
+        if wrong:
+            problems.append(f"amendment {aid}: field(s) {wrong} differ from the authored ruling — the exception "
+                            "cannot be moved to another principal/action or re-attributed; not applied")
+            continue
+        if not _DATE_RE.match(str(record["ruling_date"])) or not _SHA_RE.match(str(record["ruling_sha256"])):
+            problems.append(f"amendment {aid}: malformed ruling_date or ruling_sha256; not applied")
+            continue
+        if record["status"] not in _REQUIREMENT_AMENDMENT_RULINGS["statuses"]:
+            problems.append(f"amendment {aid}: status {record['status']!r} not in "
+                            f"{_REQUIREMENT_AMENDMENT_RULINGS['statuses']}; not applied")
+            continue
+        entry = base.get(record["amends_outcome_id"])
+        if entry is None or record["action"] not in entry.get("actions", []):
+            problems.append(f"amendment {aid}: {record['amends_outcome_id']}/{record['action']} is not a requirement "
+                            "of the loaded source; not applied")
+            continue
+        if record["amends_action_set_sha256"] != _action_set_sha256(entry.get("actions", [])):
+            problems.append(f"amendment {aid}: the amended requirement {record['amends_outcome_id']} changed since the "
+                            "ruling (action-set digest differs); not applied")
+            continue
+        if record["principal"] not in principals:
+            problems.append(f"amendment {aid}: principal {record['principal']!r} is not a designed principal; not applied")
+            continue
+        if record["status"] == "ACTIVE":
+            active[(record["amends_outcome_id"], record["principal"], record["action"])] = aid
+    return active, problems
+
+
+def _amended_pair_problems(outcome_id: str, amendment_id: str, name: str, document: dict, action: str) -> list[str]:
+    """The ruled replacement of the "*" probe, from the ruling text (operator reply 2026-10-23 §1) — the protected keys
+    from the identity module, the expiry from expiry_authorization, the region from the identity anchor:
+      (a) kms:PutKeyPolicy on the state CMK and on the secrets CMK is EXPLICIT_DENY unconditionally (in or out of the
+          window, in or out of the region, with or without the bypass flag);
+      (b) with kms:BypassPolicyLockoutSafetyCheck = true it is EXPLICIT_DENY on any key (the existing bypass Deny);
+      (c) the reviewed b-wide Allow keeps its expiry and Region conditions: on another key it is IMPLICIT_DENY after
+          the expiry and outside the region, and EXPLICIT_ALLOW only inside both (so a protected-key Deny widened to
+          every key, or a dropped condition, is visible)."""
+    import expiry_authorization as _ea
+    import iam_eval
+    import signalnest_identity as identity
+
+    D = iam_eval.Decision
+    ruling = _REQUIREMENT_AMENDMENT_RULINGS["rulings"][amendment_id]
+    critical = identity.critical_resources()
+    protected = [critical[k] for k in ruling["protected_keys"]]
+    other_key = identity.kms_key_arn("00000000-0000-4000-8000-0000000a3e11")
+    region = identity.REGION
+    other_region = "eu-west-1" if region != "eu-west-1" else "us-west-2"
+    expiry = _ea.ACTIVE_EXPIRY_UTC
+    after = (datetime.datetime.strptime(expiry, "%Y-%m-%dT%H:%M:%SZ")
+             + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    within = _PROBE_CONTEXT["aws:CurrentTime"]
+    problems: list[str] = []
+    if not within < expiry or other_key in protected:
+        return [f"{outcome_id} [{amendment_id}]: the amendment's probe inputs are inconsistent (in-window instant "
+                f"{within} vs expiry {expiry}); fail-closed"]
+    base = {"aws:CurrentTime": within, "aws:RequestedRegion": region, "kms:BypassPolicyLockoutSafetyCheck": "false"}
+    variants = {"in window, in region": {}, "bypass flag": {"kms:BypassPolicyLockoutSafetyCheck": "true"},
+                "after expiry": {"aws:CurrentTime": after}, "outside the region": {"aws:RequestedRegion": other_region}}
+    expected = [(key, label, over, D.EXPLICIT_DENY) for key in protected for label, over in variants.items()]
+    expected += [(other_key, "bypass flag", variants["bypass flag"], D.EXPLICIT_DENY),
+                 (other_key, "in window, in region", {}, D.EXPLICIT_ALLOW),
+                 (other_key, "after expiry", variants["after expiry"], D.IMPLICIT_DENY),
+                 (other_key, "outside the region", variants["outside the region"], D.IMPLICIT_DENY)]
+    for resource, label, over, want in expected:
+        got = iam_eval.decide(document, action, resource, {**base, **over}).decision
+        if got is not want:
+            problems.append(f"{outcome_id} [{amendment_id}]: {name} resolves {got.value} for {action} on {resource} "
+                            f"({label}); the ruled amendment requires {want.value}")
+    return problems
 
 
 def _principal_matches(principal: str, document_name: str) -> bool:

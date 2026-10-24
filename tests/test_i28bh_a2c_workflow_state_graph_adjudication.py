@@ -101,7 +101,7 @@ def test_a2c_distribution():
 
 def test_a1_a2a_a2b_non_regression():
     assert len(CONTRACT["a1a_adjudication"]) == 41 and len(CONTRACT["a1b_adjudication"]) == 22  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): a1a +2; INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES); P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): a1a +3
-    assert len(CONTRACT["a1c_adjudication"]) == 23 and len(CONTRACT["a2a_adjudication"]) == 10
+    assert len(CONTRACT["a1c_adjudication"]) == 24 and len(CONTRACT["a2a_adjudication"]) == 10
     assert len(CONTRACT["a2b_adjudication"]) == 15
 
 

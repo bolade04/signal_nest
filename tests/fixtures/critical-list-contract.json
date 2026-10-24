@@ -92,6 +92,7 @@
   "deny_requirements.py::AWS_SERVICE_SAFETY": "SECURITY_CRITICAL_LIST",
   "deny_requirements.py::_KINDS": "SECURITY_CRITICAL_LIST",
   "deny_requirements.py::_PRINCIPAL_SCOPES": "SECURITY_CRITICAL_LIST",
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": "SECURITY_CRITICAL_LIST",
   "deny_requirements.py::_PROBE_CONTEXT": "TEST_ONLY",
   "deny_triangulation.py::IN_WINDOW": "TEST_ONLY",
   "deny_triangulation.py::PASSING": "SECURITY_CRITICAL_LIST",
@@ -664,6 +665,7 @@
   "deny_requirements.py::AWS_SERVICE_SAFETY": "BH-A1c: SECURITY_CRITICAL_SOURCE (requirement-authority, PRODUCTION_AUTHORITY). SOURCE 3 \u2014 AWS service-safety requirement set, independent of the generators; a load-bearing A1a deny-source dependency",
   "deny_requirements.py::_KINDS": "BH-A1c: SECURITY_CRITICAL_SOURCE (closed-enum, PRODUCTION_AUTHORITY). a kind not in _KINDS fails closed; adding an unreviewed kind would let a 'permanent' requirement be mis-typed and its no-expiry check skipped",
   "deny_requirements.py::_PRINCIPAL_SCOPES": "BH-A1c: SECURITY_CRITICAL_SOURCE (authority, PRODUCTION_AUTHORITY). a blanked/new principal cannot pass by being unrecognised; authoritative \u2014 guarantee = positive presence + unknown-phrase-is-a-finding",
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": "BH-A1c: SECURITY_CRITICAL_SOURCE (authority, PRODUCTION_AUTHORITY). Operator ruling 2026-10-23 (O11 option 1): the authored table of requirement amendments the operator has ruled (today exactly one: O11 x key_apply x kms:PutKeyPolicy), their provenance, the provenance fields every amendment record must carry and the closed status set. An amendment record applies only when its provenance equals this table, so adding a ruling or a pair WIDENS (it lifts the universal Resource \"*\" Deny check for that pair); review-pinned.",
   "deny_requirements.py::_PROBE_CONTEXT": "BH-A1c: TEST_ONLY_LOAD_BEARING (eval-context, TEST_PARAMETER_ONLY). test/harness scaffold; load-bearing only for a mandatory proof, not a deployed policy source",
   "deny_triangulation.py::IN_WINDOW": "BH-A1c: TEST_ONLY_LOAD_BEARING (eval-context, TEST_PARAMETER_ONLY). test/harness scaffold; load-bearing only for a mandatory proof, not a deployed policy source",
   "deny_triangulation.py::PASSING": "BH-A1c: SECURITY_CRITICAL_SOURCE (outcome-set, PRODUCTION_AUTHORITY). adding a failing outcome (e.g. REQUIRED_BUT_MISSING) to PASSING would make a missing deny count as pass \u2014 defeating the whole triangulation; risk is A",
@@ -2386,6 +2388,27 @@
    "positive_presence": "INVALID_EMPTY",
    "widen_on_add": false,
    "widen_on_remove": true,
+   "a1a_dependency": null,
+   "bh_b": {
+    "resolver": "authoritative_source_no_enumerable_oracle",
+    "spec_needed": true,
+    "complexity": "SMALL"
+   }
+  },
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "authority",
+   "module": "deny_requirements.py",
+   "final_consumer": "principals_actually_deny_their_requirements() via _active_amendments()/_amended_pair_problems()",
+   "authority_domain": "PRODUCTION_AUTHORITY",
+   "oracle_family": "AUTHORITATIVE_SOURCE_NO_ENUMERABLE_ORACLE",
+   "expected_authority": "the operator rulings themselves (operator reply 2026-10-23 section 1, sha256 e2a963e3...); an amendment record whose provenance differs from this table is refused",
+   "observed_authority": "the ACTIVE amendment records of the loaded amendment source (tests/fixtures/synthetic-requirement-amendments.json or SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH)",
+   "independence": "dual key: neither the table alone nor a fixture record alone lifts the universal check; the replacement expectations are written from the ruling text (identity-module protected keys, expiry_authorization expiry, anchor region), never read off the generated policy",
+   "comparison": "AUTHORITATIVE_SUPERSET",
+   "positive_presence": "CONDITIONALLY_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
    "a1a_dependency": null,
    "bh_b": {
     "resolver": "authoritative_source_no_enumerable_oracle",

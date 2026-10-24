@@ -114,7 +114,7 @@ def test_a2a_no_unclassified_and_all_production_authority():
 def test_a1_non_regression():
     assert len(CONTRACT["a1a_adjudication"]) == 41  # P6-CI-6 K0-2 2026-10-21 (REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE): a1a +2; INFRA-9-B3 apply-identity: +2 (W0_APPLY_CLOSURE, W0_SCOPED_CAPABILITIES); P6-W0-TRANSITION 2026-10-02 (REV-2026-10-02-P6-W0-TRANSITION-PERMS): a1a +3
     assert len(CONTRACT["a1b_adjudication"]) == 22
-    assert len(CONTRACT["a1c_adjudication"]) == 23
+    assert len(CONTRACT["a1c_adjudication"]) == 24  # P6-CI-6 O11 amendment 2026-10-23 (REV-2026-10-23-P6-CI6-O11-AMENDMENT): +1
 
 
 def test_a2a_a3_ownership_boundary():

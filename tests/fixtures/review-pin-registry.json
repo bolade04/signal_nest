@@ -1030,6 +1030,13 @@
    "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
    "reviewed_digest": "sha256:821cb86b3845bbf08cdfcba47eb2e92c9b58d7a146d68ed2ca0e8064d7581eaf",
    "source": "live"
+  },
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": {
+   "collection_id": "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-23-P6-CI6-O11-AMENDMENT",
+   "reviewed_digest": "sha256:a60e252cb5d8f8da3bacdf2ef41ca267307f83e7d2af9041fd6e534b1ea6ffc2",
+   "source": "live"
   }
  }
 }

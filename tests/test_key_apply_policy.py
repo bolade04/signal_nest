@@ -653,3 +653,166 @@ def test_the_dead_grant_detector_covers_the_b_wide_put_key_policy_statements():
         stmt = next(s for s in mutated["Statement"] if s["Sid"] == sid)
         stmt["Condition"].setdefault(op, {})[key] = "true"
         assert any(f"kms:PutKeyPolicy does not support condition key {key}" in p for p in iam_eval.validate_policy(mutated)), sid
+
+
+# =====================================================================================
+# 8. The O11 requirement amendment (operator ruling 2026-10-23, "option 1"): the ONE pair (key_apply, kms:PutKeyPolicy)
+#    replaces the universal Resource "*" EXPLICIT_DENY with the ruling's grounded expectations; nothing else changes.
+# =====================================================================================
+
+AMENDMENTS = REPO_ROOT / "tests" / "fixtures" / "synthetic-requirement-amendments.json"
+REQUIREMENTS = REPO_ROOT / "tests" / "fixtures" / "synthetic-requirements.json"
+AMENDMENT_ID = "O11-AMEND-2026-10-23-KEY-APPLY-PUTKEYPOLICY"
+
+
+def _dr():
+    import deny_requirements
+    return deny_requirements
+
+
+def _o11_problems(monkeypatch, *, documents=None, amendments=None, tmp_path=None):
+    dr = _dr()
+    if documents is not None:
+        monkeypatch.setattr(dr, "_reviewed_documents", lambda: documents)
+    if amendments is not None:
+        target = tmp_path / "amendments.json"
+        target.write_text(json.dumps(amendments), encoding="utf-8")
+        monkeypatch.setenv("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH", str(target))
+    return dr.principals_actually_deny_their_requirements()
+
+
+def _docs_with_key_apply(mutate):
+    docs = copy.deepcopy(_dr()._reviewed_documents())
+    mutate(docs["key_apply"])
+    return docs
+
+
+def _stmt(policy, sid):
+    return next(s for s in policy["Statement"] if s["Sid"] == sid)
+
+
+def _amendment_doc():
+    return json.loads(AMENDMENTS.read_text(encoding="utf-8"))
+
+
+def test_o11_is_clean_with_the_ruled_amendment_and_the_original_requirement_is_intact():
+    dr = _dr()
+    assert dr.principals_actually_deny_their_requirements() == []
+    o11 = next(e for e in json.loads(REQUIREMENTS.read_text(encoding="utf-8"))["entries"] if e["outcome_id"] == "O11")
+    assert o11["principal"] == "any principal in the SignalNest design" and o11["requirement_kind"] == "permanent"
+    assert "kms:PutKeyPolicy" in o11["actions"] and len(o11["actions"]) == 9
+    active, problems = dr._active_amendments()
+    assert problems == [] and active == {("O11", "key_apply", "kms:PutKeyPolicy"): AMENDMENT_ID}
+    ruling = dr._REQUIREMENT_AMENDMENT_RULINGS["rulings"][AMENDMENT_ID]
+    assert (ruling["ruling_date"], ruling["ruled_by"], ruling["principal"], ruling["action"]) == \
+        ("2026-10-23", "operator", "key_apply", "kms:PutKeyPolicy")
+    assert set(dr._REQUIREMENT_AMENDMENT_RULINGS["rulings"]) == {AMENDMENT_ID}
+
+
+def test_without_the_amendment_record_the_universal_check_still_reports_the_pair(monkeypatch, tmp_path):
+    doc = _amendment_doc()
+    doc["amendments"], doc["amendment_count"] = [], 0
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert problems == ["O11: principal scope is every designed principal, but key_apply resolves EXPLICIT_ALLOW for "
+                        "kms:PutKeyPolicy rather than an explicit Deny"]
+
+
+def test_an_external_requirement_source_never_inherits_the_repository_amendment(monkeypatch):
+    monkeypatch.setenv("SIGNALNEST_REQUIREMENTS_PATH", str(REQUIREMENTS))
+    monkeypatch.delenv("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH", raising=False)
+    assert _dr().requirement_amendments()["amendments"] == []
+    assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy" in p
+               for p in _dr().principals_actually_deny_their_requirements())
+
+
+def test_the_amended_pair_is_still_checked_not_skipped(monkeypatch):
+    """Every other O11 action of key_apply keeps the "*" EXPLICIT_DENY check, and the amended pair is probed."""
+    def unfence(policy):
+        ceiling = _stmt(policy, "KeyApplyDenyDangerous")
+        ceiling["Action"] = [a for a in ceiling["Action"] if a != "kms:ScheduleKeyDeletion"]
+    problems = _o11_problems(monkeypatch, documents=_docs_with_key_apply(unfence))
+    assert any("key_apply resolves" in p and "kms:ScheduleKeyDeletion rather than an explicit Deny" in p for p in problems)
+
+
+@pytest.mark.parametrize("label,mutate,needle", [
+    ("existing-key Deny removed",
+     lambda p: p["Statement"].remove(_stmt(p, "KeyApplyDenyWritesOnTheExistingKeys")), gen.ARN["cmk_secrets"]),
+    ("existing-key Deny on the state CMK only",
+     lambda p: _stmt(p, "KeyApplyDenyWritesOnTheExistingKeys").update(Resource=[gen.ARN["cmk_state"]]), gen.ARN["cmk_secrets"]),
+    ("existing-key Deny on a wrong ARN",
+     lambda p: _stmt(p, "KeyApplyDenyWritesOnTheExistingKeys").update(
+         Resource=[gen.ARN["cmk_state"], f"arn:aws:kms:{gen.REGION}:{gen.ACCOUNT}:key/99999999-9999-4999-8999-999999999999"]),
+     gen.ARN["cmk_secrets"]),
+    ("existing-key Deny widened to key/*",
+     lambda p: _stmt(p, "KeyApplyDenyWritesOnTheExistingKeys").update(Resource=gen.key_apply_resource_arns()["key_star"]),
+     "in window, in region"),
+    ("bypass-flag PutKeyPolicy leg removed",
+     lambda p: _stmt(p, "KeyApplyDenyRiskyKeyShapes").update(Action=["kms:CreateKey"]), "bypass flag"),
+    ("b-wide Allow without DateLessThan",
+     lambda p: _stmt(p, "KeyApplyLockoutCheckPutKeyPolicy")["Condition"].pop("DateLessThan"), "after expiry"),
+    ("b-wide Allow without RequestedRegion",
+     lambda p: _stmt(p, "KeyApplyLockoutCheckPutKeyPolicy")["Condition"].pop("StringEquals"), "outside the region"),
+])
+def test_o11_amendment_negative_controls_on_the_documents(monkeypatch, label, mutate, needle):
+    problems = _o11_problems(monkeypatch, documents=_docs_with_key_apply(mutate))
+    assert any(AMENDMENT_ID in p and needle in p for p in problems), (label, problems)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("principal", "permanent_w0"), ("principal", "window_transition"),
+    ("action", "kms:ScheduleKeyDeletion"), ("action", "kms:CreateGrant"),
+    ("amends_outcome_id", "O10"), ("ruling_date", "2026-10-24"), ("ruled_by", "coordinator"),
+    ("ruling_sha256", "0" * 64), ("amends_action_set_sha256", "0" * 64), ("amendment_id", "O11-AMEND-OTHER"),
+])
+def test_the_exception_cannot_be_moved_or_reattributed(monkeypatch, tmp_path, field, value):
+    doc = _amendment_doc()
+    doc["amendments"][0][field] = value
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert any("not applied" in p for p in problems), (field, problems)
+    # and since nothing is applied, the original universal finding for key_apply's PutKeyPolicy returns
+    assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy rather than an explicit Deny" in p for p in problems)
+
+
+def test_an_exception_for_another_principal_is_refused_even_alongside_the_ruled_one(monkeypatch, tmp_path):
+    doc = _amendment_doc()
+    other = copy.deepcopy(doc["amendments"][0])
+    other["principal"] = "window_transition"
+    doc["amendments"].append(other)
+    doc["amendment_count"] = 2
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert any("duplicate amendment_id" in p for p in problems)
+
+
+@pytest.mark.parametrize("field", ["amendment_id", "ruling_date", "ruled_by", "ruling_record", "ruling_sha256",
+                                   "status", "replaces", "retains", "context", "amends_action_set_sha256"])
+def test_an_amendment_with_missing_provenance_is_refused(monkeypatch, tmp_path, field):
+    doc = _amendment_doc()
+    doc["amendments"][0][field] = [] if field == "retains" else ""
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert any("missing provenance" in p and field in p for p in problems), (field, problems)
+
+
+def test_a_superseded_amendment_applies_nothing(monkeypatch, tmp_path):
+    doc = _amendment_doc()
+    doc["amendments"][0]["status"] = "SUPERSEDED"
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy" in p for p in problems)
+
+
+def test_the_amendment_record_declares_its_size_and_every_field_is_consumed():
+    doc = _amendment_doc()
+    assert doc["amendment_count"] == len(doc["amendments"]) == 1
+    assert set(doc["amendments"][0]) == set(_dr()._REQUIREMENT_AMENDMENT_RULINGS["provenance_fields"])
+    assert "Resource \"*\"" in doc["amendments"][0]["replaces"]
+
+
+def test_the_requirements_guard_fails_on_an_unruled_amendment(tmp_path):
+    import os
+    import subprocess
+    doc = _amendment_doc()
+    doc["amendments"][0]["principal"] = "permanent_w0"
+    target = tmp_path / "amendments.json"
+    target.write_text(json.dumps(doc), encoding="utf-8")
+    proc = subprocess.run([sys.executable, "scripts/deny_requirements.py"], cwd=REPO_ROOT, capture_output=True,
+                          text=True, env={**os.environ, "SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH": str(target)})
+    assert proc.returncode == 1 and "not applied" in proc.stderr

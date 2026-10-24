@@ -209,6 +209,10 @@
    "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
    "control": "review_pin"
   },
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
   "deny_triangulation.py::PASSING": {
    "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
    "control": "review_pin"
