@@ -33,8 +33,11 @@ password) echo no password and no hash either.
 forbids unknown fields, and the password change takes both passwords the same way; no
 operation anywhere has a token in its path, query or headers; the two public operations
 have no parameters at all (no bearer dependency), the two verification operations and the
-password change only the ``authorization`` header; each answers 204 with no body. 106
-operations (105 before P6-UI-017 added the password change).
+password change only the ``authorization`` header; each answers 204 with no body. 118
+operations (105 before P6-UI-017 added the password change; 106 before P6-PLAT-9 added a
+PATCH to each of the nine campaign-context collections; 115 before P6-UI-023 added
+location deactivate and reactivate; 117 before P6-UI-006 added the scheduling-capability
+reflection).
 """
 
 from __future__ import annotations
@@ -743,7 +746,10 @@ class TestOpenApiContract:
             if method in {"get", "post", "put", "delete", "patch"}
         )
         # 105 -> 106 (P6-UI-017): POST /auth/password/change, pinned below in OPERATIONS.
-        assert count == 106
+        # 106 -> 115 (P6-PLAT-9): PATCH on each of the nine campaign-context collections.
+        # 115 -> 117 (P6-UI-023): POST .../locations/{location_id}/deactivate and /reactivate.
+        # 117 -> 118 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability.
+        assert count == 118
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

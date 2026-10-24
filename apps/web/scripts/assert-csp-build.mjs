@@ -51,6 +51,14 @@ export const NEVER_FETCHED_ORIGINS = new Set([
   'https://reactjs.org', // React's error-decoder link in production error messages
   'http://fb.me', // a dead PropTypes warning string
   'https://example.com', // a form placeholder
+  // React Router 7 (P6-CI-7). Its package exports only its unminified build to bundlers, so
+  // its messages and URL-parsing bases ship with the bundle. None is ever requested:
+  'https://reactrouter.com', // "… must be used within a data router.  See https://reactrouter.com/…" error text
+  'https://github.com', // useSearchParams warning text naming a URLSearchParams polyfill on github.com
+  // The base of `new URL(path, "http://localhost")` when there is no window, and the default
+  // navigation URL; in the browser the router resolves against window.location instead. An
+  // API base of exactly http://localhost therefore fails the policy check below (fail-closed).
+  'http://localhost',
 ]);
 
 /** The SPA policy, exactly. `frame-ancestors` is absent: a <meta> policy ignores it. */

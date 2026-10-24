@@ -54,6 +54,21 @@ def close_coordination() -> None:
         logger.warning("lifecycle.notifier_close_failed")
 
 
+def close_redis_client(client: object | None) -> None:
+    """Close one Redis client and its connection pool, if given. Never raises."""
+    if client is None:
+        return
+    try:
+        close = getattr(client, "close", None)
+        if close is not None:
+            close()
+        pool = getattr(client, "connection_pool", None)
+        if pool is not None:
+            pool.disconnect()
+    except Exception:  # pragma: no cover - best-effort cleanup
+        logger.warning("lifecycle.redis_close_failed")
+
+
 def close_database() -> None:
     """Dispose the SQLAlchemy engine, returning pooled connections. Never raises."""
     try:

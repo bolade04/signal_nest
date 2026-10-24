@@ -8,6 +8,8 @@ artifact hashes:
 |---|---|---|
 | `requirements-runtime.txt` | `[project.dependencies]` + the `full` extra | `Dockerfile` builder stage (`pip install --require-hashes`) — exactly what reaches the production image |
 | `requirements-dev.txt` | the same, plus the `dev` extra, constrained to the runtime pins | CI (`.github/workflows/ci.yml`) and local test environments |
+| `requirements-bootstrap.txt` (2026-10-20) | `requirements-bootstrap.in`: pip and the setuptools build backend, at the reader tooling lock's pins | the four CI jobs that create `apps/api/.venv`, installed first with `--require-hashes --no-deps` |
+| `requirements-locktools.txt` (2026-10-20) | `requirements-locktools.in`: the documented lock toolchain (~~pip 25.1.1, pip-tools 7.5.2~~ pip 26.2.2, pip-tools 7.6.2 since CERT-2, 2026-10-21) and every transitive distribution | CI job *Backend quality*, the `.locktools` venv that runs `tools/verify_locks.py` |
 
 Rules:
 
@@ -17,14 +19,24 @@ Rules:
   exactly as before this change: the `pip` self-upgrade (`pip install --upgrade pip`) in the
   image and CI, and the build-isolation fetch of `setuptools>=68` that `pip install .`
   performs for the project's own metadata. Neither is application code; pinning them is a
-  separate decision.
+  separate decision. *(2026-10-20, P6-CI-6 coverage gaps: in CI both are gone — pip and setuptools
+  come from `requirements-bootstrap.txt` and the editable install runs with
+  `--no-build-isolation`, and every hash-locked install carries `--isolated --only-binary :all:` from locks that
+  may hold only pins, hashes and comments (`security/test_tooling_locks.py`), so no locked dependency is built
+  from source with unpinned build requirements; each job scans its venv as installed and reconciles it against these
+  locks (`security/README.md`). They remain in the Dockerfile's builder stage, whose tooling does
+  not ship; the builder stages are an open operator decision.)*
 - Never edit a lock by hand — a manual edit breaks the hashes. Change `pyproject.toml`
   (or just re-resolve) and regenerate both files.
 - Dependabot watches `apps/api` and updates these files alongside `pyproject.toml`.
 
 Regenerate with the documented toolchain — Python 3.12 (the image's `python:3.12-slim`),
-`pip==25.1.1`, `pip-tools==7.5.2` (pip-tools 7.5.2 imports a pip-internal symbol that pip 26
-removed, so pip must stay on 25.x), package source: the default index, PyPI
+~~`pip==25.1.1`, `pip-tools==7.5.2` (pip-tools 7.5.2 imports a pip-internal symbol that pip 26
+removed, so pip must stay on 25.x)~~ *(CERT-2, operator order 2026-10-21: `pip==26.2.2`,
+`pip-tools==7.6.2` — pip 26.2.2 is the first pip whose vendored certifi is 2026.10.19
+(GHSA-6q48-6c7w-9gw2); pip-tools 7.5.2 cannot run under pip 26 (`ImportError: stdlib_pkgs`),
+7.6.2 can; the runtime and dev locks verify unchanged under 7.6.2 — 46 pins / 973 hashes and
+55 pins / 1007 hashes, every hash recomputed from the index)*, package source: the default index, PyPI
 (`https://pypi.org/simple`). Run in place, these commands keep every existing pin that
 still satisfies `pyproject.toml` (pip-tools' default when the output file exists and
 `--upgrade` is not given):
@@ -36,6 +48,11 @@ pip-compile --generate-hashes --strip-extras --extra full \
 pip-compile --generate-hashes --strip-extras --extra full --extra dev \
   --constraint requirements-runtime.txt \
   --output-file requirements-dev.txt pyproject.toml
+# the bootstrap and lock-toolchain locks (2026-10-20); --allow-unsafe keeps pip and setuptools
+pip-compile --allow-unsafe --generate-hashes --strip-extras \
+  --output-file requirements-bootstrap.txt requirements-bootstrap.in
+pip-compile --allow-unsafe --generate-hashes --strip-extras \
+  --output-file requirements-locktools.txt requirements-locktools.in
 ```
 
 **Upgrading is an explicit maintenance action.** A newer release on PyPI never changes the
@@ -86,18 +103,30 @@ pinned artifact. Recomputed hashes come from the index's published digests (the 
 API), so a file added to or removed from an already-pinned release changes the expected set
 and fails the check until the locks are regenerated. Resolution reads the index's current
 metadata. pip-tools reads the project's static `[project]` metadata, so no build backend runs;
-dynamic dependencies would bring an unpinned `setuptools>=68` fetch into the check. Only pip
-and pip-tools are pinned in the tool venv; their own dependencies are not. The check runs on
+~~dynamic dependencies would bring an unpinned `setuptools>=68` fetch into the check. Only pip
+and pip-tools are pinned in the tool venv; their own dependencies are not.~~ *(Since 2026-10-20
+the tool venv is installed from the hash lock `requirements-locktools.txt` — pip, pip-tools and
+every transitive distribution — and pip-compile runs with `--no-build-isolation`, so dynamic
+dependencies would be built with that lock's setuptools, not an unpinned fetch.)* The check runs on
 linux/amd64 with Python 3.12 only; it is not an offline or universal reproducibility
 guarantee.
 
-**Header caveat.** The autogenerated comment inside each lock shows `--no-index`. That text
+**Header caveat.** ~~The autogenerated comment inside each lock shows `--no-index`.~~ *(Since
+CERT-2 the compiler is pip-tools 7.6.2, whose header is correct: `requirements-bootstrap.txt` and
+`requirements-locktools.txt`, recompiled on 2026-10-21, show no `--no-index`; the runtime, dev,
+reader, Semgrep and Gate 4N locks keep their 7.5.2-era header until they are next regenerated —
+the caveat below still applies to those.)* That text
 is wrong and is a defect in pip-tools 7.5.2's header reconstruction (`piptools/utils.py`,
 `get_compile_command`, handling of the negative-only `--no-index` flag): it prints the flag
 for its *default* value. Reproduction: `printf 'six\n' > req.in && pip-compile req.in`
 prints `--no-index` in the header while resolving from PyPI, and a real
 `pip-compile --no-index req.in` fails with "No matching distribution found". Use the
-commands above, never the header line.
+commands above, never the header line. *(2026-10-20: the same caveat applies to
+`requirements-bootstrap.txt` and `requirements-locktools.txt`, compiled against PyPI with the commands
+above. `tools/verify_locks.py` re-resolves only the runtime and dev locks; the bootstrap and
+lock-toolchain locks are checked by their hash-checked installs, `pip check`, the scanned-as-installed
+reconciliation against them and the pin-agreement tests in `security/test_tooling_locks.py`, not by a
+resolution check.)*
 
 Hashes cover every published artifact of each pinned version, so one lock is intended to
 serve the linux/amd64 image, CI and macOS development; that equivalence is established by
