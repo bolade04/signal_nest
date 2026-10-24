@@ -746,6 +746,14 @@ def test_the_amended_pair_is_still_checked_not_skipped(monkeypatch):
     ("existing-key Deny widened to key/*",
      lambda p: _stmt(p, "KeyApplyDenyWritesOnTheExistingKeys").update(Resource=gen.key_apply_resource_arns()["key_star"]),
      "in window, in region"),
+    # review r1 F1: condition mis-scoping of the protected-key Deny (kills consumer mutants that accept IMPLICIT_DENY on
+    # the protected keys, or probe them only in window / in region)
+    ("existing-key Deny made to expire",
+     lambda p: _stmt(p, "KeyApplyDenyWritesOnTheExistingKeys").update(Condition={"DateLessThan": {"aws:CurrentTime": EXPIRY}}),
+     "after expiry"),
+    ("existing-key Deny made region-only",
+     lambda p: _stmt(p, "KeyApplyDenyWritesOnTheExistingKeys").update(
+         Condition={"StringEquals": {"aws:RequestedRegion": gen.REGION}}), "outside the region"),
     ("bypass-flag PutKeyPolicy leg removed",
      lambda p: _stmt(p, "KeyApplyDenyRiskyKeyShapes").update(Action=["kms:CreateKey"]), "bypass flag"),
     ("b-wide Allow without DateLessThan",
@@ -799,11 +807,53 @@ def test_a_superseded_amendment_applies_nothing(monkeypatch, tmp_path):
     assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy" in p for p in problems)
 
 
-def test_the_amendment_record_declares_its_size_and_every_field_is_consumed():
+def test_the_amendment_record_declares_its_size_and_states_exactly_the_authored_fields():
+    """Every field of the record is either machine-checked against the authored ruling (ids, provenance, replaces,
+    retains, context) or against the loaded requirement source (amends_action_set_sha256), or is the closed status."""
     doc = _amendment_doc()
     assert doc["amendment_count"] == len(doc["amendments"]) == 1
     assert set(doc["amendments"][0]) == set(_dr()._REQUIREMENT_AMENDMENT_RULINGS["provenance_fields"])
-    assert "Resource \"*\"" in doc["amendments"][0]["replaces"]
+    ruling = _dr()._REQUIREMENT_AMENDMENT_RULINGS["rulings"][AMENDMENT_ID]
+    rec = doc["amendments"][0]
+    assert (rec["replaces"], tuple(rec["retains"]), rec["context"]) == (ruling["replaces"], ruling["retains"], ruling["context"])
+    assert "Resource \"*\"" in rec["replaces"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("retains", ["nothing is retained"]), ("retains", None), ("replaces", "every principal, every action"),
+    ("context", "unconditional"),
+])
+def test_the_amendment_narrative_must_equal_the_authored_ruling(monkeypatch, tmp_path, field, value):
+    doc = _amendment_doc()
+    doc["amendments"][0][field] = value
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert any("not applied" in p and field in p for p in problems), (field, problems)
+
+
+@pytest.mark.parametrize("extra", [{"principals": ["permanent_w0"]}, {"actions": ["kms:ScheduleKeyDeletion"]}, {"note": "x"}])
+def test_an_amendment_with_an_unknown_field_is_refused(monkeypatch, tmp_path, extra):
+    doc = _amendment_doc()
+    doc["amendments"][0].update(extra)
+    problems = _o11_problems(monkeypatch, amendments=doc, tmp_path=tmp_path)
+    assert any("unknown field" in p and "not applied" in p for p in problems), problems
+    assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy" in p for p in problems)
+
+
+def test_an_external_source_refuses_an_amendment_record_inside_the_repository(monkeypatch, tmp_path):
+    """review r1 F3: with an external requirement source, even an EXPLICIT amendments path into the repository (the
+    tracked fixture) is refused, fail-closed; a copy outside the repository is accepted."""
+    external = tmp_path / "external-requirements.json"
+    external.write_text(REQUIREMENTS.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setenv("SIGNALNEST_REQUIREMENTS_PATH", str(external))
+    monkeypatch.setenv("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH", str(AMENDMENTS))
+    problems = _dr().principals_actually_deny_their_requirements()
+    assert any("resolves inside the repository" in p for p in problems), problems
+    assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy" in p for p in problems)
+    # the same record read from OUTSIDE the repository applies
+    outside = tmp_path / "amendments.json"
+    outside.write_text(AMENDMENTS.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setenv("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH", str(outside))
+    assert _dr().principals_actually_deny_their_requirements() == []
 
 
 def test_the_requirements_guard_fails_on_an_unruled_amendment(tmp_path):

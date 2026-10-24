@@ -5,18 +5,24 @@
   "governed_files": {
     "critical-list-contract.json": "sha256:9566ca36c0d19b5e290095615666a875fd811105dff5e7da5e503597588e8c08",
     "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
-    "review-pin-registry.json": "sha256:f70d6de6b9c74dd7d9ad1986f27247cfde4e2813927238565bee0fc2c0a8dc40",
+    "review-pin-registry.json": "sha256:e1869dac6d52a0c7ac943b6b86ceba8e11c07aed295a240afa2b1c8fb2d9e1c2",
     "security-assurance-registry.json": "sha256:7434b5c6e0e14295e6286426c4af20fbc29d1ffe2996c978c190a850dc103fea",
     "site-coverage-function-assurance.json": "sha256:332afc74ad5f6bd5c6a88af9b4925caf702de46b2976f76507dbc9e6a09dd728",
     "site-coverage-matrix.json": "sha256:8572ccd2a571a044931f05e2f82b2751786cae140f83aeef6ba8e3607b33b87e",
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-10-23-P6-CI6-O11-AMENDMENT-R1": {
+        "approver": "P6-CI6-KEY-APPLY-K02-O11-AMENDMENT-R1-DRAFT-TRANCHE",
+        "established": "2026-10-23",
+        "scope": "Supersedes REV-2026-10-23-P6-CI6-O11-AMENDMENT after the independent review P6-W6-REV249-01/REVIEW-r1.md (SUPPORTS WITH CHANGES for 85702e9e). Same O11 amendment (operator ruling 2026-10-23 (2) section 1, sha256 e2a963e32d1aac0f1424c7749a29aa6511be8b38cf6d7f4a87d7356b11fa80a5; key_apply x kms:PutKeyPolicy only; changes the universal Resource * EXPLICIT_DENY enforcement for that pair only). r1 changes: deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS now also carries the amendment's replaces/retains/context text, which a record must state verbatim (F2); records with unknown fields are refused (F2); with an external requirement source an amendment path inside the repository is refused, fail-closed (F3); two negative controls for a time- or region-conditioned protected-key Deny kill the consumer mutants that accept IMPLICIT_DENY on, or probe only in-window/in-region, the protected keys (F1).",
+        "status": "ACTIVE"
+    },
     "REV-2026-10-23-P6-CI6-O11-AMENDMENT": {
         "approver": "P6-CI6-KEY-APPLY-K02-O11-AMENDMENT-DRAFT-TRANCHE",
         "established": "2026-10-23",
         "scope": "Operator ruling 2026-10-23 (reply 2, section 1, sha256 e2a963e32d1aac0f1424c7749a29aa6511be8b38cf6d7f4a87d7356b11fa80a5): O11 option 1 \u2014 a narrowly scoped requirement amendment for the expiring key-apply principal's kms:PutKeyPolicy ONLY. It changes O11's previous universal Resource * EXPLICIT_DENY enforcement for the one pair (key_apply, kms:PutKeyPolicy); every other principal and every other O11 action keep it. The original O11 requirement (tests/fixtures/synthetic-requirements.json and the external SOURCE 1 v2 record) is unchanged; the amendment is a separate provenance-carrying record (tests/fixtures/synthetic-requirement-amendments.json) that applies only when it equals the new review-pinned authored table deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS. For the pair, the * probe is replaced by expectations written from the ruling: PutKeyPolicy EXPLICIT_DENY on the state and secrets CMKs unconditionally, EXPLICIT_DENY with the bypass flag, and on another key EXPLICIT_ALLOW only before the expiry and inside the region (IMPLICIT_DENY otherwise). An external requirement source never inherits the repository amendment. Independent permissions/adversarial review of this tranche pending.",
-        "status": "ACTIVE"
+        "status": "SUPERSEDED"
     },
     "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE": {
         "approver": "P6-CI6-KEY-APPLY-K02-BWIDE-DRAFT-TRANCHE",

@@ -373,6 +373,16 @@ _REQUIREMENT_AMENDMENT_RULINGS = {
         "ruling_sha256": "e2a963e32d1aac0f1424c7749a29aa6511be8b38cf6d7f4a87d7356b11fa80a5",
         # The ruling's "two protected state/secrets keys", named by their identity-module role (never by a policy Sid).
         "protected_keys": ("state_cmk", "secrets_cmk"),
+        # The narrative a record must state VERBATIM (review r1 F2): a record cannot claim retentions or a scope the
+        # code does not enforce, and the code's expectations in _amended_pair_problems() implement exactly these.
+        "replaces": "For the expiring key-apply principal (key_apply) and the action kms:PutKeyPolicy ONLY, this amendment replaces O11's previous universal enforcement (EXPLICIT_DENY at Resource \"*\" for every designed principal). It changes that universal Resource \"*\" enforcement for this one principal/action pair and for nothing else.",
+        "retains": (
+            "unconditional explicit denial of kms:PutKeyPolicy on the two protected keys (the state CMK and the secrets CMK)",
+            "the existing bypass Deny (kms:BypassPolicyLockoutSafetyCheck = true is explicitly denied)",
+            "the reviewed b-wide Allow's expiry (DateLessThan aws:CurrentTime) and Region (aws:RequestedRegion) conditions",
+            "unchanged O11 protection (EXPLICIT_DENY at Resource \"*\") for every other covered principal and every other O11 action, key_apply's included",
+        ),
+        "context": "D-K1-3 = (b-wide), operator decision 2026-10-23: the key-apply principal holds an expiring, region-conditioned Allow of kms:PutKeyPolicy on Resource \"*\" because the CreateKey policy-lockout check requires the caller to hold it. The amendment does not establish that AWS's lockout-safety check accepts the conditioned Allow.",
     },
   },
   # Every amendment record must carry all of these (non-blank; `retains` a non-empty list) or it is refused.
@@ -387,17 +397,26 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def requirement_amendments(path: Path | None = None) -> dict:
     """The requirement-amendment record. Explicit SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH, else — only while the
     requirement source itself is the tracked synthetic set — the tracked synthetic amendments fixture. An EXTERNAL
-    requirement source never inherits a repository-controlled amendment (that would let a repository file relax SOURCE
-    1): without an explicit external amendment record it carries no amendment at all, so the original check applies."""
+    requirement source never inherits a repository-controlled amendment record: without an explicit amendment record it
+    carries no amendment at all (the original check applies), and an explicit amendment path that resolves INSIDE the
+    repository is REFUSED (AnchorUnavailable; review r1 F3), so a tracked file cannot relax an external SOURCE 1.
+    (The authored ruling table in this module is still a repository file; it is review-pinned.)"""
+    external = bool(os.environ.get("SIGNALNEST_REQUIREMENTS_PATH"))
     if path is None:
         explicit = os.environ.get("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH")
         if explicit:
             path = Path(explicit)
-        elif os.environ.get("SIGNALNEST_REQUIREMENTS_PATH"):
+        elif external:
             return {"version": "1", "amendments": []}
         else:
             path = SYNTHETIC_REQUIREMENT_AMENDMENTS
     path = Path(path)
+    if external:
+        resolved, root = path.resolve(), REPO_ROOT.resolve()
+        if resolved == root or root in resolved.parents:
+            raise AnchorUnavailable(
+                f"requirement amendment record {path} resolves inside the repository while the requirement source is "
+                "external; a repository file must not amend an external SOURCE 1. FAIL-CLOSED.")
     if not path.exists():
         raise AnchorUnavailable(f"requirement amendment record missing at {path}. FAIL-CLOSED.")
     doc = json.loads(path.read_text(encoding="utf-8"))
@@ -418,8 +437,18 @@ def _active_amendments() -> tuple[dict, list[str]]:
     base = {e.get("outcome_id"): e for e in external_requirements()["entries"]}
     principals = set(_principal_documents())
     seen: set = set()
-    for record in requirement_amendments().get("amendments") or []:
+    try:
+        records = requirement_amendments().get("amendments") or []
+    except AnchorUnavailable as exc:
+        return active, [f"requirement amendment source refused, no amendment applied: {exc}"]
+    allowed = set(_REQUIREMENT_AMENDMENT_RULINGS["provenance_fields"])
+    for record in records:
         aid = str(record.get("amendment_id") or "").strip() or "<no amendment_id>"
+        unknown = sorted(set(record) - allowed) if isinstance(record, dict) else ["<not an object>"]
+        if unknown:
+            problems.append(f"amendment {aid}: unknown field(s) {unknown}; an amendment states only the authored "
+                            "provenance fields; not applied")
+            continue
         missing = [f for f in _REQUIREMENT_AMENDMENT_RULINGS["provenance_fields"] if f != "retains"
                    and not str(record.get(f) or "").strip()]
         retains = record.get("retains")
@@ -438,7 +467,9 @@ def _active_amendments() -> tuple[dict, list[str]]:
                             f"{sorted(_REQUIREMENT_AMENDMENT_RULINGS['rulings'])}); not applied")
             continue
         wrong = [f for f in ("amends_outcome_id", "principal", "action", "ruling_date", "ruled_by", "ruling_record",
-                             "ruling_sha256") if record.get(f) != ruling[f]]
+                             "ruling_sha256", "replaces", "context") if record.get(f) != ruling[f]]
+        if list(record.get("retains") or []) != list(ruling["retains"]):
+            wrong.append("retains")
         if wrong:
             problems.append(f"amendment {aid}: field(s) {wrong} differ from the authored ruling — the exception "
                             "cannot be moved to another principal/action or re-attributed; not applied")
