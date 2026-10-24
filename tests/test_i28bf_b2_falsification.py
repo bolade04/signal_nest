@@ -380,6 +380,9 @@ _ARM16_NEEDLE = "declares no Docker call site"
 # final (post-deselection) item list are computed, and each test asserts on its own arm's record
 # alone: an exception raised in an arm's unit is re-raised, unchanged, in that arm's test.
 _GRADED_ARM_TESTS = ("test_policy_arm", "test_source_arm", "test_arm16_force_both_universes_empty")
+# The pool size the go/no-go gate measured, and the vCPU count of the 4-vCPU CI runner: each worker
+# drives a CPU-bound nested graded session, so more workers only add contention on the host.
+_MAX_ARM_WORKERS = 4
 
 
 def _graded_arm_unit(item):
@@ -405,18 +408,23 @@ def graded_arm_results(pristine, request, tmp_path_factory) -> dict:
     for item in request.session.items:
         unit = _graded_arm_unit(item)
         if unit is not None:
-            units.setdefault(*unit)
+            key, run = unit
+            # never let two tests share one arm's run (a duplicate arm id must fail, not merge)
+            assert key not in units, f"two selected graded-arm tests map to the same arm {key}"
+            units[key] = run
     tmps = {key: tmp_path_factory.mktemp(f"b2-{key[0]}-arm{key[1]:02d}") for key in units}
-    workers = max(1, min(os.cpu_count() or 1, len(units)))
-    results = {}
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    workers = max(1, min(cpus, _MAX_ARM_WORKERS, len(units)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {key: pool.submit(run, pristine, tmps[key]) for key, run in units.items()}
-        for key, future in futures.items():
-            try:
-                results[key] = (True, future.result())
-            except BaseException as exc:            # re-raised in this arm's own test only
-                results[key] = (False, exc)
-    return results
+        try:
+            concurrent.futures.wait(futures.values())
+        except BaseException:                       # e.g. KeyboardInterrupt: stop, never blame an arm
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    # an exception raised in an arm's unit is re-raised in that arm's own test only
+    return {key: (False, f.exception()) if f.exception() is not None else (True, f.result())
+            for key, f in futures.items()}
 
 
 def _arm_result(results: dict, key) -> dict:
