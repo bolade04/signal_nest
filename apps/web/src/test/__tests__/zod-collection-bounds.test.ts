@@ -107,6 +107,24 @@ describe('form validation behaviour the migration preserves', () => {
     expect(email.safeParse('person@example.com').success).toBe(true);
   });
 
+  // `.trim()` before `.min(1)` is the Invitations schema's shape, and it is the only construct
+  // here whose zod 4 equivalence was not already pinned by an existing exact-string assertion:
+  // the trim has to apply before the length check, or whitespace would satisfy `.min(1)`.
+  it('trims before measuring length, and returns the trimmed value', () => {
+    const email = z.string().trim().min(1, 'Enter an email address').email('Enter a valid email address');
+
+    const blank = email.safeParse('   ');
+    expect(blank.success).toBe(false);
+    /* v8 ignore next */
+    if (blank.success) return;
+    expect(blank.error.issues[0]?.message).toBe('Enter an email address');
+
+    expect(email.safeParse('  person@example.com  ')).toEqual({
+      success: true,
+      data: 'person@example.com',
+    });
+  });
+
   it('keeps a cross-field refinement on its stated path', () => {
     const schema = z
       .object({ new_password: z.string(), confirm_password: z.string() })
