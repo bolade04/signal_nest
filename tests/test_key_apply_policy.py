@@ -717,8 +717,10 @@ def test_without_the_amendment_record_the_universal_check_still_reports_the_pair
                         "kms:PutKeyPolicy rather than an explicit Deny"]
 
 
-def test_an_external_requirement_source_never_inherits_the_repository_amendment(monkeypatch):
-    monkeypatch.setenv("SIGNALNEST_REQUIREMENTS_PATH", str(REQUIREMENTS))
+def test_an_external_requirement_source_never_inherits_the_repository_amendment(monkeypatch, tmp_path):
+    external = tmp_path / "external-requirements.json"
+    external.write_text(REQUIREMENTS.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setenv("SIGNALNEST_REQUIREMENTS_PATH", str(external))
     monkeypatch.delenv("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH", raising=False)
     assert _dr().requirement_amendments()["amendments"] == []
     assert any("key_apply resolves EXPLICIT_ALLOW for kms:PutKeyPolicy" in p

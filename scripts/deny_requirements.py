@@ -401,9 +401,12 @@ def requirement_amendments(path: Path | None = None) -> dict:
     carries no amendment at all (the original check applies), and an explicit amendment path that resolves INSIDE the
     repository is REFUSED (AnchorUnavailable; review r1 F3), so a tracked file cannot relax an external SOURCE 1.
     (The authored ruling table in this module is still a repository file; it is review-pinned.)"""
-    external = bool(os.environ.get("SIGNALNEST_REQUIREMENTS_PATH"))
+    # Both are OPTIONAL explicit inputs, read through _explicit() exactly as external_requirements() reads
+    # SIGNALNEST_REQUIREMENTS_PATH (no workflow step produces either; CI runs the tracked synthetic tier).
+    source = _explicit("SIGNALNEST_REQUIREMENTS_PATH", SYNTHETIC_REQUIREMENTS)
+    external = source.resolve() != SYNTHETIC_REQUIREMENTS.resolve()
     if path is None:
-        explicit = os.environ.get("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH")
+        explicit = _explicit("SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH", None)
         if explicit:
             path = Path(explicit)
         elif external:
@@ -422,7 +425,9 @@ def requirement_amendments(path: Path | None = None) -> dict:
     doc = json.loads(path.read_text(encoding="utf-8"))
     _declared_version(doc, "version", ("1",), path)
     _declared_utc(doc, "created_utc", path)
-    _declared_count(doc, "amendment_count", len(doc.get("amendments") or []), path)
+    if not isinstance(doc.get("amendments"), list):
+        raise AnchorUnavailable(f"{path}: 'amendments' is {type(doc.get('amendments')).__name__}, not a list; FAIL-CLOSED.")
+    _declared_count(doc, "amendment_count", len(doc["amendments"]), path)
     return doc
 
 

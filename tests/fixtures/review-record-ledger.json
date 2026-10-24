@@ -8,7 +8,7 @@
     "review-pin-registry.json": "sha256:e1869dac6d52a0c7ac943b6b86ceba8e11c07aed295a240afa2b1c8fb2d9e1c2",
     "security-assurance-registry.json": "sha256:7434b5c6e0e14295e6286426c4af20fbc29d1ffe2996c978c190a850dc103fea",
     "site-coverage-function-assurance.json": "sha256:332afc74ad5f6bd5c6a88af9b4925caf702de46b2976f76507dbc9e6a09dd728",
-    "site-coverage-matrix.json": "sha256:8572ccd2a571a044931f05e2f82b2751786cae140f83aeef6ba8e3607b33b87e",
+    "site-coverage-matrix.json": "sha256:1d3c26ef164967edf17d51277eec1aab371df5b76ed126d1f22e56f6705dd4a0",
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
