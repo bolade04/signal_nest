@@ -76,6 +76,8 @@ export function requiredInputKeys(schema: z.ZodType): string[] {
     );
   }
   return Object.entries(schema.shape as Record<string, z.ZodType>)
+    // isOptional() parses synchronously, so a field with an async refinement throws here
+    // (loudly, never a silent pass); classify such a field deliberately if one appears.
     .filter(([, field]) => !field.isOptional())
     .map(([key]) => key);
 }

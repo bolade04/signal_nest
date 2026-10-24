@@ -32,6 +32,9 @@ import { renderApp, renderProductionApp } from '@/test/utils';
  * Both the zodResolver and useForm used below are the REAL implementations, wrapped only to
  * record the schema object and defaults the application itself passes (see
  * `@/test/form-defaults`). The required-key set is read from that schema at runtime.
+ *
+ * Coverage is per rendered scenario: a NEW useForm + zodResolver form is only checked once
+ * a scenario below renders it, so add one alongside any new form.
  */
 
 vi.mock('@hookform/resolvers/zod', async (importOriginal) => {
