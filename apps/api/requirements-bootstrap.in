@@ -6,4 +6,4 @@
 #                --no-build-isolation so no unpinned build dependency is fetched
 # Both pins equal the reader tooling lock's (security/test_tooling_locks.py keeps them equal).
 pip==26.2.2
-setuptools==84.0.0
+setuptools==84.2.1
