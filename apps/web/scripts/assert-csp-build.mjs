@@ -59,6 +59,14 @@ export const NEVER_FETCHED_ORIGINS = new Set([
   // navigation URL; in the browser the router resolves against window.location instead. An
   // API base of exactly http://localhost therefore fails the policy check below (fail-closed).
   'http://localhost',
+  // zod 4 (P6-SEC-ZOD4). Its JSON Schema conversion writes a `$schema` dialect identifier —
+  // `result.$schema = "…/draft/2020-12/schema"` and the draft-07 / draft-04 forms
+  // (node_modules/zod/v4/core/to-json-schema.js). A `$schema` value identifies a dialect; it is
+  // never retrieved, and the file contains no fetch or XHR. This app never calls toJSONSchema at
+  // all, so the literals are unreferenced code the bundler retains. Same kind of entry as the
+  // w3.org namespace URIs above.
+  'https://json-schema.org',
+  'http://json-schema.org',
 ]);
 
 /** The SPA policy, exactly. `frame-ancestors` is absent: a <meta> policy ignores it. */
