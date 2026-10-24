@@ -4,11 +4,11 @@ run-history endpoint.
     GET /api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/runs
 
 These run against a self-contained, throwaway four-market demo seed (Dallas, London,
-Lagos, Nairobi) with ``get_db`` overridden. The seed itself runs the pipeline in-process
-and creates **no** durable ``Job`` rows, so this suite synthesises deterministic runs by
-enqueuing scout-execute jobs and then setting their terminal fields directly — giving
-full control over status, timestamps, stats and trigger markers without touching the
-job-execution behaviour under test.
+Lagos, Nairobi) with ``get_db`` overridden. The seed records one real run per request
+(P6-UI-009); this suite clears those after seeding and synthesises deterministic runs
+by enqueuing scout-execute jobs and then setting their terminal fields directly —
+giving full control over status, timestamps, stats and trigger markers without
+touching the job-execution behaviour under test.
 
 The suite asserts only coverage the durable-jobs suite does not: the bounded, customer-
 safe run-history projection, request/workspace/tenant isolation across four markets,
@@ -42,6 +42,7 @@ from app.scouting_requests.run_history import (
 )
 from app.scouting_requests.schemas import TriggerType
 from app.tests._auth2_support import live_bearer
+from app.tests._seed_support import clear_seeded_runs
 
 API = get_settings().api_prefix
 
@@ -153,6 +154,7 @@ def h(tmp_path_factory):
     seed_mod.SessionLocal = factory
     try:
         seed_mod.seed(reset=True)
+        clear_seeded_runs(factory)
 
         with factory() as s:
             # Non-member outsider (exists + active, but not in the demo org) → 403.

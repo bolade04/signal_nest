@@ -28,20 +28,22 @@ export function Breadcrumbs() {
 
   if (crumbs.length <= 1) return null;
 
+  // The one item of the header row that gives way when space runs short (P6-UI-011):
+  // it shrinks, and each label truncates on one line rather than wrapping.
   return (
-    <nav aria-label="Breadcrumb" className="hidden md:block">
-      <ol className="flex items-center gap-1 text-sm text-muted-foreground">
+    <nav aria-label="Breadcrumb" className="hidden min-w-0 md:block">
+      <ol className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
         {crumbs.map((crumb, i) => {
           const last = i === crumbs.length - 1;
           return (
-            <li key={crumb.to} className="flex items-center gap-1">
-              {i > 0 ? <ChevronRight className="size-3.5 opacity-60" aria-hidden /> : null}
+            <li key={crumb.to} className="flex min-w-0 items-center gap-1">
+              {i > 0 ? <ChevronRight className="size-3.5 shrink-0 opacity-60" aria-hidden /> : null}
               {last ? (
-                <span aria-current="page" className="font-medium text-foreground">
+                <span aria-current="page" className="truncate font-medium text-foreground">
                   {crumb.label}
                 </span>
               ) : (
-                <Link to={crumb.to} className="hover:text-foreground hover:underline">
+                <Link to={crumb.to} className="truncate hover:text-foreground hover:underline">
                   {crumb.label}
                 </Link>
               )}

@@ -53,6 +53,14 @@ export const queryKeys = {
 
   opportunities: (workspaceId: string, filters: OpportunityFilters) =>
     ['workspaces', workspaceId, 'opportunities', filters] as const,
+  // The paged feed (an infinite query) under the same prefix, so every invalidation of
+  // a workspace's opportunities reaches it; its own segment keeps its cache shape apart.
+  opportunityFeed: (workspaceId: string, filters: OpportunityFilters) =>
+    ['workspaces', workspaceId, 'opportunities', 'feed', filters] as const,
+  // One page with its paging headers (an ApiPage, not a bare array), for screens that
+  // must report the true total rather than the page length.
+  opportunityPage: (workspaceId: string, filters: OpportunityFilters) =>
+    ['workspaces', workspaceId, 'opportunities', 'page', filters] as const,
   opportunity: (workspaceId: string, opportunityId: string) =>
     ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId] as const,
   opportunityIntelligence: (workspaceId: string, opportunityId: string) =>
@@ -87,6 +95,12 @@ export const queryKeys = {
   // would serve one workspace's value to another for the life of the entry.
   feedbackCapability: (workspaceId: string) =>
     ['workspaces', workspaceId, 'feedback-capability'] as const,
+
+  // Workspace-effective scheduling availability (P6-UI-006) — the same reasoning as
+  // `feedbackCapability`: a per-workspace answer must never share the raw-global
+  // `runtimeSummary` entry.
+  schedulingCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'scheduling-capability'] as const,
 
   auditLogs: (workspaceId: string) => ['workspaces', workspaceId, 'audit-logs'] as const,
 } as const;

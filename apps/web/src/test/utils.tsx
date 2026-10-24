@@ -2,10 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, type RenderResult } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode, type ReactElement, type ReactNode } from 'react';
-import { BrowserRouter, MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { vi } from 'vitest';
 import { setAuthToken } from '@/api/client';
 import { AppProviders } from '@/app/providers';
+import { AppRouter, ROUTER_USE_TRANSITIONS } from '@/app/router';
 import { ThemeProvider } from '@/app/theme';
 import { AuthProvider } from '@/auth/AuthContext';
 import { ToastProvider } from '@/components/ui/toast';
@@ -49,7 +50,9 @@ export function renderApp(
           <TooltipProvider delayDuration={0}>
             <AuthProvider>
               <WorkspaceProvider>
-                <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+                <MemoryRouter initialEntries={[route]} useTransitions={ROUTER_USE_TRANSITIONS}>
+                  {ui}
+                </MemoryRouter>
               </WorkspaceProvider>
             </AuthProvider>
           </TooltipProvider>
@@ -70,7 +73,7 @@ interface ProductionRenderOptions {
 
 /**
  * Render `ui` (normally `<App />`) exactly as main.tsx does — StrictMode,
- * BrowserRouter and the production AppProviders (the real QueryClient: 30 s
+ * AppRouter (its BrowserRouter) and the production AppProviders (the real QueryClient: 30 s
  * staleTime, 5 min gcTime) — at `url`, which is written to the jsdom address bar
  * first. Each call is a fresh
  * browser: storage and cookies are cleared, so a test can play a second user by
@@ -93,12 +96,12 @@ export function renderProductionApp(
 
   const result = render(
     <StrictMode>
-      <BrowserRouter>
+      <AppRouter>
         <AppProviders>
           {ui}
           {probe}
         </AppProviders>
-      </BrowserRouter>
+      </AppRouter>
     </StrictMode>,
   );
 

@@ -71,8 +71,9 @@ export function useCapabilityOverrides(organizationId: string | null, workspaceI
 
 /** Invalidate the tenant-scoped capability reads after a mutation.
  *
- * The third key is the customer-facing one. Without it an operator could enable
- * feedback for a workspace and the customer surface would keep saying otherwise
+ * The last two keys are the customer-facing ones. Without them an operator could
+ * enable feedback or scheduling for a workspace and the customer surface would keep
+ * saying otherwise
  * INDEFINITELY — not for 60s. `staleTime` is permission to refetch, not a
  * trigger: an entry that already has a mounted observer is not refetched when it
  * goes stale, and this app disables refetch-on-focus and sets no interval, so a
@@ -96,6 +97,10 @@ function useInvalidateCapabilityState(organizationId: string | null, workspaceId
       }),
       queryClient.invalidateQueries({
         queryKey: queryKeys.feedbackCapability(workspaceId),
+      }),
+      // Scheduling enforces per workspace too since P6-CAP-1 (P6-UI-006).
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.schedulingCapability(workspaceId),
       }),
     ]);
   };

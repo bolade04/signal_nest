@@ -1,0 +1,9 @@
+# API venv BOOTSTRAP inputs (P6-CI-6 coverage gaps): what the four CI jobs that create apps/api/.venv install
+# before the application lock. requirements-bootstrap.txt is compiled from this file, with hashes
+# (--allow-unsafe keeps pip and setuptools in it). Never edited by hand.
+#   pip        - the installer itself, installed from this lock instead of an unpinned self-upgrade
+#   setuptools - the build backend (pyproject.toml [build-system]); the editable install runs with
+#                --no-build-isolation so no unpinned build dependency is fetched
+# Both pins equal the reader tooling lock's (security/test_tooling_locks.py keeps them equal).
+pip==26.2.2
+setuptools==84.0.0

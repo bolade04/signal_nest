@@ -58,30 +58,34 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur">
+          {/* Only the breadcrumb trail may shrink in this row (P6-UI-011): every other item
+              keeps its size, and the switchers join it only once there is room for them. */}
           <div className="flex h-14 items-center gap-2 px-4">
             <Button
               variant="ghost"
               size="icon"
-              className="lg:hidden"
+              className="shrink-0 lg:hidden"
               aria-label="Open navigation"
               onClick={() => setMobileOpen(true)}
             >
               <Menu className="size-5" />
             </Button>
-            <div className="hidden items-center gap-2 md:flex">
+            <div className="hidden shrink-0 items-center gap-2 2xl:flex">
               <WorkspaceSwitcher />
               <LocationSwitcher />
             </div>
             <Breadcrumbs />
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <GlobalSearch />
               <ThemeToggle />
               <Notifications />
               <UserMenu />
             </div>
           </div>
-          {/* Compact switchers on small screens */}
-          <div className="flex items-center gap-2 overflow-x-auto border-t border-border px-4 py-2 md:hidden">
+          {/* Compact switchers below 1536px. The first row has room for them only from
+              there: from 1024 the sidebar takes 256px of the width, and a member of more
+              than one organization has a third switcher. */}
+          <div className="flex items-center gap-2 overflow-x-auto border-t border-border px-4 py-2 2xl:hidden">
             <WorkspaceSwitcher />
             <LocationSwitcher />
           </div>
