@@ -121,7 +121,10 @@ concern; every row's disposition is **non-secret configuration**.
 `api_prefix` (`API_PREFIX`).
 
 **Observability / tracing:** `service_name` (`SERVICE_NAME`), `log_format`
-(`LOG_FORMAT`), `metrics_enabled` (`METRICS_ENABLED`), `tracing_enabled`
+(`LOG_FORMAT`), `metrics_enabled` (`METRICS_ENABLED`), `metrics_exporter`
+(`METRICS_EXPORTER`), `metrics_namespace` (`METRICS_NAMESPACE`),
+`metrics_flush_interval_seconds` (`METRICS_FLUSH_INTERVAL_SECONDS`; the three P6-INF-5
+exporter fields, added after the §3.7 count was taken), `tracing_enabled`
 (`TRACING_ENABLED`), `tracing_exporter` (`TRACING_EXPORTER`), `tracing_sample_ratio`
 (`TRACING_SAMPLE_RATIO`), `tracing_export_timeout_seconds`
 (`TRACING_EXPORT_TIMEOUT_SECONDS`), `tracing_shutdown_flush_seconds`

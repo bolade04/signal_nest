@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
-import type { OpportunityDetail } from '@/api/types';
+import type { LocationOut, OpportunityDetail, OpportunitySort } from '@/api/types';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -45,8 +45,14 @@ export const CITIES: City[] = [
   { id: 'loc-nairobi', name: 'Nairobi', market: 'Nairobi, KE', country: 'Kenya' },
 ];
 
-const locations = CITIES.map((c) => ({
+// Every field LocationOut carries: the API always returns the full model, `is_active`
+// included. (This fixture used to omit `is_active`, `brand_id` and `workspace_id`, so every
+// fixture location rendered as "Inactive" and no test could notice.)
+const locations: LocationOut[] = CITIES.map((c) => ({
   id: c.id,
+  brand_id: 'brand-1',
+  workspace_id: 'ws-1',
+  is_active: true,
   name: c.name,
   address: `1 ${c.name} Ave`,
   city: c.name,
@@ -57,9 +63,31 @@ const locations = CITIES.map((c) => ({
   currency: 'USD',
   latitude: 0,
   longitude: 0,
+  languages: [],
+  local_phone: null,
+  local_website_page: null,
+  local_social_links: {},
+  google_business_profile: null,
   local_competitors: [],
   local_notes: '',
+  overrides: {},
 }));
+
+/** Location lifecycle state (P6-UI-023). Module state: call `locationModel.reset()` first. */
+const deactivatedLocations = new Set<string>();
+export const locationModel = {
+  reset(): void {
+    deactivatedLocations.clear();
+  },
+  deactivate(id: string): void {
+    deactivatedLocations.add(id);
+  },
+  isActive: (id: string): boolean => !deactivatedLocations.has(id),
+};
+const locationView = (loc: LocationOut): LocationOut => ({
+  ...loc,
+  is_active: !deactivatedLocations.has(loc.id),
+});
 
 const scoutRequests = CITIES.map((c, i) => ({
   id: `scout-${c.id}`,
@@ -110,6 +138,27 @@ interface Opp {
   created_at: string;
 }
 
+const SORT_KEYS: readonly OpportunitySort[] = ['priority', 'opportunity', 'confidence', 'relevance', 'created'];
+
+/**
+ * One page of a cursor-paginated list, as the API answers it (P6-PLAT-12): the body is
+ * the page, `X-Total-Count` the filtered total and `X-Next-Cursor` present only when
+ * another page follows. The fixture cursor is an offset; the client never reads it.
+ */
+export function pagedJson<T>(rows: T[], url: URL, defaultLimit = 100) {
+  const limit = Number(url.searchParams.get('limit') ?? defaultLimit);
+  // As the API: `limit` is an integer in 1..500, else 422 before any row is read.
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    return modelError(422, 'validation_error', 'Request validation failed');
+  }
+  const cursor = url.searchParams.get('cursor');
+  const start = cursor ? Number(cursor.replace('fixture-cursor-', '')) : 0;
+  const page = rows.slice(start, start + limit);
+  const headers: Record<string, string> = { 'X-Total-Count': String(rows.length) };
+  if (start + limit < rows.length) headers['X-Next-Cursor'] = `fixture-cursor-${start + limit}`;
+  return HttpResponse.json(page, { headers });
+}
+
 const opportunities: Opp[] = CITIES.flatMap((c, ci) =>
   [0, 1].map((n) => ({
     id: `opp-${c.id}-${n}`,
@@ -140,10 +189,11 @@ const opportunities: Opp[] = CITIES.flatMap((c, ci) =>
 );
 
 // One opportunity's explanation is degraded (P6-LLM-5): the provider failed, so the API
-// stores its placeholder copy with explanation_source 'degraded' and no ai_inference.
+// stores its placeholder copy (pipeline.DEGRADED_WHY) with explanation_source 'degraded'
+// and no ai_inference.
 export const degradedOpportunityId = 'opp-loc-dallas-1';
 export const DEGRADED_WHY =
-  'AI explanation unavailable: the language-model provider did not return a usable response for this run. Scores and observed evidence are unaffected.';
+  'AI explanation unavailable: the language-model provider did not return a usable response for this run.';
 
 function detailFor(o: Opp): OpportunityDetail {
   const degraded = o.id === degradedOpportunityId;
@@ -1140,6 +1190,11 @@ export const handlers = [
   http.get(P('/workspaces/:workspaceId/feedback-capability'), () =>
     HttpResponse.json({ enabled: false }),
   ),
+  // Workspace-effective scheduling availability (P6-UI-006). Dark by default for the
+  // same reason, with the same trade-off, as the feedback handler above.
+  http.get(P('/workspaces/:workspaceId/scheduling-capability'), () =>
+    HttpResponse.json({ enabled: false }),
+  ),
 
   // Coarse summary for any authenticated caller (no per-capability topology).
   // Raw global flags only — NOT the workspace-effective answer above.
@@ -1620,7 +1675,23 @@ export const handlers = [
   ),
 
   // ---- Locations & geo ----
-  http.get(P('/workspaces/:ws/locations'), () => HttpResponse.json(locations)),
+  http.get(P('/workspaces/:ws/locations'), () => HttpResponse.json(locations.map(locationView))),
+  // P6-UI-023: require_role(OWNER, ADMIN, MARKETER) as in apps/api/app/locations/routes.py.
+  ...(['deactivate', 'reactivate'] as const).map((verb) =>
+    http.post(P(`/workspaces/:ws/locations/:id/${verb}`), ({ request, params }) => {
+      const user = userOf(request);
+      const orgId = workspaceOrganization(String(params.ws));
+      const role = orgId && user ? membershipOf(orgId, user.id)?.role : undefined;
+      if (role && !['owner', 'admin', 'marketer'].includes(role)) {
+        return modelError(403, 'permission_denied', `Role '${role}' is not permitted for this action.`);
+      }
+      const loc = locations.find((l) => l.id === params.id);
+      if (!loc) return modelError(404, 'not_found', 'Location not found in this workspace.');
+      if (verb === 'deactivate') deactivatedLocations.add(loc.id);
+      else deactivatedLocations.delete(loc.id);
+      return HttpResponse.json(locationView(loc));
+    }),
+  ),
   http.post(P('/workspaces/:ws/locations'), async ({ request }) => {
     const body = (await request.json()) as Record<string, unknown>;
     return HttpResponse.json({ ...locations[0], ...body, id: 'loc-new' });
@@ -1636,8 +1707,21 @@ export const handlers = [
     const body = (await request.json()) as Record<string, unknown>;
     return HttpResponse.json({ ...body, id: 'geo-1', location_id: params.id });
   }),
+  // Shape of GeocodeResponse (apps/api/app/locations/schemas.py), as the fixture geocoder answers "Dallas".
   http.post(P('/geocode'), () =>
-    HttpResponse.json({ latitude: 32.7, longitude: -96.8, city: 'Dallas', state_province: 'TX', country: 'United States', timezone: 'America/Chicago', confidence: 0.95 }),
+    HttpResponse.json({
+      latitude: 32.7767,
+      longitude: -96.797,
+      city: 'Dallas',
+      state_province: 'Texas',
+      country: 'United States',
+      timezone: 'America/Chicago',
+      confidence: 0.95,
+      country_code: 'US',
+      region_code: 'US-TX',
+      label: 'Dallas, Texas, United States',
+      provider: 'fixture',
+    }),
   ),
 
   // ---- Scout requests ----
@@ -1681,6 +1765,13 @@ export const handlers = [
     const search = url.searchParams.get('search');
     const minScore = url.searchParams.get('min_score');
 
+    // The API declares `sort` as an enum and answers an unknown key with 422
+    // (apps/api/app/opportunities/routes.py, P6-PLAT-12); it used to fall back silently.
+    const sort = url.searchParams.get('sort');
+    if (sort !== null && !(SORT_KEYS as readonly string[]).includes(sort)) {
+      return modelError(422, 'validation_error', 'Request validation failed');
+    }
+
     let rows = opportunities.slice();
     if (locationId) rows = rows.filter((o) => o.location_id === locationId);
     if (scoutId) rows = rows.filter((o) => o.scout_request_id === scoutId);
@@ -1691,7 +1782,7 @@ export const handlers = [
       const q = search.toLowerCase();
       rows = rows.filter((o) => o.title.toLowerCase().includes(q));
     }
-    return HttpResponse.json(rows);
+    return pagedJson(rows, url);
   }),
   http.get(P('/workspaces/:ws/opportunities/:id'), ({ params }) => {
     const o = opportunities.find((x) => x.id === params.id);

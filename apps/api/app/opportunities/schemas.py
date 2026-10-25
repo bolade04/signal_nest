@@ -58,9 +58,10 @@ class OpportunityDetail(OpportunityCard):
     ai_inference: str | None
     #: Provenance of why_it_matters / who_cares / ai_inference / suggested_angles
     #: (and recommended_action on act decisions). ``degraded`` = the AI provider
-    #: failed; ``withheld`` = the AI text failed safety screening; ``budget_limited`` =
-    #: no AI call was made (run cap or workspace budget) - placeholder copy is shown
-    #: in all three; null = recorded before the marker.
+    #: failed (to explain, or to classify a member signal); ``withheld`` = the AI text
+    #: failed safety screening; ``budget_limited`` = an AI call was not made (run cap
+    #: or workspace budget) - placeholder copy is shown in all three; null = recorded
+    #: before the marker.
     explanation_source: (
         Literal["model", "degraded", "rule_based", "withheld", "budget_limited"] | None
     )

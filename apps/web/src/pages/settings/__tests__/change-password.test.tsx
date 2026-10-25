@@ -8,6 +8,7 @@ import { App } from '@/App';
 import { ApiError } from '@/api/client';
 import { API_PREFIX } from '@/api/config';
 import { useAuth } from '@/auth/AuthContext';
+import { SESSION_ENDED_COPY, SESSION_ENDED_NOTICE } from '@/auth/session-ended';
 import { SIGN_OUT_NOTICE_COPY } from '@/auth/sign-out';
 import { orgModel, type ModelRole } from '@/test/handlers';
 import { server } from '@/test/server';
@@ -633,11 +634,14 @@ describe('U17-F09 a 401 on the change itself', () => {
     expect(screen.getByTestId('auth-status')).toHaveTextContent(/^unauthenticated$/);
     expect(localStorage.getItem('signalnest-token')).toBeNull();
     expect(answered.filter((a) => CHANGE.test(a.path)).map((a) => a.status)).toEqual([401]);
-    // No success is claimed: neither the notice nor any router state carries one.
+    // No success is claimed: neither the notice nor any router state carries one. The
+    // router state carries exactly the session-ended notice (P6-UI-013): the session was
+    // refused, which is what sign-in says.
     await screen.findByRole('button', { name: /^sign in$/i });
     expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
     expect(screen.queryByText(/password has been changed/i)).not.toBeInTheDocument();
-    expect((window.history.state as { usr?: unknown } | null)?.usr ?? null).toBeNull();
+    expect((window.history.state as { usr?: unknown } | null)?.usr ?? null).toEqual({ notice: SESSION_ENDED_NOTICE });
+    expect(screen.getByText(SESSION_ENDED_COPY)).toBeInTheDocument();
     expect(orgModel.user(USER)?.password).toBe(CURRENT);
     expect(orgModel.signOuts()).toEqual([]);
   });

@@ -1,7 +1,8 @@
 """Scout request pipeline orchestration.
 
-Implements the Phase 2 job chain in-process (default). Full mode enqueues
-``run_scout_request`` onto Redis for the worker; the body is identical.
+Implements the Phase 2 job chain. A scout run is a durable ``scout_request.execute``
+job: the API enqueues it in the database job store and a worker runs :func:`_run`
+through the handler in :mod:`app.jobs.handlers`.
 
 Chain: ingest -> normalize -> classify -> dedupe/cluster -> noise filter ->
 relevance -> geo-relevance -> validate -> opportunity/confidence score -> decide ->
@@ -30,14 +31,13 @@ from app.core.enums import (
 )
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
-from app.infra.queue import register_job
-from app.infra.vector import cosine, embed_text
+from app.geography.markets import market_from_parts
+from app.infra.vector import build_index, embed_text
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
 from app.intelligence.models import AnalysisInput, OpportunityCandidate
 from app.intelligence.persistence import attach_opportunity, persist_intelligence
 from app.jobs.context import ExecutionContext, JobContextError, scope_matches
-from app.jobs.contracts import unwrap
 from app.llm.base import LLMError
 from app.llm.metering import LLMBudgetExceededError, LLMMeter
 from app.llm.screening import screen_classification, screen_explanation
@@ -77,10 +77,18 @@ DEDUPE_THRESHOLD = 0.92
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
     market = request.resolved_market
     rule = None
+    home = None
     if request.location_id:
         location = db.get(BusinessLocation, request.location_id)
-        if location and not market:
-            market = f"{location.city}, {location.state_province or location.country}"
+        if location:
+            if not market:
+                market = f"{location.city}, {location.state_province or location.country}"
+            # The location's own market, from its structured fields (P6-DATA-6).
+            home = market_from_parts(
+                city=location.city,
+                region=location.state_province,
+                country=location.country,
+            )
         rule = db.scalar(
             select(GeoCoverageRule).where(GeoCoverageRule.location_id == request.location_id)
         )
@@ -95,36 +103,19 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
             included_markets=tuple(rule.included_markets or ()),
             excluded_markets=tuple(rule.excluded_markets or ()),
             online_global=rule.online_global,
+            home_market=home,
+        )
+    elif request.location_id or market:
+        cov = CoverageRule(
+            coverage_type="radius",
+            included_markets=(market,) if market else (),
+            home_market=home,
         )
     else:
-        cov = CoverageRule(coverage_type="radius", included_markets=(market,) if market else ())
+        # No location and no market: an explicitly unscoped (global/online) request,
+        # which the fixture connector serves across every market.
+        cov = CoverageRule(coverage_type="online", online_global=True)
     return cov, market
-
-
-@register_job("run_scout_request")
-def run_scout_request(payload: dict) -> dict:
-    """Job entrypoint.
-
-    Accepts either a versioned :class:`~app.jobs.contracts.JobEnvelope` mapping or the
-    legacy bare ``{"scout_request_id": ...}`` payload, so existing callers and in-flight
-    messages keep working while new callers carry an explicit tenant execution context.
-    """
-    from app.db.session import SessionLocal
-
-    context, body = unwrap(payload)
-    db = SessionLocal()
-    meter = LLMMeter(get_settings())
-    try:
-        result = _run(db, body["scout_request_id"], context, meter=meter)
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        # Money a failed run spent is still counted against the workspace budget.
-        meter.persist_after_rollback(db)
-        raise
-    finally:
-        db.close()
 
 
 def _run(
@@ -169,7 +160,14 @@ def _run(
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
-    connector = get_connector(source_types=request.source_types or [], market=market)
+    # P6-CAP-1: the request's own tenant scope decides RSS through the resolver.
+    connector = get_connector(
+        source_types=request.source_types or [],
+        market=market,
+        db=db,
+        organization_id=request.organization_id,
+        workspace_id=request.workspace_id,
+    )
     fixtures = connector.fetch(
         market=market,
         keywords=request.keywords or ctx.keywords,
@@ -178,7 +176,9 @@ def _run(
 
     scanned = len(fixtures)
     normalized: list[NormalizedSignal] = []
-    seen_embeddings: list[tuple[str, list[float]]] = []
+    # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
+    # index is the configured vector backend (P6-PLAT-1); there is no fallback.
+    kept_index = build_index()
     noise_filtered = 0
 
     for fx in fixtures:
@@ -217,10 +217,9 @@ def _run(
         content_hash = hashlib.sha256(fx.content.strip().lower().encode()).hexdigest()[:64]
         embedding = embed_text(fx.content)
 
-        # Dedupe against already-seen signals in this request.
-        is_duplicate = any(
-            cosine(embedding, emb) >= DEDUPE_THRESHOLD for _, emb in seen_embeddings
-        )
+        # Dedupe against already-kept signals in this request.
+        nearest = kept_index.search(embedding, top_k=1)
+        is_duplicate = bool(nearest) and nearest[0][1] >= DEDUPE_THRESHOLD
 
         signal_type = None
         pain_dna = None
@@ -250,10 +249,7 @@ def _run(
             except LLMError as exc:
                 classification_source = ExplanationSource.DEGRADED.value
                 logger.warning(
-                    "classify_failed",
-                    extra={
-                        "extra_fields": {"error_class": type(exc).__name__, "err": str(exc)}
-                    },
+                    "classify_failed", extra={"extra_fields": {"error_class": type(exc).__name__}}
                 )
 
         # Additive Phase 3B Batch 3 annotation: a deterministic, offline intelligence
@@ -324,7 +320,7 @@ def _run(
         if is_duplicate:
             continue
 
-        seen_embeddings.append((norm.id, embedding))
+        kept_index.add(norm.id, embedding)
         normalized.append(norm)
 
     # Cluster non-noise signals by pain-point DNA (simple, explainable clustering).
@@ -421,9 +417,27 @@ def _build_opportunities(
 
         # Explanation — from the model only when action is plausible; the source
         # marker is persisted so degraded or rule-based copy is never mistaken for
-        # model reasoning (P6-LLM-5).
+        # model reasoning (P6-LLM-5). A member whose classification failed degrades
+        # the whole opportunity: its scores, title and grouping lack that input. A
+        # member left unclassified because a usage limit was reached (P6-LLM-4) lacks
+        # it just the same, and is marked ``budget_limited``.
+        sources = {m.ingest_metadata.get("classification_source") for m in members}
+        if ExplanationSource.DEGRADED.value in sources:
+            unclassified: ExplanationSource | None = ExplanationSource.DEGRADED
+        elif ExplanationSource.BUDGET_LIMITED.value in sources:
+            unclassified = ExplanationSource.BUDGET_LIMITED
+        else:
+            unclassified = None
         explanation, explanation_source, explanation_warnings = _explain(
-            request, primary, geo, audience_label, safe_positioning, relevance, ctx.industry, meter
+            request,
+            primary,
+            geo,
+            audience_label,
+            safe_positioning,
+            relevance,
+            unclassified,
+            ctx.industry,
+            meter,
         )
 
         priority = int(round(opp_breakdown.total * (conf_breakdown.total / 100.0)))
@@ -628,29 +642,80 @@ def _placeholder(why_it_matters: str, recommended_action: str) -> dict:
     }
 
 
-#: The provider failed (P6-LLM-5).
-DEGRADED_EXPLANATION = _placeholder(
+#: Placeholder stored when the provider fails (P6-LLM-5). It states that no AI
+#: explanation exists rather than imitating one; ``ai_inference`` stays empty. It
+#: makes no claim that the scores are unaffected: an outage fails classification
+#: too, and the scores, title and grouping are computed from the classification.
+DEGRADED_WHY = (
     "AI explanation unavailable: the language-model provider did not return a "
-    "usable response for this run. Scores and observed evidence are unaffected.",
+    "usable response for this run."
+)
+#: The placeholder when a member signal could not be classified.
+UNCLASSIFIED_WHY = (
+    f"{DEGRADED_WHY} AI classification failed for at least one of these signals, so the "
+    "scores, title and grouping shown were computed without it."
+)
+DEGRADED_EXPLANATION = _placeholder(
+    DEGRADED_WHY,
     "Review the observed evidence before acting; no AI recommendation was generated.",
 )
-#: The model replied but its text failed output screening (P6-LLM-3).
+#: The model replied but its text failed output screening (P6-LLM-3). Reached only
+#: when every member signal was classified by the model.
 WITHHELD_EXPLANATION = _placeholder(
     "AI explanation withheld: the generated text did not pass safety screening, so it "
-    "is not shown. Scores and observed evidence are unaffected.",
+    "is not shown.",
     "Review the observed evidence before acting; no AI recommendation is shown.",
 )
 #: No call was made: run call cap or workspace monthly budget reached (P6-LLM-4).
-BUDGET_LIMITED_EXPLANATION = _placeholder(
+BUDGET_LIMITED_WHY = (
     "AI explanation not generated: this workspace reached its AI usage limit for this "
-    "run or this month. Scores and observed evidence are unaffected.",
+    "run or this month."
+)
+#: The limit was reached before every member signal was classified.
+BUDGET_UNCLASSIFIED_WHY = (
+    f"{BUDGET_LIMITED_WHY} AI classification was not run for at least one of these "
+    "signals, so the scores, title and grouping shown were computed without it."
+)
+BUDGET_LIMITED_EXPLANATION = _placeholder(
+    BUDGET_LIMITED_WHY,
     "Review the observed evidence before acting; no AI recommendation was generated.",
 )
 
 
 def _explain(
-    request, primary, geo, audience_label, safe_positioning, relevance, industry, meter
+    request,
+    primary,
+    geo,
+    audience_label,
+    safe_positioning,
+    relevance,
+    unclassified: ExplanationSource | None,
+    industry,
+    meter,
 ) -> tuple[dict, ExplanationSource, list[str]]:
+    if unclassified is ExplanationSource.DEGRADED:
+        # Never explained: the prompt would carry an empty pain point, and a
+        # below-floor verdict may only reflect the missing classification.
+        return (
+            {
+                **DEGRADED_EXPLANATION,
+                "why_it_matters": UNCLASSIFIED_WHY,
+                "who_cares": audience_label,
+            },
+            ExplanationSource.DEGRADED,
+            [],
+        )
+    if unclassified is ExplanationSource.BUDGET_LIMITED:
+        # Same reasoning; and no further call is attempted for this opportunity.
+        return (
+            {
+                **BUDGET_LIMITED_EXPLANATION,
+                "why_it_matters": BUDGET_UNCLASSIFIED_WHY,
+                "who_cares": audience_label,
+            },
+            ExplanationSource.BUDGET_LIMITED,
+            [],
+        )
     if relevance < RELEVANCE_ACTION_FLOOR:
         return {
             "why_it_matters": "Below the relevance action floor; monitoring only.",

@@ -16,9 +16,8 @@ nothing it does not:
 * execution metadata (``job_id``, ``attempt``, ``worker_id``), and
 * ``is_cancelled`` — a cheap cooperative-cancellation check the handler may poll.
 
-The registry is intentionally separate from the legacy in-process
-``app.infra.queue`` registry: that one runs work synchronously inside the request;
-this one names durable, worker-executed units of work.
+This is the only job registry: the legacy ``app.infra.queue`` adapter (an in-process
+runner and a Redis stream that no consumer read) was removed in P6-PLAT-2.
 """
 
 from __future__ import annotations

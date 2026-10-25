@@ -378,6 +378,8 @@ class GateCase(unittest.TestCase):
             "unknown scope": lambda d: d["vulnerabilities"]["severity_rules"]["CRITICAL"]["fail_scopes"].append("tooling"),
             "target twice": lambda d: d["vulnerabilities"]["development_targets"].append("package-lock.json"),
             "non-boolean fix flag": lambda d: d["vulnerabilities"]["severity_rules"]["HIGH"].__setitem__("fail_requires_fix_available", "yes"),
+            "binary scope missing": lambda d: d["vulnerabilities"].pop("binary_scope"),
+            "binary scope unknown": lambda d: d["vulnerabilities"].__setitem__("binary_scope", "tooling"),
         }
         for label, mutate in mutations.items():
             with self.subTest(label):
@@ -388,6 +390,16 @@ class GateCase(unittest.TestCase):
     def test_the_tracked_policy_is_adopted_and_fails_critical_everywhere(self):
         doc = json.loads(POLICY.read_text())
         self.assertTrue(doc["_status"].startswith("ADOPTED"))
+        # O1: the binaries' scope is the operator's bounded decision of 2026-10-21, recorded apart from the scopes adopted on
+        # 2026-10-19 (which do not name the binaries) and carried by its own validated key
+        self.assertNotIn("binar", doc["_authority"]["vulnerability_scopes"])
+        o1 = doc["_operator_decisions"]["O1_2026_10_21"]
+        self.assertTrue(o1["status"].startswith("ADOPTED: a new, dated, bounded operator decision of 2026-10-21"))
+        self.assertIn("not shipped or executed as application runtime components", o1["decision"])
+        self.assertEqual(doc["vulnerabilities"]["binary_scope"], "development")
+        self.assertIn("vulnerabilities.binary_scope = development", o1["enforced_as"])
+        self.assertEqual(len(o1["limbs_verbatim"]), 6)
+        self.assertIn("repository owner is accountable", o1["open_findings"]["accountable_owner"])
         rules = doc["vulnerabilities"]["severity_rules"]
         self.assertEqual(set(rules["CRITICAL"]["fail_scopes"]), set(gate.VULN_SCOPES)); self.assertFalse(rules["CRITICAL"]["fail_requires_fix_available"])
         self.assertEqual((set(rules["HIGH"]["fail_scopes"]), rules["HIGH"]["fail_requires_fix_available"]), ({"image", "runtime"}, True))
@@ -573,6 +585,14 @@ class GateCase(unittest.TestCase):
         path = self.reports / "a.summary.txt"; path.write_text(path.read_text() + gate.RESULT_PASS + "\n")
         code, result, _ = self.run_gate("complete", "--name", "done", "--expect-pass", "a")
         self.assertEqual((code, result), (4, gate.RESULT_INCOMPLETE))
+
+    def test_the_control_result_lines_claim_no_policy_violation(self):
+        # D7 (label-only): one success line serves every control, so it must be true of a case meant to pass, to list a finding
+        # or to fail closed, as well as of a violation; the summary above it states the intended outcome
+        for line in (gate.RESULT_CONTROL_OK, gate.RESULT_CONTROL_BAD):
+            self.assertTrue(line.startswith("RESULT: CONTROL "))
+            self.assertNotIn("violation", line); self.assertNotIn("DETECTED", line)
+        self.assertNotEqual(gate.RESULT_CONTROL_OK, gate.RESULT_PASS)
 
     def test_complete_rejects_a_control_that_passed_cleanly(self):
         self.run_gate("vuln", self.write("r.json", image_report()), "--name", "ctl", "--kind", "image", "--artifact", "signalnest-api:ci")

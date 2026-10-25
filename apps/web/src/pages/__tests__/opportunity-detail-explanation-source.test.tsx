@@ -10,7 +10,12 @@ import { renderApp } from '@/test/utils';
 // model, so placeholder text is never read as evidence-backed AI reasoning.
 const DEGRADED_BADGE = 'AI explanation unavailable';
 const DEGRADED_NOTE = /AI explanation unavailable for this run\./i;
-const RULE_BASED_NOTE = /no AI model\s+was consulted/i;
+const RULE_BASED_NOTE = /no AI\s+explanation\s+was\s+generated/i;
+// Below the floor the classifier still ran (its output set the score); only the
+// explanation was skipped, and the note must not claim more than that.
+const RULE_BASED_NOTE_TEXT =
+  'Rule-based summary: this opportunity is below the relevance threshold, so no AI ' +
+  'explanation was generated for it. Its signals were still classified by the AI model.';
 
 describe('opportunity detail explanation source', () => {
   it('labels a degraded explanation as placeholder copy, not AI reasoning', async () => {
@@ -23,6 +28,9 @@ describe('opportunity detail explanation source', () => {
     const note = screen.getByRole('note');
     expect(note).toHaveTextContent(DEGRADED_NOTE);
     expect(note).toHaveTextContent(/placeholder copy, not AI reasoning/i);
+    // A provider outage also fails classification, which the scores are computed from:
+    // nothing on the page may claim they are unaffected.
+    expect(screen.queryAllByText(/unaffected/i)).toHaveLength(0);
     // The stored placeholder is shown as-is and no inference is fabricated.
     expect(screen.getByText(DEGRADED_WHY)).toBeInTheDocument();
     expect(screen.getByText(/No inference generated\./i)).toBeInTheDocument();
@@ -57,10 +65,13 @@ describe('opportunity detail explanation source', () => {
     const note = screen.getByRole('note');
     expect(note).toHaveTextContent(reason);
     expect(note).toHaveTextContent(/placeholder copy, not AI reasoning/i);
+    // A usage limit can stop classification too, so no label may claim the scores
+    // are unaffected (the same rule as the degraded label).
+    expect(screen.queryAllByText(/unaffected/i)).toHaveLength(0);
     expect(screen.queryByText(DEGRADED_BADGE)).not.toBeInTheDocument();
   });
 
-  it('says when no AI model was consulted', async () => {
+  it('says that no AI explanation was generated below the relevance floor', async () => {
     server.use(
       http.get(`*${API_PREFIX}/workspaces/:ws/opportunities/opp-loc-dallas-0`, () =>
         HttpResponse.json({
@@ -70,7 +81,9 @@ describe('opportunity detail explanation source', () => {
       ),
     );
     const screen = renderApp(<App />, { route: '/opportunities/opp-loc-dallas-0' });
-    expect(await screen.findByText(RULE_BASED_NOTE)).toBeInTheDocument();
+    const note = await screen.findByText(RULE_BASED_NOTE);
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe(RULE_BASED_NOTE_TEXT);
+    expect(screen.queryByText(/no AI model\s+was\s+consulted/i)).not.toBeInTheDocument();
     expect(screen.queryByText(DEGRADED_BADGE)).not.toBeInTheDocument();
   });
 

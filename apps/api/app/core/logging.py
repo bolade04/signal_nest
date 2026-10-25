@@ -55,6 +55,24 @@ _RESERVED_FIELDS = frozenset(
 )
 
 
+#: Logger the CloudWatch EMF metrics exporter writes through (``app.core.metrics_emf``).
+#: Its records carry a pre-serialized EMF document in :data:`EMF_LINE_ATTRIBUTE`, which
+#: both formatters emit verbatim: CloudWatch Logs extracts metrics only from a log event
+#: that IS the EMF JSON object, so it cannot be wrapped in the structured log envelope.
+#: Writing through the single root handler keeps one writer (and one lock) on stdout.
+#: The document is built only from catalogued metric names, allow-listed label keys,
+#: validated label values and numbers, so it carries nothing the redactor would remove.
+EMF_LOGGER_NAME = "signalnest.metrics.emf"
+EMF_LINE_ATTRIBUTE = "emf_line"
+
+
+def _emf_line(record: logging.LogRecord) -> str | None:
+    if record.name != EMF_LOGGER_NAME:
+        return None
+    line = getattr(record, EMF_LINE_ATTRIBUTE, None)
+    return line if isinstance(line, str) else None
+
+
 def _iso_timestamp(created: float) -> str:
     return datetime.fromtimestamp(created, tz=UTC).isoformat()
 
@@ -112,6 +130,9 @@ class JsonFormatter(logging.Formatter):
         self._environment = environment
 
     def format(self, record: logging.LogRecord) -> str:
+        emf = _emf_line(record)
+        if emf is not None:
+            return emf
         try:
             payload = _base_payload(
                 record, service=self._service, environment=self._environment
@@ -147,12 +168,15 @@ class ConsoleFormatter(logging.Formatter):
         self._environment = environment
 
     def format(self, record: logging.LogRecord) -> str:
+        emf = _emf_line(record)
+        if emf is not None:
+            return emf
         try:
             payload = _base_payload(
                 record, service=self._service, environment=self._environment
             )
             _merge_extra_fields(payload, record)
-            head = f"{payload['timestamp']} {record.levelname:<8} {record.name} {payload['event']}"
+            head =f"{payload['timestamp']} {record.levelname:<8} {record.name} {payload['event']}"
             extras = {
                 k: v
                 for k, v in payload.items()
@@ -228,6 +252,8 @@ def log_event(
 
 
 __all__ = [
+    "EMF_LINE_ATTRIBUTE",
+    "EMF_LOGGER_NAME",
     "JsonFormatter",
     "ConsoleFormatter",
     "configure_logging",

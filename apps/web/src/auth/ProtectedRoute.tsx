@@ -2,9 +2,10 @@ import { useEffect } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from './AuthContext';
+import { SESSION_ENDED_NOTICE } from './session-ended';
 
 export function ProtectedRoute() {
-  const { status, setIntendedPath } = useAuth();
+  const { status, sessionEnded, setIntendedPath } = useAuth();
   const location = useLocation();
 
   useEffect(() => {
@@ -22,7 +23,8 @@ export function ProtectedRoute() {
   }
 
   if (status === 'unauthenticated') {
-    return <Navigate to="/sign-in" replace />;
+    // A session the server refused is announced on sign-in (P6-UI-013).
+    return <Navigate to="/sign-in" replace state={sessionEnded ? { notice: SESSION_ENDED_NOTICE } : null} />;
   }
 
   return <Outlet />;

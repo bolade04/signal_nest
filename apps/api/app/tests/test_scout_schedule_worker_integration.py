@@ -23,9 +23,10 @@ recover machinery is in the loop, across the four independent demo markets
 * manual and scheduled runs coexist in one request and are labelled honestly in the
   customer-safe run history.
 
-The throwaway four-market seed creates no ``Job`` rows, so every job observed here was
-produced by the code under test. The database is file-backed because the worker opens
-its own sessions; the feature flag is turned on per test (dark by default).
+The throwaway four-market seed's own scout runs (P6-UI-009) are cleared after seeding,
+so every job observed here was produced by the code under test. The database is
+file-backed because the worker opens its own sessions; the feature flag is turned on
+per test (dark by default).
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from app.main import app  # noqa: F401
 from app.scouting_requests import schedules as sched
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.scouting_requests.run_history import get_run_history
+from app.tests._seed_support import clear_seeded_runs
 
 _MARKETS = ("dallas", "london", "lagos", "nairobi")
 # A fixed enable instant. The seeded tick is scheduled_for T0 + interval, so a worker
@@ -75,6 +77,7 @@ def factory(tmp_path_factory):
     seed_mod.SessionLocal = make
     try:
         seed_mod.seed(reset=True)
+        clear_seeded_runs(make)
         yield make
     finally:
         seed_mod.SessionLocal = original

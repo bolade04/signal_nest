@@ -20,10 +20,10 @@ from app.connectors.rss import RssNewsConnector
 from app.core.config import Settings, get_settings
 
 
-def _rss_policy(settings: Settings) -> ConnectorPolicy:
+def _rss_policy(settings: Settings, *, enabled: bool) -> ConnectorPolicy:
     return ConnectorPolicy(
         source_type="rss_news",
-        enabled=settings.connector_rss_enabled,
+        enabled=enabled,
         allowed_markets=frozenset(settings.connector_rss_markets),
     )
 
@@ -42,12 +42,18 @@ def resolve_connector(
     *,
     source_types: tuple[str, ...],
     market: str | None,
+    rss_enabled: bool,
     settings: Settings | None = None,
 ) -> SourceConnector | None:
-    """Return the permitted live connector for this scope, or ``None``."""
+    """Return the permitted live connector for this scope, or ``None``.
+
+    ``rss_enabled`` is the capability resolver's decision for the request's workspace
+    (P6-CAP-1), never the raw ``connector_rss_enabled`` flag; it has no default so no
+    caller can fall back to the flag by omission.
+    """
     settings = settings or get_settings()
 
-    policy = _rss_policy(settings)
+    policy = _rss_policy(settings, enabled=rss_enabled)
     if policy.permits(source_types=source_types, market=market):
         return _build_rss(settings)
 

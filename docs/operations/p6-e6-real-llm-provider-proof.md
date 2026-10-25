@@ -66,10 +66,11 @@ With the same image in both API and worker services and `LLM_PROVIDER=anthropic`
    (`provider=anthropic`, `is_simulated=false`, token counts, `estimated_cost_usd`,
    `attempt`), the `scout.completed` line's `llm_attempts` / `llm_cost_usd` /
    `llm_refusals`, and the run's `llm_usage_events` rows (counts and cost only). No
-   `llm.failed` line is expected; any `degraded`, `withheld` or `budget_limited`
-   opportunity is recorded as observed, not hidden. The workspace's monthly budget
-   (`llm_workspace_monthly_budget_usd`) and the per-run cap must be set high enough for the
-   run, or the refusal state is what gets recorded.
+   `llm.failed` line is expected; any `degraded` opportunity (a failed explanation, or a
+   failed classification of one of its signals, logged as `classify_failed`), and any
+   `withheld` or `budget_limited` opportunity, is recorded as observed, not hidden. The
+   workspace's monthly budget (`llm_workspace_monthly_budget_usd`) and the per-run cap
+   must be set high enough for the run, or the refusal state is what gets recorded.
 3. Note: until `P6-DATA-1` lands, connector input is fixture data (`is_simulated=true` on the
    opportunity). E6 concerns the provider, not the source; record both facts separately.
 
