@@ -5,6 +5,10 @@ explanation text carrying a link, contact detail, markup, an echoed injection ma
 or a high/blocked claim is withheld; medium claims are kept with warnings; long
 fields are capped. Pipeline level: a replayed real-adapter reply that fails screening
 is stored as ``withheld`` placeholder copy with its claim warnings, never verbatim.
+
+Every module-level path to a provider is offline (``app.tests._llm_offline``), and the
+pipeline's settings come from ``offline_settings``, so the module behaves the same on a
+machine whose environment configures a real provider.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from app.llm.service import LLMService
 from app.opportunities.models import Opportunity
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal
+from app.tests._llm_offline import offline_llm, offline_settings
 
 CLEAN = {
     "why_it_matters": "Commuters keep reporting long waits at peak hours.",
@@ -163,7 +168,13 @@ def _service(classified: dict, explanation: dict) -> LLMService:
         "fixture-key", "claude-sonnet-4-6", 5,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    return LLMService(provider, sleep=lambda _s: None)
+    return LLMService(provider, sleep=lambda _s: None, settings=offline_settings())
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _offline():
+    with offline_llm():
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -186,6 +197,7 @@ def seeded(tmp_path_factory):
 
 def _rerun(factory, monkeypatch, service):
     monkeypatch.setattr(pipeline, "llm_service", service)
+    monkeypatch.setattr(pipeline, "get_settings", offline_settings)
     with factory() as db:
         request_id = db.scalars(select(ScoutRequest.id).order_by(ScoutRequest.id)).first()
         before = set(db.scalars(select(Opportunity.id)))

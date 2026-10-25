@@ -31,6 +31,12 @@
 Concurrency: two runs of one workspace started together each see the other's
 spend only once it is recorded, so the budget can be exceeded by at most one run's
 cap worth of worst-case attempts. That bound is stated, not hidden.
+
+Failed attempts: a run's rows are written in its own transaction. On the durable
+worker path they are also re-written after an attempt's rollback (see
+:class:`LLMMeter`), so every failed or retried attempt is counted. The meter is held
+in memory, so the one gap is a worker process that dies during an attempt: that
+attempt's spend is not recorded.
 """
 
 from __future__ import annotations
@@ -126,9 +132,12 @@ class LLMMeter:
     """Accounting and limits for the model calls of ONE scout run.
 
     Bound to its workspace once the run has loaded its scout request. Attempts are
-    kept in memory and written by :meth:`flush` in the run's own transaction; if the
-    run fails and rolls back, :meth:`persist_after_rollback` writes them again in a
-    fresh transaction, so money spent by a failed run is still counted.
+    kept in memory and written by :meth:`flush` in the run's own transaction. On the
+    durable worker path (``app.jobs.handlers.execute_scout_request``), :meth:`flush` is
+    also registered as an after-rollback write. When an attempt fails, or loses its
+    lease at completion, the worker rolls the attempt back and commits the same rows
+    in a fresh transaction. Money spent by a failed attempt is therefore still
+    counted, and the next attempt's budget check sees it.
     """
 
     def __init__(self, settings: Settings):
@@ -231,17 +240,3 @@ class LLMMeter:
             )
             for record in self._records
         )
-
-    def persist_after_rollback(self, db: Session) -> None:
-        """Re-record a failed run's attempts in a fresh transaction (never raises)."""
-        if not self._records:
-            return
-        try:
-            self.flush(db)
-            db.commit()
-        except Exception as exc:  # accounting must not mask the run's own failure
-            db.rollback()
-            logger.warning(
-                "llm.usage_persist_failed",
-                extra={"extra_fields": {"error_class": type(exc).__name__}},
-            )

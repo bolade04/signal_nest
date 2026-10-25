@@ -15,6 +15,9 @@ locations/markets.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -118,6 +121,22 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
     return cov, market
 
 
+#: The meter of the run the durable handler is executing (P6-LLM-4), supplied with
+#: :func:`metered_run`. A context variable rather than an argument keeps the handler's
+#: call ``_run(db, scout_request_id, context)`` - a seam job tests stub - unchanged.
+_run_meter: ContextVar[LLMMeter | None] = ContextVar("llm_run_meter", default=None)
+
+
+@contextmanager
+def metered_run(meter: LLMMeter) -> Iterator[LLMMeter]:
+    """Make ``meter`` the meter of the :func:`_run` called inside this block."""
+    token = _run_meter.set(meter)
+    try:
+        yield meter
+    finally:
+        _run_meter.reset(token)
+
+
 def _run(
     db: Session,
     scout_request_id: str,
@@ -150,7 +169,7 @@ def _run(
 
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
     # opaque tenant reference sent to the provider.
-    meter = (meter or LLMMeter(get_settings())).bind(
+    meter = (meter or _run_meter.get() or LLMMeter(get_settings())).bind(
         db,
         organization_id=request.organization_id,
         workspace_id=request.workspace_id,

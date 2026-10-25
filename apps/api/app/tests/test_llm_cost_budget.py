@@ -5,15 +5,20 @@ costs come from the configured price table (unknown models fail closed to the hi
 rate, the mock is free); every attempt is recorded in ``llm_usage_events`` with no
 content; the per-run cap and the monthly budget stop calls before they are made and
 the affected output is marked ``budget_limited``; the run endpoint refuses an
-exhausted workspace with HTTP 429 ``llm_budget_exhausted``; a failed run's spend is
-still recorded; and only an opaque tenant reference - never a raw id - reaches the
+exhausted workspace with HTTP 429 ``llm_budget_exhausted``; on the durable worker
+path every failed attempt's spend is still recorded and the next attempt's budget
+check sees it; and only an opaque tenant reference - never a raw id - reaches the
 provider.
+
+Every module-level path to a provider is offline (``app.tests._llm_offline``), and
+every ``Settings`` here is built by ``offline_settings``, so the module behaves the
+same on a machine whose environment configures a real provider.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -26,7 +31,13 @@ from app.core.enums import ExplanationSource
 from app.db import seed as seed_mod
 from app.db.models import Base
 from app.db.session import get_db
+from app.jobs import handlers as job_handlers
 from app.jobs import pipeline
+from app.jobs.models import Job
+from app.jobs.service import enqueue_scout_request
+from app.jobs.status import JobStatus
+from app.jobs.store import DurableJobStore, JobLeaseLostError
+from app.jobs.worker import LEASE_LOST, JobRunner
 from app.llm.base import LLMMalformedError
 from app.llm.metering import (
     LLMBudgetExceededError,
@@ -44,6 +55,7 @@ from app.scouting_requests import routes as scout_routes
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal
 from app.tests._auth2_support import live_bearer
+from app.tests._llm_offline import offline_llm, offline_settings
 
 API = get_settings().api_prefix
 KEY = "fixture-key"
@@ -57,8 +69,14 @@ EXPLAINED = {
 }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _offline():
+    with offline_llm():
+        yield
+
+
 def _settings(**overrides) -> Settings:
-    return Settings(llm_provider="anthropic", llm_api_key=KEY, llm_model=MODEL, **overrides)
+    return offline_settings(llm_provider="anthropic", llm_api_key=KEY, llm_model=MODEL, **overrides)
 
 
 def _reply(output: dict, *, stop_reason: str = "end_turn", tokens=(1000, 500)) -> httpx.Response:
@@ -114,7 +132,7 @@ class TestPricing:
         assert cost_usd(_settings(), "mock", "mock-1", 10**6, 10**6) == 0.0
 
     def test_price_source_is_recorded(self):
-        assert "2026-06-24" in Settings().llm_price_source
+        assert "2026-06-24" in offline_settings().llm_price_source
 
     @pytest.mark.parametrize(
         "table", [{}, {"m": [1.0]}, {"m": [-1.0, 2.0]}, {"m": [1.0, float("nan")]}]
@@ -123,7 +141,7 @@ class TestPricing:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="llm_prices_usd_per_mtok"):
-            Settings(llm_prices_usd_per_mtok=table)
+            offline_settings(llm_prices_usd_per_mtok=table)
 
     def test_reply_cost_reaches_the_response_and_the_log(self, caplog):
         caplog.set_level("INFO", logger="signalnest.llm")
@@ -327,9 +345,23 @@ def test_run_cap_marks_the_rest_budget_limited(seeded, monkeypatch):
     assert all(
         o.explanation_source in {"budget_limited", "rule_based"} for o in opps
     )
+    member_sources: dict[str, set] = {}
+    for s in signals:
+        if s.cluster_id:
+            member_sources.setdefault(s.cluster_id, set()).add(
+                s.ingest_metadata["classification_source"]
+            )
     limited = [o for o in opps if o.explanation_source == "budget_limited"]
+    assert limited
     for o in limited:
-        assert o.why_it_matters == pipeline.BUDGET_LIMITED_EXPLANATION["why_it_matters"]
+        # A cluster the cap left unclassified says so; a fully classified one whose
+        # explain call the cap refused carries the plain budget copy.
+        expected = (
+            pipeline.BUDGET_UNCLASSIFIED_WHY
+            if "budget_limited" in member_sources[o.cluster_id]
+            else pipeline.BUDGET_LIMITED_WHY
+        )
+        assert o.why_it_matters == expected
         assert o.ai_inference is None
 
 
@@ -353,36 +385,181 @@ def test_exhausted_workspace_budget_makes_no_calls(seeded, monkeypatch):
     assert all(o.explanation_source in {"budget_limited", "rule_based"} for o in opps)
 
 
-def test_a_failed_run_still_records_its_spend(seeded, monkeypatch):
+def test_a_member_left_unclassified_by_the_cap_is_never_rule_based(seeded, monkeypatch):
+    """The cap stops classification part-way: a cluster with an unclassified member
+    is ``budget_limited`` with copy saying the scores lack it, even below the action
+    floor, where an all-classified cluster would be ``rule_based`` (#237's rule)."""
+    real = pipeline.score_relevance
+    monkeypatch.setattr(pipeline, "score_relevance", lambda sig, ctx: (0, real(sig, ctx)[1]))
     recorder = Recorder()
-    settings = _settings()
-    monkeypatch.setattr(pipeline, "get_settings", lambda: settings)
+    _, opps, signals, _ = _run_with(
+        seeded, monkeypatch, _settings(llm_max_calls_per_run=2), recorder
+    )
+    assert len(recorder.bodies) == 2
+    by_cluster: dict[str, set] = {}
+    for s in signals:
+        if s.cluster_id:
+            by_cluster.setdefault(s.cluster_id, set()).add(
+                s.ingest_metadata["classification_source"]
+            )
+    limited = [o for o in opps if "budget_limited" in by_cluster[o.cluster_id]]
+    complete = [o for o in opps if by_cluster[o.cluster_id] == {"model"}]
+    assert limited, "the cap must leave at least one cluster with an unclassified member"
+    for o in limited:
+        assert o.explanation_source == "budget_limited"
+        assert o.why_it_matters == pipeline.BUDGET_UNCLASSIFIED_WHY
+        assert "unaffected" not in o.why_it_matters.lower()
+        assert o.ai_inference is None
+    for o in complete:
+        assert o.explanation_source == "rule_based"
+
+
+# --------------------------------------------------------------------------- #
+# Failed attempts on the durable worker path (scope r1 MAJOR-1)
+# --------------------------------------------------------------------------- #
+class _LeaseLostAtCompletion(DurableJobStore):
+    """The lease is reclaimed while the attempt runs: completion matches no row."""
+
+    def complete(self, db, job, **_kwargs):
+        raise JobLeaseLostError(job.id)
+
+
+def _failing_worker_run(monkeypatch, settings: Settings, *, fail: bool = True) -> Recorder:
+    """The real handler under the real worker, with a replayed real adapter. With
+    ``fail`` the pipeline raises after its classification calls (a non-LLM error)."""
+    recorder = Recorder()
+    monkeypatch.setattr(job_handlers, "get_settings", lambda: settings)
     monkeypatch.setattr(pipeline, "llm_service", recorder.service(settings))
-    monkeypatch.setattr("app.db.session.SessionLocal", seeded)
+    if fail:
+        def boom(*_a, **_k):
+            raise RuntimeError("opportunity build failed")
 
-    def boom(*_a, **_k):
-        raise RuntimeError("opportunity build failed")
+        monkeypatch.setattr(pipeline, "_build_opportunities", boom)
+    return recorder
 
-    monkeypatch.setattr(pipeline, "_build_opportunities", boom)
+
+def _enqueue(factory, request: ScoutRequest) -> str:
+    with factory() as db:
+        job = enqueue_scout_request(
+            db,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+            scout_request_id=request.id,
+            location_id=request.location_id,
+            campaign_id=request.campaign_id,
+            request_id=request.id,
+        )
+        db.commit()
+        return job.id
+
+
+def _attempt(factory, attempt: int, store: DurableJobStore | None = None) -> str | bool:
+    """One worker poll, a day after the previous one so any retry backoff has passed."""
+    when = datetime.now(UTC) + timedelta(days=attempt)
+    runner = JobRunner(
+        settings=offline_settings(),
+        session_factory=factory,
+        store=store or DurableJobStore(),
+        clock=lambda: when,
+    )
+    if store is None:
+        return runner.poll_once(worker_id="w-llm4")
+    with factory() as db:
+        job = store.claim_one(db, worker_id="w-llm4", lease_seconds=60, now=when)
+        db.commit()
+        return runner.run_claimed(db, job)
+
+
+def _anthropic_rows(factory, request_id: str) -> list[LLMUsageEvent]:
+    with factory() as db:
+        return list(db.scalars(select(LLMUsageEvent).where(
+            LLMUsageEvent.scout_request_id == request_id,
+            LLMUsageEvent.provider == "anthropic",
+        )))
+
+
+def test_every_failed_worker_attempt_records_its_spend(seeded, monkeypatch):
+    recorder = _failing_worker_run(monkeypatch, _settings())
     request = _first_request(seeded)
     with seeded() as db:
         opportunities_before = db.scalar(select(func.count()).select_from(Opportunity))
-    with pytest.raises(RuntimeError):
-        pipeline.run_scout_request({"scout_request_id": request.id})
-    assert recorder.bodies  # classification calls were made before the failure
-    with seeded() as db:
-        # (the seed's own mock run of this request recorded zero-cost "mock" rows too)
-        rows = db.scalars(
-            select(LLMUsageEvent).where(
-                LLMUsageEvent.scout_request_id == request.id,
-                LLMUsageEvent.provider == "anthropic",
+    job_id = _enqueue(seeded, request)
+    calls_per_attempt = None
+    for attempt in (1, 2):
+        assert _attempt(seeded, attempt) is True
+        with seeded() as db:
+            job = db.get(Job, job_id)
+            assert (job.status, job.attempt_count) == (JobStatus.RETRY_WAIT.value, attempt)
+            # The attempt's own work was rolled back ...
+            assert db.scalar(select(func.count()).select_from(Opportunity)) == (
+                opportunities_before
             )
-        ).all()
-        status = db.get(ScoutRequest, request.id).status
-        opportunities_after = db.scalar(select(func.count()).select_from(Opportunity))
+        calls_per_attempt = calls_per_attempt or len(recorder.bodies)
+        assert calls_per_attempt > 0
+        # ... but every provider call it paid for is recorded, once.
+        rows = _anthropic_rows(seeded, request.id)
+        assert len(rows) == len(recorder.bodies) == attempt * calls_per_attempt
+        assert {r.workspace_id for r in rows} == {request.workspace_id}
+        assert sum(r.cost_usd for r in rows) == pytest.approx(0.0105 * len(rows))
+
+
+def test_the_next_attempt_is_budgeted_with_the_failed_attempts_spend(seeded, monkeypatch):
+    budget = 0.04
+    recorder = _failing_worker_run(
+        monkeypatch, _settings(llm_workspace_monthly_budget_usd=budget)
+    )
+    request = _first_request(seeded)
+    _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    first = len(recorder.bodies)
+    assert first > 0
+    assert _attempt(seeded, 2) is True
+    # Unrecorded, the second attempt would start from zero and pay for ``first`` calls
+    # again; recorded, the budget it sees is already spent.
+    assert len(recorder.bodies) == first
+    rows = _anthropic_rows(seeded, request.id)
+    assert len(rows) == first
+    assert sum(r.cost_usd for r in rows) <= budget
+
+
+def test_spend_survives_a_lease_lost_at_completion(seeded, monkeypatch):
+    recorder = _failing_worker_run(monkeypatch, _settings(), fail=False)
+    request = _first_request(seeded)
+    with seeded() as db:
+        opportunities_before = db.scalar(select(func.count()).select_from(Opportunity))
+    _enqueue(seeded, request)
+    assert _attempt(seeded, 1, store=_LeaseLostAtCompletion()) == LEASE_LOST
+    assert recorder.bodies
+    rows = _anthropic_rows(seeded, request.id)
     assert len(rows) == len(recorder.bodies)
-    # The run itself rolled back: status and opportunities are as before it started.
-    assert status == request.status and opportunities_after == opportunities_before
+    with seeded() as db:
+        assert db.scalar(select(func.count()).select_from(Opportunity)) == opportunities_before
+
+
+def test_a_successful_worker_attempt_records_its_spend_once(seeded, monkeypatch):
+    recorder = _failing_worker_run(monkeypatch, _settings(), fail=False)
+    request = _first_request(seeded)
+    job_id = _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    with seeded() as db:
+        assert db.get(Job, job_id).status == JobStatus.SUCCEEDED.value
+    assert recorder.bodies
+    assert len(_anthropic_rows(seeded, request.id)) == len(recorder.bodies)
+
+
+def test_a_failing_after_rollback_write_never_masks_the_attempt(seeded, monkeypatch):
+    _failing_worker_run(monkeypatch, _settings())
+
+    def broken_flush(self, db):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(pipeline.LLMMeter, "flush", broken_flush)
+    request = _first_request(seeded)
+    job_id = _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    with seeded() as db:
+        job = db.get(Job, job_id)
+        assert (job.status, job.attempt_count) == (JobStatus.RETRY_WAIT.value, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -449,8 +626,40 @@ def test_run_endpoint_accepts_a_workspace_under_budget(seeded, client, monkeypat
     assert response.json()["status"] == "queued"
 
 
-def test_mock_provider_is_never_refused(seeded, client):
+def test_mock_provider_is_never_refused(seeded, client, monkeypatch):
+    monkeypatch.setattr(scout_routes, "get_settings", lambda: offline_settings())
     request = _first_request(seeded)
     _spend(seeded, request, 50.0)
-    assert get_settings().llm_provider == "mock"
+    assert scout_routes.get_settings().llm_provider == "mock"
     assert _post_run(client, request).status_code == 200
+
+
+def test_a_foreign_caller_is_refused_before_any_budget_lookup(seeded, client, monkeypatch):
+    """E9 on the budget branch (scope r1 INFO-7): under a real provider, the owner of
+    another organization naming an exhausted workspace gets the existing membership
+    refusal (403 ``permission_denied``), never the 429 that would reveal its spend."""
+    monkeypatch.setattr(scout_routes, "get_settings", lambda: _settings())
+    target = _first_request(seeded)
+    _spend(seeded, target, 50.0)
+    registered = client.post(
+        f"{API}/auth/register",
+        json={
+            "email": "llm4-outsider@example.com",
+            "full_name": "LLM4 outsider",
+            "password": "Outsider-passphrase-2026!",
+            "organization_name": "LLM4 outsider organization",
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    assert registered.json()["memberships"][0]["organization_id"] != target.organization_id
+    path = f"{API}/workspaces/{target.workspace_id}/scout-requests/{target.id}/run"
+    foreign = client.post(
+        path, headers={"Authorization": f"Bearer {registered.json()['access_token']}"}
+    )
+    assert foreign.status_code == 403, foreign.text
+    assert foreign.json()["error"]["code"] == "permission_denied"
+    assert "budget" not in foreign.text.lower() and "USD" not in foreign.text
+    # Positive control: the exhausted workspace's own editor does get the refusal.
+    assert _post_run(client, target).status_code == 429
+    with seeded() as db:
+        assert db.get(ScoutRequest, target.id).status == target.status

@@ -5,6 +5,9 @@ earlier model output - is sanitized, stripped of Unicode format characters, capp
 escaped and wrapped in an ``untrusted_data`` block, and the system prompt states that
 nothing inside such a block is an instruction. Checked on the rendered prompt and on
 the exact request body the real Anthropic adapter sends (recorded replay; no network).
+
+Every module-level path to a provider is offline (``app.tests._llm_offline``): a request
+no ``httpx.MockTransport`` serves fails the test loudly.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from app.llm.base import LLMRequest
 from app.llm.prompts import PROMPTS, SYSTEM_PROMPT, render_prompt, template_fields
 from app.llm.providers_real import AnthropicProvider
 from app.llm.untrusted import TRUNCATION_MARKER, clean, data_block
+from app.tests._llm_offline import offline_llm
 
 CAP = 4000
 BLOCK = re.compile(r'<untrusted_data name="([a-z_]+)">\n(.*?)\n</untrusted_data>', re.S)
@@ -35,6 +39,12 @@ PAYLOADS = {
     "control_chars": "line\x00one\x07two\x1bthree",
     "braces": "{content} {audiences} {0} {__class__}",
 }
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _offline():
+    with offline_llm():
+        yield
 
 
 def _blocks(prompt: str) -> dict[str, str]:

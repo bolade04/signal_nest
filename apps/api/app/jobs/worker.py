@@ -270,6 +270,8 @@ class JobRunner:
             correlation_id=job.correlation_id,
         )
         started = time.perf_counter()
+        # Writes the handler needs kept even if this attempt is rolled back.
+        after_rollback: list[Callable[[Session], None]] = []
         try:
             handler = resolve_handler(job.job_type)
             # Capture one execution-boundary timestamp from the worker's clock and
@@ -286,6 +288,7 @@ class JobRunner:
                 worker_id=worker_id,
                 is_cancelled=self._cancel_checker(job_id),
                 now=now,
+                after_rollback=after_rollback,
             )
             result = handler(ctx)
             # A child span over just the terminal transition (not the handler, which
@@ -312,6 +315,7 @@ class JobRunner:
             return JobStatus.SUCCEEDED.value
         except JobLeaseLostError:
             db.rollback()
+            self._write_after_rollback(db, after_rollback, job_type=job_type)
             log_event(
                 logger, "worker.lease_lost", level=WARNING,
                 component="jobs", outcome="degraded", stage="complete",
@@ -319,6 +323,7 @@ class JobRunner:
             return LEASE_LOST
         except JobExecutionError as exc:
             db.rollback()
+            self._write_after_rollback(db, after_rollback, job_type=job_type)
             if exc.error.code == JobErrorCode.CANCELLED:
                 try:
                     self._store.finish_cancel(
@@ -340,6 +345,7 @@ class JobRunner:
             )
         except Exception as exc:  # unclassified escape -> conservative retryable
             db.rollback()
+            self._write_after_rollback(db, after_rollback, job_type=job_type)
             # Record only the exception *class name*, never its message (which may
             # carry secrets or customer content).
             return self._fail(
@@ -350,6 +356,36 @@ class JobRunner:
         finally:
             stop_hb.set()
             hb_thread.join(timeout=1.0)
+
+    def _write_after_rollback(
+        self, db: Session, writers: list[Callable[[Session], None]], *, job_type: str
+    ) -> None:
+        """Commit what a rolled-back attempt must not lose, in its own transaction.
+
+        Runs after the attempt's rollback and before its failure (or lease-loss)
+        bookkeeping, once per failed attempt rather than only on the final failure:
+        a retried job's earlier attempts happened too (e.g. LLM spend, P6-LLM-4).
+        Best-effort, like the terminal-failure hook: a writer that raises discards
+        only these writes, logged by class name, and never changes the attempt's
+        recorded outcome.
+        """
+        if not writers:
+            return
+        try:
+            for write in writers:
+                write(db)
+            db.commit()
+        except Exception as exc:  # noqa: BLE001 - never mask the attempt's own failure
+            db.rollback()
+            log_event(
+                logger,
+                "worker.after_rollback_write_failed",
+                level=WARNING,
+                component="jobs",
+                outcome="degraded",
+                job_type=job_type,
+                error_class=type(exc).__name__,
+            )
 
     #: Terminal statuses that mean "this job will never run again and it failed".
     #: ``retry_wait`` is deliberately absent: the attempt failed, the job did not.
