@@ -23,6 +23,33 @@ export interface ObservedForm {
 
 export const observedForms: ObservedForm[] = [];
 
+/**
+ * FU-261-1: what this test file observed at RUNTIME, kept across scenarios (`observedForms`
+ * is cleared per scenario). Both are private and only grow from the real `useForm` wrapper:
+ * a site string cannot be added by hand, only a form object this module itself recorded.
+ */
+const recordedForms = new WeakSet<ObservedForm>();
+const recordedSites = new Set<string>();
+const assertedSites = new Set<string>();
+
+/** Mark a recorded form as having passed the defaults assertions. Refuses any other object. */
+export function markAsserted(form: ObservedForm): void {
+  if (!recordedForms.has(form)) {
+    throw new Error(`markAsserted: ${String(form?.site)} was not recorded by the useForm wrapper`);
+  }
+  assertedSites.add(form.site);
+}
+
+/** Every site the useForm wrapper recorded in this file so far (a copy). */
+export function runtimeRecordedSites(): Set<string> {
+  return new Set(recordedSites);
+}
+
+/** Every recorded site whose form passed the defaults assertions in this file so far (a copy). */
+export function runtimeAssertedSites(): Set<string> {
+  return new Set(assertedSites);
+}
+
 const schemaByResolver = new WeakMap<object, z.ZodType>();
 
 export function trackZodResolver<F extends AnyFn>(real: F): F {
@@ -47,7 +74,10 @@ export function trackUseForm<F extends AnyFn>(real: F): F {
     const props = args[0] as { resolver?: unknown; defaultValues?: unknown; values?: unknown } | undefined;
     const schema = props?.resolver ? schemaByResolver.get(props.resolver as object) : undefined;
     if (schema) {
-      observedForms.push({ site: callerSite(), schema, defaultValues: props?.defaultValues, values: props?.values });
+      const form: ObservedForm = { site: callerSite(), schema, defaultValues: props?.defaultValues, values: props?.values };
+      recordedForms.add(form);
+      recordedSites.add(form.site);
+      observedForms.push(form);
     }
     return real(...args);
   }) as F;
