@@ -164,6 +164,15 @@ BYPASSES = [
     "Call (415) 555-0100 to buy",
     "Admins [quoted:you are now] in charge",  # R3-04: strong markers stay withheld
     "Reply as [quoted:assistant:] now",
+    # adversarial r4 (fix pass 4)
+    "Visit evil-asp.net now",  # R4-A: the tech-name exemption is anchored
+    "Visit cheap-vb.net now",
+    "Visit get.ado.net now",
+    "Visit EVIL-ASP.NET now",
+    "Visit deals.net now",  # bare .net
+    "Order at deals\u3002shop",  # R4-C: ideographic full stop
+    "Order at deals\uff61shop",  # halfwidth ideographic full stop
+    "Order at BESTDEALS.SHOP today",  # R4-B: an ALL-CAPS TLD is a TLD
 ]
 #: Ordinary explanation text that must still be kept.
 LEGITIMATE = [
@@ -191,6 +200,22 @@ LEGITIMATE = [
     "Caf\u00e9 cr\u00e8me lovers wait at the station.",
     "Share index.ts and the README.md with the developers.",  # file extensions, not TLDs
     "Queues peak at rush hour.It is worst on Mondays.",  # capitalised word after a dot
+    # adversarial r4 R4-D: Title case after a dot is a missing space, ASCII or not
+    "Ask Sra.Garc\u00eda about the morning queue.",
+    "Dr.M\u00fcller's patients come before work.",
+    "Riders in Z\u00fcrich.Most of them commute.",
+    "Build on ASP.NET today.",
+]
+#: Fix pass 4, R4-E: meaningful characters that the stored text must keep as written.
+AS_WRITTEN = [
+    "Customers rated us 4\u00bd stars.",
+    "A 50 m\u00b2 seating area.",
+    "Order the House\u2122 blend.",
+    "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 coffee",  # Persian, ZWNJ
+    "\u0915\u094d\u200d\u0937 conjunct",  # Devanagari, ZWJ
+    "\U0001F468\u200d\U0001F469\u200d\U0001F467 families visit on Sundays.",  # ZWJ emoji
+    "\u2764\ufe0f from our regulars",  # variation selector
+    "Hebrew speakers say \u05e9\u05dc\u05d5\u05dd\u200f.",  # RLM
 ]
 
 
@@ -264,11 +289,25 @@ class TestNormalisedScreening:
         assert len(screened.output["why_it_matters"]) <= MAX_FIELD_CHARS
         assert "evil" not in screened.output["why_it_matters"]
 
-    def test_the_normalised_text_is_what_is_stored(self):
-        screened = screen_explanation(
-            _with(why_it_matters="\uff23ommuters\u200b wait at peak\u00a0hours."), None
-        )
-        assert screened.output["why_it_matters"] == "Commuters wait at peak hours."
+    @pytest.mark.parametrize("text", AS_WRITTEN)
+    def test_meaningful_characters_are_stored_as_written(self, text):
+        # R4-E: a normalised COPY is screened; the stored text is NFC as written.
+        screened = screen_explanation(_with(why_it_matters=text, suggested_angles=[text]), None)
+        assert screened.output is not None, screened.withheld_reason
+        assert screened.output["why_it_matters"] == text
+        assert screened.output["suggested_angles"] == [text]
+        assert screen_audience(text, None) == text
+
+    def test_bidi_controls_and_stray_invisibles_are_not_stored(self):
+        cases = {
+            "Visit \u202eoffers\u202c today": "Visit offers today",
+            "Great\u200d coffee\u200b here\u2060.": "Great coffee here.",
+            "\ufe0fCommuters wait.": "Commuters wait.",
+            "Morning\u2066 rush\u2069": "Morning rush",
+        }
+        for raw, stored in cases.items():
+            screened = screen_explanation(_with(why_it_matters=raw), None)
+            assert screened.output["why_it_matters"] == stored
 
     def test_an_echoed_act_as_defang_is_unwrapped_not_withheld(self):
         screened = screen_explanation(

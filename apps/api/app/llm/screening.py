@@ -11,13 +11,15 @@ audience label is normalised and screened like explanation text, against the sam
 patterns and the claim check. A failing label is dropped, and the pipeline then falls
 back to the business's own first audience.
 
-All model text is first Unicode-normalised (NFKC, then invisible characters
-removed: ``Cf`` and every ``Default_Ignorable_Code_Point``;
-:func:`app.llm.untrusted.normalise`) and capped at its field limit. A zero-width,
-fullwidth or variation-selector character therefore cannot split a link, an
-address or an echoed phrase. The screen's cost is bounded whatever the reply
-length, and the normalised, capped text it screened is exactly what gets
-persisted.
+Model text is first put in its persisted form and capped at its field limit. The
+persisted form is NFC, with bidi controls and true invisibles removed and ZWJ/ZWNJ
+kept where they join letters or emoji, so "4½", "m²", Persian ZWNJ words and emoji
+sequences are stored as written. A normalised copy of exactly that text is what gets
+screened: NFKC, then every ``Cf`` and ``Default_Ignorable_Code_Point`` removed
+(:func:`app.llm.untrusted.normalise`), then ideographic and fullwidth full stops
+mapped to ".". A zero-width, fullwidth, variation-selector or ideographic character
+therefore cannot split a link, an address or an echoed phrase. The screen's cost is
+bounded whatever the reply length.
 
 Explanation text is withheld (replaced by fixed copy, ``explanation_source =
 "withheld"``) when any field contains:
@@ -52,6 +54,7 @@ lane's decision memo for the recorded reasoning.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from app.claims.engine import check_claim_safety
@@ -102,11 +105,32 @@ _GENERIC_TLDS = frozenset(
 #: a recorded residual.)
 _NOT_TLDS = frozenset({"js", "ts", "py", "rb", "go", "gz", "md"})
 #: Product names whose dot is not a domain: removed before the link checks only.
+#: Anchored on both sides: not after a word character, dot or hyphen, and not before
+#: one (or before a further ".label"), so "evil-asp.net", "get.ado.net" and
+#: "asp.net.evil.com" stay links while "ASP.NET" and "Node.js" in prose do not.
 _TECH_NAMES = re.compile(
-    r"\b(?:node|vue|next|nuxt|react|express|three|d3|chart|ember|backbone)\.js\b"
-    r"|\b(?:asp|vb|ado)\.net\b",
+    r"(?<![\w.-])(?:(?:node|vue|next|nuxt|react|express|three|d3|chart|ember|backbone)\.js"
+    r"|(?:asp|vb|ado)\.net)(?![\w-]|\.\w)",
     re.I,
 )
+#: Full stops that IDNA and browsers treat as label separators: ideographic (U+3002),
+#: fullwidth (U+FF0E) and halfwidth ideographic (U+FF61). Mapped to "." in the
+#: screening copy only.
+_FULL_STOPS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
+#: Removed from the persisted text: bidi embeddings, overrides and isolates, and code
+#: points that render as nothing and carry no meaning in ordinary copy (zero-width
+#: space, word joiner, invisible operators, BOM, soft hyphen, combining grapheme
+#: joiner, Hangul fillers, Khmer inherent vowels, Mongolian vowel separator,
+#: interlinear and shorthand format controls, musical format controls, tags).
+#: Kept: ZWJ/ZWNJ between letters, marks or emoji; variation selectors after a
+#: visible character; LRM/RLM/ALM (they shape right-to-left text).
+_DISPLAY_STRIP = re.compile(
+    "[\u202a-\u202e\u2066-\u2069\u200b\u2060-\u2064\u206a-\u206f\ufeff\u00ad"
+    "\u034f\u115f\u1160\u3164\uffa0\u17b4\u17b5\u180e\ufff0-\ufff8"
+    "\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e007f]"
+)
+_JOINERS = frozenset("\u200c\u200d")
+_SELECTORS = re.compile("[\ufe00-\ufe0f\U000e0100-\U000e01ef\u180b-\u180d\u180f]")
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+")
 #: An address spelled out to dodge filters: "sales (at) deals (dot) com".
 _SPELLED_EMAIL = re.compile(
@@ -167,36 +191,78 @@ def _has_phone(text: str) -> bool:
 def _has_bare_domain(text: str) -> bool:
     """A bare domain: a dot-joined token whose final label is a TLD.
 
-    An all-ASCII token counts when its final label is lowercase and either a
-    two-letter ccTLD (not a file extension in ``_NOT_TLDS``) or a generic TLD in
-    ``_GENERIC_TLDS``. So "long.customers", "report.pdf" and "rush.Promote" pass.
-    A token with any non-ASCII letter always counts. It is either an
-    internationalised domain or a look-alike (Cyrillic "dеals.shop"), and NFKC does
-    not fold either; English copy has no such token. This is a simpler, documented
-    stand-in for a UTS #39 confusable skeleton.
+    The final label is a TLD candidate only when it is all lowercase or ALL CAPS.
+    Title case after a dot ("long.Customers", "Sra.García", "Zürich.Most") is a
+    missing space, not a domain, and "BESTDEALS.SHOP" is a domain.
+
+    * A candidate in a token with any non-ASCII letter counts. It is either an
+      internationalised domain or a look-alike (Cyrillic "dеals.shop"), which NFKC
+      does not fold. This is a simpler, documented stand-in for a UTS #39
+      confusable skeleton.
+    * In an all-ASCII token, a candidate counts when it is a two-letter ccTLD (not a
+      file extension in ``_NOT_TLDS``) or a generic TLD in ``_GENERIC_TLDS``. So
+      "long.customers" and "report.pdf" pass.
+    * Unlisted generic TLDs (".pharmacy", ".loans", ".london") and ``.py``/``.md``
+      domains are recorded residuals. There is no full IANA list.
     """
     for match in _DOMAIN_TOKEN.finditer(text):
         token = match.group(0)
         tld = match.group(2)
+        if not (tld.islower() or tld.isupper()):
+            continue
         if not token.isascii():
             return True
-        if tld != tld.lower():
-            continue
+        tld = tld.lower()
         if (len(tld) == 2 and tld not in _NOT_TLDS) or tld in _GENERIC_TLDS:
             return True
     return False
 
 
+def _joinable(ch: str | None) -> bool:
+    if not ch:
+        return False
+    category = unicodedata.category(ch)
+    return category[0] in "LM" or category in ("So", "Sk")
+
+
+def _display(text: str) -> str:
+    """The text as it is persisted and shown.
+
+    NFC; control characters become spaces; bidi controls and true invisibles are
+    removed. ZWJ/ZWNJ are kept between letters, marks or emoji (Persian ZWNJ words,
+    Indic conjuncts, ZWJ emoji sequences), and a variation selector is kept after a
+    visible character. Meaningful characters such as "½", "²" and "™" are kept as
+    written. The defanged echo ``[quoted:act as]`` is unwrapped.
+    """
+    text = _DISPLAY_STRIP.sub("", unicodedata.normalize("NFC", _CONTROL.sub(" ", text)))
+    kept: list[str] = []
+    for i, ch in enumerate(text):
+        if ch in _JOINERS:
+            nxt = text[i + 1] if i + 1 < len(text) else None
+            if not (_joinable(kept[-1] if kept else None) and _joinable(nxt)):
+                continue
+        elif _SELECTORS.match(ch) and (not kept or kept[-1].isspace()):
+            continue
+        kept.append(ch)
+    return _BENIGN_QUOTED.sub(r"\1", "".join(kept))
+
+
 def _normalised(text: str) -> str:
-    """Model text as it will be screened and stored."""
-    return _BENIGN_QUOTED.sub(r"\1", _CONTROL.sub(" ", normalise(text)))
+    """The screening copy of persisted text: fully normalised (NFKC, invisibles
+    removed) with every full-stop variant mapped to ".", so look-alike forms cannot
+    dodge a pattern. It is never persisted."""
+    return normalise(text).translate(_FULL_STOPS)
 
 
-def _prepared(text: str, limit: int) -> str:
-    """Normalised and capped at ``limit`` BEFORE screening: the screen's cost is
-    bounded whatever the reply length, and it screens exactly what is stored. The raw
-    text is pre-cut (with slack, since NFKC may expand) so normalising is bounded too."""
-    return _cap(_normalised(text[: limit * 4]), limit)
+def _prepared(text: str, limit: int) -> tuple[str, str]:
+    """``(persisted, screening copy)``, capped at ``limit`` BEFORE screening.
+
+    The screen's cost is bounded whatever the reply length, and the screening copy is
+    derived from exactly the persisted text, so nothing is stored that was not
+    screened. The raw text is pre-cut (with slack) so normalising is bounded too.
+    """
+    persisted = _cap(_display(text[: limit * 4]), limit)
+    return persisted, _normalised(persisted)
 
 
 def _pattern_reason(text: str) -> str | None:
@@ -221,10 +287,10 @@ def screen_audience(value: str | None, industry: str | None = None) -> str | Non
     """The model's audience label, or None when it breaks any explanation rule."""
     if not isinstance(value, str):
         return None
-    label = _prepared(value, MAX_LABEL_CHARS)
-    if not label or _pattern_reason(label):
+    label, screened = _prepared(value, MAX_LABEL_CHARS)
+    if not label or _pattern_reason(screened):
         return None
-    if check_claim_safety(label, industry).risk_level in (ClaimRisk.HIGH, ClaimRisk.BLOCKED):
+    if check_claim_safety(screened, industry).risk_level in (ClaimRisk.HIGH, ClaimRisk.BLOCKED):
         return None
     return label
 
@@ -246,13 +312,18 @@ def _cap(text: str, limit: int) -> str:
 
 
 def screen_explanation(output: dict, industry: str | None) -> ScreenedExplanation:
-    texts = {
-        k: _prepared(v, MAX_FIELD_CHARS) if isinstance(v := output.get(k), str) else ""
+    prepared = {
+        k: _prepared(v, MAX_FIELD_CHARS) if isinstance(v := output.get(k), str) else ("", "")
         for k in _TEXT_FIELDS
     }
     raw_angles = [a for a in (output.get("suggested_angles") or []) if isinstance(a, str)]
-    angles = [_prepared(a, MAX_ANGLE_CHARS) for a in raw_angles[:MAX_ANGLES]]
-    everything = "\n".join([*texts.values(), *angles])
+    prepared_angles = [_prepared(a, MAX_ANGLE_CHARS) for a in raw_angles[:MAX_ANGLES]]
+    texts = {k: persisted for k, (persisted, _) in prepared.items()}
+    angles = [persisted for persisted, _ in prepared_angles]
+    # Screened: the normalised copies of exactly what would be persisted.
+    everything = "\n".join(
+        [*(copy for _, copy in prepared.values()), *(copy for _, copy in prepared_angles)]
+    )
 
     reason = _pattern_reason(everything)
     if reason:
@@ -263,7 +334,7 @@ def screen_explanation(output: dict, industry: str | None) -> ScreenedExplanatio
         warnings = [f"AI explanation withheld: {w}" for w in safety.warnings]
         return ScreenedExplanation(None, warnings, f"claim_risk_{safety.risk_level.value}")
 
-    screened = dict(texts)  # already normalised and capped by _prepared
+    screened = dict(texts)  # the persisted forms, capped by _prepared
     screened["ai_inference"] = screened["ai_inference"] or None
     screened["suggested_angles"] = angles
     warnings = [f"AI explanation: {w}" for w in safety.warnings]
