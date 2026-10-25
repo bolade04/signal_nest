@@ -475,7 +475,8 @@ class Settings(BaseSettings):
     #: Longest value (characters, after sanitizing) interpolated into a prompt as
     #: one untrusted data block; longer values are cut with a "[truncated]" marker.
     llm_max_untrusted_chars: int = 4000
-    #: Provider attempts (retries included) allowed in ONE scout run.
+    #: Provider attempts (retries included) allowed in ONE scout run - on the worker
+    #: path, across all attempts of the run's job.
     llm_max_calls_per_run: int = 100
     #: Model spend allowed per workspace per calendar month (UTC), in USD. Runs are
     #: refused once it is spent; inside a run, an attempt whose worst case would

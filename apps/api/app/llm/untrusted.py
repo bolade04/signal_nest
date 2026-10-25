@@ -7,10 +7,13 @@ alike - a classifier that read an injected post can carry the injection forward.
 
 :func:`data_block` turns one value into a delimited block:
 
-1. control characters stripped and known injection phrases defanged by
-   :func:`app.intelligence.extraction.sanitize_text` (``[quoted:...]``);
-2. Unicode format characters (category ``Cf``: bidi overrides, zero-width
-   characters, tag characters) removed, so hidden text cannot ride along;
+1. Unicode-normalised (NFKC: fullwidth and compatibility forms such as ``＜`` or
+   ``．`` become their ASCII equivalents) and stripped of Unicode format characters
+   (category ``Cf``: bidi overrides, zero-width characters, tag characters), so
+   hidden text cannot ride along and look-alike text cannot dodge step 2;
+2. control characters stripped and known injection phrases defanged by
+   :func:`app.intelligence.extraction.sanitize_text` (``[quoted:...]``), applied
+   to the normalised text so a zero-width character cannot split a phrase;
 3. capped at ``max_chars`` with an explicit truncation marker;
 4. ``&``, ``<`` and ``>`` escaped, so the value can never close its own block or
    open a fake one;
@@ -45,9 +48,16 @@ def _strip_format_characters(text: str) -> str:
     return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
 
 
+def normalise(text: str) -> str:
+    """NFKC, then without Unicode format (``Cf``) characters. Stripping can expose new
+    compatibility sequences, so NFKC runs again (idempotent on ordinary text)."""
+    stripped = _strip_format_characters(unicodedata.normalize("NFKC", text))
+    return unicodedata.normalize("NFKC", stripped)
+
+
 def clean(value: Any, max_chars: int) -> str:
-    """Sanitized, format-stripped, length-capped text (not yet escaped)."""
-    text = _strip_format_characters(sanitize_text(as_text(value)))
+    """Normalised, sanitized, length-capped text (not yet escaped)."""
+    text = sanitize_text(normalise(as_text(value)))
     if len(text) > max_chars:
         text = text[:max_chars] + TRUNCATION_MARKER
     return text

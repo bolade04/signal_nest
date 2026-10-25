@@ -256,7 +256,7 @@ def _run(
                     meter=meter,
                 )
                 # P6-LLM-3: labels constrained to the closed vocabularies before use.
-                labels = screen_classification(classified)
+                labels = screen_classification(classified, ctx.industry)
                 signal_type = labels["signal_type"]
                 pain_dna = labels["pain_point_dna"]
                 sentiment = labels["sentiment"]

@@ -6,11 +6,18 @@
   table's most expensive rates (fail-closed: an unknown model can never look free).
   The mock provider costs nothing.
 * **Per-run cap** - at most ``llm_max_calls_per_run`` provider *attempts*
-  (retries included) per scout run.
+  (provider retries included) per scout run. On the durable worker path a run is one
+  ``scout_request.execute`` job, and the cap spans all of that job's worker attempts.
+  Each attempt's meter starts from the usage rows this scout request has recorded
+  since the job was enqueued (``run_started_at``). An attempt whose rows were never
+  recorded (see "Failed attempts") is not seen.
 * **Per-workspace budget** - month-to-date spend (calendar month, UTC) plus this
   run's spend plus the worst case of the next attempt must stay within
   ``llm_workspace_monthly_budget_usd``. The worst case assumes ~3 characters per
-  input token and a reply of ``max_tokens``, so the check can only over-estimate.
+  input token and a reply of ``max_tokens``. That over-estimates for most English
+  text, but it is an estimate, not a bound: text that tokenises at fewer than 3
+  characters per token (CJK, emoji, some symbols) is under-estimated. The same
+  estimate is the charge for a timed-out attempt.
 * **Refusal state** - a run is refused at the API with HTTP 429
   ``llm_budget_exhausted`` once the month's budget is spent
   (:func:`ensure_run_allowed`); inside a run, an attempt that would cross the cap or
@@ -28,15 +35,27 @@
   abuse signals are per tenant, and it reveals no id, name or PII. Rotating
   ``SECRET_KEY`` changes every reference.
 
-Concurrency: two runs of one workspace started together each see the other's
-spend only once it is recorded, so the budget can be exceeded by at most one run's
-cap worth of worst-case attempts. That bound is stated, not hidden.
+Concurrency: a run reads month-to-date spend once, when it starts, and sees
+other runs' spend only once they have recorded it. With N runs of one workspace in
+flight together (``worker_concurrency`` above 1, several workers, or several
+requests), each can spend up to the budget remaining at its own start. Together they
+can therefore exceed the budget by up to (N - 1) x that remainder, plus one
+attempt's worst case each. Each run's total is still bounded by its call cap. There
+is no reservation in the database, and this bound is stated, not hidden.
 
 Failed attempts: a run's rows are written in its own transaction. On the durable
 worker path they are also re-written after an attempt's rollback (see
-:class:`LLMMeter`), so every failed or retried attempt is counted. The meter is held
-in memory, so the one gap is a worker process that dies during an attempt: that
-attempt's spend is not recorded.
+:class:`LLMMeter`), so a failed or retried attempt is counted and the next
+attempt's budget check and call cap see it. The writing fails closed: if that write
+itself fails, the worker fails the job for good instead of retrying it into spend
+that no budget check can see (``app.jobs.worker``). Gaps that remain:
+
+* a worker process that dies during an attempt records nothing for that attempt,
+  because the meter is held in memory;
+* an after-rollback write that fails after a lease loss cannot fail the job, because
+  another worker owns it;
+* after a terminal failure with unrecorded spend, a later run of the request, manual
+  or scheduled, starts from the recorded month-to-date only.
 """
 
 from __future__ import annotations
@@ -57,7 +76,7 @@ from app.llm.models import LLMUsageEvent
 
 logger = get_logger("signalnest.llm")
 
-_CHARS_PER_TOKEN = 3  # deliberately low: over-estimates input tokens
+_CHARS_PER_TOKEN = 3  # low for English (over-estimates); CJK/emoji can be under it
 
 
 class LLMBudgetExceededError(LLMError):
@@ -140,8 +159,13 @@ class LLMMeter:
     counted, and the next attempt's budget check sees it.
     """
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, run_started_at: datetime | None = None):
         self.settings = settings
+        #: When the run began (its job's enqueue time). Usage rows this scout request
+        #: recorded since then are earlier attempts of the same run, and count
+        #: towards the call cap.
+        self.run_started_at = run_started_at
+        self.prior_attempts = 0
         self.organization_id: str | None = None
         self.workspace_id: str | None = None
         self.scout_request_id: str | None = None
@@ -165,6 +189,17 @@ class LLMMeter:
         self.scout_request_id = scout_request_id
         self.tenant_ref = tenant_reference(self.settings, workspace_id)
         self.month_to_date = month_to_date_usd(db, workspace_id)
+        if self.run_started_at is not None and scout_request_id is not None:
+            self.prior_attempts = int(
+                db.scalar(
+                    select(func.count()).select_from(LLMUsageEvent).where(
+                        LLMUsageEvent.scout_request_id == scout_request_id,
+                        LLMUsageEvent.created_at >= self.run_started_at,
+                    )
+                )
+                or 0
+            )
+            self.attempts = self.prior_attempts
         return self
 
     def worst_case_usd(self, provider: str, model: str, prompt_chars: int, max_tokens: int):
@@ -223,6 +258,7 @@ class LLMMeter:
     def summary(self) -> dict[str, Any]:
         return {
             "llm_attempts": self.attempts,
+            "llm_prior_attempts": self.prior_attempts,
             "llm_cost_usd": self.spent,
             "llm_refusals": dict(self.refusals),
         }

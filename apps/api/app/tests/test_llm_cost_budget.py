@@ -33,9 +33,10 @@ from app.db.models import Base
 from app.db.session import get_db
 from app.jobs import handlers as job_handlers
 from app.jobs import pipeline
+from app.jobs import worker as worker_mod
 from app.jobs.models import Job
 from app.jobs.service import enqueue_scout_request
-from app.jobs.status import JobStatus
+from app.jobs.status import JobErrorCode, JobStatus
 from app.jobs.store import DurableJobStore, JobLeaseLostError
 from app.jobs.worker import LEASE_LOST, JobRunner
 from app.llm.base import LLMMalformedError
@@ -53,7 +54,7 @@ from app.main import app
 from app.opportunities.models import Opportunity
 from app.scouting_requests import routes as scout_routes
 from app.scouting_requests.models import ScoutRequest
-from app.signals.models import NormalizedSignal
+from app.signals.models import NormalizedSignal, RawSignal
 from app.tests._auth2_support import live_bearer
 from app.tests._llm_offline import offline_llm, offline_settings
 
@@ -547,19 +548,166 @@ def test_a_successful_worker_attempt_records_its_spend_once(seeded, monkeypatch)
     assert len(_anthropic_rows(seeded, request.id)) == len(recorder.bodies)
 
 
-def test_a_failing_after_rollback_write_never_masks_the_attempt(seeded, monkeypatch):
-    _failing_worker_run(monkeypatch, _settings())
-
+def _broken_ledger(monkeypatch):
     def broken_flush(self, db):
         raise RuntimeError("ledger unavailable")
 
     monkeypatch.setattr(pipeline.LLMMeter, "flush", broken_flush)
+
+
+def test_a_failed_ledger_write_fails_the_job_closed(seeded, monkeypatch):
+    """Fix pass 2, F1 (adversarial r2 probe P4d). The failed attempt's spend could not
+    be recorded, so the job fails for good: no retry pays again where no budget check
+    can see it."""
+    budget = 0.04
+    recorder = _failing_worker_run(
+        monkeypatch, _settings(llm_workspace_monthly_budget_usd=budget)
+    )
+    _broken_ledger(monkeypatch)
+    request = _first_request(seeded)
+    job_id = _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    first = len(recorder.bodies)
+    assert first > 0
+    with seeded() as db:
+        job = db.get(Job, job_id)
+        assert (job.status, job.attempt_count) == (JobStatus.FAILED.value, 1)
+        assert job.last_error_code == JobErrorCode.NON_RETRYABLE.value
+    for attempt in (2, 3):
+        assert _attempt(seeded, attempt) is False  # nothing left to run
+    assert len(recorder.bodies) == first
+    assert 0.0105 * len(recorder.bodies) <= budget
+
+
+def test_a_failed_ledger_write_never_hides_the_attempts_own_failure(seeded, monkeypatch):
+    """The job still records a failure (now terminal); the write error only escalates it."""
+    _failing_worker_run(monkeypatch, _settings())
+    _broken_ledger(monkeypatch)
     request = _first_request(seeded)
     job_id = _enqueue(seeded, request)
     assert _attempt(seeded, 1) is True
     with seeded() as db:
-        job = db.get(Job, job_id)
-        assert (job.status, job.attempt_count) == (JobStatus.RETRY_WAIT.value, 1)
+        assert db.get(Job, job_id).status == JobStatus.FAILED.value
+
+
+def test_a_raise_after_the_success_commit_never_writes_the_spend_twice(seeded, monkeypatch):
+    """Fix pass 2, F4 (probe P4b): metrics raising after the completion commit must not
+    re-run the after-rollback write for rows that were already committed."""
+    recorder = _failing_worker_run(monkeypatch, _settings(), fail=False)
+    request = _first_request(seeded)
+    job_id = _enqueue(seeded, request)
+    real = worker_mod.get_metrics()
+
+    class RaisingMetrics:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def increment(self, name, *a, **k):
+            if k.get("outcome") == "success":
+                raise RuntimeError("metrics exporter down")
+            return real.increment(name, *a, **k)
+
+    monkeypatch.setattr(worker_mod, "get_metrics", lambda: RaisingMetrics())
+    try:
+        _attempt(seeded, 1)
+    except Exception:  # noqa: BLE001 - the worker's own reaction is not under test here
+        pass
+    with seeded() as db:
+        assert db.get(Job, job_id).status == JobStatus.SUCCEEDED.value
+    assert recorder.bodies
+    assert len(_anthropic_rows(seeded, request.id)) == len(recorder.bodies)
+
+
+def test_the_run_cap_spans_all_attempts_of_the_runs_job(seeded, monkeypatch):
+    """Fix pass 2, F2 (probe P4a): ``llm_max_calls_per_run`` bounds the run, not each
+    worker attempt. Three failed attempts of one job make ``cap`` calls in total."""
+    cap = 3
+    recorder = _failing_worker_run(monkeypatch, _settings(llm_max_calls_per_run=cap))
+    request = _first_request(seeded)
+    _enqueue(seeded, request)
+    for attempt in (1, 2, 3):
+        assert _attempt(seeded, attempt) is True
+    assert len(recorder.bodies) == cap
+    assert len(_anthropic_rows(seeded, request.id)) == cap
+
+
+def test_a_new_run_of_the_request_gets_a_fresh_cap(seeded, monkeypatch):
+    cap = 3
+    recorder = _failing_worker_run(
+        monkeypatch, _settings(llm_max_calls_per_run=cap), fail=False
+    )
+    request = _first_request(seeded)
+    first_job = _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    assert len(recorder.bodies) == cap
+    with seeded() as db:
+        assert db.get(Job, first_job).status == JobStatus.SUCCEEDED.value
+        # The run endpoint would flip the settled request to queued; the job is new.
+    _enqueue(seeded, request)
+    assert _attempt(seeded, 2) is True
+    assert len(recorder.bodies) == 2 * cap
+
+
+def test_a_failed_attempt_commits_only_its_usage_rows(seeded, monkeypatch):
+    """R2-10 (probe P4f), on the REAL opportunity build: the run fails after
+    ``_build_opportunities`` has written its clusters and opportunities, explain calls
+    included. The after-rollback write keeps only the usage rows."""
+    recorder = _failing_worker_run(monkeypatch, _settings(), fail=False)
+    real_build = pipeline._build_opportunities
+
+    def build_then_fail(*args, **kwargs):
+        built = real_build(*args, **kwargs)
+        assert built, "the real build must have written opportunities to roll back"
+        raise RuntimeError("failure after the real opportunity build")
+
+    monkeypatch.setattr(pipeline, "_build_opportunities", build_then_fail)
+    request = _first_request(seeded)
+
+    def counts():
+        with seeded() as db:
+            return tuple(
+                db.scalar(select(func.count()).select_from(model))
+                for model in (RawSignal, NormalizedSignal, Opportunity)
+            )
+
+    before = counts()
+    _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    assert counts() == before
+    assert recorder.bodies  # classify and explain calls were made
+    rows = _anthropic_rows(seeded, request.id)
+    assert len(rows) == len(recorder.bodies)
+    assert {r.task for r in rows} == {"classify_signal", "explain_opportunity"}
+
+
+def test_degraded_outranks_budget_limited_in_a_mixed_cluster(seeded, monkeypatch):
+    """R2-08: a cluster holding both a provider-failed and a limit-skipped member is
+    ``degraded`` (the provider failure is the stronger statement)."""
+    calls = {"n": 0}
+
+    def classify():
+        calls["n"] += 1
+        if calls["n"] == 1:  # permanent: not retried, the signal is unclassified
+            return httpx.Response(
+                400, json={"type": "error", "error": {"type": "invalid_request_error"}}
+            )
+        return _reply(CLASSIFIED)
+
+    recorder = Recorder(classify=classify)
+    _, opps, signals, _ = _run_with(
+        seeded, monkeypatch, _settings(llm_max_calls_per_run=2), recorder
+    )
+    by_cluster: dict[str, set] = {}
+    for s in signals:
+        if s.cluster_id:
+            by_cluster.setdefault(s.cluster_id, set()).add(
+                s.ingest_metadata["classification_source"]
+            )
+    mixed = [o for o in opps if {"degraded", "budget_limited"} <= by_cluster[o.cluster_id]]
+    assert mixed, "the scenario must produce a cluster with both kinds of member"
+    for o in mixed:
+        assert o.explanation_source == "degraded"
+        assert o.why_it_matters == pipeline.UNCLASSIFIED_WHY
 
 
 # --------------------------------------------------------------------------- #

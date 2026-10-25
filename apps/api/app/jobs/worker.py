@@ -106,6 +106,11 @@ register_builtin_handlers()
 
 logger = get_logger("signalnest.jobs.worker")
 
+#: The failure recorded when an attempt's after-rollback writes could not be
+#: committed: non-retryable, so the job fails for good instead of repeating work
+#: whose record is lost (P6-LLM-4: spend no budget check would see).
+_UNRECORDED_WRITES = JobError(JobErrorCode.NON_RETRYABLE, "after_rollback_write_failed")
+
 SessionFactory = Callable[[], Session]
 Clock = Callable[[], datetime]
 
@@ -305,6 +310,9 @@ class JobRunner:
                 )
                 # Metrics only after the terminal state is durably committed.
                 db.commit()
+                # Committed: the handler's writes are durable, so nothing may write
+                # them again if a later step (span, metrics) raises.
+                after_rollback.clear()
                 span.set_attribute("outcome", "success")
             elapsed_ms = (time.perf_counter() - started) * 1000
             m = get_metrics()
@@ -323,7 +331,7 @@ class JobRunner:
             return LEASE_LOST
         except JobExecutionError as exc:
             db.rollback()
-            self._write_after_rollback(db, after_rollback, job_type=job_type)
+            recorded = self._write_after_rollback(db, after_rollback, job_type=job_type)
             if exc.error.code == JobErrorCode.CANCELLED:
                 try:
                     self._store.finish_cancel(
@@ -340,16 +348,19 @@ class JobRunner:
                     )
                     return LEASE_LOST
             return self._fail(
-                db, job, exc.error, worker_id=worker_id, lease_token=lease_token,
+                db, job, exc.error if recorded else _UNRECORDED_WRITES,
+                worker_id=worker_id, lease_token=lease_token,
                 started=started, job_type=job_type,
             )
         except Exception as exc:  # unclassified escape -> conservative retryable
             db.rollback()
-            self._write_after_rollback(db, after_rollback, job_type=job_type)
+            recorded = self._write_after_rollback(db, after_rollback, job_type=job_type)
             # Record only the exception *class name*, never its message (which may
             # carry secrets or customer content).
             return self._fail(
-                db, job, JobError(JobErrorCode.TRANSIENT, type(exc).__name__),
+                db, job,
+                JobError(JobErrorCode.TRANSIENT, type(exc).__name__)
+                if recorded else _UNRECORDED_WRITES,
                 worker_id=worker_id, lease_token=lease_token,
                 started=started, job_type=job_type,
             )
@@ -359,22 +370,26 @@ class JobRunner:
 
     def _write_after_rollback(
         self, db: Session, writers: list[Callable[[Session], None]], *, job_type: str
-    ) -> None:
+    ) -> bool:
         """Commit what a rolled-back attempt must not lose, in its own transaction.
 
         Runs after the attempt's rollback and before its failure (or lease-loss)
         bookkeeping, once per failed attempt rather than only on the final failure:
         a retried job's earlier attempts happened too (e.g. LLM spend, P6-LLM-4).
-        Best-effort, like the terminal-failure hook: a writer that raises discards
-        only these writes, logged by class name, and never changes the attempt's
-        recorded outcome.
+
+        Returns ``False`` when the writes could not be committed. The caller then
+        fails the job for good (``_UNRECORDED_WRITES``) instead of retrying it. A
+        retry would repeat work whose record is lost, e.g. spend that no budget check
+        can see. A writer that raises is logged by class name; it never hides the
+        attempt's own failure.
         """
         if not writers:
-            return
+            return True
         try:
             for write in writers:
                 write(db)
             db.commit()
+            return True
         except Exception as exc:  # noqa: BLE001 - never mask the attempt's own failure
             db.rollback()
             log_event(
@@ -386,6 +401,7 @@ class JobRunner:
                 job_type=job_type,
                 error_class=type(exc).__name__,
             )
+            return False
 
     #: Terminal statuses that mean "this job will never run again and it failed".
     #: ``retry_wait`` is deliberately absent: the attempt failed, the job did not.

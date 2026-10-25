@@ -20,6 +20,7 @@ from typing import Any
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
+from app.jobs.models import Job
 from app.jobs.pipeline import _run, metered_run
 from app.jobs.registry import (
     HandlerContext,
@@ -62,7 +63,9 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     if ctx.is_cancelled():
         raise JobExecutionError(JobErrorCode.CANCELLED, "cancelled before execution")
 
-    meter = LLMMeter(get_settings())
+    # The run is this job: the call cap counts its earlier attempts' recorded rows.
+    job = ctx.db.get(Job, ctx.job_id)
+    meter = LLMMeter(get_settings(), run_started_at=job.created_at if job else None)
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
         result = _run(ctx.db, scout_request_id, ctx.context)
