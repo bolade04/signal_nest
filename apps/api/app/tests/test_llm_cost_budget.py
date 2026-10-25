@@ -648,6 +648,53 @@ def test_a_new_run_of_the_request_gets_a_fresh_cap(seeded, monkeypatch):
     assert len(recorder.bodies) == 2 * cap
 
 
+def test_another_run_of_the_request_never_uses_this_jobs_cap(seeded, monkeypatch):
+    """Fix pass 3, R3-A (adversarial r3 probe R3f). Job A fails attempt 1 and waits to
+    retry. Meanwhile a manual run (job B) of the same request runs and spends. A's
+    retry still has ``cap`` minus its OWN earlier calls: the cap counts usage rows by
+    job, never by request plus time."""
+    cap = 10
+    recorder = _failing_worker_run(monkeypatch, _settings(llm_max_calls_per_run=cap))
+    request = _first_request(seeded)
+    job_a = _enqueue(seeded, request)
+    assert _attempt(seeded, 1) is True
+    calls_a1 = len(recorder.bodies)
+    assert 0 < calls_a1 < cap
+    with seeded() as db:
+        job_b = enqueue_scout_request(
+            db,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+            scout_request_id=request.id,
+            request_id=request.id,
+            idempotency_key="manual-run-b",
+        ).id
+        db.commit()
+    # B runs now, before A's retry backoff ends, so the claim picks B.
+    store = DurableJobStore()
+    runner = JobRunner(
+        settings=offline_settings(), session_factory=seeded, store=store,
+        clock=lambda: datetime.now(UTC),
+    )
+    with seeded() as db:
+        claimed = store.claim_one(db, worker_id="w-b", lease_seconds=60, now=datetime.now(UTC))
+        db.commit()
+        assert claimed is not None and claimed.id == job_b
+        runner.run_claimed(db, claimed)
+    calls_b = len(recorder.bodies) - calls_a1
+    assert calls_b > 0
+    with seeded() as db:  # take B out of the queue so the next poll is A's retry
+        db.get(Job, job_b).status = JobStatus.FAILED.value
+        db.commit()
+    assert _attempt(seeded, 3) is True
+    calls_a2 = len(recorder.bodies) - calls_a1 - calls_b
+    assert calls_a2 == cap - calls_a1
+    by_job: dict[str | None, int] = {}
+    for row in _anthropic_rows(seeded, request.id):
+        by_job[row.job_id] = by_job.get(row.job_id, 0) + 1
+    assert by_job == {job_a: calls_a1 + calls_a2, job_b: calls_b}
+
+
 def test_a_failed_attempt_commits_only_its_usage_rows(seeded, monkeypatch):
     """R2-10 (probe P4f), on the REAL opportunity build: the run fails after
     ``_build_opportunities`` has written its clusters and opportunities, explain calls

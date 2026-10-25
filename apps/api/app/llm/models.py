@@ -26,6 +26,11 @@ class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     scout_request_id: Mapped[str | None] = mapped_column(
         ForeignKey("scout_requests.id", ondelete="SET NULL"), index=True
     )
+    #: The durable job whose attempt made the call (NULL off the worker path). A run's
+    #: call cap counts this job's rows only.
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
     task: Mapped[str] = mapped_column(String(64), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)

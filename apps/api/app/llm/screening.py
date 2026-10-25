@@ -11,18 +11,26 @@ audience label is normalised and screened like explanation text, against the sam
 patterns and the claim check. A failing label is dropped, and the pipeline then falls
 back to the business's own first audience.
 
-All model text is Unicode-normalised first (NFKC, then Unicode format characters
-removed; :func:`app.llm.untrusted.normalise`). A zero-width or fullwidth character
-therefore cannot split a link, an address or an echoed phrase, and the normalised
-text is what gets persisted.
+All model text is first Unicode-normalised (NFKC, then invisible characters
+removed: ``Cf`` and every ``Default_Ignorable_Code_Point``;
+:func:`app.llm.untrusted.normalise`) and capped at its field limit. A zero-width,
+fullwidth or variation-selector character therefore cannot split a link, an
+address or an echoed phrase. The screen's cost is bounded whatever the reply
+length, and the normalised, capped text it screened is exactly what gets
+persisted.
 
 Explanation text is withheld (replaced by fixed copy, ``explanation_source =
 "withheld"``) when any field contains:
 
-* a link (a scheme, ``www.``, ``domain.tld/path`` or a bare lowercase-TLD domain
-  such as ``bestdeals.shop``), an e-mail address, a phone number (10 or more
-  digits) or markup - none of which the prompt ever asks for, so their presence
-  means the model copied them from scraped content;
+* a link, an e-mail address, a phone number or markup - none of which the prompt
+  ever asks for, so their presence means the model copied them from scraped content.
+  A link is a scheme, ``www.``, ``domain.tld/path``, a ``.com``-style domain
+  ("Amazon.com" included, deliberately), or a bare domain whose final label is a
+  ccTLD or a listed generic TLD ("bestdeals.shop"), or any dot-TLD token holding a
+  non-ASCII letter (look-alike scripts). An e-mail address can be literal or
+  spelled out ("sales (at) deals (dot) com"). A phone number is 10 or more digits
+  written like one, with ``+`` or ``( ) - .``. Ordinary copy passes: "Node.js",
+  "report.pdf", "long.customers", sizes "10 12 14", year runs, ISO dates;
 * an echoed injection marker (``[quoted:`` from input sanitization, or the
   phrases themselves) - evidence the model followed or repeated injected text. The
   one weak marker ``act as`` is common in ordinary text ("parents who act as
@@ -59,28 +67,64 @@ MAX_FIELD_CHARS = 600
 MAX_ANGLES = 5
 MAX_ANGLE_CHARS = 200
 
+# Every pattern below is linear in the text length: each repeated part is either
+# bounded or can only start where a run of its own characters starts (a negative
+# lookbehind on that character class), so a long adversarial run is scanned once.
+# The texts are also capped before they are screened (see ``_prepared``).
 _LINK = re.compile(
     r"(?:https?://|ftp://|www\.)\S"  # scheme or www
-    r"|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/\S"  # domain.tld/path (shorteners too)
-    r"|\b[a-z0-9-]+\.(?:com|net|org|io|co|ly|me|xyz|info|biz|app|dev|link|click|top)\b",
+    r"|(?<![a-z0-9.-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/\S"  # domain.tld/path
+    r"|(?<![a-z0-9-])[a-z0-9-]+\.(?:com|net|org|io|co|ly|me|xyz|info|biz|app|dev|link|click"
+    r"|top)\b",
     re.I,
 )
-#: A bare domain with any TLD: labels of letters/digits/hyphens, then a lowercase TLD
-#: of 2-24 letters ("bestdeals.shop", "Deals.example"). It never starts inside a
-#: word, so "rush.Promote" (capital) and "e.g." or "3.5" (too short / digits) pass.
-_BARE_DOMAIN = re.compile(
-    r"(?<![\w@.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[a-z]{2,24}(?![\w-])"
+#: A dot-joined token ending in a 2-24 letter final label (Unicode letters, so
+#: look-alike scripts are seen too). :func:`_has_bare_domain` decides whether the
+#: final label is a TLD.
+_DOMAIN_TOKEN = re.compile(
+    r"(?<![\w@.-])((?:\w(?:[\w-]{0,61}\w)?\.){1,8})([^\W\d_]{2,24})(?![\w-])"
 )
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-#: A run of digits with phone-number punctuation; it counts only when it holds at
-#: least 10 digits (see :func:`_has_phone`), so years, prices and ranges pass.
-_PHONE_RUN = re.compile(r"(?<![\w.])\+?\(?\d[\d ().-]{7,}\d(?![\w.])")
+#: Generic TLDs counted as links when bare (two-letter final labels are ccTLDs).
+#: ``.com``-style TLDs are also in ``_LINK``, case-insensitively, so "Amazon.com"
+#: and "Booking.com" are withheld: they are real domains, which the prompt never
+#: asks for. That is a deliberate choice.
+_GENERIC_TLDS = frozenset(
+    "com net org info biz xyz top club online site store shop app dev io co me ly link "
+    "click live life world today news blog tech space website fun icu vip pro win bid "
+    "loan buzz rest cyou monster sbs cfd lol quest cam bar deals sale promo gift fit tv "
+    "cc ws mobi name page cloud digital agency email network global inc ltd llc group "
+    "services solutions finance money cash bank bet casino poker games wiki host press "
+    "media studio download stream watch video tube example".split()
+)
+#: Two-letter final labels that are file extensions or language names in ordinary
+#: copy ("Node.js", "index.ts", "script.py", "README.md"); they are not treated as
+#: ccTLDs. (Some, e.g. ``.py``/``.md``, are real ccTLDs; a bare domain under them is
+#: a recorded residual.)
+_NOT_TLDS = frozenset({"js", "ts", "py", "rb", "go", "gz", "md"})
+#: Product names whose dot is not a domain: removed before the link checks only.
+_TECH_NAMES = re.compile(
+    r"\b(?:node|vue|next|nuxt|react|express|three|d3|chart|ember|backbone)\.js\b"
+    r"|\b(?:asp|vb|ado)\.net\b",
+    re.I,
+)
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+")
+#: An address spelled out to dodge filters: "sales (at) deals (dot) com".
+_SPELLED_EMAIL = re.compile(
+    r"\w{1,64}\s{0,3}[(\[]\s{0,3}at\s{0,3}[)\]]\s{0,3}[\w-]{1,63}"
+    r"\s{0,3}(?:[(\[]\s{0,3}dot\s{0,3}[)\]]|\.)\s{0,3}[a-z]{2,24}",
+    re.I,
+)
+#: Maximal runs of digits and phone punctuation, found in one linear pass; each run
+#: is judged by :func:`_has_phone`.
+_PHONE_RUN = re.compile(r"[+(]?\d[\d ().-]*\d")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+_YEAR = re.compile(r"(?:19|20)\d\d")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _BENIGN_QUOTED = re.compile(r"\[quoted:(act as)\]", re.I)
 _MARKUP = re.compile(r"<\s*/?\s*[a-z!?][^>]*>|&lt;|&gt;", re.I)
 _INSTRUCTION_ECHO = re.compile(
-    r"\[quoted:|ignore (?:all )?previous instructions|disregard (?:the )?above|system prompt"
+    r"\[quoted:|ignore\s+(?:all\s+)?previous\s+instructions|disregard\s+(?:the\s+)?above"
+    r"|system\s+prompt"
     r"|untrusted_data",
     re.I,
 )
@@ -102,9 +146,43 @@ def screen_label(value: str | None, vocabulary: frozenset[str]) -> str | None:
 
 
 def _has_phone(text: str) -> bool:
+    """A phone number: a run of at least 10 digits that is written like one - it starts
+    with ``+`` or uses ``( ) - .`` punctuation. Space-separated numbers ("sizes 10 12
+    14 16 18"), ISO dates and runs of years ("2019-2020-2021") are not phones."""
     for match in _PHONE_RUN.finditer(text):
         run = match.group(0)
-        if sum(ch.isdigit() for ch in run) >= 10 and not _ISO_DATE.match(run):
+        if sum(ch.isdigit() for ch in run) < 10:
+            continue
+        if not (run.startswith("+") or any(ch in run for ch in "().-")):
+            continue
+        if _ISO_DATE.match(run):
+            continue
+        groups = [g for g in re.split(r"[ ().+-]+", run) if g]
+        if groups and all(_YEAR.fullmatch(g) for g in groups):
+            continue
+        return True
+    return False
+
+
+def _has_bare_domain(text: str) -> bool:
+    """A bare domain: a dot-joined token whose final label is a TLD.
+
+    An all-ASCII token counts when its final label is lowercase and either a
+    two-letter ccTLD (not a file extension in ``_NOT_TLDS``) or a generic TLD in
+    ``_GENERIC_TLDS``. So "long.customers", "report.pdf" and "rush.Promote" pass.
+    A token with any non-ASCII letter always counts. It is either an
+    internationalised domain or a look-alike (Cyrillic "dеals.shop"), and NFKC does
+    not fold either; English copy has no such token. This is a simpler, documented
+    stand-in for a UTS #39 confusable skeleton.
+    """
+    for match in _DOMAIN_TOKEN.finditer(text):
+        token = match.group(0)
+        tld = match.group(2)
+        if not token.isascii():
+            return True
+        if tld != tld.lower():
+            continue
+        if (len(tld) == 2 and tld not in _NOT_TLDS) or tld in _GENERIC_TLDS:
             return True
     return False
 
@@ -114,17 +192,26 @@ def _normalised(text: str) -> str:
     return _BENIGN_QUOTED.sub(r"\1", _CONTROL.sub(" ", normalise(text)))
 
 
+def _prepared(text: str, limit: int) -> str:
+    """Normalised and capped at ``limit`` BEFORE screening: the screen's cost is
+    bounded whatever the reply length, and it screens exactly what is stored. The raw
+    text is pre-cut (with slack, since NFKC may expand) so normalising is bounded too."""
+    return _cap(_normalised(text[: limit * 4]), limit)
+
+
 def _pattern_reason(text: str) -> str | None:
     """The first content rule ``text`` breaks, or None."""
     for reason, pattern in (
-        ("link", _LINK),
-        ("link", _BARE_DOMAIN),
-        ("contact_detail", _EMAIL),
         ("markup", _MARKUP),
         ("instruction_echo", _INSTRUCTION_ECHO),
+        ("contact_detail", _EMAIL),
+        ("contact_detail", _SPELLED_EMAIL),
     ):
         if pattern.search(text):
             return reason
+    linkable = _TECH_NAMES.sub(" ", text)
+    if _LINK.search(linkable) or _has_bare_domain(linkable):
+        return "link"
     if _has_phone(text):
         return "contact_detail"
     return None
@@ -134,12 +221,12 @@ def screen_audience(value: str | None, industry: str | None = None) -> str | Non
     """The model's audience label, or None when it breaks any explanation rule."""
     if not isinstance(value, str):
         return None
-    label = _normalised(value).strip()
+    label = _prepared(value, MAX_LABEL_CHARS)
     if not label or _pattern_reason(label):
         return None
     if check_claim_safety(label, industry).risk_level in (ClaimRisk.HIGH, ClaimRisk.BLOCKED):
         return None
-    return _cap(label, MAX_LABEL_CHARS)
+    return label
 
 
 def screen_classification(out, industry: str | None = None) -> dict:
@@ -160,9 +247,11 @@ def _cap(text: str, limit: int) -> str:
 
 def screen_explanation(output: dict, industry: str | None) -> ScreenedExplanation:
     texts = {
-        k: _normalised(v) if isinstance(v := output.get(k), str) else "" for k in _TEXT_FIELDS
+        k: _prepared(v, MAX_FIELD_CHARS) if isinstance(v := output.get(k), str) else ""
+        for k in _TEXT_FIELDS
     }
-    angles = [_normalised(a) for a in (output.get("suggested_angles") or []) if isinstance(a, str)]
+    raw_angles = [a for a in (output.get("suggested_angles") or []) if isinstance(a, str)]
+    angles = [_prepared(a, MAX_ANGLE_CHARS) for a in raw_angles[:MAX_ANGLES]]
     everything = "\n".join([*texts.values(), *angles])
 
     reason = _pattern_reason(everything)
@@ -174,8 +263,8 @@ def screen_explanation(output: dict, industry: str | None) -> ScreenedExplanatio
         warnings = [f"AI explanation withheld: {w}" for w in safety.warnings]
         return ScreenedExplanation(None, warnings, f"claim_risk_{safety.risk_level.value}")
 
-    screened = {k: (_cap(v, MAX_FIELD_CHARS) if v else v) for k, v in texts.items()}
+    screened = dict(texts)  # already normalised and capped by _prepared
     screened["ai_inference"] = screened["ai_inference"] or None
-    screened["suggested_angles"] = [_cap(a, MAX_ANGLE_CHARS) for a in angles[:MAX_ANGLES]]
+    screened["suggested_angles"] = angles
     warnings = [f"AI explanation: {w}" for w in safety.warnings]
     return ScreenedExplanation(screened, warnings, None)

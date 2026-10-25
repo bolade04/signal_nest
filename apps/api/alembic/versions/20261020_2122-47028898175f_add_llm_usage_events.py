@@ -7,13 +7,15 @@ sum of a workspace's rows since the first of the month, UTC).
 
 Purely **additive and safe on a live database**:
 
-* One brand-new table and two indexes (``scout_request_id``; ``workspace_id,
+* One brand-new table and three indexes (``scout_request_id``; ``job_id``, so a
+  run's call cap counts only the attempts of its own durable job; ``workspace_id,
   created_at`` for the month-to-date sum). No existing table is altered.
 * No backfill: spend before this revision was never recorded, so every workspace
   starts the month at zero recorded spend.
 * No prompt, scraped content or model text is stored - counts and money only.
   ``CASCADE`` on organization and workspace ties retention to tenant deletion;
-  ``SET NULL`` on ``scout_request_id`` keeps the spend when a request is deleted.
+  ``SET NULL`` on ``scout_request_id`` and ``job_id`` keeps the spend when a request
+  or a job row is deleted.
 
 Rollback: ``downgrade`` drops the indexes and the table, and with them the recorded
 spend; budgets then restart from zero.
@@ -42,6 +44,7 @@ def upgrade() -> None:
     sa.Column('organization_id', sa.String(length=32), nullable=False),
     sa.Column('workspace_id', sa.String(length=32), nullable=False),
     sa.Column('scout_request_id', sa.String(length=32), nullable=True),
+    sa.Column('job_id', sa.String(length=32), nullable=True),
     sa.Column('task', sa.String(length=64), nullable=False),
     sa.Column('provider', sa.String(length=32), nullable=False),
     sa.Column('model', sa.String(length=100), nullable=False),
@@ -53,11 +56,13 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['job_id'], ['jobs.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['scout_request_id'], ['scout_requests.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('llm_usage_events', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_llm_usage_events_job_id'), ['job_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_llm_usage_events_scout_request_id'), ['scout_request_id'], unique=False)
         batch_op.create_index('ix_llm_usage_events_workspace_created', ['workspace_id', 'created_at'], unique=False)
 
@@ -66,5 +71,6 @@ def downgrade() -> None:
     with op.batch_alter_table('llm_usage_events', schema=None) as batch_op:
         batch_op.drop_index('ix_llm_usage_events_workspace_created')
         batch_op.drop_index(batch_op.f('ix_llm_usage_events_scout_request_id'))
+        batch_op.drop_index(batch_op.f('ix_llm_usage_events_job_id'))
 
     op.drop_table('llm_usage_events')

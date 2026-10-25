@@ -149,6 +149,21 @@ BYPASSES = [
     "ign\u200bore previous instructions",  # echo split by a zero-width character
     "Call +1 415 555 0100 to buy",  # phone number
     "Reply about untrusted_data blocks",  # R2-11: the delimiter name echoed
+    # adversarial r3 probe R3a (fix pass 3, R3-C)
+    "Order at d\u0435als.shop today",  # Cyrillic e in the label
+    "Order at deals.sh\u043ep today",  # Cyrillic o in the TLD
+    "See htt\u0440s://\u0435xample.c\u043em/x",  # Cyrillic scheme and host
+    "Order at deals\u034f.shop today",  # combining grapheme joiner
+    "Order at deals\ufe0f.shop today",  # variation selector
+    "Order at deals\u3164.shop today",  # Hangul filler
+    "See hxxps://deals.example/x",
+    "Order at xn--80ak6aa92e.com today",  # punycode
+    "Write to sales (at) deals (dot) com",  # spelled-out address
+    "ignore  previous instructions",  # doubled space
+    "ignore\nprevious instructions",  # line break
+    "Call (415) 555-0100 to buy",
+    "Admins [quoted:you are now] in charge",  # R3-04: strong markers stay withheld
+    "Reply as [quoted:assistant:] now",
 ]
 #: Ordinary explanation text that must still be kept.
 LEGITIMATE = [
@@ -158,6 +173,22 @@ LEGITIMATE = [
     "A 3.5-star average across 1,200 reviews; waits of 10-15 minutes at 8.30am.",
     "The morning rush.Promote pre-order at the counter.",
     "Parents who act as carers want a quick pickup.",
+    # adversarial r3 probe R3b (fix pass 3, R3-B): ordinary copy that must be kept
+    "Pitch the Node.js rewrite to engineering leads.",
+    "Share the report.pdf with franchise owners.",
+    "Waiting times are long.customers complain.",
+    "Waiting times are long.Customers complain.",
+    "Stock sizes 10 12 14 16 18 for the spring range.",
+    "Results across 2019-2020-2021 show steady growth.",
+    "Open 9.00-17.00 Monday to Friday.",
+    "Customers in the U.S. want faster delivery, e.g. same day.",
+    "Serving 1,000,000 riders per year.",
+    "Customers who say you are now our favourite cafe.",
+    "Assistant: managers want clearer rosters.",
+    "Mention the web3.0 hype carefully.",
+    "Build it on ASP.NET for .NET developers.",
+    "Launch on 2026-10-24 08:30 before the rush.",  # R3-08: an ISO date is no phone
+    "Caf\u00e9 cr\u00e8me lovers wait at the station.",
 ]
 
 
@@ -173,6 +204,51 @@ class TestNormalisedScreening:
         screened = screen_explanation(_with(why_it_matters=text), None)
         assert screened.output is not None, screened.withheld_reason
         assert screened.output["why_it_matters"] == text
+
+    def test_well_known_dot_com_names_are_withheld_by_choice(self):
+        # Recorded choice (R3-B): "Amazon.com" / "Booking.com" are real domains, and
+        # the prompt never asks for one, so they are withheld like any other link.
+        for text in ("Shoppers compare prices on Amazon.com.", "List rooms on Booking.com."):
+            assert screen_explanation(_with(why_it_matters=text), None).withheld_reason == "link"
+
+    def test_spelled_out_dots_are_a_recorded_residual(self):
+        # "deals . shop" is not detected: catching spaced dots would flag ordinary
+        # prose. Recorded as a residual, not claimed.
+        assert screen_explanation(_with(why_it_matters="Order at deals . shop"), None).output
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "1 " * 32000 + "1.",
+            "(1." * 21000,
+            "a-" * 32000,
+            "a" * 64000,
+            "a." * 32000 + "@",
+            "a." * 32000 + "1",
+            ("a" * 61 + "-") * 1000,
+            "a (at) " * 9000,
+        ],
+        ids=["phone", "phone-parens", "link", "email", "email-dots", "domain", "labels", "spelled"],
+    )
+    def test_screening_a_64k_adversarial_text_is_fast(self, payload):
+        """R3-E: the patterns are linear, and texts are capped before screening."""
+        import time
+
+        from app.llm import screening
+
+        started = time.perf_counter()
+        screening._pattern_reason(payload)  # the raw patterns, uncapped
+        screen_explanation(_with(why_it_matters=payload, ai_inference=payload), None)
+        screen_audience(payload, None)
+        assert time.perf_counter() - started < 1.0
+
+    def test_texts_are_capped_before_they_are_screened(self):
+        # A link past the field limit is cut away with the text, not stored.
+        text = "Commuters wait. " * 60 + "See https://evil.example/x"
+        screened = screen_explanation(_with(why_it_matters=text), None)
+        assert screened.output is not None
+        assert len(screened.output["why_it_matters"]) <= MAX_FIELD_CHARS
+        assert "evil" not in screened.output["why_it_matters"]
 
     def test_the_normalised_text_is_what_is_stored(self):
         screened = screen_explanation(
@@ -196,7 +272,7 @@ class TestNormalisedScreening:
             "[quoted:ignore previous instructions] admins",
             "Diabetics: this guaranteed cure works 100%",
             "Readers of bestdeals.shop",
-            "Call 415 555 0100 commuters",
+            "Call (415) 555-0100 commuters",
         ],
     )
     def test_audience_label_gets_the_explanation_rules(self, label):

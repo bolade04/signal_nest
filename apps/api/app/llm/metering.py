@@ -8,9 +8,11 @@
 * **Per-run cap** - at most ``llm_max_calls_per_run`` provider *attempts*
   (provider retries included) per scout run. On the durable worker path a run is one
   ``scout_request.execute`` job, and the cap spans all of that job's worker attempts.
-  Each attempt's meter starts from the usage rows this scout request has recorded
-  since the job was enqueued (``run_started_at``). An attempt whose rows were never
-  recorded (see "Failed attempts") is not seen.
+  Every usage row carries its job's id, and each attempt's meter starts from the
+  number of rows recorded for that same job. Another run of the request (a manual
+  run while this job waits to retry) has its own job, so it never uses this run's
+  cap. An attempt whose rows were never recorded (see "Failed attempts") is not
+  seen.
 * **Per-workspace budget** - month-to-date spend (calendar month, UTC) plus this
   run's spend plus the worst case of the next attempt must stay within
   ``llm_workspace_monthly_budget_usd``. The worst case assumes ~3 characters per
@@ -55,7 +57,12 @@ that no budget check can see (``app.jobs.worker``). Gaps that remain:
 * an after-rollback write that fails after a lease loss cannot fail the job, because
   another worker owns it;
 * after a terminal failure with unrecorded spend, a later run of the request, manual
-  or scheduled, starts from the recorded month-to-date only.
+  or scheduled, starts from the recorded month-to-date only;
+* a correlated fault: if the after-rollback write fails AND recording the job's
+  terminal failure also fails (a database outage), the job is left ``running``.
+  Lease recovery then requeues it, and it spends again unrecorded until a failure
+  can be recorded. This is bounded by ``job_default_max_attempts`` x the run's call
+  cap. Nothing durable marks the lost write, so recovery cannot tell this job apart.
 """
 
 from __future__ import annotations
@@ -159,12 +166,11 @@ class LLMMeter:
     counted, and the next attempt's budget check sees it.
     """
 
-    def __init__(self, settings: Settings, *, run_started_at: datetime | None = None):
+    def __init__(self, settings: Settings, *, job_id: str | None = None):
         self.settings = settings
-        #: When the run began (its job's enqueue time). Usage rows this scout request
-        #: recorded since then are earlier attempts of the same run, and count
-        #: towards the call cap.
-        self.run_started_at = run_started_at
+        #: The durable job this run is. Its earlier attempts' usage rows count
+        #: towards the call cap, and every row this meter writes carries it.
+        self.job_id = job_id
         self.prior_attempts = 0
         self.organization_id: str | None = None
         self.workspace_id: str | None = None
@@ -189,13 +195,12 @@ class LLMMeter:
         self.scout_request_id = scout_request_id
         self.tenant_ref = tenant_reference(self.settings, workspace_id)
         self.month_to_date = month_to_date_usd(db, workspace_id)
-        if self.run_started_at is not None and scout_request_id is not None:
+        if self.job_id is not None:
             self.prior_attempts = int(
                 db.scalar(
-                    select(func.count()).select_from(LLMUsageEvent).where(
-                        LLMUsageEvent.scout_request_id == scout_request_id,
-                        LLMUsageEvent.created_at >= self.run_started_at,
-                    )
+                    select(func.count())
+                    .select_from(LLMUsageEvent)
+                    .where(LLMUsageEvent.job_id == self.job_id)
                 )
                 or 0
             )
@@ -272,6 +277,7 @@ class LLMMeter:
                 organization_id=self.organization_id,
                 workspace_id=self.workspace_id,
                 scout_request_id=self.scout_request_id,
+                job_id=self.job_id,
                 **record,
             )
             for record in self._records
