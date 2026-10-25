@@ -339,3 +339,29 @@ def test_a_rejected_audience_label_falls_back_to_the_business_audience(seeded, m
         for o in opps:
             for stored in (o.who_cares, o.audience_fit):
                 assert "<i>" not in (stored or "") and "guaranteed cure" not in (stored or "")
+
+
+def test_the_pipeline_screens_the_audience_label_for_the_business_industry(
+    seeded, monkeypatch
+):
+    """F6: the label's claim check uses the business's industry. "best" is a medium
+    claim, which a regulated industry escalates to high, so for a healthcare business
+    the label is dropped rather than shown."""
+    import dataclasses
+
+    real_context = pipeline.build_business_context
+
+    def healthcare_context(db, workspace_id):
+        return dataclasses.replace(real_context(db, workspace_id), industry="healthcare")
+
+    monkeypatch.setattr(pipeline, "build_business_context", healthcare_context)
+    label = "Patients who want the best results"
+    assert screen_audience(label, None) == label  # kept where nothing is regulated
+    classified = {**CLASSIFIED, "audience_fit_label": label}
+    opps, signals = _rerun(seeded, monkeypatch, _service(classified, CLEAN))
+    model_signals = [
+        s for s in signals if s.ingest_metadata.get("classification_source") == "model"
+    ]
+    assert model_signals
+    assert all(s.ingest_metadata.get("audience_label") is None for s in model_signals)
+    assert all(o.audience_fit != label for o in opps)
