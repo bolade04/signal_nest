@@ -3503,6 +3503,8 @@ export interface components {
             created_at: string;
             /** Decision */
             decision: string;
+            /** Explanation Source */
+            explanation_source: ("model" | "degraded" | "rule_based") | null;
             /** Id */
             id: string;
             /** Inside Scout Area */

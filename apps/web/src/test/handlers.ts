@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
-import type { LocationOut, OpportunitySort } from '@/api/types';
+import type { LocationOut, OpportunityDetail, OpportunitySort } from '@/api/types';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -188,9 +188,19 @@ const opportunities: Opp[] = CITIES.flatMap((c, ci) =>
   })),
 );
 
-function detailFor(o: Opp) {
+// One opportunity's explanation is degraded (P6-LLM-5): the provider failed, so the API
+// stores its placeholder copy (pipeline.DEGRADED_WHY) with explanation_source 'degraded'
+// and no ai_inference.
+export const degradedOpportunityId = 'opp-loc-dallas-1';
+export const DEGRADED_WHY =
+  'AI explanation unavailable: the language-model provider did not return a usable response for this run.';
+
+function detailFor(o: Opp): OpportunityDetail {
+  const degraded = o.id === degradedOpportunityId;
   return {
     ...o,
+    ...(degraded ? { why_it_matters: DEGRADED_WHY } : {}),
+    explanation_source: degraded ? 'degraded' : 'model',
     who_cares: 'Local growth marketers for this market.',
     observed_evidence: [
       {
@@ -201,8 +211,10 @@ function detailFor(o: Opp) {
         source_url: 'https://example.com/article',
       },
     ],
-    ai_inference: 'The signal suggests an unmet, localized need worth a timely response.',
-    suggested_angles: ['Speed-focused messaging', 'Local trust signals'],
+    ai_inference: degraded
+      ? null
+      : 'The signal suggests an unmet, localized need worth a timely response.',
+    suggested_angles: degraded ? [] : ['Speed-focused messaging', 'Local trust signals'],
     risk_note: null,
     claims_warnings: [],
     brand_id: brand.id,
@@ -214,6 +226,13 @@ function detailFor(o: Opp) {
       { source_type: 'rss_news', detail: 'Corroborated by a local news mention.', weight: 2, source_url: 'https://example.com/article' },
     ],
   };
+}
+
+/** The detail payload the default handler serves for ``id`` (for per-test overrides). */
+export function opportunityDetailFixture(id: string): OpportunityDetail {
+  const o = opportunities.find((x) => x.id === id);
+  if (!o) throw new Error(`no opportunity fixture ${id}`);
+  return detailFor(o);
 }
 
 // One opportunity deliberately has no persisted intelligence so tests can prove

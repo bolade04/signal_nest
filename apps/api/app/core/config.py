@@ -462,6 +462,15 @@ class Settings(BaseSettings):
     llm_mock_seed: str = "signalnest-dev"
     llm_allow_dev_fallback: bool = False
 
+    # --- LLM reliability (P6-LLM-1) ------------------------------------------
+    #: Upper bound on generated tokens per call (Anthropic ``max_tokens``, OpenAI
+    #: ``max_completion_tokens``). A reply that stops at the bound is treated as
+    #: truncated (malformed), never parsed as a partial answer.
+    llm_max_output_tokens: int = 1024
+    #: Longest provider ``retry-after`` the service honours before its next
+    #: attempt; a longer hint is clamped so one call's wall-clock stays bounded.
+    llm_retry_after_cap_seconds: float = 10.0
+
     # --- Readiness probes ----------------------------------------------------
     #: Wall-clock budget for a single readiness probe. Bounded so a hung backend
     #: cannot stall the readiness endpoint. Must be > 0 and <= the total budget.
@@ -675,6 +684,17 @@ class Settings(BaseSettings):
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")
+
+        # LLM call bounds (P6-LLM-1): one call costs at most
+        # (llm_max_retries + 1) x llm_timeout_seconds plus clamped backoff.
+        if not 0 <= self.llm_max_retries <= 5:
+            errors.append("llm_max_retries must be between 0 and 5")
+        if not 1 <= self.llm_timeout_seconds <= 120:
+            errors.append("llm_timeout_seconds must be between 1 and 120")
+        if not 1 <= self.llm_max_output_tokens <= 16000:
+            errors.append("llm_max_output_tokens must be between 1 and 16000")
+        if not 0 <= self.llm_retry_after_cap_seconds <= 60:
+            errors.append("llm_retry_after_cap_seconds must be between 0 and 60")
 
         # A non-positive lifetime would mint invitations that are already expired
         # when created; reject it at construction.

@@ -230,7 +230,7 @@ const ROWS: Row[] = [
   },
   {
     id: 'C03 Opportunity status actions (x4)',
-    site: 'OpportunityDetail.tsx:151',
+    site: 'OpportunityDetail.tsx:155',
     policy: EDITOR,
     route: '/opportunities/opp-loc-dallas-0',
     ready: (s) => s.findByRole('heading', { name: /dallas customers want faster delivery 1/i }),
@@ -701,7 +701,7 @@ const SIDE_ROWS: SideRow[] = [
     },
   },
   {
-    site: 'W04 OpportunityDetail.tsx:94-98 mark saved',
+    site: 'W04 OpportunityDetail.tsx:95-99 mark saved',
     route: '/opportunities/opp-loc-dallas-0',
     handlers: [
       http.get(P('/workspaces/ws-1/opportunities/opp-loc-dallas-0'), async () => {
@@ -828,7 +828,7 @@ const RETRY_ROWS: RetryRow[] = [
   { site: 'Locations.tsx:67', route: '/locations', fails: '/workspaces/:ws/locations', recovered: (s) => s.findByText('Dallas') },
   { site: 'CampaignContext.tsx:445', route: '/context', fails: '/workspaces/:ws/products', recovered: (s) => s.findByText(/no products yet/i) },
   {
-    site: 'OpportunityDetail.tsx:112',
+    site: 'OpportunityDetail.tsx:113',
     route: '/opportunities/opp-loc-dallas-0',
     fails: '/workspaces/:ws/opportunities/opp-loc-dallas-0',
     recovered: (s) => s.findByRole('heading', { name: /dallas customers want faster delivery 1/i }),

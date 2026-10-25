@@ -94,8 +94,10 @@ def _this_revision() -> str:
 
 
 THIS = _this_revision()
-#: The code head: one additive revision later (P6-AUTH-4 sessions), the single head.
-CODE_HEAD = "87198ab57b59"
+#: The P6-AUTH-4 sessions revision, one additive revision later; the code head one further
+#: (P6-LLM-5 opportunity explanation source).
+SESSIONS = "87198ab57b59"
+CODE_HEAD = "6ad2ff77f691"
 
 
 # --------------------------------------------------------------------------- #
@@ -247,7 +249,8 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == THIS
+    assert script.get_revision(CODE_HEAD).down_revision == SESSIONS
+    assert script.get_revision(SESSIONS).down_revision == THIS
     revision = script.get_revision(THIS)
     assert revision.down_revision == PREV
     assert Path(revision.path).name.endswith("_add_password_reset_and_email_verification.py")
