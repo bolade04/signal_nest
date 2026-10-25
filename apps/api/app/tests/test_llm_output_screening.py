@@ -189,6 +189,8 @@ LEGITIMATE = [
     "Build it on ASP.NET for .NET developers.",
     "Launch on 2026-10-24 08:30 before the rush.",  # R3-08: an ISO date is no phone
     "Caf\u00e9 cr\u00e8me lovers wait at the station.",
+    "Share index.ts and the README.md with the developers.",  # file extensions, not TLDs
+    "Queues peak at rush hour.It is worst on Mondays.",  # capitalised word after a dot
 ]
 
 
@@ -241,6 +243,18 @@ class TestNormalisedScreening:
         screen_explanation(_with(why_it_matters=payload, ai_inference=payload), None)
         screen_audience(payload, None)
         assert time.perf_counter() - started < 1.0
+
+    def test_raw_text_is_cut_before_it_is_normalised(self, monkeypatch):
+        """R3-E: normalising is bounded too - a 100k reply is cut to a small multiple of
+        the field limit before NFKC runs."""
+        from app.llm import screening
+
+        seen: list[int] = []
+        real = screening.normalise
+        monkeypatch.setattr(screening, "normalise", lambda t: seen.append(len(t)) or real(t))
+        screen_explanation(_with(why_it_matters="x" * 100_000), None)
+        screen_audience("y" * 100_000, None)
+        assert seen and max(seen) <= 4 * MAX_FIELD_CHARS
 
     def test_texts_are_capped_before_they_are_screened(self):
         # A link past the field limit is cut away with the text, not stored.
