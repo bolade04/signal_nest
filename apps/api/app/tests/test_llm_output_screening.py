@@ -173,6 +173,7 @@ BYPASSES = [
     "Order at deals\u3002shop",  # R4-C: ideographic full stop
     "Order at deals\uff61shop",  # halfwidth ideographic full stop
     "Order at BESTDEALS.SHOP today",  # R4-B: an ALL-CAPS TLD is a TLD
+    "Visit vb.net.au now",  # R4-A: right anchor - a further ".label" is a domain
 ]
 #: Ordinary explanation text that must still be kept.
 LEGITIMATE = [
@@ -275,8 +276,8 @@ class TestNormalisedScreening:
         from app.llm import screening
 
         seen: list[int] = []
-        real = screening.normalise
-        monkeypatch.setattr(screening, "normalise", lambda t: seen.append(len(t)) or real(t))
+        real = screening._display
+        monkeypatch.setattr(screening, "_display", lambda t: seen.append(len(t)) or real(t))
         screen_explanation(_with(why_it_matters="x" * 100_000), None)
         screen_audience("y" * 100_000, None)
         assert seen and max(seen) <= 4 * MAX_FIELD_CHARS
