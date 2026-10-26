@@ -200,3 +200,85 @@ def test_an_injected_client_cannot_bring_cookies_either():
     # The cookie the caller built the client with is gone, and no reply's cookie stuck.
     assert seen == [None, None]
     assert len(client.cookies) == 0
+
+
+@pytest.mark.parametrize("name", ["anthropic", "openai"])
+def test_a_cookie_cannot_slip_between_one_tenants_reply_and_anothers_request(name, monkeypatch):
+    """A forced interleaving that defeats "clear a shared jar around each request".
+
+    Clearing a shared jar before and/or after each ``_post`` leaves windows where tenant
+    A's reply cookie is in the jar while tenant B's request is being built. This test
+    forces exactly that, on the adapter's default client:
+
+    1. A's request reaches the (offline) transport and is held there;
+    2. B enters ``_post`` (past any "clear before" step) and is held at the start of
+       ``Client.build_request``, before its cookies are merged;
+    3. A's reply is released; httpx extracts its cookie into the client's jar, then A
+       is held in a response hook, i.e. before any "clear after" step in ``_post``;
+    4. B's request is built and sent while A is still held; then both finish.
+
+    With a jar that can hold A's cookie, B's request carries it. With the adapter's
+    jar, nothing is ever stored, so B's request carries no cookie.
+    """
+    b_building, a_extracted, b_sent = threading.Event(), threading.Event(), threading.Event()
+    seen: dict[str, str | None] = {}
+    original_build = httpx.Client.build_request
+
+    def handle(_self, request: httpx.Request) -> httpx.Response:
+        tenant = _tenant_of(name, json.loads(request.content))
+        seen[tenant] = request.headers.get("cookie")
+        if tenant == "t_tenant_A":
+            assert b_building.wait(timeout=5), "B never reached build_request"
+        else:
+            b_sent.set()
+        return httpx.Response(
+            200,
+            json=_reply_body(name),
+            headers={"set-cookie": f"edge_session={tenant}; Path=/"},
+        )
+
+    def build_request(self, method, url, **kwargs):
+        body = kwargs.get("json")
+        if isinstance(body, dict) and _tenant_of(name, body) == "t_tenant_B":
+            b_building.set()
+            assert a_extracted.wait(timeout=5), "A's reply was never processed"
+        return original_build(self, method, url, **kwargs)
+
+    def hold_a_after_extraction(response: httpx.Response) -> None:
+        if _tenant_of(name, json.loads(response.request.content)) == "t_tenant_A":
+            a_extracted.set()
+            assert b_sent.wait(timeout=5), "B's request was never sent"
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle)
+    monkeypatch.setattr(httpx.Client, "build_request", build_request)
+    provider = _provider(name)  # default construction, as ``llm_service`` builds it
+    provider._client.event_hooks = {"response": [hold_a_after_extraction]}
+    errors: list[BaseException] = []
+
+    def call(tenant: str) -> None:
+        try:
+            _call(provider, tenant)
+        except BaseException as exc:  # surfaced below
+            errors.append(exc)
+
+    a = threading.Thread(target=call, args=("t_tenant_A",), name="tenant-A")
+    b = threading.Thread(target=call, args=("t_tenant_B",), name="tenant-B")
+    a.start()
+    b.start()
+    a.join(timeout=15)
+    b.join(timeout=15)
+
+    assert errors == [] and not a.is_alive() and not b.is_alive()
+    # The interleaving really happened, in the order above.
+    assert b_building.is_set() and a_extracted.is_set() and b_sent.is_set()
+    assert seen == {"t_tenant_A": None, "t_tenant_B": None}
+    assert len(provider._client.cookies) == 0
+
+
+@pytest.mark.parametrize("name", ["anthropic", "openai"])
+def test_the_adapters_client_jar_refuses_every_cookie(name):
+    from app.llm.providers_real import _NoCookiePolicy
+
+    jar = _provider(name)._client.cookies.jar
+    assert isinstance(jar._policy, _NoCookiePolicy)
+    assert len(jar) == 0

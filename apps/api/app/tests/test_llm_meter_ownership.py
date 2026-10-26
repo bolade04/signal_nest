@@ -196,6 +196,48 @@ def test_a_meter_holding_records_cannot_be_bound(db):
     assert db.scalars(select(LLMUsageEvent)).all() == []
 
 
+def _attempt_only() -> LLMMeter:
+    meter = LLMMeter(_settings(), job_id=JOB)
+    meter.before_attempt("anthropic", MODEL, 10, 100)  # counted, nothing recorded yet
+    assert meter.attempts == 1
+    return meter
+
+
+def _spend_only() -> LLMMeter:
+    meter = LLMMeter(_settings(), job_id=JOB)
+    meter.spent = 0.5
+    return meter
+
+
+def _refusal_only() -> LLMMeter:
+    meter = LLMMeter(_settings(llm_workspace_monthly_budget_usd=0.0), job_id=JOB)
+    with pytest.raises(LLMBudgetExceededError):
+        meter.before_attempt("anthropic", MODEL, 10, 100)  # budget 0: refused
+    assert meter.attempts == 0 and meter.refusals == {"workspace_budget": 1}
+    return meter
+
+
+@pytest.mark.parametrize(
+    "prime", [_attempt_only, _spend_only, _refusal_only], ids=["attempts", "spent", "refusals"]
+)
+def test_a_meter_with_attempts_spend_or_refusals_but_no_records_cannot_be_bound(db, prime):
+    """Not only records: any accounting state from before a bind refuses the bind."""
+    _seed(db)
+    meter = prime()
+    assert meter._records == []
+    before = _state(meter)
+
+    with pytest.raises(RuntimeError, match="already holds") as exc:
+        meter.bind(db, **A)
+    assert type(exc.value).__name__ == "LLMMeterBindingError"
+    assert _state(meter) == before
+    assert meter.workspace_id is None and meter.tenant_ref is None
+
+    meter.flush(db)
+    db.commit()
+    assert len(db.scalars(select(LLMUsageEvent)).all()) == 3  # only the seeded rows
+
+
 @pytest.mark.parametrize("field", OWNER_FIELDS)
 def test_owner_fields_cannot_be_assigned(db, field):
     meter = LLMMeter(_settings(), job_id=JOB).bind(db, **A)
