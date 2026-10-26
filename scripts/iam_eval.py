@@ -224,6 +224,27 @@ ACTION_CONDITION_KEYS: dict[str, set[str]] = {
     "rds:StopDBInstance": {"aws:ResourceTag/${TagKey}", "rds:db-tag/${TagKey}", "rds:snapshot-tag/${TagKey}", "rds:DatabaseClass",
                            "rds:DatabaseEngine", "rds:DatabaseName", "rds:MultiAz", "rds:Piops", "rds:StorageEncrypted",
                            "rds:StorageSize", "rds:Vpc"},
+    # P6-CI-6 K0-2 (2026-10-21): the key-apply principal's conditioned KMS writes, keys per the Service
+    # Authorization Reference (AWS KMS) Actions table read 2026-10-21. CreateAlias authorizes against the
+    # alias AND the key, so its set is the union of the two resource rows.
+    "kms:CreateKey": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys",
+                      "kms:BypassPolicyLockoutSafetyCheck", "kms:CallerAccount", "kms:KeyOrigin", "kms:KeySpec",
+                      "kms:KeyUsage", "kms:MultiRegion", "kms:MultiRegionKeyType", "kms:ViaService"},
+    "kms:TagResource": {"aws:RequestTag/${TagKey}", "aws:ResourceTag/${TagKey}", "aws:TagKeys", "kms:CallerAccount",
+                        "kms:KeyOrigin", "kms:KeySpec", "kms:KeyUsage", "kms:MultiRegion", "kms:MultiRegionKeyType",
+                        "kms:ResourceAliases", "kms:ViaService"},
+    "kms:EnableKeyRotation": {"aws:ResourceTag/${TagKey}", "kms:CallerAccount", "kms:KeyOrigin", "kms:KeySpec",
+                              "kms:KeyUsage", "kms:MultiRegion", "kms:MultiRegionKeyType", "kms:ResourceAliases",
+                              "kms:RotationPeriodInDays", "kms:ViaService"},
+    "kms:CreateAlias": {"aws:ResourceTag/${TagKey}", "kms:CallerAccount", "kms:KeyOrigin", "kms:KeySpec", "kms:KeyUsage",
+                        "kms:MultiRegion", "kms:MultiRegionKeyType", "kms:ResourceAliases", "kms:ViaService"},
+    # D-K1-3 = (b-wide), operator decision 2026-10-23: the key-apply principal's lockout-check Allow and the
+    # bypass-flag Deny (KeyApplyDenyRiskyKeyShapes) now condition kms:PutKeyPolicy; keys per the same saved
+    # Service Authorization Reference (AWS KMS) Actions table read 2026-10-21 (resource key*), so a Deny
+    # conditioned on a key PutKeyPolicy never populates is reported as dead rather than trusted.
+    "kms:PutKeyPolicy": {"aws:ResourceTag/${TagKey}", "kms:BypassPolicyLockoutSafetyCheck", "kms:CallerAccount",
+                         "kms:KeyOrigin", "kms:KeySpec", "kms:KeyUsage", "kms:MultiRegion", "kms:MultiRegionKeyType",
+                         "kms:ResourceAliases", "kms:ViaService"},
     # INFRA-9 B-3 (adversarial-lane finding 4): the apply identity's state-CMK statement
     # conditions these two actions on kms:ViaService; entering them here puts the delta's
     # only new condition under the same dead-grant detector Gate 4N-I2 motivated. Both
