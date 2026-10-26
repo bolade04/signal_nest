@@ -17,12 +17,14 @@ from app.auth.dependencies import TenantContext, get_tenant_context, require_rol
 from app.brands.service import get_primary_brand
 from app.capabilities.registry import Capability
 from app.capabilities.resolver import CapabilityResolution
+from app.core.config import get_settings
 from app.core.enums import Role, ScoutRequestStatus
 from app.core.errors import CapabilityUnavailableError, NotFoundError, ValidationDomainError
 from app.core.logging import get_logger, log_event, trace_id_ctx
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
 from app.db.session import get_db
 from app.jobs.service import enqueue_scout_request
+from app.llm.metering import ensure_run_allowed
 from app.locations.models import BusinessLocation
 from app.locations.service import ensure_location_active
 from app.scouting_requests import schedules as schedule_service
@@ -332,6 +334,9 @@ def run_scout_request_endpoint(
     if observed == ScoutRequestStatus.PAUSED.value:
         raise ValidationDomainError("Resume the request before running it.")
     ensure_location_active(db, request.location_id)
+    # P6-LLM-4: a workspace whose monthly AI budget is spent is refused here (HTTP 429,
+    # ``llm_budget_exhausted``) before any state changes or work is enqueued.
+    ensure_run_allowed(db, get_settings(), request.workspace_id)
 
     # Atomic claim of the run: only the caller that flips the observed status to
     # QUEUED proceeds to enqueue; a lost race is reported rather than duplicated.

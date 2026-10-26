@@ -17,9 +17,10 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
-from app.jobs.pipeline import _run
+from app.jobs.pipeline import _run, metered_run
 from app.jobs.registry import (
     HandlerContext,
     TerminalFailureContext,
@@ -27,6 +28,7 @@ from app.jobs.registry import (
     register_terminal_failure_hook,
 )
 from app.jobs.status import JobErrorCode, JobExecutionError, JobType
+from app.llm.metering import LLMMeter
 from app.scouting_requests.models import ScoutRequest
 
 logger = get_logger("signalnest.jobs.handlers")
@@ -40,6 +42,13 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     re-verifies that the loaded request matches the job's declared execution
     context, so a mis-enqueued id can never blend one market's data into
     another's.
+
+    Model calls are paid for when they are made (P6-LLM-4). The run's usage rows
+    are written in the worker's transaction, so a successful attempt commits them
+    with its results. A failed attempt is rolled back and may be retried, so the
+    same rows are also handed to the worker as an after-rollback write. Every
+    attempt's spend then counts against the workspace's monthly budget, the next
+    attempt's included.
     """
     scout_request_id = ctx.payload.get("scout_request_id")
     if not isinstance(scout_request_id, str) or not scout_request_id:
@@ -53,7 +62,11 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     if ctx.is_cancelled():
         raise JobExecutionError(JobErrorCode.CANCELLED, "cancelled before execution")
 
-    result = _run(ctx.db, scout_request_id, ctx.context)
+    # The run is this job: the call cap counts its earlier attempts' recorded rows.
+    meter = LLMMeter(get_settings(), job_id=ctx.job_id)
+    ctx.after_rollback.append(meter.flush)
+    with metered_run(meter):
+        result = _run(ctx.db, scout_request_id, ctx.context)
 
     # ``_run`` returns only safe aggregate counts (scanned / noise_filtered /
     # signals_analyzed / opportunities), which is exactly the shape we persist.

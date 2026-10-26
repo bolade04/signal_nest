@@ -4506,6 +4506,24 @@
             "title": "Decision",
             "type": "string"
           },
+          "explanation_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "model",
+                  "degraded",
+                  "rule_based",
+                  "withheld",
+                  "budget_limited"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation Source"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -4688,6 +4706,7 @@
           "who_cares",
           "observed_evidence",
           "ai_inference",
+          "explanation_source",
           "suggested_angles",
           "risk_note",
           "claims_warnings",

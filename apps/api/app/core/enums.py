@@ -176,6 +176,29 @@ class OpportunityStatus(StrEnum):
     ACTIONED = "actioned"
 
 
+class ExplanationSource(StrEnum):
+    """Where an opportunity's explanation text came from (P6-LLM-5).
+
+    ``model``: validated output of the configured LLM provider (in local/demo mode
+    that is the deterministic mock), screened before persistence. ``degraded``: the
+    provider failed - to explain the opportunity or to classify one of its signals -
+    and fixed placeholder copy was stored instead. ``rule_based``: below the
+    relevance action floor; deterministic copy, no explanation requested from the
+    model (which still classified the signals). ``withheld``: the model replied but
+    its explanation text failed output screening (P6-LLM-3) and fixed copy was
+    stored instead. ``budget_limited``: a model call the opportunity needed was not
+    made because the run's call cap or the workspace's monthly budget was reached
+    (P6-LLM-4). A NULL column predates the marker and means "not recorded" - it is
+    never backfilled by guessing.
+    """
+
+    MODEL = "model"
+    DEGRADED = "degraded"
+    RULE_BASED = "rule_based"
+    WITHHELD = "withheld"
+    BUDGET_LIMITED = "budget_limited"
+
+
 class ClaimRisk(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
