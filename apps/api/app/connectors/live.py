@@ -292,13 +292,23 @@ def live_connector_for(
     market: str | None,
     source_types: tuple[str, ...],
     takedowns: frozenset[str],
+    rss_enabled: bool,
     settings: Settings | None = None,
 ) -> LiveRssConnector | None:
+    """The live connector for this scope, or ``None``.
+
+    ``rss_enabled`` is the capability resolver's decision for the request's workspace
+    (P6-CAP-1): live feeds are RSS, so a workspace whose RSS is off (override, safety
+    ceiling or the global flag) gets no live connector, whatever the live gate says.
+    It has no default so no caller can bypass the per-workspace decision by omission.
+    """
     settings = settings or get_settings()
     # The takedown ran in another process (the API); this process drops any bytes it
     # still holds for a taken-down source before it reads anything (P6-PRIV-4).
     for key in takedowns:
         feed_cache.forget(key)
+    if not rss_enabled:
+        return None
     targets = live_targets_for(
         market=market, source_types=source_types, takedowns=takedowns, settings=settings
     )

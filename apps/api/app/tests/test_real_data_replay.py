@@ -129,6 +129,8 @@ def _world(tmp_path: Path) -> Iterator[World]:
         seed_mod.seed(reset=True)
         mp.setenv("CONNECTOR_RSS_REPLAY_ORIGIN", server.origin)
         mp.setenv("CONNECTOR_RSS_LIVE_ENABLED", "true")
+        # Live feeds are RSS: the workspace's CAP-1 decision needs the global flag on.
+        mp.setenv("CONNECTOR_RSS_ENABLED", "true")
         get_settings.cache_clear()
         app.dependency_overrides[get_db] = _override_get_db
         try:
@@ -367,7 +369,11 @@ def test_the_replay_cli_reads_one_corpus_on_both_sides(tmp_path):
     _relabelled_corpus(corpus)
     api_dir = Path(__file__).resolve().parents[2]
     env = {**os.environ, "DATABASE_URL": f"sqlite:///{tmp_path / 'cli.db'}"}
-    for key in ("CONNECTOR_RSS_REPLAY_ORIGIN", "CONNECTOR_RSS_LIVE_ENABLED"):
+    for key in (
+        "CONNECTOR_RSS_REPLAY_ORIGIN",
+        "CONNECTOR_RSS_LIVE_ENABLED",
+        "CONNECTOR_RSS_ENABLED",
+    ):
         env.pop(key, None)
 
     def run(*args: str) -> subprocess.CompletedProcess:
@@ -465,7 +471,7 @@ def test_live_sources_that_all_fail_report_unavailable_not_empty():
         connector_rss_max_attempts=1,
     )
     batch = fetch_signals(
-        market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=False, settings=settings
+        market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=True, settings=settings
     )
     assert batch.signals == []
     assert batch.coverage.reason is CoverageReason.SOURCES_UNAVAILABLE
@@ -496,7 +502,7 @@ def test_an_undecodable_capture_fails_its_source_only_end_to_end(tmp_path):
             )
             batch = fetch_signals(
                 market=REPLAY_MARKET, keywords=list(good["keywords"]), source_types=[],
-                rss_enabled=False, settings=settings,
+                rss_enabled=True, settings=settings,
             )
             requested = sorted(p for p, _s, _u in server.hits)
     assert batch.coverage.reason is CoverageReason.LIVE_SOURCES
@@ -519,6 +525,28 @@ def test_an_opportunity_is_simulated_if_any_member_is():
     assert pipeline_mod._signal_is_simulated(live) is False
 
 
+def test_live_feeds_need_the_workspace_rss_decision():
+    """P6-CAP-1: a workspace whose RSS is off gets no live egress, whatever the live gate says."""
+    feed_cache.clear()
+    with ReplayServer() as server:
+        settings = _settings(
+            connector_rss_live_enabled=True, connector_rss_replay_origin=server.origin
+        )
+        off = fetch_signals(
+            market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=False,
+            settings=settings,
+        )
+        assert server.hits == []
+        on = fetch_signals(
+            market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=True,
+            settings=settings,
+        )
+        assert server.hits
+    assert off.coverage.reason is CoverageReason.NO_SOURCE_FOR_MARKET and off.signals == []
+    assert on.coverage.reason is CoverageReason.LIVE_SOURCES
+    feed_cache.clear()
+
+
 def test_the_kill_switch_returns_a_live_market_to_not_covered():
     feed_cache.clear()
     with ReplayServer() as server:
@@ -528,8 +556,9 @@ def test_the_kill_switch_returns_a_live_market_to_not_covered():
             connector_rss_replay_origin=server.origin,
         )
         batch = fetch_signals(
-        market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=False, settings=settings
-    )
+            market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=True,
+            settings=settings,
+        )
         assert server.hits == []
     assert batch.coverage.reason is CoverageReason.NO_SOURCE_FOR_MARKET
 

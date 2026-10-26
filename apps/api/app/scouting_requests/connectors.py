@@ -9,7 +9,8 @@ results stay isolated per location.
 fixed order and always says why it holds what it holds (P6-DATA-2):
 
 1. approved **live** feeds for the market (``app.connectors.live`` — dark by
-   default) → ``covered/live_sources``, or ``unavailable/sources_unavailable`` when
+   default, and only for a workspace whose RSS the capability resolver admits,
+   P6-CAP-1) → ``covered/live_sources``, or ``unavailable/sources_unavailable`` when
    every live source failed;
 2. the **sandbox** RSS feed, when ``connector_rss_enabled`` and its policy admit the
    request and the sandbox has a feed for the market → ``covered/sandbox_feed``;
@@ -153,7 +154,11 @@ def fetch_signals(
     scope = FetchScope(market=market, keywords=tuple(keywords or ()), source_types=types)
 
     live = live_connector_for(
-        market=market, source_types=types, takedowns=takedowns, settings=settings
+        market=market,
+        source_types=types,
+        takedowns=takedowns,
+        rss_enabled=rss_enabled,
+        settings=settings,
     )
     if live is not None:
         result = live.collect(scope)

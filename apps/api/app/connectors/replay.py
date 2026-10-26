@@ -425,6 +425,9 @@ def capture_source(
 def _point_settings_at(origin: str) -> None:
     os.environ["CONNECTOR_RSS_REPLAY_ORIGIN"] = origin
     os.environ["CONNECTOR_RSS_LIVE_ENABLED"] = "true"
+    # Live feeds are RSS: the per-workspace capability decision (P6-CAP-1) needs the
+    # global RSS flag on as well.
+    os.environ["CONNECTOR_RSS_ENABLED"] = "true"
     get_settings.cache_clear()
 
 
