@@ -219,8 +219,10 @@ ACTIVE_EXPIRY_UTC = "2026-08-15T10:00:00Z"
 
 # P6-W0-TRANSITION (2026-10-02): the separate, expiring window-transition principal (D3: per-window
 # expiry, ≤ 24 h, re-stamped each window). Same bound as every other temporary purpose.
+# P6-CI-6 key apply (K0-2, 2026-10-21): the separate, expiring key-apply principal (one root apply, retired after its
+# readback). Same bound as every other temporary purpose.
 PURPOSES = ("stage_a_operator", "role_bootstrap", "boundary_bootstrap", "readonly_verifier",
-            "window_transition")
+            "window_transition", "key_apply")
 
 
 class ExpiryAuthorizationError(ValueError):

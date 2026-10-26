@@ -39,7 +39,16 @@
     "window_transition::dynamodb:PutItem": "state-lock acquisition for the window apply; exact lock table, fenced (P6-W0-TRANSITION 2026-10-02)",
     "window_transition::dynamodb:DeleteItem": "state-lock release after the window apply; exact lock table, fenced (P6-W0-TRANSITION 2026-10-02)",
     "window_transition::kms:Decrypt": "state CMK only and only via the S3/DynamoDB backend services (kms:ViaService); the secrets CMK is re-denied by WinDenyStateCmkUseOutsideTheStateCmk (P6-W0-TRANSITION 2026-10-02)",
-    "window_transition::iam:PutRolePolicy": "D5: the merged #194 api_ses_send role policy is created by the first window apply \u2014 ONE role (the api-task role), conditioned on the reviewed permissions boundary, expiring, re-denied on every other role by WinDenyInlinePolicyOutsideTheApiTaskRole (P6-W0-TRANSITION 2026-10-02; sealed P6-W0-TRANSITION-PERMS-prep def6cfd7\u2026)"
+    "window_transition::iam:PutRolePolicy": "D5: the merged #194 api_ses_send role policy is created by the first window apply \u2014 ONE role (the api-task role), conditioned on the reviewed permissions boundary, expiring, re-denied on every other role by WinDenyInlinePolicyOutsideTheApiTaskRole (P6-W0-TRANSITION 2026-10-02; sealed P6-W0-TRANSITION-PERMS-prep def6cfd7\u2026)",
+    "key_apply::s3:GetObject": "the key-apply principal reads the encrypted state object for the key-apply plan/apply; state_backend_closure.read; exact state object, re-denied everywhere else by KeyApplyDenyStateObjectOutside (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::s3:PutObject": "the key-apply principal writes the new state object on the key apply; state_backend_closure.write_apply_only; exact state object, fenced by KeyApplyDenyStateObjectOutside (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::dynamodb:GetItem": "state-lock inspection before the key-apply plan/apply; exact lock table, re-denied elsewhere by KeyApplyDenyLockOutside (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::dynamodb:PutItem": "state-lock acquisition for the key apply; exact lock table, fenced by KeyApplyDenyLockOutside (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::dynamodb:DeleteItem": "state-lock release after the key apply; exact lock table, fenced by KeyApplyDenyLockOutside (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::kms:Decrypt": "state CMK only and only via the S3/DynamoDB backend services (kms:ViaService); the secrets CMK is re-denied by KeyApplyDenyStateCmkUseOutside (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::iam:PutRolePolicy": "key_apply_closure.task_role_policies: the P6-CI-6 inline-policy updates on exactly the api and worker task roles, conditioned on the reviewed permissions boundary, expiring, re-denied on every other role by KeyApplyDenyInlinePolicyOutsideTaskRoles (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::cloudtrail:UpdateTrail": "key_apply_closure.trail_key: the audit trail's kms_key_id update to the new audit CMK on the ONE trail, expiring, re-denied on every other trail by KeyApplyDenyTrailUpdateOutside (the trail sets no CloudWatch Logs role, so the update passes no role) (P6-CI-6 K0-2 2026-10-21, REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE; operator decisions D-K1-1\u20267 recorded 2026-10-23, D-K1-3 = b-wide)",
+    "key_apply::kms:PutKeyPolicy": "key_apply_closure.kms_key_policy_lockout_check: the CreateKey policy-lockout check requires the CALLER to hold kms:PutKeyPolicy on the new key (the provider never calls PutKeyPolicy on create; the readback requires no such event); Allowed on * with the expiry and the region, re-denied on the state CMK and the secrets CMK by KeyApplyDenyWritesOnTheExistingKeys and with the bypass flag by KeyApplyDenyRiskyKeyShapes; NOT limited to the two new keys (other keys bounded only by expiry, region, K1.R and the R0 row-6 census); acceptance does not prove the lockout check accepts the conditioned Allow (P6-CI-6 K0-2, operator decision 2026-10-23 D-K1-3 = b-wide, REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE)"
    },
    "member_expansion": "dict_items",
    "subtype": "D1"
@@ -197,6 +206,10 @@
    "control": "review_pin"
   },
   "deny_requirements.py::_PRINCIPAL_SCOPES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": {
    "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
    "control": "review_pin"
   },
@@ -1015,6 +1028,14 @@
    "control": "review_pin"
   },
   "policy_inventory.py::DISCOVERY_ARGS": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::KEY_APPLY_WRITES": {
+   "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
+   "control": "review_pin"
+  },
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": {
    "assurance_kind": "AUTHORED_SOURCE_OF_TRUTH_INTEGRITY",
    "control": "review_pin"
   }

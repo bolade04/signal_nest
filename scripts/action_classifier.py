@@ -354,8 +354,23 @@ WINDOW_TRANSITION_METADATA = {
     "rds:StopDBInstance": (MUTATING,),
 }
 
+# ---- P6-CI-6 key apply (2026-10-21, PKT-K0 K0-2): the key-apply principal's KMS surface ----------
+# Categorised from the Service Authorization Reference (AWS KMS) access levels, read 2026-10-21:
+# CreateKey, CreateAlias and EnableKeyRotation are Write; TagResource and UntagResource are
+# Tagging, Write. CreateKey also sets the new key's KEY POLICY (the resource policy that governs
+# who may use the key), so it carries authority, not just a mutation. kms:UntagResource is named
+# only by the key-apply DENY on the existing keys; it is classified so the coverage stays exact.
+KEY_APPLY_METADATA = {
+    "kms:CreateKey": (MUTATING, AUTHORITY_BEARING),
+    "kms:CreateAlias": (MUTATING,),
+    "kms:EnableKeyRotation": (MUTATING,),
+    "kms:TagResource": (MUTATING,),
+    "kms:UntagResource": (MUTATING,),
+}
+
 ACTION_METADATA.update(CURATED_REMAINDER)
 ACTION_METADATA.update(WINDOW_TRANSITION_METADATA)
+ACTION_METADATA.update(KEY_APPLY_METADATA)
 ACTION_METADATA.update(CURATED_HIGH_RISK)
 
 _READ_PREFIXES = ("Describe", "List", "Get", "Lookup", "BatchGet", "Search", "Query", "Scan",
@@ -483,6 +498,8 @@ def reviewed_policy_actions() -> dict:
         "readonly_verifier": rv.readonly_verifier_policy(expiry),
         # P6-W0-TRANSITION: the window principal's EFFECTIVE policy (inline + both customer managed).
         "window_transition": gen.window_transition_effective_policy(expiry, WINDOW_API_FQDN),
+        # P6-CI-6 K0-2: the key-apply principal's EFFECTIVE policy (inline + both customer managed).
+        "key_apply": gen.key_apply_effective_policy(expiry, WINDOW_API_FQDN),
     }
     out = {}
     for name, doc in documents.items():
