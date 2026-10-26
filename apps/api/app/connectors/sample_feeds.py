@@ -13,6 +13,8 @@ topics overlap across markets while geography differs.
 
 from __future__ import annotations
 
+from app.geography.markets import parse_market, text_within
+
 _FEED_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -54,7 +56,8 @@ _MARKET_FEEDS: dict[str, tuple[str, str]] = {
 
 def _sample_market(market: str | None) -> tuple[str, str] | None:
     for key, city_slug in _MARKET_FEEDS.items():
-        if market and (key.lower() in market.lower() or market.lower() in key.lower()):
+        # Structured, fail-closed identity (P6-DATA-6), not a bidirectional substring test.
+        if market and text_within(market, parse_market(key)):
             return city_slug
     return None
 
