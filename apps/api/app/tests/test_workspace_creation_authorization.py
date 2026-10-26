@@ -1925,7 +1925,11 @@ class TestRouteContract:
         assert "200" not in op["responses"]
 
     def test_operation_is_identical_to_base(self):
-        assert self._operation() == _BASE_CREATE_OPERATION
+        """Identical to the base in every field; the one addition since is P6-PLAT-5's security
+        requirement, which documents the existing bearer header and adds no client input."""
+        operation = dict(self._operation())
+        assert operation.pop("security") == [{"bearerAuth": []}]
+        assert operation == _BASE_CREATE_OPERATION
 
 
 class TestBodyValidationOrdering:
