@@ -44,8 +44,10 @@ import { renderApp, renderProductionApp } from '@/test/utils';
  * under `src/` with the TypeScript compiler API (`@/test/form-discovery`) and compares the
  * discovered `file:line` sites with the sites the wrapped `useForm` RECORDED in this run and
  * whose forms passed `expectDefaultsCoverRequiredInputs`. It fails, naming each site, when
- * a discovered form was never exercised, when a recorded site is not discoverable, or when
- * the discoverer meets a shape it does not understand. Nothing lists the expected forms.
+ * a discovered form was never exercised, when a recorded site is not discoverable, when an
+ * asserted site was never recorded, or when the discoverer meets a shape it does not
+ * understand (including a shared wrapper whose schema or defaults come from its caller, and
+ * a `useForm` / `zodResolver` imported from any other module). Nothing lists the expected forms.
  * The comparison needs every scenario in this file: under `-t`, `.only` or `.skip` it fails
  * by design (never a vacuous pass), so run the whole file to see a real result.
  */
@@ -174,6 +176,10 @@ afterAll(() => {
   }
   for (const site of recorded) {
     if (!discoveredSet.has(site)) failures.push(`${site}: recorded at runtime but not discovered in the source`);
+  }
+  // Review r1 F5: coverage can only be granted for a site the wrapper itself recorded.
+  for (const site of asserted) {
+    if (!recorded.has(site)) failures.push(`${site}: asserted but never recorded at runtime by the useForm wrapper`);
   }
   console.info(
     `[FU-261-1] files scanned: ${discovery.filesScanned}; sites discovered: ${discoveredSet.size}; ` +

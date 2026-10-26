@@ -17,6 +17,25 @@ import * as ts from 'typescript';
  * The discoverer is deliberately narrow: every shape it does not understand is returned as
  * a named, site-specific PROBLEM (see `ProblemKind`) instead of being skipped, so the
  * caller fails closed. It holds no list of expected forms.
+ *
+ * One site label must mean one form (review r1 F1). A function that takes its schema or its
+ * defaults from its CALLER is a shared wrapper: every caller would record the same
+ * `file:line`, so one exercised caller would cover an unrendered one. Such a site is the
+ * problem `parameter-sourced-form-input`, whatever the function is called (component,
+ * anonymous default export, class method, `memo(...)` callback, any capitalisation). The
+ * rule is syntactic: the `zodResolver(...)` argument or the `defaultValues` value is
+ * followed through parentheses, type assertions, `!`, member and element access (`props.s`,
+ * `p.s.extend(...)` — a call's receiver, never its arguments), `?:` / `??` / `||` / `&&`
+ * branches, object-literal values and spreads, and same-scope variable aliases and
+ * destructuring (`const { schema } = props`), and it is a problem when that reaches a
+ * parameter (destructured or not), `this` or `arguments`. It does NOT follow a value
+ * computed by a function call from its arguments (`useMemo(() => …, [roles])`,
+ * `make(props.x)`), context, or module-level mutable state; see the FU-261-1 fix-r1 report.
+ *
+ * `useForm` / `zodResolver` imported from any other module (review r1 F2: a re-export
+ * outside the scanned glob, e.g. under `src/test/` or outside `src/`) is the problem
+ * `foreign-form-import`, as is `NS.useForm` / `NS.zodResolver` on a namespace or default
+ * import of another module.
  */
 
 export const RHF_MODULE = 'react-hook-form';
@@ -50,7 +69,18 @@ export type ProblemKind =
   /** A `zodResolver(...)` call that is not the `resolver` of a recognised `useForm` options literal. */
   | 'zod-resolver-outside-useform'
   /** A recognised site inside a function named `use…` (a custom wrapper hook). */
-  | 'custom-hook-wrapper';
+  | 'custom-hook-wrapper'
+  /**
+   * A recognised site whose `zodResolver(...)` schema or `defaultValues` flows from a parameter
+   * (or `this` / `arguments`) of an enclosing function: a shared wrapper, whose one site label
+   * would stand for every caller (review r1 F1).
+   */
+  | 'parameter-sourced-form-input'
+  /**
+   * A binding named `useForm` / `zodResolver` imported from a module other than its package, or
+   * read as a member of another module's namespace or default import (review r1 F2).
+   */
+  | 'foreign-form-import';
 
 export interface DiscoveredSite {
   /** `path/File.tsx:line`, relative to `src/`, as the runtime site label. */
@@ -82,6 +112,8 @@ const TRACKED_EXPORT: Record<string, Tracked> = {
   [RHF_MODULE]: 'useForm',
   [ZOD_RESOLVER_MODULE]: 'zodResolver',
 };
+
+const TRACKED_NAMES: ReadonlySet<string> = new Set<Tracked>(['useForm', 'zodResolver']);
 
 function isTrackedModule(spec: string): spec is typeof RHF_MODULE | typeof ZOD_RESOLVER_MODULE {
   return spec === RHF_MODULE || spec === ZOD_RESOLVER_MODULE;
@@ -156,6 +188,9 @@ function insideTypeQuery(node: ts.Node): boolean {
 }
 
 function enclosingFunctionName(node: ts.Node): string | undefined {
+  // True while walking up from an anonymous callback through call arguments only
+  // (`const useX = memo(forwardRef(() => …))`): the variable then names the callback.
+  let wrappedCallback = false;
   for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
     if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) return n.name?.getText();
     if (ts.isFunctionExpression(n) || ts.isArrowFunction(n)) {
@@ -164,9 +199,132 @@ function enclosingFunctionName(node: ts.Node): string | undefined {
       if (ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name)) return holder.name.text;
       if (ts.isPropertyAssignment(holder)) return holder.name.getText();
       // An anonymous callback (e.g. `memo(() => …)`) — keep walking to the named owner.
+      wrappedCallback = true;
+      continue;
+    }
+    if (wrappedCallback && ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) return n.name.text;
+    if (!(ts.isCallExpression(n) || ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression(n))) {
+      wrappedCallback = false;
     }
   }
   return undefined;
+}
+
+/** True when the binding pattern (or plain name) declares `text`. */
+function bindsName(name: ts.BindingName, text: string): boolean {
+  if (ts.isIdentifier(name)) return name.text === text;
+  return name.elements.some((el) => !ts.isOmittedExpression(el) && bindsName(el.name, text));
+}
+
+type Binding = { kind: 'parameter' } | { kind: 'variable'; source: ts.Expression | undefined } | { kind: 'other' };
+
+/**
+ * The nearest declaration of the identifier `ref`, found by walking the enclosing scopes:
+ * a parameter of an enclosing function, a variable (with the expression its value comes
+ * from), or anything else (function, class, enum, catch variable). `undefined` when the
+ * name is not declared in this file except by an import (or is a global).
+ */
+function resolveBinding(ref: ts.Identifier): Binding | undefined {
+  const text = ref.text;
+  const fromList = (list: ts.VariableDeclarationList, source: (d: ts.VariableDeclaration) => ts.Expression | undefined) => {
+    const decl = list.declarations.find((d) => bindsName(d.name, text));
+    return decl ? ({ kind: 'variable', source: source(decl) } as const) : undefined;
+  };
+  for (let n: ts.Node | undefined = ref.parent; n; n = n.parent) {
+    if (ts.isFunctionLike(n) && n.parameters.some((p) => bindsName(p.name, text))) return { kind: 'parameter' };
+    if ((ts.isForOfStatement(n) || ts.isForInStatement(n)) && ts.isVariableDeclarationList(n.initializer)) {
+      const loop = n;
+      const found = fromList(n.initializer, () => loop.expression);
+      if (found) return found;
+    }
+    if (ts.isForStatement(n) && n.initializer && ts.isVariableDeclarationList(n.initializer)) {
+      const found = fromList(n.initializer, (d) => d.initializer);
+      if (found) return found;
+    }
+    if (ts.isCatchClause(n) && n.variableDeclaration && bindsName(n.variableDeclaration.name, text)) return { kind: 'other' };
+    if (ts.isBlock(n) || ts.isSourceFile(n) || ts.isModuleBlock(n) || ts.isCaseClause(n) || ts.isDefaultClause(n)) {
+      for (const stmt of n.statements) {
+        if (ts.isVariableStatement(stmt)) {
+          const found = fromList(stmt.declarationList, (d) => d.initializer);
+          if (found) return found;
+        }
+        if (
+          (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt) || ts.isEnumDeclaration(stmt)) &&
+          stmt.name?.text === text
+        ) {
+          return { kind: 'other' };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * When `expr` (a zodResolver schema argument or a `defaultValues` value) flows from a
+ * parameter, `this` or `arguments` of an enclosing function, a description of that source;
+ * otherwise `undefined`. The flow rules are listed in the header comment.
+ */
+function parameterSource(expr: ts.Expression | undefined, seen: Set<ts.Node> = new Set()): string | undefined {
+  if (!expr || seen.has(expr)) return undefined;
+  seen.add(expr);
+  let e = expr;
+  while (
+    ts.isParenthesizedExpression(e) ||
+    ts.isAsExpression(e) ||
+    ts.isSatisfiesExpression(e) ||
+    ts.isNonNullExpression(e) ||
+    ts.isTypeAssertionExpression(e)
+  ) {
+    e = e.expression;
+  }
+  if (e.kind === ts.SyntaxKind.ThisKeyword) return '`this`';
+  if (ts.isIdentifier(e)) {
+    const binding = resolveBinding(e);
+    if (binding?.kind === 'parameter') return `parameter "${e.text}"`;
+    if (binding?.kind === 'variable') {
+      const via = parameterSource(binding.source, seen);
+      return via && `${via} (via "${e.text}")`;
+    }
+    if (!binding && e.text === 'arguments') return '`arguments`';
+    return undefined;
+  }
+  if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e) || ts.isCallExpression(e)) {
+    return parameterSource(e.expression, seen);
+  }
+  if (ts.isConditionalExpression(e)) return parameterSource(e.whenTrue, seen) ?? parameterSource(e.whenFalse, seen);
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind;
+    if (
+      op === ts.SyntaxKind.QuestionQuestionToken ||
+      op === ts.SyntaxKind.BarBarToken ||
+      op === ts.SyntaxKind.AmpersandAmpersandToken ||
+      op === ts.SyntaxKind.CommaToken
+    ) {
+      return parameterSource(e.left, seen) ?? parameterSource(e.right, seen);
+    }
+    return undefined;
+  }
+  if (ts.isObjectLiteralExpression(e)) {
+    for (const prop of e.properties) {
+      const value = ts.isPropertyAssignment(prop)
+        ? prop.initializer
+        : ts.isShorthandPropertyAssignment(prop)
+          ? prop.name
+          : ts.isSpreadAssignment(prop)
+            ? prop.expression
+            : undefined;
+      const found = parameterSource(value, seen);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/** The member name of `X.name` / `X['name']`, when it is static. */
+function staticMemberName(node: ts.PropertyAccessExpression | ts.ElementAccessExpression): string | undefined {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  return ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : undefined;
 }
 
 function describeParent(node: ts.Node): string {
@@ -191,6 +349,8 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
 
   // Pass 1: import bindings.
   const b: FileBindings = { locals: new Map(), namespaces: new Map() };
+  /** Namespace and default imports of every OTHER module: local name → specifier. */
+  const foreignObjects = new Map<string, string>();
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
     const spec = stmt.moduleSpecifier.text;
@@ -198,8 +358,23 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
       problem(stmt, 'unsupported-specifier', `import from "${spec}": only "${RHF_MODULE}" and "${ZOD_RESOLVER_MODULE}" are understood`);
       continue;
     }
-    if (!isTrackedModule(spec)) continue;
     const clause = stmt.importClause;
+    if (!isTrackedModule(spec)) {
+      // Review r1 F2: another module may re-export the packages from outside the scanned glob.
+      if (!clause || clause.isTypeOnly) continue;
+      if (clause.name) foreignObjects.set(clause.name.text, spec);
+      const named = clause.namedBindings;
+      if (named && ts.isNamespaceImport(named)) foreignObjects.set(named.name.text, spec);
+      if (named && ts.isNamedImports(named)) {
+        for (const el of named.elements) {
+          const imported = (el.propertyName ?? el.name).text;
+          if (!el.isTypeOnly && TRACKED_NAMES.has(imported)) {
+            problem(el, 'foreign-form-import', `"${imported}" imported from "${spec}", not from its package`);
+          }
+        }
+      }
+      continue;
+    }
     if (!clause || clause.isTypeOnly) continue;
     if (clause.name) problem(clause.name, 'default-import', `default import "${clause.name.text}" of "${spec}"`);
     const named = clause.namedBindings;
@@ -215,6 +390,8 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
         problem(el, 'default-import', `"{ default as ${el.name.text} }" from "${spec}"`);
       } else if (imported === TRACKED_EXPORT[spec]) {
         b.locals.set(el.name.text, imported as Tracked);
+      } else if (TRACKED_NAMES.has(imported)) {
+        problem(el, 'foreign-form-import', `"${imported}" imported from "${spec}", not from its package`);
       }
     }
   }
@@ -239,6 +416,7 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
       return;
     }
     let resolver: ts.ObjectLiteralElementLike | undefined;
+    let defaults: ts.Expression | undefined;
     let unreadable = false;
     for (const prop of options.properties) {
       if (ts.isSpreadAssignment(prop)) {
@@ -253,6 +431,10 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
       }
       if (prop.name && (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) && prop.name.text === 'resolver') {
         resolver = prop;
+      }
+      if (prop.name && (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) && prop.name.text === 'defaultValues') {
+        if (ts.isPropertyAssignment(prop)) defaults = prop.initializer;
+        else if (ts.isShorthandPropertyAssignment(prop)) defaults = prop.name;
       }
     }
     const value = resolver && ts.isPropertyAssignment(resolver) ? resolver.initializer : undefined;
@@ -275,6 +457,18 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
     const owner = enclosingFunctionName(call);
     if (owner && /^use[A-Z0-9_]/.test(owner)) {
       problem(nameToken(call.expression), 'custom-hook-wrapper', `useForm + zodResolver inside custom hook "${owner}"`);
+      return;
+    }
+    // Review r1 F1: one site label must stand for one form, not for every caller of a wrapper.
+    const fromSchema = parameterSource(direct.arguments[0]);
+    const fromDefaults = fromSchema ? undefined : parameterSource(defaults);
+    if (fromSchema || fromDefaults) {
+      problem(
+        nameToken(call.expression),
+        'parameter-sourced-form-input',
+        `${fromSchema ? 'zodResolver schema' : 'defaultValues'} comes from ${fromSchema ?? fromDefaults} of ` +
+          `${owner ? `"${owner}"` : 'an anonymous function'}: a shared wrapper, so one site label would cover every caller`,
+      );
       return;
     }
     sites.push({ site: at(nameToken(call.expression)) });
@@ -316,6 +510,31 @@ export function discoverInSource(path: string, text: string): { sites: Discovere
       }
       if (ts.isIdentifier(node.expression) && node.expression.text === 'require' && isPackageSpecifier(node.arguments[0])) {
         problem(node, 'require', `require(${node.arguments[0]?.getText(sf) ?? ''})`);
+      }
+    }
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      ts.isIdentifier(node.expression) &&
+      foreignObjects.has(node.expression.text)
+    ) {
+      const member = staticMemberName(node);
+      if (member !== undefined && TRACKED_NAMES.has(member)) {
+        problem(node, 'foreign-form-import', `"${member}" read from "${foreignObjects.get(node.expression.text)}", not from its package`);
+      }
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer &&
+      ts.isIdentifier(node.initializer) &&
+      foreignObjects.has(node.initializer.text)
+    ) {
+      for (const el of node.name.elements) {
+        const key = el.propertyName ?? el.name;
+        const member = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : undefined;
+        if (member !== undefined && TRACKED_NAMES.has(member)) {
+          problem(el, 'foreign-form-import', `"${member}" destructured from "${foreignObjects.get(node.initializer.text)}", not from its package`);
+        }
       }
     }
     if (ts.isIdentifier(node)) {

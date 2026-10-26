@@ -27,17 +27,22 @@ export const observedForms: ObservedForm[] = [];
  * FU-261-1: what this test file observed at RUNTIME, kept across scenarios (`observedForms`
  * is cleared per scenario). Both are private and only grow from the real `useForm` wrapper:
  * a site string cannot be added by hand, only a form object this module itself recorded.
+ *
+ * Review r1 F5: each recorded form is frozen, and its site is kept HERE, keyed by the object.
+ * `markAsserted` reads the site from this map, never from `form.site`, so mutating or
+ * re-labelling a recorded form cannot move coverage to another site.
  */
-const recordedForms = new WeakSet<ObservedForm>();
+const recordedForms = new WeakMap<ObservedForm, string>();
 const recordedSites = new Set<string>();
 const assertedSites = new Set<string>();
 
 /** Mark a recorded form as having passed the defaults assertions. Refuses any other object. */
 export function markAsserted(form: ObservedForm): void {
-  if (!recordedForms.has(form)) {
+  const site = recordedForms.get(form);
+  if (site === undefined) {
     throw new Error(`markAsserted: ${String(form?.site)} was not recorded by the useForm wrapper`);
   }
-  assertedSites.add(form.site);
+  assertedSites.add(site);
 }
 
 /** Every site the useForm wrapper recorded in this file so far (a copy). */
@@ -60,13 +65,23 @@ export function trackZodResolver<F extends AnyFn>(real: F): F {
   }) as F;
 }
 
-function callerSite(): string {
-  const frames = (new Error().stack ?? '').split('\n').slice(1);
+/**
+ * The first application frame of a stack, as `path/File.tsx:line` relative to `src/`. Frames
+ * under `src/test/` and `node_modules` are skipped. Review r1 F4: the extensions are the
+ * ones the FU-261-1 discovery glob scans (`ts,tsx,mts,cts,js,jsx,mjs,cjs`), so a `.jsx` / `.js`
+ * form records a discoverable site instead of "unknown site".
+ */
+export function siteFromStack(stack: string): string {
+  const frames = stack.split('\n').slice(1);
   for (const frame of frames) {
-    const match = /\/src\/((?!test\/)[^\s?:)]+\.tsx?)(?:\?[^:]*)?:(\d+)/.exec(frame);
+    const match = /\/src\/((?!test\/)[^\s?:)]+\.(?:tsx|ts|mts|cts|jsx|js|mjs|cjs))(?:\?[^:]*)?:(\d+)/.exec(frame);
     if (match && !frame.includes('node_modules')) return `${match[1]}:${match[2]}`;
   }
   return 'unknown site';
+}
+
+function callerSite(): string {
+  return siteFromStack(new Error().stack ?? '');
 }
 
 export function trackUseForm<F extends AnyFn>(real: F): F {
@@ -74,8 +89,13 @@ export function trackUseForm<F extends AnyFn>(real: F): F {
     const props = args[0] as { resolver?: unknown; defaultValues?: unknown; values?: unknown } | undefined;
     const schema = props?.resolver ? schemaByResolver.get(props.resolver as object) : undefined;
     if (schema) {
-      const form: ObservedForm = { site: callerSite(), schema, defaultValues: props?.defaultValues, values: props?.values };
-      recordedForms.add(form);
+      const form: ObservedForm = Object.freeze({
+        site: callerSite(),
+        schema,
+        defaultValues: props?.defaultValues,
+        values: props?.values,
+      });
+      recordedForms.set(form, form.site);
       recordedSites.add(form.site);
       observedForms.push(form);
     }
