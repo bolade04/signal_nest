@@ -94,6 +94,14 @@ class LLMBudgetExceededError(LLMError):
         self.reason = reason  # "run_call_cap" | "workspace_budget"
 
 
+class LLMMeterBindingError(RuntimeError):
+    """A meter was bound a second time, or after it had recorded an attempt.
+
+    A programming error, not an LLM outcome: it is deliberately not an ``LLMError``,
+    so no LLM failure handling (fallback, ``budget_limited`` marking) absorbs it.
+    """
+
+
 class LLMBudgetExhaustedError(SignalNestError):
     status_code = 429
     code = "llm_budget_exhausted"
@@ -164,18 +172,27 @@ class LLMMeter:
     lease at completion, the worker rolls the attempt back and commits the same rows
     in a fresh transaction. Money spent by a failed attempt is therefore still
     counted, and the next attempt's budget check sees it.
+
+    Ownership is fixed: :meth:`bind` succeeds at most once, and only on a meter that
+    has recorded nothing; any further :meth:`bind` raises
+    :class:`LLMMeterBindingError` before changing anything. ``job_id`` (set at
+    construction) and the owner fields set by :meth:`bind` (``organization_id``,
+    ``workspace_id``, ``scout_request_id``, ``tenant_ref``) are read-only. A meter's
+    records, counters and every row it writes therefore belong to one run of one
+    tenant. Build a new meter for each run (the durable handler builds one per attempt).
     """
 
     def __init__(self, settings: Settings, *, job_id: str | None = None):
         self.settings = settings
         #: The durable job this run is. Its earlier attempts' usage rows count
         #: towards the call cap, and every row this meter writes carries it.
-        self.job_id = job_id
+        self._job_id = job_id
+        self._bound = False
         self.prior_attempts = 0
-        self.organization_id: str | None = None
-        self.workspace_id: str | None = None
-        self.scout_request_id: str | None = None
-        self.tenant_ref: str | None = None
+        self._organization_id: str | None = None
+        self._workspace_id: str | None = None
+        self._scout_request_id: str | None = None
+        self._tenant_ref: str | None = None
         self.month_to_date = 0.0
         self.attempts = 0
         self.spent = 0.0
@@ -190,22 +207,62 @@ class LLMMeter:
         workspace_id: str,
         scout_request_id: str | None,
     ) -> LLMMeter:
-        self.organization_id = organization_id
-        self.workspace_id = workspace_id
-        self.scout_request_id = scout_request_id
-        self.tenant_ref = tenant_reference(self.settings, workspace_id)
-        self.month_to_date = month_to_date_usd(db, workspace_id)
-        if self.job_id is not None:
-            self.prior_attempts = int(
+        """Bind this meter, once, to the run's tenant and request.
+
+        Raises :class:`LLMMeterBindingError`, changing nothing, if the meter is
+        already bound or has already recorded an attempt.
+        """
+        if self._bound:
+            raise LLMMeterBindingError(
+                "this LLM meter is already bound to a run; build a new meter per run"
+            )
+        if self._records or self.attempts or self.spent or self.refusals:
+            raise LLMMeterBindingError(
+                "this LLM meter already holds attempts from before it was bound; "
+                "build a new meter per run"
+            )
+        # Read everything first, so a failing query leaves the meter unbound.
+        tenant_ref = tenant_reference(self.settings, workspace_id)
+        month_to_date = month_to_date_usd(db, workspace_id)
+        prior_attempts = 0
+        if self._job_id is not None:
+            prior_attempts = int(
                 db.scalar(
                     select(func.count())
                     .select_from(LLMUsageEvent)
-                    .where(LLMUsageEvent.job_id == self.job_id)
+                    .where(LLMUsageEvent.job_id == self._job_id)
                 )
                 or 0
             )
-            self.attempts = self.prior_attempts
+        self._organization_id = organization_id
+        self._workspace_id = workspace_id
+        self._scout_request_id = scout_request_id
+        self._tenant_ref = tenant_ref
+        self.month_to_date = month_to_date
+        self.prior_attempts = prior_attempts
+        self.attempts = prior_attempts
+        self._bound = True
         return self
+
+    @property
+    def job_id(self) -> str | None:
+        return self._job_id
+
+    @property
+    def organization_id(self) -> str | None:
+        return self._organization_id
+
+    @property
+    def workspace_id(self) -> str | None:
+        return self._workspace_id
+
+    @property
+    def scout_request_id(self) -> str | None:
+        return self._scout_request_id
+
+    @property
+    def tenant_ref(self) -> str | None:
+        return self._tenant_ref
 
     def worst_case_usd(self, provider: str, model: str, prompt_chars: int, max_tokens: int):
         tokens_in = -(-prompt_chars // _CHARS_PER_TOKEN)
