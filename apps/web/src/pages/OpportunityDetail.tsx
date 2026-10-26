@@ -114,6 +114,7 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
   if (!query.data) return null;
 
   const o = query.data;
+  const placeholder = explanationPlaceholder(o.explanation_source);
 
   const statusActions: { status: string; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { status: 'saved', label: 'Save', icon: Bookmark },
@@ -137,8 +138,8 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               <ConfidenceBadge level={o.confidence_level} />
               <StatusBadge value={o.status} />
               {o.is_simulated ? <SimulatedBadge /> : null}
-              {o.explanation_source === 'degraded' ? (
-                <Badge intent="warning">AI explanation unavailable</Badge>
+              {placeholder ? (
+                <Badge intent="warning">{placeholder.badge}</Badge>
               ) : null}
             </div>
             <h1 className="text-2xl font-semibold tracking-tight">{o.title}</h1>
@@ -256,17 +257,17 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
               </p>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {o.explanation_source === 'degraded' ? (
+              {placeholder ? (
                 <div
                   role="note"
                   className="flex gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2"
                 >
                   <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
                   <p>
-                    <span className="font-medium">AI explanation unavailable for this run.</span>{' '}
+                    <span className="font-medium">{placeholder.title}</span>{' '}
                     <span className="text-muted-foreground">
-                      The AI provider did not return a usable response, so the explanation text
-                      on this page is placeholder copy, not AI reasoning.
+                      {placeholder.detail} The explanation text on this page is placeholder copy,
+                      not AI reasoning.
                     </span>
                   </p>
                 </div>
@@ -449,4 +450,36 @@ export function OpportunityDetailPage() {
       {({ workspaceId: ws }) => <DetailInner workspaceId={ws} opportunityId={opportunityId} />}
     </RequireWorkspace>
   );
+}
+
+/**
+ * Labels for explanation copy that is NOT model output (P6-LLM-3/4/5): the provider
+ * failed, the model's text failed safety screening, or no call was made because a
+ * usage limit was reached. Model output, rule-based copy and unrecorded rows get none.
+ */
+function explanationPlaceholder(
+  source: OpportunityDetail['explanation_source'],
+): { badge: string; title: string; detail: string } | null {
+  switch (source) {
+    case 'degraded':
+      return {
+        badge: 'AI explanation unavailable',
+        title: 'AI explanation unavailable for this run.',
+        detail: 'The AI provider did not return a usable response.',
+      };
+    case 'withheld':
+      return {
+        badge: 'AI explanation withheld',
+        title: 'AI explanation withheld.',
+        detail: 'The generated text did not pass safety screening, so it is not shown.',
+      };
+    case 'budget_limited':
+      return {
+        badge: 'AI usage limit reached',
+        title: 'AI explanation not generated.',
+        detail: "This workspace reached its AI usage limit for the run or for this month.",
+      };
+    default:
+      return null;
+  }
 }

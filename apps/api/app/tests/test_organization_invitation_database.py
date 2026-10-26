@@ -70,10 +70,12 @@ API_DIR = Path(__file__).resolve().parents[2]
 PREV = "98289430a3ec"
 HEAD = "3dc124a7dfd7"
 #: The 6B-4A account-token revision, one additive revision later; then P6-AUTH-4 sessions;
-#: the code head one further (P6-LLM-5 opportunity explanation source).
+#: then P6-LLM-5 (opportunity explanation source); the code head one further (P6-LLM-4
+#: usage ledger).
 ACCOUNT_TOKENS = "a452ee007cc2"
 SESSIONS = "87198ab57b59"
-CODE_HEAD = "6ad2ff77f691"
+EXPLANATION = "6ad2ff77f691"
+CODE_HEAD = "47028898175f"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -273,7 +275,8 @@ def test_revision_chain() -> None:
     assert script.get_revision(HEAD).down_revision == PREV
     assert script.get_revision(ACCOUNT_TOKENS).down_revision == HEAD
     assert script.get_revision(SESSIONS).down_revision == ACCOUNT_TOKENS
-    assert script.get_revision(CODE_HEAD).down_revision == SESSIONS
+    assert script.get_revision(EXPLANATION).down_revision == SESSIONS
+    assert script.get_revision(CODE_HEAD).down_revision == EXPLANATION
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
 
 

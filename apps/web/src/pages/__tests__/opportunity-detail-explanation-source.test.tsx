@@ -46,6 +46,31 @@ describe('opportunity detail explanation source', () => {
     expect(screen.queryByText(RULE_BASED_NOTE)).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['withheld', 'AI explanation withheld', /did not pass safety screening/i],
+    ['budget_limited', 'AI usage limit reached', /reached its AI usage limit/i],
+  ] as const)('labels %s explanation copy as placeholder', async (source, badge, reason) => {
+    server.use(
+      http.get(`*${API_PREFIX}/workspaces/:ws/opportunities/opp-loc-dallas-0`, () =>
+        HttpResponse.json({
+          ...opportunityDetailFixture('opp-loc-dallas-0'),
+          explanation_source: source,
+          ai_inference: null,
+          suggested_angles: [],
+        }),
+      ),
+    );
+    const screen = renderApp(<App />, { route: '/opportunities/opp-loc-dallas-0' });
+    expect(await screen.findByText(badge)).toBeInTheDocument();
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent(reason);
+    expect(note).toHaveTextContent(/placeholder copy, not AI reasoning/i);
+    // A usage limit can stop classification too, so no label may claim the scores
+    // are unaffected (the same rule as the degraded label).
+    expect(screen.queryAllByText(/unaffected/i)).toHaveLength(0);
+    expect(screen.queryByText(DEGRADED_BADGE)).not.toBeInTheDocument();
+  });
+
   it('says that no AI explanation was generated below the relevance floor', async () => {
     server.use(
       http.get(`*${API_PREFIX}/workspaces/:ws/opportunities/opp-loc-dallas-0`, () =>

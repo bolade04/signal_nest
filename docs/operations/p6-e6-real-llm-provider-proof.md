@@ -63,9 +63,14 @@ With the same image in both API and worker services and `LLM_PROVIDER=anthropic`
 2. Record: the scout run's final status and stats; for each resulting opportunity, from the
    detail endpoint, `explanation_source` (`model` expected where relevance is above the action
    floor, `rule_based` below it); and the worker's `llm.call` log lines
-   (`provider=anthropic`, `is_simulated=false`, token counts, `attempt`). No `llm.failed` line
-   is expected; any `degraded` opportunity (a failed explanation, or a failed classification of
-   one of its signals, logged as `classify_failed`) is recorded as observed, not hidden.
+   (`provider=anthropic`, `is_simulated=false`, token counts, `estimated_cost_usd`,
+   `attempt`), the `scout.completed` line's `llm_attempts` / `llm_cost_usd` /
+   `llm_refusals`, and the run's `llm_usage_events` rows (counts and cost only). No
+   `llm.failed` line is expected; any `degraded` opportunity (a failed explanation, or a
+   failed classification of one of its signals, logged as `classify_failed`), and any
+   `withheld` or `budget_limited` opportunity, is recorded as observed, not hidden. The
+   workspace's monthly budget (`llm_workspace_monthly_budget_usd`) and the per-run cap
+   must be set high enough for the run, or the refusal state is what gets recorded.
 3. Note: until `P6-DATA-1` lands, connector input is fixture data (`is_simulated=true` on the
    opportunity). E6 concerns the provider, not the source; record both facts separately.
 

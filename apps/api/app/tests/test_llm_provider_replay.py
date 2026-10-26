@@ -224,9 +224,16 @@ class TestAnthropicSuccess:
         assert body["temperature"] == 0.0
         [message] = body["messages"]
         assert message["role"] == "user"
-        # The rendered prompt carries the inputs the pipeline passes (1.0.0 dropped them).
-        assert "the queue at the cafe is so slow" in message["content"]
-        assert "Target audiences: commuters" in message["content"]
+        # The rendered prompt carries the inputs the pipeline passes (1.0.0 dropped them),
+        # each as an untrusted data block (1.2.0, P6-LLM-2).
+        assert (
+            '<untrusted_data name="content">\nthe queue at the cafe is so slow\n'
+            "</untrusted_data>" in message["content"]
+        )
+        assert (
+            '<untrusted_data name="audiences">\ncommuters\n</untrusted_data>'
+            in message["content"]
+        )
         assert message["content"].endswith("Respond with strict minified JSON only.")
 
     @pytest.mark.parametrize(

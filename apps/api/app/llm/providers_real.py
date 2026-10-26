@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import re
-import string
 import time
 from typing import Any
 
@@ -50,16 +49,13 @@ from app.llm.base import (
     LLMUnavailableError,
     LLMUsage,
 )
-from app.llm.prompts import get_prompt
+from app.llm.prompts import SYSTEM_PROMPT, render_prompt
+
+__all__ = ["SYSTEM_PROMPT", "AnthropicProvider", "OpenAIProvider"]
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-
-SYSTEM_PROMPT = (
-    "You are SignalNest's analysis engine. Reply with exactly one JSON object and "
-    "nothing else: no prose, no markdown."
-)
 
 #: Anthropic models that still accept ``temperature``. Opus 4.7 and later, the
 #: Fable family and Sonnet 5 reject sampling parameters with HTTP 400, so for any
@@ -79,18 +75,13 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _render(request: LLMRequest) -> str:
-    prompt = get_prompt(request.task)
-    fields = [f[1] for f in string.Formatter().parse(prompt.template) if f[1]]
-    body = prompt.template.format(**{k: _as_text(request.inputs.get(k)) for k in fields})
-    return body + "\nRespond with strict minified JSON only."
+    return render_prompt(request.task, request.inputs, request.max_untrusted_chars)
 
 
-def _as_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list | tuple):
-        return ", ".join(str(v) for v in value)
-    return str(value)
+def _with_usage(exc: Exception, usage: LLMUsage) -> Exception:
+    """Attach the billed usage of an unusable reply to the error that rejects it."""
+    exc.usage = usage
+    return exc
 
 
 def anthropic_accepts_temperature(model: str) -> bool:
@@ -247,46 +238,45 @@ class OpenAIProvider(_HTTPProvider):
 
     def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
         started = time.perf_counter()
-        resp = self._post(
-            OPENAI_CHAT_URL,
-            {"Authorization": f"Bearer {self.api_key}"},
-            {
-                "model": self.model,
-                "temperature": request.temperature,
-                "max_completion_tokens": request.max_tokens,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": _render(request)},
-                ],
-            },
-        )
+        body: dict[str, Any] = {
+            "model": self.model,
+            "temperature": request.temperature,
+            "max_completion_tokens": request.max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _render(request)},
+            ],
+        }
+        if request.tenant_ref:
+            body["user"] = request.tenant_ref
+        resp = self._post(OPENAI_CHAT_URL, {"Authorization": f"Bearer {self.api_key}"}, body)
         data = _json_body(resp, self.name)
+        raw_usage = data.get("usage")
+        usage = LLMUsage(
+            input_tokens=_token_count(raw_usage, "prompt_tokens"),
+            output_tokens=_token_count(raw_usage, "completion_tokens"),
+        )
         choices = data.get("choices")
         choice = choices[0] if isinstance(choices, list) and choices else None
         message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
-            raise LLMMalformedError("openai returned no message")
+            raise _with_usage(LLMMalformedError("openai returned no message"), usage)
         finish = choice.get("finish_reason")
         if isinstance(message.get("refusal"), str) or finish == "content_filter":
-            raise LLMRefusalError("openai refused the request")
+            raise _with_usage(LLMRefusalError("openai refused the request"), usage)
         if finish == "length":
-            raise LLMMalformedError("openai output truncated at the token limit")
+            raise _with_usage(
+                LLMMalformedError("openai output truncated at the token limit"), usage
+            )
         content = message.get("content")
         if not isinstance(content, str):
-            raise LLMMalformedError("openai returned no text content")
-        usage = data.get("usage")
-        return self._response(
-            request,
-            _json_object(content, self.name),
-            LLMUsage(
-                input_tokens=_token_count(usage, "prompt_tokens"),
-                output_tokens=_token_count(usage, "completion_tokens"),
-            ),
-            started,
-            prompt_name,
-            prompt_version,
-        )
+            raise _with_usage(LLMMalformedError("openai returned no text content"), usage)
+        try:
+            output = _json_object(content, self.name)
+        except LLMMalformedError as exc:
+            raise _with_usage(exc, usage) from exc
+        return self._response(request, output, usage, started, prompt_name, prompt_version)
 
 
 class AnthropicProvider(_HTTPProvider):
@@ -307,38 +297,41 @@ class AnthropicProvider(_HTTPProvider):
         }
         if anthropic_accepts_temperature(self.model):
             body["temperature"] = request.temperature
+        if request.tenant_ref:
+            # Opaque per-tenant reference for the provider's abuse signals (P6-LLM-4).
+            body["metadata"] = {"user_id": request.tenant_ref}
         resp = self._post(
             ANTHROPIC_MESSAGES_URL,
             {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION},
             body,
         )
         data = _json_body(resp, self.name)
+        raw_usage = data.get("usage")
+        usage = LLMUsage(
+            input_tokens=_token_count(raw_usage, "input_tokens"),
+            output_tokens=_token_count(raw_usage, "output_tokens"),
+        )
         stop_reason = data.get("stop_reason")
         if stop_reason == "refusal":
-            raise LLMRefusalError("anthropic refused the request")
+            raise _with_usage(LLMRefusalError("anthropic refused the request"), usage)
         if stop_reason == "max_tokens":
-            raise LLMMalformedError("anthropic output truncated at max_tokens")
+            raise _with_usage(LLMMalformedError("anthropic output truncated at max_tokens"), usage)
         if stop_reason not in ("end_turn", "stop_sequence"):
-            raise LLMMalformedError("anthropic returned an unexpected stop_reason")
+            raise _with_usage(
+                LLMMalformedError("anthropic returned an unexpected stop_reason"), usage
+            )
         blocks = data.get("content")
         if not isinstance(blocks, list):
-            raise LLMMalformedError("anthropic returned no content blocks")
+            raise _with_usage(LLMMalformedError("anthropic returned no content blocks"), usage)
         texts = [
             b["text"]
             for b in blocks
             if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
         ]
         if not texts:
-            raise LLMMalformedError("anthropic returned no text block")
-        usage = data.get("usage")
-        return self._response(
-            request,
-            _json_object("".join(texts), self.name),
-            LLMUsage(
-                input_tokens=_token_count(usage, "input_tokens"),
-                output_tokens=_token_count(usage, "output_tokens"),
-            ),
-            started,
-            prompt_name,
-            prompt_version,
-        )
+            raise _with_usage(LLMMalformedError("anthropic returned no text block"), usage)
+        try:
+            output = _json_object("".join(texts), self.name)
+        except LLMMalformedError as exc:
+            raise _with_usage(exc, usage) from exc
+        return self._response(request, output, usage, started, prompt_name, prompt_version)

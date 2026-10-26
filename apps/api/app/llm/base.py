@@ -13,7 +13,13 @@ from pydantic import BaseModel, Field
 
 
 class LLMError(Exception):
-    """Base class for normalized provider errors."""
+    """Base class for normalized provider errors.
+
+    ``usage`` is set when the provider replied (and billed) but the reply was unusable
+    - truncated, refused or not JSON - so cost accounting can charge it (P6-LLM-4).
+    """
+
+    usage: LLMUsage | None = None
 
 
 class LLMTimeoutError(LLMError):
@@ -50,6 +56,10 @@ class LLMRequest(BaseModel):
     seed: str | None = None
     temperature: float = 0.0
     max_tokens: int = 800
+    #: Opaque per-tenant reference sent to the provider (never a raw id; P6-LLM-4).
+    tenant_ref: str | None = None
+    #: Cap per untrusted prompt value, in characters (P6-LLM-2).
+    max_untrusted_chars: int = 4000
 
 
 class LLMUsage(BaseModel):

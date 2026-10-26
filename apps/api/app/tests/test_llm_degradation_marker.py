@@ -108,9 +108,9 @@ def _overloaded() -> httpx.Response:
 
 def _task(request: httpx.Request) -> str:
     content = json.loads(request.content)["messages"][0]["content"]
-    if content.startswith("You are SignalNest's signal classifier"):
+    if content.startswith("Classify the public post"):
         return "classify_signal"
-    if content.startswith("You are SignalNest's explanation engine"):
+    if content.startswith("Explain a market opportunity"):
         return "explain_opportunity"
     raise AssertionError(f"unexpected prompt: {content[:60]!r}")
 
@@ -188,6 +188,8 @@ def seeded(tmp_path_factory):
 def _rerun(factory, monkeypatch, service: LLMService) -> tuple[list[Opportunity], list]:
     """Re-run the first seeded scout request with ``service``; return what this run created."""
     monkeypatch.setattr(pipeline, "llm_service", service)
+    # The run's P6-LLM-4 meter (cap, budget) reads the pipeline's settings: pin them too.
+    monkeypatch.setattr(pipeline, "get_settings", offline_settings)
     with factory() as db:
         request_id = db.scalars(select(ScoutRequest.id).order_by(ScoutRequest.id)).first()
         before_opps = set(db.scalars(select(Opportunity.id)))
@@ -318,7 +320,10 @@ def test_an_unclassified_cluster_below_the_floor_is_degraded_not_rule_based(
 
 @pytest.mark.parametrize(
     "collision",
-    [{"signal_type": "general", "pain_point_dna": None}, {"pain_point_dna": "general"}],
+    [
+        {"signal_type": "general", "pain_point_dna": None},
+        {"signal_type": "general", "pain_point_dna": "general"},
+    ],
     ids=["signal_type", "pain_point_dna"],
 )
 def test_a_mixed_cluster_with_any_unclassified_member_is_degraded(
@@ -327,13 +332,18 @@ def test_a_mixed_cluster_with_any_unclassified_member_is_degraded(
     # An unclassified signal is clustered under "general"; a classified signal whose model
     # output yields the same key joins it. Here the cluster's first (primary) member is
     # classified and a later one is not: one unclassified member still degrades it.
-    service, calls = _partial_outage_service(lambda _n: {**CLASSIFIED, **collision})
+    # (Merged with #244: P6-LLM-3 screening maps the out-of-vocabulary label "general" to
+    # None, so the collision key is "general" through the fallback, and the classified
+    # primary is recognised by the audience label only its model output carries.)
+    service, calls = _partial_outage_service(
+        lambda _n: {**CLASSIFIED, **collision, "audience_fit_label": "Weekday commuters"}
+    )
     opps, signals = _rerun(seeded, monkeypatch, service)
     assert len(opps) == 1
     (o,) = opps
     sources = {s.ingest_metadata["classification_source"] for s in _members(o, signals)}
     assert sources == {"model", "degraded"}
-    assert o.title.startswith("General in "), "the primary member must be the classified one"
+    assert o.audience_fit == "Weekday commuters", "the primary member must be the classified one"
     assert "explain_opportunity" not in calls
     assert o.explanation_source == ExplanationSource.DEGRADED.value
     assert o.why_it_matters == UNCLASSIFIED_WHY

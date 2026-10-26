@@ -15,7 +15,7 @@ dropped by :func:`pg_database`), never against a shared one:
 * an **interrupted / failed migration**, in two forms that prove different things:
 
   1. *a tracked revision failing partway* — the real sessions revision
-     (``87198ab57b59``, ``auth_sessions``, one below head) is run against a database
+     (``87198ab57b59``, ``auth_sessions``, two below head) is run against a database
      that already holds a relation with its index's name, so ``CREATE TABLE`` succeeds
      and ``CREATE INDEX`` fails inside the same revision. This proves that PostgreSQL's
      transactional DDL (the revision's statements run inside one transaction, which
@@ -58,10 +58,12 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (P6-LLM-5: adds ``opportunities.explanation_source``).
-HEAD = "6ad2ff77f691"
-#: One below head: the P6-AUTH-4 sessions revision (``auth_sessions``), the tracked
-#: revision that M2(a) breaks midway.
+#: The code head (P6-LLM-4: adds the ``llm_usage_events`` table).
+HEAD = "47028898175f"
+#: One below head (P6-LLM-5: adds ``opportunities.explanation_source``).
+BELOW_HEAD = "6ad2ff77f691"
+#: The P6-AUTH-4 sessions revision (``auth_sessions``), the tracked revision that M2(a)
+#: breaks midway.
 SESSIONS = "87198ab57b59"
 PREV = "a452ee007cc2"
 BASE_REVISION = "9a7c614699d8"
@@ -238,7 +240,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     refused = _run(["downgrade", "base"], pg_url)
     assert refused.returncode != 0
     assert "confirm" in (refused.stdout + refused.stderr)
-    assert _version(pg_url) == [HEAD] and "auth_sessions" in _tables(pg_url)
+    assert _version(pg_url) == [HEAD] and "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
 
     # One guarded step down undoes exactly the head revision; the spent token does not
@@ -246,14 +248,16 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
-    assert _version(pg_url) == [SESSIONS]
-    assert "explanation_source" not in _columns(pg_url, "opportunities")
-    assert "auth_sessions" in _tables(pg_url)  # the revision below head is untouched
+    assert _version(pg_url) == [BELOW_HEAD]
+    assert "llm_usage_events" not in _tables(pg_url)
+    # The revisions below head are untouched.
+    assert "explanation_source" in _columns(pg_url, "opportunities")
+    assert "auth_sessions" in _tables(pg_url)
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [SESSIONS]
+    assert spent.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
     # The base token minted at head is likewise refused from the moved source.
     stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [SESSIONS]
+    assert stale.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
 
     # Base under the guard: minted at the live revision, every table destroyed.
     token = _confirmation(pg_url, "base")
@@ -318,7 +322,7 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
 # M2(a) — a TRACKED revision failing partway: no partial object, version unmoved
 # --------------------------------------------------------------------------- #
 def test_tracked_revision_that_fails_midway_leaves_no_partial_schema_and_retries(pg_url):
-    """The sessions revision (one below head) creates ``auth_sessions`` and then its
+    """The sessions revision (two below head) creates ``auth_sessions`` and then its
     index; the index's name is occupied in advance, so the revision fails AFTER its first
     DDL statement and the upgrade to head stops there."""
     _alembic(pg_url, "upgrade", PREV)

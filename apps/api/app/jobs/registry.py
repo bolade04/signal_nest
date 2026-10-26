@@ -53,6 +53,14 @@ class HandlerContext:
     #: timestamp from this immutable value rather than reading the wall clock, so a
     #: pinned-clock worker (and the fan-out it produces) stay on one consistent clock.
     now: datetime = field(default_factory=utcnow)
+    #: Writes that must outlive this attempt's rollback. A handler appends a
+    #: callable taking a session (e.g. the LLM spend its attempt already incurred,
+    #: P6-LLM-4). When the attempt fails, or loses its lease at completion, the worker
+    #: rolls the attempt back and then runs each callable in a fresh, separately
+    #: committed transaction. On success none runs: the handler wrote the same rows
+    #: in the attempt's own transaction. A callable must only add rows; it never
+    #: commits or rolls back itself.
+    after_rollback: list[Callable[[Session], None]] = field(default_factory=list)
 
 
 #: A handler returns a *safe* result summary (counts/status only — never secrets,
