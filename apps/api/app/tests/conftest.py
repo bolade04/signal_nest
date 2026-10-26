@@ -15,11 +15,18 @@ anything that runs after it.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
 
-from app.jobs import registry as _registry
+from app.tests import _offline_provider as _provider
+
+# Must run before the application modules below are imported: they build llm_service from
+# the environment at import time (FU-237-F1 part 2).
+_provider.scrub_environment()
+
+from app.jobs import registry as _registry  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +60,13 @@ def pytest_configure(config: pytest.Config) -> None:
         f"{_guard.MARKER}: allow non-loopback network in one test; refused unless "
         f"{_guard.ALLOW_ENV}=1 (and no test in the repository may carry it).",
     )
+    config.addinivalue_line(
+        "markers",
+        f"{_provider.MARKER}: use the real LLM provider in one test; refused unless "
+        f"{_provider.ALLOW_ENV}=1 (and no test in the repository may carry it).",
+    )
+    _provider.scrub_environment()
+    _provider.verify_and_swap()
     _guard.install()  # before collection, so import-time connects are caught too
 
 
@@ -64,6 +78,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session", autouse=True)
 def _offline_guard_session() -> Iterator[None]:
     _guard.install()
+    _provider.verify_and_swap()
     yield
 
 
@@ -75,20 +90,29 @@ def _offline_guard_per_test(request: pytest.FixtureRequest) -> Iterator[None]:
     every other fixture, including ``monkeypatch``: a test that replaced the socket methods
     has them restored by the time the integrity check runs.
     """
-    import os
-
     allow = request.node.get_closest_marker(_guard.MARKER) is not None
     if allow and os.environ.get(_guard.ALLOW_ENV) != "1":
         pytest.fail(
             f"@pytest.mark.{_guard.MARKER} is forbidden unless {_guard.ALLOW_ENV}=1 is set",
             pytrace=False,
         )
+    real_provider = request.node.get_closest_marker(_provider.MARKER) is not None
+    if real_provider and os.environ.get(_provider.ALLOW_ENV) != "1":
+        pytest.fail(
+            f"@pytest.mark.{_provider.MARKER} is forbidden unless {_provider.ALLOW_ENV}=1 is set",
+            pytrace=False,
+        )
     _guard.install()
     _guard.take_violations()
     _guard.set_current_test(request.node.nodeid, allow=allow)
+    window = _provider.RealProviderWindow() if real_provider else None
+    if window:
+        window.__enter__()
     try:
         yield
     finally:
+        if window:
+            window.__exit__(None, None, None)
         _guard.set_current_test(None)
         tampered = _guard.restore_if_tampered()
         violations = _guard.take_violations()

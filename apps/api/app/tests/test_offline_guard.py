@@ -6,7 +6,10 @@ The guard itself lives in ``_offline_guard.py`` and is wired by ``conftest.py``.
 from __future__ import annotations
 
 import ast
+import os
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -17,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.tests import _offline_guard as guard
+from app.tests import _offline_provider as provider
 from app.tests._offline_guard import NetworkBlockedError, expected_violations
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -194,8 +198,51 @@ def test_a_test_that_replaces_the_guard_is_detected_and_it_is_restored():
 
 def test_the_opt_out_marker_is_registered_but_only_usable_with_the_env_var(pytestconfig):
     registered = "\n".join(pytestconfig.getini("markers"))
-    assert guard.MARKER in registered
+    assert guard.MARKER in registered and provider.MARKER in registered
+    assert provider.ALLOW_ENV in registered
     assert guard.ALLOW_ENV in registered
+
+
+def test_pin_state_no_provider_credential_and_mock_service():
+    """Asserts the F1 part-2 pin; the subprocess control below runs it under an ambient key."""
+    from app.core.config import get_settings
+    from app.jobs import pipeline
+    from app.llm import service as service_module
+
+    assert os.environ["LLM_PROVIDER"] == "mock"
+    assert not [k for k in os.environ if k.upper().startswith(("LLM_API", "ANTHROPIC_", "OPENAI_"))]
+    assert get_settings().llm_provider == "mock" and not get_settings().llm_api_key
+    assert pipeline.llm_service.provider_name == "mock"
+    assert service_module.llm_service is pipeline.llm_service
+
+
+def test_an_ambient_real_provider_environment_is_pinned_to_the_mock():
+    env = {
+        **os.environ,
+        "LLM_PROVIDER": "anthropic",
+        "LLM_API_KEY": "fake-not-a-real-key",
+        "ANTHROPIC_API_KEY": "fake-not-a-real-key",
+        "OPENAI_API_KEY": "fake-not-a-real-key",
+    }
+    env.pop(provider.ALLOW_ENV, None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            f"{Path(__file__).name}::test_pin_state_no_provider_credential_and_mock_service",
+        ],
+        cwd=TESTS_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-1000:]
+    assert "fake-not-a-real-key" not in result.stdout + result.stderr
 
 
 def _py_files() -> list[Path]:
@@ -209,19 +256,20 @@ def _py_files() -> list[Path]:
     ]
 
 
-def test_no_test_in_the_repository_carries_the_allow_network_marker():
+@pytest.mark.parametrize("marker", [guard.MARKER, provider.MARKER])
+def test_no_test_in_the_repository_carries_an_opt_out_marker(marker):
     offenders: list[str] = []
     for path in _py_files():
-        if path.name == "conftest.py":
+        if path.name in {"conftest.py", "_offline_provider.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == guard.MARKER:
+            if isinstance(node, ast.Attribute) and node.attr == marker:
                 offenders.append(f"{path}:{node.lineno}")
-            if isinstance(node, ast.Constant) and node.value == guard.MARKER:
+            if isinstance(node, ast.Constant) and node.value == marker:
                 if path.name != Path(__file__).name:
                     offenders.append(f"{path}:{node.lineno}")
-    assert not offenders, f"{guard.MARKER} is forbidden: {offenders}"
+    assert not offenders, f"{marker} is forbidden: {offenders}"
 
 
 def test_expected_violations_helper_is_used_only_by_this_module():
