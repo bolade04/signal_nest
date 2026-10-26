@@ -1,0 +1,30 @@
+{
+ "_what_this_is": "Requirement AMENDMENTS to SOURCE 1 v2 (the outcome-organised external security requirements). Each amendment is a separate, provenance-carrying record: the amended requirement is NOT edited, and a sealed external copy of the requirement source is never rewritten. An amendment applies only when scripts/deny_requirements.py's authored ruling table carries the same amendment_id with identical provenance.",
+ "_classification": "SECURITY_CRITICAL \u2014 tracked Tier-1 synthetic amendment record, consumed by deny_requirements.requirement_amendments() when the requirement source is the tracked synthetic set. An external requirement source takes its amendments only from SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH.",
+ "_original_requirement_preserved": "O11 in tests/fixtures/synthetic-requirements.json (and in the external SOURCE 1 v2 record) is unchanged: outcome 'the keys protecting state and secrets are used, delegated, or destroyed', gate 4N-H1, permanent, principal 'any principal in the SignalNest design', actions kms:CreateGrant/Decrypt/DisableKey/PutKeyPolicy/ReEncryptFrom/ReEncryptTo/RetireGrant/RevokeGrant/ScheduleKeyDeletion (action-set sha256 below).",
+ "version": "1",
+ "created_utc": "2026-10-23T23:30:00Z",
+ "amendment_count": 1,
+ "amendments": [
+  {
+   "amendment_id": "O11-AMEND-2026-10-23-KEY-APPLY-PUTKEYPOLICY",
+   "amends_outcome_id": "O11",
+   "amends_action_set_sha256": "0921f43faaee805f878d208b81166114ab82a6d8b2b2b265682c881d7c8c7c35",
+   "principal": "key_apply",
+   "action": "kms:PutKeyPolicy",
+   "ruling_date": "2026-10-23",
+   "ruled_by": "operator",
+   "ruling_record": "P6-W6-INFRABRIEF-01/decision/OPERATOR-REPLY-2026-10-23-2-verbatim.md section 1",
+   "ruling_sha256": "e2a963e32d1aac0f1424c7749a29aa6511be8b38cf6d7f4a87d7356b11fa80a5",
+   "status": "ACTIVE",
+   "replaces": "For the expiring key-apply principal (key_apply) and the action kms:PutKeyPolicy ONLY, this amendment replaces O11's previous universal enforcement (EXPLICIT_DENY at Resource \"*\" for every designed principal). It changes that universal Resource \"*\" enforcement for this one principal/action pair and for nothing else.",
+   "retains": [
+    "unconditional explicit denial of kms:PutKeyPolicy on the two protected keys (the state CMK and the secrets CMK)",
+    "the existing bypass Deny (kms:BypassPolicyLockoutSafetyCheck = true is explicitly denied)",
+    "the reviewed b-wide Allow's expiry (DateLessThan aws:CurrentTime) and Region (aws:RequestedRegion) conditions",
+    "unchanged O11 protection (EXPLICIT_DENY at Resource \"*\") for every other covered principal and every other O11 action, key_apply's included"
+   ],
+   "context": "D-K1-3 = (b-wide), operator decision 2026-10-23: the key-apply principal holds an expiring, region-conditioned Allow of kms:PutKeyPolicy on Resource \"*\" because the CreateKey policy-lockout check requires the caller to hold it. The amendment does not establish that AWS's lockout-safety check accepts the conditioned Allow."
+  }
+ ]
+}

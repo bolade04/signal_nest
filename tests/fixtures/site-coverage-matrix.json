@@ -531,6 +531,34 @@
       "mutate_to": "99",
       "attributable_token": "ledger_version"
     },
+    "synthetic-requirement-amendments.json::amendment_count": {
+      "fixture": "synthetic-requirement-amendments.json",
+      "guard": "deny_requirements.py",
+      "key": "amendment_count",
+      "mutate_to": 2,
+      "attributable_token": "amendment_count"
+    },
+    "synthetic-requirement-amendments.json::amendments": {
+      "fixture": "synthetic-requirement-amendments.json",
+      "guard": "deny_requirements.py",
+      "key": "amendments",
+      "mutate_to": "none",
+      "attributable_token": "amendments"
+    },
+    "synthetic-requirement-amendments.json::created_utc": {
+      "fixture": "synthetic-requirement-amendments.json",
+      "guard": "deny_requirements.py",
+      "key": "created_utc",
+      "mutate_to": "2026/10/23",
+      "attributable_token": "created_utc"
+    },
+    "synthetic-requirement-amendments.json::version": {
+      "fixture": "synthetic-requirement-amendments.json",
+      "guard": "deny_requirements.py",
+      "key": "version",
+      "mutate_to": "99",
+      "attributable_token": "version"
+    },
     "synthetic-requirements.json::action_count": {
       "fixture": "synthetic-requirements.json",
       "guard": "deny_requirements.py",

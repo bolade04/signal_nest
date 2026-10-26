@@ -205,6 +205,80 @@ EXEMPTIONS = {
                                      f"arn:aws:iam::{gen.ACCOUNT}:role/anything"],
         },
     },
+    # P6-CI-6 K0-2 (2026-10-21): the key-apply principal's nine forbidden capabilities held SCOPED —
+    # the same state-backend carve as the window principal, the boundary-conditioned inline-policy
+    # write on exactly the api and worker task roles, the ONE trail's key update — each fenced
+    # everywhere else — and (D-K1-3 = b-wide, operator decision 2026-10-23) kms:PutKeyPolicy for the
+    # CreateKey policy-lockout check, explicitly denied on the two existing CMKs. (s3:PutEncryptionConfiguration
+    # is scoped too, but it is a PERMANENT_DENY member, not a forbidden capability; tests/test_key_apply_policy.py
+    # proves its fence.)
+    "key_apply": {
+        "s3:GetObject": {
+            "reason": "reads the encrypted state object for the key-apply plan/apply; state_backend_closure.read",
+            "in_scope": lambda: gen.ARN["state_object"],
+            "out_of_scope": lambda: [f"{gen.ARN['audit_bucket']}/AWSLogs/x",
+                                     f"{identity.s3_bucket_arn(identity.APP_BUCKET_NAME)}/x"],
+        },
+        "s3:PutObject": {
+            "reason": "writes the new state object on the key apply; state_backend_closure.write_apply_only",
+            "in_scope": lambda: gen.ARN["state_object"],
+            "out_of_scope": lambda: [f"{gen.ARN['audit_bucket']}/AWSLogs/x",
+                                     f"{gen.ARN['state_bucket']}/other/object"],
+        },
+        "dynamodb:GetItem": {
+            "reason": "inspects the state lock before the key-apply plan or apply acquires it",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "dynamodb:PutItem": {
+            "reason": "acquires the Terraform state lock for the key apply",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "dynamodb:DeleteItem": {
+            "reason": "releases the Terraform state lock the key apply acquired",
+            "in_scope": lambda: gen.ARN["lock"],
+            "out_of_scope": lambda: [
+                f"arn:aws:dynamodb:{gen.REGION}:{gen.ACCOUNT}:table/some-other-table"],
+        },
+        "kms:Decrypt": {
+            "reason": "decrypts the state object under the state CMK, ONLY via the S3 and DynamoDB "
+                      "backend services (kms:ViaService); the SECRETS CMK is fenced off",
+            "context": lambda: {"kms:ViaService": f"s3.{gen.REGION}.amazonaws.com"},
+            "in_scope": lambda: gen.ARN["cmk_state"],
+            "out_of_scope": lambda: [gen.ARN["cmk_secrets"]],
+        },
+        "iam:PutRolePolicy": {
+            "reason": "key_apply_closure.task_role_policies: the P6-CI-6 inline-policy updates on the api "
+                      "and worker task roles; conditioned on the reviewed permissions boundary, fenced to "
+                      "those two roles everywhere else",
+            "in_scope": lambda: gen.key_apply_resource_arns()["task_roles"][0],
+            "out_of_scope": lambda: [identity.iam_role_arn(f"{gen.PREFIX}-ecs-execution"),
+                                     gen.READER_ROLE_ARNS[0],
+                                     f"arn:aws:iam::{gen.ACCOUNT}:role/anything"],
+        },
+        "cloudtrail:UpdateTrail": {
+            "reason": "key_apply_closure.trail_key: the audit trail's kms_key_id update to the new audit "
+                      "CMK, on the ONE trail; fenced everywhere else",
+            "in_scope": lambda: gen.ARN["trail"],
+            "out_of_scope": lambda: [
+                f"arn:aws:cloudtrail:{gen.REGION}:{gen.ACCOUNT}:trail/some-other-trail"],
+        },
+        "kms:PutKeyPolicy": {
+            "reason": "key_apply_closure.kms_key_policy_lockout_check (D-K1-3 = b-wide, operator decision "
+                      "2026-10-23): the CreateKey policy-lockout check requires the CALLER to hold "
+                      "kms:PutKeyPolicy on the new key, so it is allowed on * (expiring, region-conditioned; "
+                      "the provider never calls PutKeyPolicy on create). It is NOT limited to the two new keys: "
+                      "the two existing CMKs are re-denied by KeyApplyDenyWritesOnTheExistingKeys and the bypass "
+                      "flag by KeyApplyDenyRiskyKeyShapes; any other key is bounded only by the expiry, the "
+                      "region, K1.R retirement and the R0 row-6 census",
+            "context": lambda: {"kms:BypassPolicyLockoutSafetyCheck": "false"},
+            "in_scope": lambda: gen.key_apply_resource_arns()["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de",
+            "out_of_scope": lambda: list(gen.key_apply_resource_arns()["existing_keys"]),
+        },
+    },
     "permanent_w0": {
         "s3:GetObject": {
             "reason": "reads the encrypted state object; state_backend_closure.read "
@@ -515,10 +589,19 @@ def window_required_actions() -> dict[str, str]:
     return _sections_required(("refresh_closure", "state_backend_closure", "window_transition_closure"))
 
 
+def key_apply_required_actions() -> dict[str, str]:
+    """The key-apply principal's OWN requirement set (P6-CI-6 K0-2, 2026-10-21): the refresh closure,
+    the state backend and the key_apply_closure the contract authors independently. stage_a/stage_b
+    and the window topology are deliberately excluded — it registers no task definition, creates no
+    role and opens or closes nothing."""
+    return _sections_required(("refresh_closure", "state_backend_closure", "key_apply_closure"))
+
+
 EXTRA_REQUIRED_SOURCES = {
     "bootstrap_operator": rollout_required_actions,
     "role_bootstrap_operator": role_bootstrap_required_actions,
     "window_transition": window_required_actions,
+    "key_apply": key_apply_required_actions,
 }
 
 
@@ -732,6 +815,8 @@ TARGETS = {
     "boundary": (gb.boundary_policy, {}, boundary_probe),
     "window_transition": (lambda: gen.window_transition_effective_policy(MODEL_EXPIRY, WINDOW_API_FQDN),
                           WINDOW_CONTEXT, boundary_probe),
+    "key_apply": (lambda: gen.key_apply_effective_policy(MODEL_EXPIRY, WINDOW_API_FQDN),
+                  WINDOW_CONTEXT, boundary_probe),
     "permanent_w0": (gen.permanent_w0_policy, {}, boundary_probe),
     "temporary_operator": (lambda: gen.bootstrap_temp_policy(MODEL_EXPIRY),
                            IN_WINDOW, boundary_probe),
@@ -772,6 +857,19 @@ def run() -> dict:
             entry.update(prove_no_losses(
                 name, policy, context, probe, required=window_required_actions(),
                 probe_overrides={"route53:ChangeResourceRecordSets": identity.route53_hosted_zone_arn()}))
+        elif name == "key_apply":
+            # The generic kms probe is the STATE CMK — an existing key, on which every key-apply KMS write is
+            # explicitly denied BY DESIGN (KeyApplyDenyWritesOnTheExistingKeys). Probe the writes at a NEW key
+            # (its id is unknown until CreateKey) and at the alias they create; the bucket-encryption and record
+            # writes at the resources their fences carve. Every override is verified against the emitted Allow.
+            ka = gen.key_apply_resource_arns()
+            new_key = ka["key_star"][:-1] + "00000000-0000-4000-8000-00000000c0de"
+            entry.update(prove_no_losses(
+                name, policy, context, probe, required=key_apply_required_actions(),
+                probe_overrides={"kms:TagResource": new_key, "kms:EnableKeyRotation": new_key,
+                                 "kms:CreateAlias": ka["aliases"][0],
+                                 "s3:PutEncryptionConfiguration": ka["buckets"][0],
+                                 "route53:ChangeResourceRecordSets": ka["hosted_zone"]}))
         elif name == "permanent_w0":
             # ecs:TagResource is fenced but NOT forbidden, so it has no EXEMPTIONS entry to
             # supply an in-scope probe; the generic ecs probe ("*") lands on the fence BY
