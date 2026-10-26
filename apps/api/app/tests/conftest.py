@@ -75,6 +75,25 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         _guard.uninstall()
 
 
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
+    """Check the guard right after the test body, before fixtures (monkeypatch) undo anything."""
+    try:
+        result = yield
+    except BaseException:
+        if _guard.permissive_replacements():
+            _guard.restore_if_tampered()
+        raise
+    bad = _guard.permissive_replacements()
+    if bad:
+        _guard.restore_if_tampered()
+        pytest.fail(
+            f"offline guard: {', '.join(bad)} replaced by a non-refusing function during the test",
+            pytrace=False,
+        )
+    return result
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _offline_guard_session() -> Iterator[None]:
     _guard.install()

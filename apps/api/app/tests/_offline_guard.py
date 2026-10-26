@@ -17,6 +17,17 @@ IP literal or ``localhost`` (a lookup of a public name is itself an outbound lea
 precedes every connect). Name resolution done inside C by ``connect((name, port))`` is
 covered by the connect check, which also refuses non-literal names.
 
+Limitations (in-process paths the guard does NOT block; measured in review r1, cap 008):
+direct ``_socket.socket.connect`` / ``_socket.getaddrinfo`` (also reachable from pure Python,
+e.g. a ``socket.socket`` subclass calling ``_socket.socket.connect(self, ...)``);
+subprocesses and spawned children (``subprocess``, ``multiprocessing`` spawn);
+C-level sockets opened by extensions; code that captured ``socket.socket.connect`` before
+conftest was imported. A forked child inherits the patch and is blocked, but its refusal is
+recorded in the child only, so the parent test is not failed. Review r1 (cap 009) found none
+of these reachable from application or test code (no ``_socket``, ``multiprocessing``,
+``os.fork``, ``requests`` or ``aiohttp``; ``subprocess`` only in this guard's own tests). The
+deny-outbound sandbox remains the only host-level proof; CI has no sandbox.
+
 Opt-out: ``@pytest.mark.allow_network`` is honoured only when the environment variable
 ``SIGNALNEST_TESTS_ALLOW_NETWORK=1`` is set; otherwise a test carrying it fails. A
 governance test (``test_offline_guard.py``) asserts that no test in the repository
@@ -45,6 +56,7 @@ _state: dict[str, Any] = {"test": _NO_TEST, "allow": False, "violations": []}
 _lock = threading.Lock()
 _originals: dict[str, Any] = {}
 _installed: dict[str, Any] = {}
+_SOCKET_METHODS = ("connect", "connect_ex", "sendto", "sendmsg")
 
 
 def set_current_test(nodeid: str | None, *, allow: bool = False) -> None:
@@ -154,6 +166,20 @@ def _wrap_sendto() -> Any:
     return guarded
 
 
+def _wrap_sendmsg() -> Any:
+    original = socket.socket.sendmsg
+
+    def guarded(self: socket.socket, buffers: Any, *args: Any) -> Any:
+        # sendmsg(buffers[, ancdata[, flags[, address]]])
+        if self.family != socket.AF_UNIX and len(args) >= 3:
+            _check_address("sendmsg", args[2])
+        return original(self, buffers, *args)
+
+    guarded._offline_guard = True  # type: ignore[attr-defined]
+    _originals["sendmsg"] = original
+    return guarded
+
+
 def _wrap_getaddrinfo() -> Any:
     original = socket.getaddrinfo
 
@@ -188,6 +214,7 @@ def install() -> None:
         connect=_wrap_address_method("connect"),
         connect_ex=_wrap_address_method("connect_ex"),
         sendto=_wrap_sendto(),
+        sendmsg=_wrap_sendmsg(),
         getaddrinfo=_wrap_getaddrinfo(),
         gethostbyname=_wrap_gethostbyname("gethostbyname"),
         gethostbyname_ex=_wrap_gethostbyname("gethostbyname_ex"),
@@ -196,7 +223,7 @@ def install() -> None:
 
 
 def _apply() -> None:
-    for name in ("connect", "connect_ex", "sendto"):
+    for name in _SOCKET_METHODS:
         setattr(socket.socket, name, _installed[name])
     for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
         setattr(socket, name, _installed[name])
@@ -205,15 +232,42 @@ def _apply() -> None:
 def is_intact() -> bool:
     return (
         bool(_installed)
-        and all(
-            getattr(socket.socket, n, None) is _installed[n]
-            for n in ("connect", "connect_ex", "sendto")
-        )
+        and all(getattr(socket.socket, n, None) is _installed[n] for n in _SOCKET_METHODS)
         and all(
             getattr(socket, n, None) is _installed[n]
             for n in ("getaddrinfo", "gethostbyname", "gethostbyname_ex")
         )
     )
+
+
+def permissive_replacements() -> list[str]:
+    """Names of guarded functions replaced by something that no longer refuses.
+
+    A test may legitimately swap ``connect``/``connect_ex`` for a *refusing* stub (see
+    ``test_mail_transport.py``), so those two are probed: a UDP ``connect`` to a TEST-NET
+    address sends no packet, and a replacement that does not raise (or returns 0) is
+    permissive. Every other replaced function is reported by identity.
+    """
+    bad: list[str] = []
+    for name in (*_SOCKET_METHODS, "getaddrinfo", "gethostbyname", "gethostbyname_ex"):
+        owner = socket.socket if name in _SOCKET_METHODS else socket
+        current = getattr(owner, name, None)
+        if current is _installed.get(name):
+            continue
+        if name in ("connect", "connect_ex"):
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                result = current(probe, ("192.0.2.1", 9))
+                if name == "connect" or result == 0:
+                    bad.append(name)
+            except BaseException:  # noqa: BLE001 - any refusal is acceptable
+                pass
+            finally:
+                probe.close()
+                take_violations()  # the probe may have been refused by the guard itself
+        else:
+            bad.append(name)
+    return bad
 
 
 def restore_if_tampered() -> bool:
@@ -225,7 +279,7 @@ def restore_if_tampered() -> bool:
 
 
 def uninstall() -> None:
-    for name in ("connect", "connect_ex", "sendto"):
+    for name in _SOCKET_METHODS:
         setattr(socket.socket, name, _originals[name])
     for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
         setattr(socket, name, _originals[name])

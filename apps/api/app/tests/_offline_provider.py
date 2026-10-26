@@ -24,6 +24,7 @@ MARKER = "allow_real_provider"
 #: Environment names removed from the test process (prefix match, upper-case).
 _SCRUB_PREFIXES = ("LLM_", "ANTHROPIC_", "OPENAI_")
 _removed: dict[str, str] = {}
+_pinned: dict[str, Any] = {}
 
 
 def scrub_environment() -> None:
@@ -50,13 +51,14 @@ def verify_and_swap() -> None:
             "offline provider pin failed: resolved settings still select "
             f"llm_provider={live.llm_provider!r} (a .env file in the working directory?)"
         )
-    settings = offline_settings()
-    mock = LLMService(
-        MockLLMProvider(model=settings.llm_model or "mock-1", seed=settings.llm_mock_seed),
-        settings=settings,
-    )
-    service_module.llm_service = mock
-    pipeline.llm_service = mock
+    if "service" not in _pinned:  # one mock object for the whole session (idempotent)
+        settings = offline_settings()
+        _pinned["service"] = LLMService(
+            MockLLMProvider(model=settings.llm_model or "mock-1", seed=settings.llm_mock_seed),
+            settings=settings,
+        )
+    service_module.llm_service = _pinned["service"]
+    pipeline.llm_service = _pinned["service"]
 
 
 class RealProviderWindow:

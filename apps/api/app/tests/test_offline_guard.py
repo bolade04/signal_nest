@@ -85,6 +85,17 @@ def test_udp_sendto_to_a_non_loopback_address_is_refused():
     assert len(seen) == 1
 
 
+def test_udp_sendmsg_with_an_address_is_refused():
+    with expected_violations() as seen:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            with pytest.raises(NetworkBlockedError):
+                s.sendmsg([b"x"], [], 0, (PUBLIC_V4, 53))
+        finally:
+            s.close()
+    assert len(seen) == 1
+
+
 def test_a_non_literal_hostname_is_refused_without_resolving_it():
     with expected_violations() as seen:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -246,7 +257,7 @@ def test_an_ambient_real_provider_environment_is_pinned_to_the_mock():
 
 
 def _py_files() -> list[Path]:
-    root = TESTS_DIR.parents[2]  # apps/api
+    root = TESTS_DIR.parents[1]  # apps/api
     return [
         p
         for base in (root / "app", root / "tests")
@@ -270,6 +281,13 @@ def test_no_test_in_the_repository_carries_an_opt_out_marker(marker):
                 if path.name != Path(__file__).name:
                     offenders.append(f"{path}:{node.lineno}")
     assert not offenders, f"{marker} is forbidden: {offenders}"
+
+
+def test_governance_scan_is_not_vacuous():
+    files = _py_files()
+    assert files, "governance scan found no files"
+    assert Path(__file__).resolve() in {p.resolve() for p in files}
+    assert any(p.name == "conftest.py" for p in files)
 
 
 def test_expected_violations_helper_is_used_only_by_this_module():
