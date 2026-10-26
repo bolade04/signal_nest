@@ -10,12 +10,16 @@ import { orgModel } from '@/test/handlers';
 import {
   distinctForms,
   initialisation,
+  markAsserted,
   missingRequiredDefaults,
   observedForms,
   RAW_UNDEFINED_ISSUE,
   requiredInputKeys,
+  runtimeAssertedSites,
+  runtimeRecordedSites,
   type ObservedForm,
 } from '@/test/form-defaults';
+import { discoverFormSites, formatProblem } from '@/test/form-discovery';
 import { renderApp, renderProductionApp } from '@/test/utils';
 
 /**
@@ -35,6 +39,17 @@ import { renderApp, renderProductionApp } from '@/test/utils';
  *
  * Coverage is per rendered scenario: a NEW useForm + zodResolver form is only checked once
  * a scenario below renders it, so add one alongside any new form.
+ *
+ * FU-261-1 makes that loud. After all scenarios, an `afterAll` parses every non-test source
+ * under `src/` with the TypeScript compiler API (`@/test/form-discovery`) and compares the
+ * discovered `file:line` sites with the sites the wrapped `useForm` RECORDED in this run and
+ * whose forms passed `expectDefaultsCoverRequiredInputs`. It fails, naming each site, when
+ * a discovered form was never exercised, when a recorded site is not discoverable, when an
+ * asserted site was never recorded, or when the discoverer meets a shape it does not
+ * understand (including a shared wrapper whose schema or defaults come from its caller, and
+ * a `useForm` / `zodResolver` imported from any other module). Nothing lists the expected forms.
+ * The comparison needs every scenario in this file: under `-t`, `.only` or `.skip` it fails
+ * by design (never a vacuous pass), so run the whole file to see a real result.
  */
 
 vi.mock('@hookform/resolvers/zod', async (importOriginal) => {
@@ -79,6 +94,7 @@ async function expectDefaultsCoverRequiredInputs(expectedSite: RegExp) {
   for (const form of forms) {
     await expectResolverMessagesOnDefaults(form);
     coverage.set(form.site, requiredInputKeys(form.schema));
+    markAsserted(form);
   }
 }
 
@@ -118,6 +134,63 @@ async function createInvitationAsOwner(email: string) {
 beforeEach(() => {
   orgModel.reset();
   observedForms.length = 0;
+});
+
+/** Non-test application sources, as raw text for the AST discoverer (FU-261-1). */
+const appSources = import.meta.glob(
+  [
+    '/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+    '!/src/**/__tests__/**',
+    '!/src/test/**',
+    '!/src/**/*.test.*',
+    '!/src/**/*.spec.*',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+) as Record<string, string>;
+
+/**
+ * FU-261-1: every useForm + zodResolver site found in the source AST was exercised by a
+ * scenario above (recorded at runtime AND passed the defaults assertions), and every site
+ * recorded at runtime is discoverable. Runs once after all scenarios in this file.
+ */
+afterAll(() => {
+  const discovery = discoverFormSites(
+    Object.fromEntries(Object.entries(appSources).map(([path, text]) => [path.replace(/^\/src\//, ''), text])),
+  );
+  const discovered = discovery.sites.map((entry) => entry.site);
+  const discoveredSet = new Set(discovered);
+  const asserted = runtimeAssertedSites();
+  const recorded = runtimeRecordedSites();
+  const failures: string[] = [];
+  if (discovery.filesScanned === 0) failures.push('no application sources were scanned (glob is broken)');
+  if (discoveredSet.size === 0) failures.push('no useForm + zodResolver site was discovered in the source');
+  if (discoveredSet.size !== discovered.length) failures.push(`two discovered forms share one site label: ${discovered.join(', ')}`);
+  for (const problem of discovery.problems) failures.push(`unsupported shape: ${formatProblem(problem)}`);
+  for (const site of discoveredSet) {
+    if (!asserted.has(site)) {
+      failures.push(
+        `${site}: useForm + zodResolver form in source, but no scenario in this file rendered it ` +
+          `and passed expectDefaultsCoverRequiredInputs${recorded.has(site) ? ' (it was rendered, not asserted)' : ''}`,
+      );
+    }
+  }
+  for (const site of recorded) {
+    if (!discoveredSet.has(site)) failures.push(`${site}: recorded at runtime but not discovered in the source`);
+  }
+  // Review r1 F5: coverage can only be granted for a site the wrapper itself recorded.
+  for (const site of asserted) {
+    if (!recorded.has(site)) failures.push(`${site}: asserted but never recorded at runtime by the useForm wrapper`);
+  }
+  console.info(
+    `[FU-261-1] files scanned: ${discovery.filesScanned}; sites discovered: ${discoveredSet.size}; ` +
+      `recorded at runtime: ${recorded.size}; asserted: ${asserted.size}; problems: ${discovery.problems.length}`,
+  );
+  if (failures.length > 0) {
+    throw new Error(
+      `[FU-261-1] form discovery and runtime coverage disagree:\n${failures.map((line) => `  - ${line}`).join('\n')}\n` +
+        'This check compares across every scenario in this file; under -t, .only or .skip it fails by design.',
+    );
+  }
 });
 
 afterAll(() => {
