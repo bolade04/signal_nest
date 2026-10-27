@@ -196,7 +196,8 @@ creates no role or policy.**
   ceiling (`VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN`, default 100, ceiling 100); a run that
   would index more signals is refused (status `failed`, reason
   `signal_volume_above_bound`), never truncated or chunked. The migration actor's
-  task environment needs no `REDIS_URL` (`migration_mode` opens no Redis connection).**
+  task environment needs no `REDIS_URL` (`migration_mode` opens no Redis connection).
+  The live RSS connector fetches at most 100 items per source scope per run (`FetchScope.max_items = 100`, `apps/api/app/connectors/base.py:75`, applied at `apps/api/app/connectors/rss.py:104` - a fetch cap, not a dedupe truncation), and one connector serves a run, so with one live source a run cannot exceed N_max today; the bound guards any path that scans more (fixture data, a raised cap or a multi-source run).**
 - **Migrations** run as a **controlled one-time ECS task** using the **approved image**
   (`python -m app.db.migrate`); replicas never migrate (`docs/operations/deployment.md`,
   `docs/operations/migrations.md`).

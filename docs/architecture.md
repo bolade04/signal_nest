@@ -219,7 +219,8 @@ on; they do not revise the notes above, which describe the code they name. Nothi
   `non_retryable` with summary `signal_volume_above_bound`; the scout request `failed` with `stats`
   carrying `refusal_reason` and the counts); it is per run, per workspace. Readiness and the runtime report
   state the bound from settings. The migration actor (`migration_mode`) is exempt from the
-  `cache_backend`/`queue_backend=redis requires redis_url` rules: it opens no Redis connection.)*
+  `cache_backend`/`queue_backend=redis requires redis_url` rules: it opens no Redis connection.
+  The live RSS connector fetches at most 100 items per source scope per run (`FetchScope.max_items = 100`, `apps/api/app/connectors/base.py:75`, applied at `apps/api/app/connectors/rss.py:104` - a fetch cap, not a dedupe truncation), and one connector serves a run, so with one live source a run cannot exceed N_max today; the bound guards any path that scans more (fixture data, a raised cap or a multi-source run).)*
 - **Rate limiting (`P6-PLAT-3`).** `rate_limit_backend` selects the counter store. `memory` is a bounded,
   per-process fixed-window counter (at most 10,000 clients; closed windows dropped first, then the oldest
   open one). `redis` is a counter shared by every replica: one `MULTI`/`EXEC` per request of
