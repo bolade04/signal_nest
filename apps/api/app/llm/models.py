@@ -3,14 +3,28 @@
 Holds counts and money only - never prompt text, scraped content or model output -
 so it carries no customer content into retention scope beyond the workspace link.
 Rows cascade with their workspace and organization.
+
+Budget ledger (D-LLM-1 option B, ``app.llm.budget``): ``llm_budget_periods`` holds
+one row per workspace and UTC calendar month with the money reserved before provider
+calls and the money settled after them; ``llm_budget_reservations`` holds one row per
+reserved provider call (keyed by attempt) so settlement is idempotent and a
+reservation whose process died can be recovered. Money and keys only, like the usage
+ledger; same cascade.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, Index, Integer, String
+from datetime import date, datetime
+from decimal import Decimal
+
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+#: Money columns: exact decimal USD with six places (never a float, so sums are exact
+#: on PostgreSQL; SQLite stores them as REAL and the module says what that costs).
+USD = Numeric(12, 6)
 
 
 class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -39,3 +53,75 @@ class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     #: ``ok`` or the normalized error class name of a failed attempt.
     outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class LLMBudgetPeriod(Base, TimestampMixin):
+    """One workspace's reserved and settled model spend for one UTC calendar month.
+
+    ``reserved_usd`` is the budget consumed: the sum, over this month's reservations,
+    of each call's worst case (or its charge, when the provider reported more than the
+    estimate) - the number the budget check compares and the run endpoint reads.
+    ``settled_usd`` is what the finished calls were charged (actual usage, or the worst
+    case for an unknown outcome); it is at most ``reserved_usd`` except for charges
+    above the estimate. The hot row is updated by short transactions only.
+    """
+
+    __tablename__ = "llm_budget_periods"
+    __table_args__ = (Index("ix_llm_budget_periods_organization_id", "organization_id"),)
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    #: First day of the UTC calendar month this row accounts for.
+    period_start: Mapped[date] = mapped_column(Date, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    reserved_usd: Mapped[Decimal] = mapped_column(USD, nullable=False, default=Decimal(0))
+    settled_usd: Mapped[Decimal] = mapped_column(USD, nullable=False, default=Decimal(0))
+
+
+#: Reservation states. ``reserved``: the call may be in flight; ``settled``: charged
+#: its actual (or worst-case) cost by the process that made it; ``released``: charged
+#: its worst case by recovery because its job ended or a later attempt started without
+#: it being settled; ``expired``: charged its worst case by the sweep after
+#: ``expires_at``.
+RESERVATION_STATES: tuple[str, ...] = ("reserved", "settled", "released", "expired")
+
+
+class LLMBudgetReservation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """One reserved provider call: its worst case before the call, its settlement after.
+
+    ``attempt_key`` (job id, worker attempt ordinal, call ordinal) makes settlement
+    idempotent: a second settlement of the same key is a no-op. A row that is still
+    ``reserved`` after its process died is the record of that call until recovery
+    charges it its worst case.
+    """
+
+    __tablename__ = "llm_budget_reservations"
+    __table_args__ = (
+        Index("ix_llm_budget_reservations_state_expires", "state", "expires_at"),
+        Index("ix_llm_budget_reservations_workspace_period", "workspace_id", "period_start"),
+    )
+
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    #: The durable job whose attempt reserved the call (NULL off the worker path).
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
+    attempt_key: Mapped[str] = mapped_column(String(96), nullable=False, unique=True)
+    #: The worst case reserved before the call (the same-session path records the
+    #: settled amount here, since nothing precedes the call there).
+    reserved_usd: Mapped[Decimal] = mapped_column(USD, nullable=False)
+    #: What the call was charged once settled, released or expired; NULL while reserved.
+    settled_usd: Mapped[Decimal | None] = mapped_column(USD, nullable=True)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
+    #: After this instant a row still ``reserved`` is treated as leaked by the sweep.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

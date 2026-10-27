@@ -278,26 +278,49 @@ exposure incident (§5.5) revoke immediately and accept those failures.
 gets `SIGTERM`: it stops claiming jobs and waits up to
 `worker_shutdown_grace_seconds` (one shared deadline for all slots,
 `JobRunner.join`) for in-flight attempts to finish. An attempt that finishes
-inside that grace completes normally on the **old** key and its usage rows are
-recorded as usual (in the run's transaction, or by the after-rollback write if
-the attempt fails); that is why the old key must stay valid until the old
-tasks are gone. The unrecorded case is narrower: an attempt **still running
+inside that grace completes normally on the **old** key; that is why the old
+key must stay valid until the old tasks are gone. An attempt **still running
 when the grace ends** (the slot threads are daemon threads, so the process
 exits under them), when a second signal shortens the grace to
 `worker_force_shutdown_grace_seconds`, or when the task is killed (`SIGKILL`
-at the task's `stopTimeout`) is abandoned mid-attempt. Its usage is held only
-in memory and is **not recorded**; its lease expires and a worker on a new
-task re-runs the job with the new key, starting from the recorded spend only.
-This is the existing "worker dies mid-attempt" unrecorded-spend gap
-documented in `app.llm.metering`; rotation does not close it. Keeping
-`worker_shutdown_grace_seconds` above the longest expected scout run (and the
-worker `stopTimeout` at or above it, as `infra/aws/modules/ecs` already
-requires) and rotating at a low-traffic time reduce, but do not remove, that
-exposure.
+at the task's `stopTimeout`) is abandoned mid-attempt. On PostgreSQL every
+model call of that attempt was reserved against the workspace's month before
+it was made and settled right after it (the budget ledger below), so the
+abandoned attempt leaves at most one call reserved and unsettled; the worker's
+recovery sweep later charges that call its worst case. Its lease expires and a
+worker on a new task re-runs the job with the new key, starting from the
+ledger's recorded amount. Keeping `worker_shutdown_grace_seconds` above the
+longest expected scout run (and the worker `stopTimeout` at or above it, as
+`infra/aws/modules/ecs` already requires) and rotating at a low-traffic time
+still reduce the number of attempts abandoned this way.
+
+**Per-workspace LLM budget ledger (D-LLM-1 option B, `app.llm.budget`).** The
+guarantee the code gives, verbatim from `app.llm.metering`: *On PostgreSQL, the
+sum of worst-case costs of all provider calls started by a workspace in a UTC
+calendar month never exceeds the workspace budget as configured at reservation
+time, across any number of processes. Not covered: provider-side billing
+differences from the price table; calls made outside the metered service (E6
+probe); budget changes mid-month lowering below already-reserved amounts;
+SQLite, where the guarantee degrades to per-session (documented, tests pin the
+degraded behaviour).* The worst case of a call is the meter's estimate (about 3
+characters per input token plus `max_tokens` output at the model's table
+price); settlement is never below the usage the provider reported; a timeout,
+an undecodable reply and a reply with no usage block settle at the worst case
+(the undecodable-reply charge is a conservative basis pending D-LLM-3). A call
+whose process died between reservation and settlement keeps its worst case as
+the month's spend ("an unknown outcome is charged its worst case"); the
+reservation row is its record. The ledger therefore bounds what the product
+*starts*; the provider's invoice remains the only statement of what was
+*billed* - reconcile `llm_budget_periods` and `llm_usage_events` against the
+provider console monthly, and expect the ledger to read at or above the invoice
+for metered calls, never below. The E6 probe and any call made outside
+`app.llm.service` are not in the ledger.
 
 Nothing here provisions, populates or rotates a key, and nothing here is an
 approved quota or spending authority: the configured LLM budget and call-cap
-values are engineering defaults, not a hard ceiling on provider spend.
+values are engineering defaults (D-LLM-5 is undecided); the ledger makes the
+configured budget a ceiling on reserved worst-case cost on PostgreSQL, not an
+approval of any value.
 
 ### 5.5 Incident boundary (INFRA-6 vs INFRA-7)
 **INFRA-6 owns the mechanics** above: how to safely place a new value and roll

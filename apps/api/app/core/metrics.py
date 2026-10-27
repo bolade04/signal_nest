@@ -71,6 +71,9 @@ WORKER_POLL_TOTAL = "worker_poll_total"
 WORKER_LEASE_RECOVERED_TOTAL = "worker_lease_recovered_total"
 WORKER_ACTIVE = "worker_active"
 
+# LLM budget ledger (D-LLM-1 option B): reservations charged their worst case by recovery
+LLM_RESERVATIONS_RELEASED_TOTAL = "llm_reservations_released_total"
+
 # Dependencies (Redis / object store / database)
 REDIS_NOTIFY_TOTAL = "redis_notify_total"
 DEPENDENCY_OPERATION_TOTAL = "dependency_operation_total"
@@ -100,6 +103,7 @@ METRIC_NAMES: frozenset[str] = frozenset(
         WORKER_POLL_TOTAL,
         WORKER_LEASE_RECOVERED_TOTAL,
         WORKER_ACTIVE,
+        LLM_RESERVATIONS_RELEASED_TOTAL,
         REDIS_NOTIFY_TOTAL,
         DEPENDENCY_OPERATION_TOTAL,
         DEPENDENCY_OPERATION_DURATION_MS,

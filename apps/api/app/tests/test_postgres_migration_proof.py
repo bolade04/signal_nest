@@ -58,10 +58,11 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (P6-LLM-4: adds the ``llm_usage_events`` table).
-HEAD = "47028898175f"
-#: One below head (P6-LLM-5: adds ``opportunities.explanation_source``).
-BELOW_HEAD = "6ad2ff77f691"
+#: The code head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
+#: ``llm_budget_reservations`` tables).
+HEAD = "8005724d811a"
+#: One below head (P6-LLM-4: adds the ``llm_usage_events`` table).
+BELOW_HEAD = "47028898175f"
 #: The P6-AUTH-4 sessions revision (``auth_sessions``), the tracked revision that M2(a)
 #: breaks midway.
 SESSIONS = "87198ab57b59"
@@ -240,7 +241,8 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     refused = _run(["downgrade", "base"], pg_url)
     assert refused.returncode != 0
     assert "confirm" in (refused.stdout + refused.stderr)
-    assert _version(pg_url) == [HEAD] and "llm_usage_events" in _tables(pg_url)
+    assert _version(pg_url) == [HEAD] and "llm_budget_reservations" in _tables(pg_url)
+    assert "llm_budget_periods" in _tables(pg_url) and "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
 
     # One guarded step down undoes exactly the head revision; the spent token does not
@@ -249,7 +251,9 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert "llm_usage_events" not in _tables(pg_url)
+    assert "llm_budget_periods" not in _tables(pg_url)
+    assert "llm_budget_reservations" not in _tables(pg_url)
+    assert "llm_usage_events" in _tables(pg_url)  # the revision below head is untouched
     # The revisions below head are untouched.
     assert "explanation_source" in _columns(pg_url, "opportunities")
     assert "auth_sessions" in _tables(pg_url)

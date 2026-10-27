@@ -1,0 +1,430 @@
+"""Shared budget ledger: reserve before a provider call, settle after it, recover leaks.
+
+Implements D-LLM-1 option B (operator decision 2026-10-27, ledger entry (5)): the
+PostgreSQL-backed reservation behind the per-workspace monthly budget. The guarantee
+it gives, its cost basis and its limits are stated in :mod:`app.llm.metering`; this
+module holds the ledger primitives. Every function writes through the session it is
+given and never commits: the caller owns the transaction, and on the shared-ledger
+path that transaction is short and separate from the run's own.
+
+Tables (:mod:`app.llm.models`): ``llm_budget_periods`` (one row per workspace and UTC
+month: ``reserved_usd``, ``settled_usd``) and ``llm_budget_reservations`` (one row per
+reserved call, keyed by attempt).
+
+* :func:`reserve` - ``UPDATE llm_budget_periods SET reserved_usd = reserved_usd + w
+  WHERE workspace_id = :ws AND period_start = :month AND reserved_usd + w <= :budget``
+  (the period row is created first with ``INSERT ... ON CONFLICT DO NOTHING``). One row
+  updated means the worst case ``w`` is reserved and a ``reserved`` reservation row is
+  inserted; zero rows means the budget would be crossed and nothing changes. On
+  PostgreSQL the conditional update takes the period's row lock, and under READ
+  COMMITTED a waiter re-evaluates the condition after the lock is released, so any
+  number of processes reserving against one workspace serialise correctly.
+* :func:`settle` - records a ``reserved`` row's settled amount (``settled_usd +=
+  settled``) and writes the usage row; keyed by ``attempt_key`` and conditional on the
+  row still being ``reserved``, so a second settlement of the same key is a no-op. The
+  budget stays consumed by the call's **worst case**: settlement never lowers
+  ``reserved_usd`` (it raises it, by ``settled - w``, only when the provider reported
+  more than the estimate). ``reserved_usd`` is therefore always at least the sum of the
+  worst cases of every call started this month, which is what makes the guarantee
+  stated in :mod:`app.llm.metering` exact rather than "up to the estimate error".
+* :func:`record_settled` - the same-session path (SQLite, or no session factory):
+  writes a reservation row that is already settled, plus the period and usage rows,
+  idempotently per attempt key. Nothing precedes the call on this path.
+* :func:`release_for_job`, :func:`release_expired`, :func:`release_terminal` and
+  :func:`sweep` - recovery. A ``reserved`` row that is released is charged its worst
+  case: **an unknown outcome is charged its worst case**, because the process that
+  reserved it may have made the call before it died. Releasing, like settling, never
+  lowers ``reserved_usd``; it only adds the amount to ``settled_usd``. A leaked
+  reservation under-spends the budget, never over-spends it.
+
+Cost basis (conservative): the worst case ``w`` is the meter's estimate (ceil(prompt
+characters / 3) input tokens plus ``max_tokens`` output tokens at the model's price).
+Settlement is never below the usage the provider reported; a timeout, an undecodable
+or usage-less reply settle at ``w`` (the undecodable-reply charge is a conservative
+basis pending D-LLM-3, not an accepted rule).
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
+
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+from app.core.logging import get_logger, log_event
+from app.core.metrics import LLM_RESERVATIONS_RELEASED_TOTAL, get_metrics
+from app.jobs.models import Job
+from app.jobs.status import TERMINAL_STATUSES
+from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
+
+logger = get_logger("signalnest.llm")
+
+RESERVED = "reserved"
+SETTLED = "settled"
+RELEASED = "released"
+EXPIRED = "expired"
+
+_MICRO = Decimal("0.000001")
+#: Margin added to the longest a reserved call can legitimately stay unsettled.
+RESERVATION_EXPIRY_MARGIN_SECONDS = 60.0
+
+
+def usd(value: float | int | str | Decimal) -> Decimal:
+    """An exact six-place USD amount from a price-table float or any numeric."""
+    return Decimal(str(value)).quantize(_MICRO, rounding=ROUND_HALF_UP)
+
+
+def period_start_for(now: datetime) -> date:
+    """The first day of ``now``'s UTC calendar month."""
+    return now.astimezone(UTC).date().replace(day=1)
+
+
+def reservation_expiry(settings: Settings, now: datetime) -> datetime:
+    """When a reservation made at ``now`` counts as leaked if still unsettled.
+
+    One reserved call is bounded by the provider timeout; the lease window covers the
+    worker's own bookkeeping around it; the margin absorbs clock differences between
+    hosts. A reservation past this instant whose process is in fact alive is released
+    at its worst case, which is conservative, never an over-spend.
+    """
+    seconds = (
+        float(settings.llm_timeout_seconds)
+        + float(settings.worker_lease_seconds)
+        + RESERVATION_EXPIRY_MARGIN_SECONDS
+    )
+    return now + timedelta(seconds=seconds)
+
+
+def _dialect_insert(db: Session):
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    return insert
+
+
+def ensure_period(
+    db: Session, *, workspace_id: str, organization_id: str, period_start: date, now: datetime
+) -> None:
+    """Create the workspace's period row if it does not exist (never an error if it does)."""
+    insert = _dialect_insert(db)
+    db.execute(
+        insert(LLMBudgetPeriod)
+        .values(
+            workspace_id=workspace_id,
+            organization_id=organization_id,
+            period_start=period_start,
+            reserved_usd=Decimal(0),
+            settled_usd=Decimal(0),
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["workspace_id", "period_start"])
+    )
+
+
+def reserved_month_to_date_usd(
+    db: Session, workspace_id: str, now: datetime | None = None
+) -> Decimal:
+    """The workspace's ``reserved_usd`` for the current UTC month (0 without a row)."""
+    period_start = period_start_for(now or datetime.now(UTC))
+    value = db.scalar(
+        select(LLMBudgetPeriod.reserved_usd).where(
+            LLMBudgetPeriod.workspace_id == workspace_id,
+            LLMBudgetPeriod.period_start == period_start,
+        )
+    )
+    return usd(value) if value is not None else Decimal(0)
+
+
+def reserve(
+    db: Session,
+    *,
+    workspace_id: str,
+    organization_id: str,
+    job_id: str | None,
+    attempt_key: str,
+    worst_usd: Decimal,
+    budget_usd: Decimal,
+    expires_at: datetime,
+    now: datetime,
+) -> bool:
+    """Reserve ``worst_usd`` for one call if the month's budget allows it.
+
+    Returns ``True`` with the reservation row added (``reserved``) when the period's
+    ``reserved_usd + worst_usd <= budget_usd`` held at the moment of the update;
+    ``False``, with nothing changed, otherwise. The caller commits (or rolls back).
+    """
+    period_start = period_start_for(now)
+    ensure_period(
+        db,
+        workspace_id=workspace_id,
+        organization_id=organization_id,
+        period_start=period_start,
+        now=now,
+    )
+    result = db.execute(
+        update(LLMBudgetPeriod)
+        .where(
+            LLMBudgetPeriod.workspace_id == workspace_id,
+            LLMBudgetPeriod.period_start == period_start,
+            LLMBudgetPeriod.reserved_usd + worst_usd <= budget_usd,
+        )
+        .values(reserved_usd=LLMBudgetPeriod.reserved_usd + worst_usd, updated_at=now),
+        execution_options={"synchronize_session": False},
+    )
+    if result.rowcount != 1:
+        return False
+    db.add(
+        LLMBudgetReservation(
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            period_start=period_start,
+            job_id=job_id,
+            attempt_key=attempt_key,
+            reserved_usd=worst_usd,
+            state=RESERVED,
+            expires_at=expires_at,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db.flush()
+    return True
+
+
+def _usage_row(reservation: LLMBudgetReservation, usage: dict[str, Any]) -> LLMUsageEvent:
+    return LLMUsageEvent(
+        organization_id=reservation.organization_id,
+        workspace_id=reservation.workspace_id,
+        job_id=reservation.job_id,
+        **usage,
+    )
+
+
+def settle(
+    db: Session,
+    *,
+    attempt_key: str,
+    settled_usd: Decimal,
+    now: datetime,
+    usage: dict[str, Any] | None = None,
+) -> bool:
+    """Record the reservation ``attempt_key``'s settled amount; write its usage row.
+
+    Idempotent: only a row still ``reserved`` is settled (one conditional update), so a
+    second call for the same key - or a call after recovery released the row - changes
+    nothing and returns ``False``. The period keeps the call's worst case as consumed
+    budget; ``settled_usd`` records what the call was charged, and only a charge above
+    the worst case raises ``reserved_usd``. ``usage`` holds the usage row's own columns
+    (``scout_request_id``, ``task``, ``provider``, ``model``, tokens, ``cost_usd``,
+    ``outcome``); the tenant and job columns come from the reservation.
+    """
+    reservation = db.scalar(
+        select(LLMBudgetReservation).where(LLMBudgetReservation.attempt_key == attempt_key)
+    )
+    if reservation is None or reservation.state != RESERVED:
+        return False
+    claimed = db.execute(
+        update(LLMBudgetReservation)
+        .where(
+            LLMBudgetReservation.id == reservation.id,
+            LLMBudgetReservation.state == RESERVED,
+        )
+        .values(state=SETTLED, settled_usd=settled_usd, settled_at=now, updated_at=now),
+        execution_options={"synchronize_session": False},
+    )
+    if claimed.rowcount != 1:
+        return False
+    worst = usd(reservation.reserved_usd)
+    above_worst = settled_usd - worst if settled_usd > worst else Decimal(0)
+    db.execute(
+        update(LLMBudgetPeriod)
+        .where(
+            LLMBudgetPeriod.workspace_id == reservation.workspace_id,
+            LLMBudgetPeriod.period_start == reservation.period_start,
+        )
+        .values(
+            reserved_usd=LLMBudgetPeriod.reserved_usd + above_worst,
+            settled_usd=LLMBudgetPeriod.settled_usd + settled_usd,
+            updated_at=now,
+        ),
+        execution_options={"synchronize_session": False},
+    )
+    if usage is not None:
+        db.add(_usage_row(reservation, usage))
+    db.flush()
+    return True
+
+
+def record_settled(
+    db: Session,
+    *,
+    workspace_id: str,
+    organization_id: str,
+    job_id: str | None,
+    attempt_key: str,
+    settled_usd: Decimal,
+    now: datetime,
+    usage: dict[str, Any] | None = None,
+) -> bool:
+    """The same-session path: record one finished call as an already-settled reservation.
+
+    Writes the reservation row (``settled``, reserved = settled = the charge), adds the
+    charge to the period's ``reserved_usd`` and ``settled_usd``, and writes the usage
+    row - all in the caller's transaction, once per attempt key: a key already present
+    changes nothing and returns ``False``.
+    """
+    period_start = period_start_for(now)
+    insert = _dialect_insert(db)
+    inserted = db.execute(
+        insert(LLMBudgetReservation)
+        .values(
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            period_start=period_start,
+            job_id=job_id,
+            attempt_key=attempt_key,
+            reserved_usd=settled_usd,
+            settled_usd=settled_usd,
+            state=SETTLED,
+            expires_at=now,
+            settled_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["attempt_key"])
+    )
+    if inserted.rowcount != 1:
+        return False
+    ensure_period(
+        db,
+        workspace_id=workspace_id,
+        organization_id=organization_id,
+        period_start=period_start,
+        now=now,
+    )
+    db.execute(
+        update(LLMBudgetPeriod)
+        .where(
+            LLMBudgetPeriod.workspace_id == workspace_id,
+            LLMBudgetPeriod.period_start == period_start,
+        )
+        .values(
+            reserved_usd=LLMBudgetPeriod.reserved_usd + settled_usd,
+            settled_usd=LLMBudgetPeriod.settled_usd + settled_usd,
+            updated_at=now,
+        ),
+        execution_options={"synchronize_session": False},
+    )
+    if usage is not None:
+        db.add(
+            LLMUsageEvent(
+                organization_id=organization_id,
+                workspace_id=workspace_id,
+                job_id=job_id,
+                **usage,
+            )
+        )
+    db.flush()
+    return True
+
+
+def _release_rows(
+    db: Session, rows: list[LLMBudgetReservation], *, now: datetime, state: str
+) -> int:
+    """Charge each still-``reserved`` row its worst case; returns how many were released."""
+    released = 0
+    for row in rows:
+        worst = usd(row.reserved_usd)
+        claimed = db.execute(
+            update(LLMBudgetReservation)
+            .where(LLMBudgetReservation.id == row.id, LLMBudgetReservation.state == RESERVED)
+            .values(state=state, settled_usd=worst, settled_at=now, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+        if claimed.rowcount != 1:
+            continue  # settled or released by someone else first: its charge stands
+        db.execute(
+            update(LLMBudgetPeriod)
+            .where(
+                LLMBudgetPeriod.workspace_id == row.workspace_id,
+                LLMBudgetPeriod.period_start == row.period_start,
+            )
+            .values(settled_usd=LLMBudgetPeriod.settled_usd + worst, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+        released += 1
+    if released:
+        db.flush()
+    return released
+
+
+def release_for_job(db: Session, *, job_id: str, now: datetime, outcome: str) -> int:
+    """Release every ``reserved`` reservation of ``job_id`` at its worst case.
+
+    Called when the job reaches a terminal state, when one of its attempts ends, and
+    when a later attempt starts (a lost lease's in-flight reservations). ``outcome``
+    labels the metric (``terminal`` | ``attempt_end`` | ``rebind``).
+    """
+    rows = db.scalars(
+        select(LLMBudgetReservation).where(
+            LLMBudgetReservation.job_id == job_id, LLMBudgetReservation.state == RESERVED
+        )
+    ).all()
+    released = _release_rows(db, list(rows), now=now, state=RELEASED)
+    _report(released, outcome=outcome)
+    return released
+
+
+def release_expired(db: Session, *, now: datetime) -> int:
+    """Charge every ``reserved`` row past its ``expires_at`` its worst case (``expired``)."""
+    rows = db.scalars(
+        select(LLMBudgetReservation).where(
+            LLMBudgetReservation.state == RESERVED, LLMBudgetReservation.expires_at < now
+        )
+    ).all()
+    released = _release_rows(db, list(rows), now=now, state=EXPIRED)
+    _report(released, outcome="expired")
+    return released
+
+
+def release_terminal(db: Session, *, now: datetime) -> int:
+    """Release every ``reserved`` row whose job is in a terminal state (``released``)."""
+    rows = db.scalars(
+        select(LLMBudgetReservation)
+        .join(Job, Job.id == LLMBudgetReservation.job_id)
+        .where(
+            LLMBudgetReservation.state == RESERVED,
+            Job.status.in_([s.value for s in TERMINAL_STATUSES]),
+        )
+    ).all()
+    released = _release_rows(db, list(rows), now=now, state=RELEASED)
+    _report(released, outcome="terminal")
+    return released
+
+
+def sweep(db: Session, *, now: datetime) -> dict[str, int]:
+    """Recovery: expired reservations, then reservations of terminal jobs."""
+    return {
+        "expired": release_expired(db, now=now),
+        "terminal": release_terminal(db, now=now),
+    }
+
+
+def _report(released: int, *, outcome: str) -> None:
+    if not released:
+        return
+    get_metrics().increment(LLM_RESERVATIONS_RELEASED_TOTAL, outcome=outcome, amount=released)
+    log_event(
+        logger,
+        "llm.reservations_released",
+        level=logging.WARNING,
+        component="llm",
+        outcome=outcome,
+        released=released,
+    )
