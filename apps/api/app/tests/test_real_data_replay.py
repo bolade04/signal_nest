@@ -34,6 +34,7 @@ from sqlalchemy.orm import sessionmaker
 from app.audit.models import AuditLog
 from app.brands.models import Brand
 from app.connectors import replay as replay_mod
+from app.connectors import takedown as takedown_mod
 from app.connectors.coverage import CoverageReason
 from app.connectors.feedcache import feed_cache
 from app.connectors.models import SourceTakedown
@@ -736,8 +737,11 @@ def test_takedown_writes_one_audit_entry_in_each_affected_workspace(replay_world
     w = replay_world
     other_org = _second_tenant_toronto_run(w.factory)
     url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
+    # The operator's free-text reason may be legal or confidential; it must not reach any
+    # tenant's audit log (adversarial r2-MINOR-2, mutant N10: ``reason=takedown.reason``).
+    operator_reason = "Publisher request, counsel memo 2026-10-27 (confidential)"
     body = w.client.post(
-        url, headers=w.auth, json={"reason": "Publisher request", "reference": "TKD-9"}
+        url, headers=w.auth, json={"reason": operator_reason, "reference": "TKD-9"}
     ).json()
     with w.factory() as s:
         takedown = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == TAKEN))
@@ -753,6 +757,8 @@ def test_takedown_writes_one_audit_entry_in_each_affected_workspace(replay_world
             assert e.context["repeat"] is False
             assert len(e.context["opportunities_deleted"]) == e.new_state["opportunities_deleted"]
             assert len(e.context["opportunities_redacted"]) == e.new_state["opportunities_redacted"]
+            assert e.reason == takedown_mod._AUDIT_REASON
+            assert operator_reason not in json.dumps([e.reason, e.context, e.new_state])
         # The per-workspace entries add up to exactly what the takedown removed.
         for kind in (
             "raw_signals", "normalized_signals", "opportunities_deleted",
