@@ -271,6 +271,10 @@ def _assert_nothing_identifying(row: dict, *, forbidden: set[str], repeats: int)
     for entry in repeat_purges:
         assert set(entry) == ENTRY_KEYS, entry
         assert set(entry["purged"]) <= COUNT_NAMES, entry
+        # Every leaf under a count name is an int, as for purge_summary (r6 C-r6-3).
+        assert all(
+            isinstance(v, int) and not isinstance(v, bool) for v in entry["purged"].values()
+        ), entry
         datetime.fromisoformat(entry["at"])  # a timestamp, nothing else
     for path, leaf in _walk({"purge_summary": summary, "repeat_purges": repeat_purges}):
         if path.endswith(".<key>"):
