@@ -7,6 +7,12 @@ module holds the ledger primitives. Every function writes through the session it
 given and never commits: the caller owns the transaction, and on the shared-ledger
 path that transaction is short and separate from the run's own.
 
+**Lock order.** Every writer that touches the period and its reservations takes the period
+row's lock first (:func:`_lock_period`), then claims reservation rows (a release: periods
+in key order, rows in id order, one period update per period). One order everywhere, so a
+settlement and a multi-row recovery release cannot deadlock on PostgreSQL; a deadlock or
+serialization failure that still occurs is retried by the meter on a fresh transaction.
+
 Tables (:mod:`app.llm.models`): ``llm_budget_periods`` (one row per workspace and UTC
 month: ``reserved_usd``, ``settled_usd``) and ``llm_budget_reservations`` (one row per
 reserved call, keyed by attempt).
@@ -64,7 +70,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -145,6 +151,39 @@ def _parent_exists(db: Session, workspace_id: str, organization_id: str) -> bool
         )
         is not None
     )
+
+
+def _lock_period(db: Session, workspace_id: str, period_start: date) -> None:
+    """Take the period row's lock (``SELECT ... FOR UPDATE``; a no-op on SQLite).
+
+    **The one lock order of the ledger: the period row first, then reservation rows.**
+    Every writer that touches both (reserve, settle, the late settlement, every release)
+    takes the period lock before it claims any reservation, and a release works through
+    periods in key order and its reservations in id order. A settlement and a multi-row
+    recovery release therefore cannot wait on each other's rows in opposite order (the
+    PostgreSQL deadlock review r3 reproduced). No row of a deleted period exists to lock:
+    the statement then matches nothing and the caller's conditional updates do too.
+    """
+    db.execute(
+        select(LLMBudgetPeriod.id)
+        .where(
+            LLMBudgetPeriod.workspace_id == workspace_id,
+            LLMBudgetPeriod.period_start == period_start,
+        )
+        .with_for_update()
+    )
+
+
+#: SQLSTATEs a transaction may simply be retried after: deadlock_detected and
+#: serialization_failure.
+RETRYABLE_SQLSTATES = frozenset({"40P01", "40001"})
+
+
+def is_retryable_conflict(exc: BaseException) -> bool:
+    """Whether ``exc`` is a database deadlock or serialization failure (retry the transaction)."""
+    if not isinstance(exc, DBAPIError):
+        return False
+    return getattr(exc.orig, "sqlstate", None) in RETRYABLE_SQLSTATES
 
 
 def _dialect_insert(db: Session):
@@ -290,6 +329,16 @@ def settle(
     """
     reservation = db.scalar(
         select(LLMBudgetReservation).where(LLMBudgetReservation.attempt_key == attempt_key)
+    )
+    if reservation is None:
+        _orphaned(attempt_key, "settle")
+        return False
+    # Period lock first (the ledger's one lock order), then decide on the row as it is now.
+    _lock_period(db, reservation.workspace_id, reservation.period_start)
+    reservation = db.scalar(
+        select(LLMBudgetReservation)
+        .where(LLMBudgetReservation.attempt_key == attempt_key)
+        .execution_options(populate_existing=True)
     )
     if reservation is None:
         _orphaned(attempt_key, "settle")
@@ -554,28 +603,41 @@ def record_settled(
 def _release_rows(
     db: Session, rows: list[LLMBudgetReservation], *, now: datetime, state: str
 ) -> int:
-    """Charge each still-``reserved`` row its worst case; returns how many were released."""
-    released = 0
+    """Charge each still-``reserved`` row its worst case; returns how many were released.
+
+    One lock order (:func:`_lock_period`): the rows are grouped by period; for each period,
+    in key order, the period row is locked first, then its rows are claimed in id order,
+    and the period is updated once with the sum of what this call released.
+    """
+    by_period: dict[tuple[str, date], list[LLMBudgetReservation]] = {}
     for row in rows:
-        worst = usd(row.reserved_usd)
-        claimed = db.execute(
-            update(LLMBudgetReservation)
-            .where(LLMBudgetReservation.id == row.id, LLMBudgetReservation.state == RESERVED)
-            .values(state=state, settled_usd=worst, settled_at=now, updated_at=now),
-            execution_options={"synchronize_session": False},
-        )
-        if claimed.rowcount != 1:
-            continue  # settled or released by someone else first: its charge stands
-        db.execute(
-            update(LLMBudgetPeriod)
-            .where(
-                LLMBudgetPeriod.workspace_id == row.workspace_id,
-                LLMBudgetPeriod.period_start == row.period_start,
+        by_period.setdefault((row.workspace_id, row.period_start), []).append(row)
+    released = 0
+    for (workspace_id, period_start), group in sorted(by_period.items()):
+        _lock_period(db, workspace_id, period_start)
+        charged = Decimal(0)
+        for row in sorted(group, key=lambda r: r.id):
+            worst = usd(row.reserved_usd)
+            claimed = db.execute(
+                update(LLMBudgetReservation)
+                .where(LLMBudgetReservation.id == row.id, LLMBudgetReservation.state == RESERVED)
+                .values(state=state, settled_usd=worst, settled_at=now, updated_at=now),
+                execution_options={"synchronize_session": False},
             )
-            .values(settled_usd=LLMBudgetPeriod.settled_usd + worst, updated_at=now),
-            execution_options={"synchronize_session": False},
-        )
-        released += 1
+            if claimed.rowcount != 1:
+                continue  # settled or released by someone else first: its charge stands
+            charged += worst
+            released += 1
+        if charged:
+            db.execute(
+                update(LLMBudgetPeriod)
+                .where(
+                    LLMBudgetPeriod.workspace_id == workspace_id,
+                    LLMBudgetPeriod.period_start == period_start,
+                )
+                .values(settled_usd=LLMBudgetPeriod.settled_usd + charged, updated_at=now),
+                execution_options={"synchronize_session": False},
+            )
     if released:
         db.flush()
     return released

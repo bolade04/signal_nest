@@ -601,6 +601,67 @@ def test_a_usage_row_whose_tenant_vanished_is_logged_and_counted_not_raised(tmp_
     engine.dispose()
 
 
+class _Sqlstate(Exception):
+    def __init__(self, sqlstate: str):
+        super().__init__(sqlstate)
+        self.sqlstate = sqlstate
+
+
+def _conflict(sqlstate: str):
+    from sqlalchemy.exc import OperationalError
+
+    return OperationalError("UPDATE llm_budget_periods", {}, _Sqlstate(sqlstate))
+
+
+@pytest.mark.parametrize("sqlstate", ["40P01", "40001"])
+def test_a_deadlock_or_serialization_failure_is_retried_and_records_the_call_once(
+    factory, monkeypatch, sqlstate
+):
+    """Review r3: a settlement that loses a deadlock is run again on a fresh transaction;
+    the rolled-back attempt leaves no usage row or claim behind, so exactly one is written."""
+    s = _settings(llm_workspace_monthly_budget_usd=1.0)
+    meter = _bound(factory, s, shared=True)
+    real, calls = ledger.settle, []
+
+    def flaky(db, **kwargs):
+        calls.append(1)
+        result = real(db, **kwargs)  # does its work, then the "conflict" aborts the transaction
+        if len(calls) < 3:
+            raise _conflict(sqlstate)
+        return result
+
+    monkeypatch.setattr(ledger, "settle", flaky)
+    monkeypatch.setattr("app.llm.metering.time.sleep", lambda _s: None)
+    _service(s, lambda r: _reply(CLASSIFIED)).run("classify_signal", {"content": "x"}, meter=meter)
+    assert len(calls) == 3
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+        assert _reservation(db, meter.attempt_key(0)).state == "settled"
+
+
+def test_a_conflict_is_retried_a_bounded_number_of_times_and_other_errors_not_at_all(
+    factory, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    s = _settings(llm_workspace_monthly_budget_usd=1.0, llm_max_retries=0)
+    monkeypatch.setattr("app.llm.metering.time.sleep", lambda _s: None)
+    for error, expected_calls in ((_conflict("40P01"), 3), (_conflict("08006"), 1)):
+        meter = _bound(factory, s, shared=True)
+        calls = []
+
+        def always(db, error=error, calls=calls, **kwargs):
+            calls.append(1)
+            raise error
+
+        monkeypatch.setattr(ledger, "settle", always)
+        with pytest.raises(OperationalError):
+            _service(s, lambda r: _reply(CLASSIFIED)).run(
+                "classify_signal", {"content": "x"}, meter=meter
+            )
+        assert len(calls) == expected_calls
+
+
 def test_a_call_that_outlives_its_tenant_finishes_without_error_or_rows(tenant_db):
     """The meter path end to end: the reservation is made, the tenant is erased while the
     provider call is in flight, the call returns. Settlement must neither raise into the

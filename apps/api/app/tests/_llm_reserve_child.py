@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -267,5 +267,124 @@ def recover_once(url: str, *, job_id: str | None, mode: str, barrier, results) -
         finally:
             session.close()
         results.put({"pid": os.getpid(), "mode": mode, "released": done})
+    finally:
+        engine.dispose()
+
+
+def usage_for(key: str, cost: Decimal) -> dict:
+    """A usage row whose ``task`` is the attempt key, so usage rows can be counted per attempt."""
+    return {
+        "scout_request_id": None,
+        "task": key,
+        "provider": "anthropic",
+        "model": MODEL,
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "cost_usd": float(cost),
+        "outcome": "ok",
+    }
+
+
+def chaos(
+    url: str,
+    *,
+    seed: int,
+    keys: list[tuple[str, str, str]],
+    budget: str,
+    w: str,
+    rounds: int,
+    barrier,
+    results,
+) -> None:
+    """P8 body: a random interleaving of every ledger operation against shared keys.
+
+    ``keys`` are (attempt key, job id, reserved w). Each round runs one operation in a
+    transaction of its own: a settlement (normal or reporting three times the bound), a
+    release by job, an expiry or full sweep with a clock a day ahead, or a fresh
+    reservation against the tight budget. Any exception is counted, not swallowed.
+    """
+    import random
+
+    rng = random.Random(seed)
+    engine = make_engine(url)
+    ops: dict[str, int] = {}
+    reserved_ok = 0
+    try:
+        factory = make_factory(engine)
+        barrier.wait(timeout=60)
+        for round_no in range(rounds):
+            op = rng.choice(
+                ["settle", "settle", "settle_over", "release_job", "expire", "sweep", "reserve"]
+            )
+            ops[op] = ops.get(op, 0) + 1
+            s = factory()
+            try:
+                if op in ("settle", "settle_over"):
+                    key, _job, rw = rng.choice(keys)
+                    cost = Decimal(rw) * (3 if op == "settle_over" else Decimal("0.5"))
+                    ledger.settle(
+                        s,
+                        attempt_key=key,
+                        settled_usd=cost,
+                        now=datetime.now(UTC),
+                        usage=usage_for(key, cost),
+                    )
+                elif op == "release_job":
+                    _key, job, _rw = rng.choice(keys)
+                    ledger.release_for_job(s, job_id=job, now=datetime.now(UTC), outcome="t")
+                elif op == "expire":
+                    ledger.release_expired(s, now=datetime.now(UTC) + timedelta(days=1))
+                elif op == "sweep":
+                    ledger.sweep(s, now=datetime.now(UTC) + timedelta(days=1))
+                else:
+                    now = datetime.now(UTC)
+                    if ledger.reserve(
+                        s,
+                        workspace_id="ws-llmpg-0001",
+                        organization_id="org-llmpg-001",
+                        job_id=None,
+                        attempt_key=f"fresh-{seed}-{round_no}",
+                        worst_usd=Decimal(w),
+                        budget_usd=Decimal(budget),
+                        expires_at=now - timedelta(seconds=1),
+                        now=now,
+                    ):
+                        reserved_ok += 1
+                s.commit()
+            except Exception as exc:  # noqa: BLE001 - counted and reported, never hidden
+                s.rollback()
+                name = "error:" + type(exc).__name__
+                ops[name] = ops.get(name, 0) + 1
+            finally:
+                s.close()
+        results.put({"pid": os.getpid(), "ops": ops, "reserved_ok": reserved_ok})
+    finally:
+        engine.dispose()
+
+
+def late_settle(url: str, *, keys: list[str], repeats: int, cost: str, barrier, results) -> None:
+    """P8 body: settle every key ``repeats`` times from this process after a barrier."""
+    engine = make_engine(url)
+    try:
+        factory = make_factory(engine)
+        barrier.wait(timeout=60)
+        out = []
+        for _ in range(repeats):
+            for key in keys:
+                s = factory()
+                try:
+                    out.append(
+                        ledger.settle(
+                            s,
+                            attempt_key=key,
+                            settled_usd=Decimal(cost),
+                            now=datetime.now(UTC),
+                            usage=usage_for(key, Decimal(cost)),
+                        )
+                    )
+                    s.commit()
+                finally:
+                    s.close()
+        results.put({"pid": os.getpid(), "settled_true": sum(out), "calls": len(out)})
     finally:
         engine.dispose()

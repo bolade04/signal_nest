@@ -835,8 +835,9 @@ def test_p7_racing_late_settlements_record_the_call_exactly_once(pg_url, factory
 
 def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(pg_url, engine):
     """Deterministic interleaving: the settlement has read the row as ``reserved`` when
-    recovery commits its release; the settlement's own update then finds the row gone
-    from ``reserved``. Its usage row must still be written, once."""
+    recovery commits its release (before the settlement's period lock); the settlement
+    re-reads the row under the lock and takes the late path. Its usage row must still be
+    written, once."""
     from sqlalchemy import event
 
     factory = child.make_factory(engine)
@@ -848,7 +849,9 @@ def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
 
     @event.listens_for(engine, "before_cursor_execute")
     def release_first(conn, cursor, statement, parameters, context, executemany):
-        if statement.startswith("UPDATE llm_budget_reservations") and not fired:
+        # Recovery commits between the settlement's first read and its period lock (the
+        # lock order makes the later window unreachable: the period lock serialises both).
+        if "FOR UPDATE" in statement and not fired:
             fired.append(1)
             other = factory()
             try:
@@ -956,3 +959,180 @@ def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(p
         assert len(rows) == attempts and {r.state for r in rows} <= {"settled", "released"}
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == attempts
         _assert_period_invariants(db, budget)
+
+
+# --------------------------------------------------------------------------- #
+# P8 - one lock order: a settlement never deadlocks with a multi-row recovery release
+# --------------------------------------------------------------------------- #
+def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url):
+    """Review r3 MAJOR-1, deterministic. Two overdue reservations of one workspace. The
+    settlement of the second takes its first lock and pauses; the sweep then runs, taking
+    the first reservation, the period and (on the old order) waiting for the second. When
+    the settlement resumes it needs the period: the old order is a lock cycle and
+    PostgreSQL aborts the settlement, whose usage row is then lost. With one lock order
+    (the period first) the sweep waits for the settlement and both complete."""
+    import time
+
+    from sqlalchemy import event
+    from sqlalchemy.exc import DBAPIError
+
+    e_settle, e_sweep = child.make_engine(pg_url), child.make_engine(pg_url)
+    f_settle, f_sweep = child.make_factory(e_settle), child.make_factory(e_sweep)
+    w = Decimal("0.020000")
+    now = datetime.now(UTC)
+    with f_settle() as db:
+        for key, age in (("dl:a:0", 20), ("dl:b:0", 10)):
+            assert ledger.reserve(
+                db,
+                workspace_id=WS,
+                organization_id=ORG,
+                job_id=None,
+                attempt_key=key,
+                worst_usd=w,
+                budget_usd=Decimal(1),
+                expires_at=now - timedelta(minutes=age),
+                now=now,
+            )
+        db.commit()
+    first_lock = threading.Event()
+
+    @event.listens_for(e_settle, "after_cursor_execute")
+    def pause_after_the_first_lock(conn, cursor, statement, params, context, many):
+        text = statement.lstrip()
+        if not first_lock.is_set() and (
+            text.startswith("UPDATE llm_budget_reservations") or "FOR UPDATE" in text
+        ):
+            first_lock.set()
+            time.sleep(2.5)  # beyond deadlock_timeout: the sweep is queued before we resume
+
+    outcome: dict[str, object] = {}
+
+    def settle() -> None:
+        session = f_settle()
+        try:
+            outcome["settle"] = ledger.settle(
+                session,
+                attempt_key="dl:b:0",
+                settled_usd=Decimal("0.01"),
+                now=datetime.now(UTC),
+                usage=child.usage_for("dl:b:0", Decimal("0.01")),
+            )
+            session.commit()
+        except DBAPIError as exc:
+            session.rollback()
+            outcome["settle"] = f"ERROR {type(exc.orig).__name__}"
+        finally:
+            session.close()
+
+    def sweep() -> None:
+        assert first_lock.wait(20)
+        session = f_sweep()
+        try:
+            outcome["sweep"] = ledger.release_expired(session, now=datetime.now(UTC))
+            session.commit()
+        except DBAPIError as exc:
+            session.rollback()
+            outcome["sweep"] = f"ERROR {type(exc.orig).__name__}"
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=settle), threading.Thread(target=sweep)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    event.remove(e_settle, "after_cursor_execute", pause_after_the_first_lock)
+    with f_settle() as db:
+        rows = {r.attempt_key: r.state for r in _reservations(db)}
+        usage = db.scalar(select(func.count()).select_from(LLMUsageEvent))
+    e_settle.dispose()
+    e_sweep.dispose()
+    assert outcome["settle"] is True, (outcome, rows, usage)  # not a deadlock victim
+    assert outcome["sweep"] == 1, outcome  # the sweep released the other overdue row
+    assert rows == {"dl:a:0": "expired", "dl:b:0": "settled"}
+    assert usage == 1  # the call's usage record is written
+
+
+@pytest.mark.parametrize("run", [1, 2, 3])
+def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factory, run):
+    """Six processes run 80 random ledger operations each against 30 shared reservations
+    (settle, over-bound settle, release by job, expiry, sweep, reserve at a tight budget),
+    then four processes late-settle every key twice. No operation may fail (no deadlock),
+    every attempt has exactly one usage row, and the period's accounting is consistent."""
+    w, budget = Decimal("0.020000"), Decimal("1.000000")
+    keys = []
+    with factory() as db:
+        for i in range(30):
+            job = _enqueue(db, f"chaos-{run}-{i}")
+            key = f"chaos:{i}:0"
+            now = datetime.now(UTC)
+            assert ledger.reserve(
+                db,
+                workspace_id=WS,
+                organization_id=ORG,
+                job_id=job,
+                attempt_key=key,
+                worst_usd=w,
+                budget_usd=budget,
+                expires_at=now + (timedelta(hours=-1) if i % 3 == 0 else timedelta(hours=1)),
+                now=now,
+            )
+            db.commit()
+            keys.append((key, job, str(w)))
+    ctx = mp.get_context("spawn")
+    results = ctx.Queue()
+    start = ctx.Barrier(6)
+    procs = _spawn(
+        child.chaos,
+        [
+            dict(
+                url=pg_url,
+                seed=seed + 100 * run,
+                keys=keys,
+                budget=str(budget),
+                w=str(w),
+                rounds=80,
+                barrier=start,
+                results=results,
+            )
+            for seed in range(6)
+        ],
+    )
+    reports = _drain(results, 6)
+    assert _join(procs) == [0] * 6
+    errors = {op: n for r in reports for op, n in r["ops"].items() if op.startswith("error:")}
+    assert errors == {}, errors
+    barrier = ctx.Barrier(4)
+    results = ctx.Queue()
+    procs = _spawn(
+        child.late_settle,
+        [
+            dict(
+                url=pg_url,
+                keys=[k for k, _j, _w in keys],
+                repeats=2,
+                cost="0.010000",
+                barrier=barrier,
+                results=results,
+            )
+            for _ in range(4)
+        ],
+    )
+    _drain(results, 4)
+    assert _join(procs) == [0] * 4
+    with factory() as db:
+        period, rows = _period(db), _reservations(db)
+        per_key: dict[str, int] = {}
+        for u in db.scalars(select(LLMUsageEvent)):
+            per_key[u.task] = per_key.get(u.task, 0) + 1
+        assert all(per_key.get(k, 0) == 1 for k, _j, _w in keys), per_key
+        assert all(v == 1 for v in per_key.values()), per_key
+        assert period.reserved_usd == sum((r.reserved_usd for r in rows), Decimal(0))
+        assert period.reserved_usd <= budget
+        assert period.settled_usd == sum(
+            (r.settled_usd or Decimal(0) for r in rows if r.state != "reserved"), Decimal(0)
+        )
+        assert all((r.settled_usd or 0) <= r.reserved_usd for r in rows)
+        assert all(
+            (r.usage_recorded_at is not None) == (per_key.get(r.attempt_key, 0) == 1) for r in rows
+        )

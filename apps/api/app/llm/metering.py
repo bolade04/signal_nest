@@ -145,6 +145,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -165,6 +166,10 @@ from app.llm.models import LLMUsageEvent
 logger = get_logger("signalnest.llm")
 
 SessionFactory = Callable[[], Session]
+
+#: A ledger transaction that loses a deadlock / serialization conflict is run again, at
+#: most this many times in all (the conflict is transient: the other side has won).
+_CONFLICT_ATTEMPTS = 3
 
 
 class LLMBudgetExceededError(LLMError):
@@ -428,18 +433,32 @@ class LLMMeter:
         return f"{self._run_key}:{self._attempt}:{call}"
 
     def _in_own_transaction(self, work: Callable[[Session], Any]) -> Any:
-        """Run ``work`` on a session of its own and commit it; roll back on any error."""
+        """Run ``work`` on a session of its own and commit it; roll back on any error.
+
+        A deadlock or serialization failure (SQLSTATE 40P01 / 40001) is retried, on a
+        fresh session, at most :data:`_CONFLICT_ATTEMPTS` times in all. A rolled-back
+        attempt leaves nothing behind (the exactly-once usage claim included), so a retry
+        can neither lose nor duplicate a usage row. Any other error is raised at once.
+        """
         assert self._session_factory is not None
-        session = self._session_factory()
-        try:
-            result = work(session)
-            session.commit()
-            return result
-        except BaseException:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        for attempt in range(1, _CONFLICT_ATTEMPTS + 1):
+            session = self._session_factory()
+            try:
+                result = work(session)
+                session.commit()
+                return result
+            except BaseException as exc:
+                session.rollback()
+                if attempt == _CONFLICT_ATTEMPTS or not ledger.is_retryable_conflict(exc):
+                    raise
+                logger.warning(
+                    "llm.ledger_transaction_retry",
+                    extra={"extra_fields": {"attempt": attempt}},
+                )
+                time.sleep(0.05 * attempt)
+            finally:
+                session.close()
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def before_attempt(self, provider: str, model: str, payload: bytes | None):
         """Raise :class:`LLMBudgetExceededError` instead of making a disallowed attempt.
