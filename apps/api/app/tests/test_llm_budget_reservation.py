@@ -567,6 +567,40 @@ def test_late_callbacks_after_the_tenant_was_deleted_recreate_nothing(tenant_db,
     assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="record_settled") == 1
 
 
+def test_a_usage_row_whose_tenant_vanished_is_logged_and_counted_not_raised(tmp_path):
+    """The tenant is erased between a settlement's claim and its usage insert: with the
+    foreign keys on the insert would fail, and the late path must absorb that."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'orphan.db'}", future=True)
+
+    @event.listens_for(engine, "connect")
+    def _fk(dbapi_connection, _record):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    Base.metadata.create_all(engine)
+    make = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    ghost = LLMBudgetReservation(
+        organization_id="org-gone",
+        workspace_id="ws-gone",
+        period_start=T0.date(),
+        job_id=None,
+        attempt_key="ghost:1:0",
+        reserved_usd=Decimal("0.01"),
+        state="released",
+        expires_at=T0,
+    )
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with make() as db:
+            ledger._add_usage(db, ghost, _usage(CALL_COST), "ghost:1:0")  # must not raise
+            db.commit()
+            assert _row_counts(db) == (0, 0, 0)
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="usage_row") == 1
+    engine.dispose()
+
+
 def test_a_call_that_outlives_its_tenant_finishes_without_error_or_rows(tenant_db):
     """The meter path end to end: the reservation is made, the tenant is erased while the
     provider call is in flight, the call returns. Settlement must neither raise into the
