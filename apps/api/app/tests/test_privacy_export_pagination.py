@@ -283,6 +283,33 @@ def test_a_tampered_or_foreign_cursor_is_refused(big: PrivacyEnv):
             cursor,
             r.text,
         )
+    # r11 MINOR-3: exact shape, control characters (NUL, Cc, Cf) and bounds are refused
+    ts = "2026-01-01T00:00:00"
+    hardened = [
+        _b64(json.dumps([TABLE, ts, "x\u0000y"])),  # a NUL-bearing forged id
+        _b64('["llm_usage_events","2026-01-01T00:00:00","x\\u0000y"]'),
+        _b64(json.dumps([TABLE, ts, "a\u200bb"])),  # zero-width (Cf)
+        _b64(json.dumps([TABLE, ts, "a\nb"])),  # control (Cc)
+        _b64(json.dumps([TABLE, ts + "\u0000", "x"])),
+        _b64(json.dumps([TABLE, ts + "\u202e", "x"])),  # bidi override (Cf)
+        _b64(json.dumps([TABLE, ts, ""])),  # empty id
+        _b64(json.dumps([TABLE, ts, "x" * 129])),  # id too long
+        _b64(json.dumps([TABLE, "2026-01-01T00:00:00" + "0" * 40, "x"])),  # timestamp too long
+        _b64(json.dumps({"a": TABLE, "b": ts, "c": "x"})),  # an object, not an array
+        _b64(json.dumps([TABLE, ts, "x", "extra"])),  # four elements
+        _b64(json.dumps([TABLE, ts])),  # two elements
+        good.replace("-", "+").replace("_", "/") + "!",  # outside the URL-safe alphabet
+    ]
+    for cursor in hardened:
+        r = big.client.get(_page_url(ORG_A, TABLE), params={"cursor": cursor}, headers=h)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_cursor", (
+            cursor,
+            r.text,
+        )
+    # a well-formed forged position is accepted and stays inside the requester's rows
+    forged = _b64(json.dumps([TABLE, ts, "no-such-id"]))
+    r = big.client.get(_page_url(ORG_A, TABLE), params={"cursor": forged}, headers=h)
+    assert r.status_code == 200 and {x["organization_id"] for x in r.json()["rows"]} == {ORG_A}
     # a cursor longer than the bound never reaches the decoder
     r = big.client.get(_page_url(ORG_A, TABLE), params={"cursor": "A" * 600}, headers=h)
     assert r.status_code == 422

@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import base64
 import json
+import re
+import unicodedata
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -275,13 +277,39 @@ def encode_cursor(table: str, created_at: datetime, row_id: str) -> str:
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
+_CURSOR_ALPHABET = re.compile(r"[A-Za-z0-9_-]+")
+_CURSOR_MAX_TIMESTAMP = 40
+_CURSOR_MAX_ID = 128
+
+
+def _clean(text: str, limit: int) -> bool:
+    """Non-empty, bounded, and free of every control, format, surrogate, private-use or
+    unassigned character (Unicode category C*), NUL included."""
+    return (
+        0 < len(text) <= limit
+        and "\x00" not in text
+        and not any(unicodedata.category(ch).startswith("C") for ch in text)
+    )
+
+
 def decode_cursor(cursor: str, table: str) -> tuple[datetime, str]:
-    """Validate an opaque cursor against the table it is used with. Anything else is refused."""
+    """Validate a cursor for ``table``: URL-safe base64 of a JSON array of exactly three
+    strings ``[table, created_at, id]``, the table named, the timestamp ISO-8601, both
+    strings bounded and free of control characters. The cursor is validated, not signed:
+    any well-formed cursor naming the table is accepted, and a forged position can only move
+    the start within the requester's own rows (the tenant filter applies to every page)."""
     bad = ValidationDomainError("The cursor is not valid for this table.", code="invalid_cursor")
+    if not _CURSOR_ALPHABET.fullmatch(cursor):
+        raise bad
     try:
         raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
-        named, created, row_id = json.loads(raw)
+        parts = json.loads(raw)
+        if not (isinstance(parts, list) and len(parts) == 3):
+            raise bad
+        named, created, row_id = parts
         if named != table or not isinstance(created, str) or not isinstance(row_id, str):
+            raise bad
+        if not _clean(created, _CURSOR_MAX_TIMESTAMP) or not _clean(row_id, _CURSOR_MAX_ID):
             raise bad
         return datetime.fromisoformat(created), row_id
     except ValidationDomainError:
