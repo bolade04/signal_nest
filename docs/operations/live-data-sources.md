@@ -103,18 +103,21 @@ simulated path or `not_covered` (the replay seed sets it for its own process).
   `not_covered`.
 * **Take one source down** (operator token):
   `POST /api/v1/internal/system/data-sources/{source_key}/takedown`
-  with `{"reference": "<public ticket / request id>"}` — required, 1–200 printable
-  characters on one line, no `@` (never an address or a URL with credentials). **There is
-  no free-text field.** The reason for a takedown is kept in the referenced request record,
-  not in the product; the product keeps attribution (the acting operator) and the public
-  reference in each affected workspace's audit log. In one transaction the call records
+  with `{"reason": "<free text, 1–2000 characters>", "external_reference": "<your own
+  ticket id, optional, ≤ 200 characters, one line>"}`. **Both fields are private (D-9e):**
+  they are written only to a restricted **operator case record**
+  (`source_takedown_cases`, one row per request, a repeat adds a new one) and never to a
+  tenant-visible API, audit entry, organization export, log line or metric. The product
+  gives each request an opaque `case_id` (returned by the call); that id is the only
+  reference an affected workspace's audit entry carries. In one transaction the call records
   the takedown (the key is never fetched again), purges the source's raw and normalized
   signals, their location evidence and intelligence records **in every tenant**, deletes
   every opportunity built only from that source **together with the customers' feedback on
   it** (and its scores and validation evidence), removes the source's entries from mixed
   opportunities' evidence, and writes **one audit entry in each affected workspace**
-  (`data_source.taken_down`, actor = the operator: the counts removed there, the ids of
-  the opportunities deleted or redacted, the source key and the public reference). The
+  (`data_source.taken_down`, actor = the operator, `reason` = one fixed generic sentence,
+  `context` = exactly `{source_key, case_id, repeat, opportunities_deleted,
+  opportunities_redacted}` — the removed ids — and the counts in `new_state`). The
   answer carries `purged` counts and `remaining` counts **recounted from the database**,
   and `verified: true` only when every remaining count is zero. Repeating it is safe and
   re-runs the purge; the first purge's counts stay on the record (`purge_summary`) and
@@ -122,10 +125,24 @@ simulated path or `not_covered` (the replay seed sets it for its own process).
 * **What the takedown record holds (D-9d):** `source_takedowns` is a permanent suppression
   record and nothing more — the source key, the time it was taken down, and aggregate
   counts (`purge_summary`, `repeat_purges[*].{at, purged}`). It never holds a user id, free
-  text or a reference, and no erasure, anonymisation or expiry of the audit log (which
-  carries the attribution under its own retention) can re-enable fetching the source.
-  Attribution and the public reference are read from the affected workspaces' audit
-  entries while those exist.
+  text or a reference, and no erasure, anonymisation or expiry of the audit log or of the
+  case records can re-enable fetching the source.
+* **Where the reason lives (D-9e, ruled):** in the operator case record only. A printable
+  string without `@` was never sufficient evidence that a reference is free of sensitive
+  content, so the operator-typed ticket id is private too. Each `source_takedown_cases`
+  row holds the opaque case id, the source key, the operator's `reason` and
+  `external_reference`, the acting operator (`actor_user_id`, set to NULL when that
+  account is erased; the case is kept) and the time. The record is not exported to
+  customers (privacy inventory: `exported=False`). Read it with the operator-only
+  `GET /api/v1/internal/system/data-sources/{source_key}/cases` (a customer, including an
+  OWNER, gets the usual non-enumerable 403); the registry shows only `cases_count` and
+  the latest `case_id`. **Its access and retention policy is separately approved and still
+  pending: no retention duration is set or implied** (retention class unset, "retention
+  duration pending operator decision (D-9e access/retention policy)"). Until that policy
+  is approved, no job deletes case records and nothing here is a legal position. Do not
+  put anything into `reason` that you would not accept being kept for that undecided
+  period, and do not upload personal data to an external service on the strength of this
+  record.
 * **Cached feed bytes:** the API process that performs the takedown drops the source's
   cached bytes at once; each worker process drops them at its next scout run, before it
   fetches anything. Until then they may sit unused in a worker's memory — no run reads a
@@ -136,14 +153,15 @@ simulated path or `not_covered` (the replay seed sets it for its own process).
   the source's signals, or the takedown waits for the run to commit and then purges them —
   a `verified` takedown is not followed by re-inserted signals.
 * **Verify later:** `GET /api/v1/internal/system/data-sources` lists every record's terms
-  record, whether it can run, its takedown, and `stored` counts measured at request time.
+  record, whether it can run, its takedown (with `cases_count` and the latest `case_id`,
+  never the reason), and `stored` counts measured at request time.
 * A takedown is permanent for its key. Re-onboarding the publisher is a new record with a
   new key and a fresh approval.
-* Downgrading below migration `da25533622b2` drops the takedown table. Do not downgrade
+* Downgrading below migration `da25533622b2` drops the takedown and case tables. Do not downgrade
   while live egress is enabled: earlier code would fetch a taken-down source again. Signals
   keep their source in their provenance, and upgrading again restores each signal's
-  `source_key` from it, so a takedown still reaches them; the takedown records themselves
-  are lost, so take each such source down again after re-upgrading.
+  `source_key` from it, so a takedown still reaches them; the takedown and case records
+  themselves are lost, so take each such source down again after re-upgrading.
 
 ## 5. Replay corpus and the Integration smoke gate (P6-CI-11)
 
