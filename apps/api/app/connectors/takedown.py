@@ -14,10 +14,12 @@ transaction it:
    validation evidence and the customers' feedback on it) and, for an opportunity that
    also cites other sources, removes the source's entries from its observed evidence;
 4. writes one audit entry in every affected workspace, naming what was removed there,
-   who did it (``actor_user_id``) and the public ``reference`` of the request it
-   answers. That audit row — under the audit log's own retention — is where
-   attribution lives. The *reason* for a takedown is kept in the referenced request
-   record outside the product: the request carries no free text (D-9e interim);
+   who did it (``actor_user_id``), a fixed generic explanation and the opaque
+   ``case_id`` of the request. That audit row — under the audit log's own retention —
+   is where attribution lives. The operator's free-text *reason* and ticket id go only
+   into the restricted operator case record
+   (:class:`~app.connectors.models.SourceTakedownCase`, D-9e): never into an audit
+   entry, an export, a log line or a metric;
 5. drops the source's feed bytes from this process's cache (a worker process drops
    them at its next scout run).
 
@@ -51,7 +53,7 @@ from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
 from app.connectors.feedcache import feed_cache
-from app.connectors.models import SourceTakedown
+from app.connectors.models import SourceTakedown, SourceTakedownCase
 from app.connectors.sources import APPROVED_SOURCES, SOURCE_KEY_PATTERN
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.logging import get_logger
@@ -76,47 +78,61 @@ _AUDIT_REASON = (
 )
 #: Most opportunity ids one audit entry lists per kind (the counts are always exact).
 _AUDIT_MAX_IDS = 500
-#: Longest accepted ``reference`` (a public ticket / request id).
-REFERENCE_MAX_LENGTH = 200
-#: Unicode categories a reference may never contain: C0/C1 controls (Cc), format
-#: characters such as zero-width and bidi overrides (Cf), private use (Co), surrogates
-#: (Cs), line and paragraph separators (Zl, Zp). The value is shown to tenants in their
-#: audit log and to operators in the registry; a bidi override could make a "ticket id"
-#: read as something else (delta review r6, C-r6-2).
+#: Longest accepted operator reason (free text, private: the case record only).
+REASON_MAX_LENGTH = 2000
+#: Longest accepted ``external_reference`` (the operator's own ticket id, private).
+EXTERNAL_REFERENCE_MAX_LENGTH = 200
+#: Unicode categories an external reference may never contain: C0/C1 controls (Cc),
+#: format characters such as zero-width and bidi overrides (Cf), private use (Co),
+#: surrogates (Cs), line and paragraph separators (Zl, Zp). Operators read the value in
+#: the case listing; a bidi override could make a "ticket id" read as something else.
 _INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Zl", "Zp"})
 
 
-def validate_reference(value: str) -> str:
-    """The public request id a takedown points to, or :class:`ValidationDomainError`.
+def validate_external_reference(value: str | None) -> str | None:
+    """The operator's own ticket / request id, or ``None``; :class:`ValidationDomainError`.
 
-    1–200 characters on one line, never containing ``@`` — so it can be neither an
-    e-mail address nor a URL carrying credentials — and no control, format, private-use,
-    surrogate or line/paragraph-separator character. It is copied into every affected
-    workspace's audit entry, where tenants can read it; the reason for the takedown
-    stays in the request record it names, outside the product.
+    Optional, at most 200 characters on one line, with no control, format, private-use,
+    surrogate or line/paragraph-separator character. It is **private** (D-9e): kept in
+    the operator case record only. An ``@`` is not refused any more because nothing
+    here is shown to a customer; a string without ``@`` was never evidence that a
+    reference is free of sensitive content, which is why it no longer leaves the case
+    record at all.
     """
     # Only ordinary spaces are trimmed: a line separator or control at either end is
     # refused below rather than silently dropped.
     reference = (value or "").strip(" ")
     if not reference:
+        return None
+    if len(reference) > EXTERNAL_REFERENCE_MAX_LENGTH:
         raise ValidationDomainError(
-            "A takedown reference (the public ticket / request id) is required."
-        )
-    if len(reference) > REFERENCE_MAX_LENGTH:
-        raise ValidationDomainError(
-            f"reference must be at most {REFERENCE_MAX_LENGTH} characters."
-        )
-    if "@" in reference:
-        raise ValidationDomainError(
-            "reference must be a public ticket / request id: no '@' (no addresses, no "
-            "URL credentials)."
+            f"external_reference must be at most {EXTERNAL_REFERENCE_MAX_LENGTH} characters."
         )
     if any(ch.isspace() and ch != " " for ch in reference) or any(
         ord(ch) < 32 or ord(ch) == 127 or unicodedata.category(ch) in _INVISIBLE_CATEGORIES
         for ch in reference
     ):
-        raise ValidationDomainError("reference must be a single line of printable text.")
+        raise ValidationDomainError("external_reference must be a single line of printable text.")
     return reference
+
+
+def validate_reason(value: str) -> str:
+    """The operator's free-text reason, or :class:`ValidationDomainError`.
+
+    1–2000 characters; line breaks and tabs are allowed, other control characters,
+    private-use characters and surrogates are not. Private: kept in the operator case
+    record only, never copied anywhere a customer, an export or a log can read it.
+    """
+    reason = (value or "").strip()
+    if not reason:
+        raise ValidationDomainError("A takedown reason is required.")
+    if len(reason) > REASON_MAX_LENGTH:
+        raise ValidationDomainError(f"reason must be at most {REASON_MAX_LENGTH} characters.")
+    if any(
+        (unicodedata.category(ch) in {"Cc", "Cs", "Co"} and ch not in "\n\r\t") for ch in reason
+    ):
+        raise ValidationDomainError("reason must not contain control or private-use characters.")
+    return reason
 
 
 def _chunks(ids: list[str]):
@@ -213,6 +229,7 @@ class TakedownResult:
     purged: dict[str, int]
     remaining: dict[str, int]
     already_taken_down: bool
+    case_id: str
 
     @property
     def verified(self) -> bool:
@@ -354,7 +371,7 @@ def _audit_tenants(
     tenants: dict[_TenantKey, dict],
     *,
     takedown: SourceTakedown,
-    reference: str | None,
+    case_id: str,
     actor_user_id: str | None,
     repeat: bool,
 ) -> int:
@@ -376,7 +393,7 @@ def _audit_tenants(
             new_state=removed,
             context={
                 "source_key": takedown.source_key,
-                "reference": reference,
+                "case_id": case_id,
                 "repeat": repeat,
                 "opportunities_deleted": tenant["deleted_ids"][:_AUDIT_MAX_IDS],
                 "opportunities_redacted": tenant["redacted_ids"][:_AUDIT_MAX_IDS],
@@ -390,17 +407,21 @@ def takedown_source(
     db: Session,
     *,
     source_key: str,
-    reference: str,
+    reason: str,
+    external_reference: str | None = None,
     actor_user_id: str | None,
 ) -> TakedownResult:
     """Take ``source_key`` down (or repeat a takedown) on behalf of ``actor_user_id``.
 
-    ``reference`` and ``actor_user_id`` go into the affected workspaces' audit entries
-    only; the :class:`SourceTakedown` row records neither.
+    ``reason`` and ``external_reference`` go into a new :class:`SourceTakedownCase`
+    (the restricted operator record) and nowhere else. The affected workspaces' audit
+    entries carry ``actor_user_id``, the fixed explanation and the case's opaque id; the
+    :class:`SourceTakedown` row records none of them.
     """
     if not SOURCE_KEY_PATTERN.match(source_key):
         raise ValidationDomainError("source_key must be a lowercase slug.")
-    reference = validate_reference(reference)
+    reason = validate_reason(reason)
+    external_reference = validate_external_reference(external_reference)
     lock_sources(db, [source_key], exclusive=True)  # waits for runs writing this source
     existing = db.scalar(select(SourceTakedown).where(SourceTakedown.source_key == source_key))
     known = existing is not None or any(s.source_key == source_key for s in known_sources())
@@ -414,13 +435,22 @@ def takedown_source(
         takedown = SourceTakedown(source_key=source_key)
         db.add(takedown)
         db.flush()
+    case = SourceTakedownCase(
+        takedown_id=takedown.id,
+        source_key=source_key,
+        reason=reason,
+        external_reference=external_reference,
+        actor_user_id=actor_user_id,
+    )
+    db.add(case)
+    db.flush()
     purged, tenants = _purge(db, source_key)
     if existing is None:
         takedown.purge_summary = purged
     else:
         # The first purge's counts are the record of what the takedown removed; a
         # repeat is appended, never written over them. Counts and a time only: the
-        # actor and the reference are in the audit entries, never in this row (D-9d).
+        # actor is in the audit entries and the case record, never in this row (D-9d).
         takedown.repeat_purges = [
             *(takedown.repeat_purges or []),
             {"at": datetime.now(UTC).isoformat(), "purged": purged},
@@ -429,7 +459,7 @@ def takedown_source(
         db,
         tenants,
         takedown=takedown,
-        reference=reference,
+        case_id=case.id,
         actor_user_id=actor_user_id,
         repeat=existing is not None,
     )
@@ -442,6 +472,7 @@ def takedown_source(
             "extra_fields": {
                 "source_key": source_key,
                 "repeat": existing is not None,
+                "case_id": case.id,
                 "audited_workspaces": audited,
                 **{f"purged_{k}": v for k, v in purged.items()},
                 **{f"remaining_{k}": v for k, v in remaining.items()},
@@ -453,6 +484,7 @@ def takedown_source(
         purged=purged,
         remaining=remaining,
         already_taken_down=existing is not None,
+        case_id=case.id,
     )
 
 
