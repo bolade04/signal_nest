@@ -109,6 +109,8 @@ intelligence records, and feedback given on those records).
 | `jobs` | tenant scope ids, `payload` (entity ids only), `result_summary` (counts), `last_error_summary` (bounded, secret-free) | delete | `job_history` (terminal jobs, by `updated_at`) |
 | `job_events` | denormalised tenant ids (no foreign key to the organization), `event_metadata` (safe, bounded) | delete (dependent of `jobs`) | dependent of `jobs` |
 | `llm_usage_events` | **tenant-linked usage metadata** (the LLM usage ledger, `P6-LLM-4`; one row per provider attempt): `organization_id`, `workspace_id`, `scout_request_id` and `job_id` (set null when the request or job row goes), `task`, `provider`, `model`, `input_tokens`, `output_tokens`, `cost_usd`, `outcome`, timestamps; no prompt text, no content, no user id | delete (cascades with its workspace in the organization deletion walk) | none — **no time-based class: kept for the life of its workspace for usage accounting and reconciliation** (unpaid pilot; operator decision `D-9c`, 2026-10-27; to be revisited before paid launch) |
+| `llm_budget_periods` | **tenant-linked usage metadata** (the LLM budget ledger, `D-LLM-1` option B; one row per workspace and UTC calendar month): `workspace_id`, `period_start`, `organization_id`, `reserved_usd` (budget consumed: the sum of the calls' worst-case bounds), `settled_usd` (what finished calls were charged), `bound_violations` (a count of calls whose reported usage exceeded their bound), timestamps; money and counts only, no prompt text, no content, no user id | delete (cascades with its workspace and organization) | none: kept for the life of its workspace for usage accounting and reconciliation (`D-9c` pattern, ruled for these two tables 2026-10-27) |
+| `llm_budget_reservations` | **tenant-linked usage metadata** (one row per reserved provider call): `organization_id`, `workspace_id`, `period_start`, `job_id` (set null when the job row goes), `attempt_key` (job id, worker attempt, call ordinal), `reserved_usd` (the call's worst-case bound), `settled_usd`, `state` (reserved, settled, released or expired), `expires_at`, `settled_at`, `usage_recorded_at` (when the attempt's usage row was written), timestamps; money, keys, states and instants only | delete (cascades with its workspace and organization) | none: as `llm_budget_periods` (`D-9c` pattern, ruled for these two tables 2026-10-27) |
 | `worker_registrations` | worker identity, a non-reversible host fingerprint; **no personal or tenant data** | — | none (not a privacy data class) |
 | `source_takedowns` | **permanent suppression record** of a live source an operator took down (`P6-PRIV-4`): `source_key`, `taken_down_at`, `purge_summary` (counts), `repeat_purges` (`[{at, purged counts}]`); **no user id, free text or reference** (operator decision `D-9d`, 2026-10-27) — attribution (the acting operator), a fixed generic explanation and the opaque case id are in each affected workspace's `audit_logs` row (`data_source.taken_down`) under that table's retention; the private reason is in `source_takedown_cases` | — (platform-wide; no tenant key) | none — **permanent**: the row is the suppression itself (the source is never fetched again while it exists); anonymising or expiring the audit rows or the case records cannot re-enable the source |
 
@@ -121,6 +123,16 @@ usage is not attributed to an individual account. Its actual lifecycle is the on
 retention sweep touches it; its rows exist exactly as long as their workspace and go with the
 organization deletion walk. Its rows are exported completely, page by page, like every other
 exported table (see *Portability* below).
+
+`llm_budget_periods` and `llm_budget_reservations` (the budget ledger behind the hard
+ceiling on PostgreSQL, `app.llm.budget`) follow the `llm_usage_events` pattern: **included
+in the organization export** with every column listed above, scoped by `organization_id`
+through the same authorization and tenant filter (`D-9b` pattern); **not in the account
+export** (no user key, no supported relationship to an account); no retention sweep touches
+them, their rows exist exactly as long as their workspace and go with the organization
+deletion walk (`D-9c` pattern, ruled for these two tables on 2026-10-27). A settlement,
+release or sweep that arrives after the workspace or organization was deleted finds no row
+and creates none (it only logs and counts `llm_settlements_orphaned_total`).
 
 `alembic_version` holds only the schema revision.
 

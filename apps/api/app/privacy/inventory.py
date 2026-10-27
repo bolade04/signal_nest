@@ -156,6 +156,18 @@ TABLES: dict[str, TableEntry] = {
         # workspace for usage accounting and reconciliation during the unpaid pilot, deleted
         # with its workspace/organization, to be revisited before paid launch.
         TableEntry("llm_usage_events", Category.OPERATIONAL, exported=True),
+        # The LLM budget ledger (D-LLM-1 option B, ``app.llm.budget``): per workspace and
+        # UTC month the money reserved before provider calls and settled after them
+        # (``llm_budget_periods``), and one row per reserved call keyed by attempt
+        # (``llm_budget_reservations``). Money, keys, states and counts only - no prompt
+        # text, no content, no user id. Same class as the usage ledger: OPERATIONAL;
+        # included in the organization export with every column, scoped by
+        # ``organization_id`` (D-9b pattern); no time-based retention class - kept for the
+        # life of the workspace for usage accounting and reconciliation, deleted with its
+        # workspace/organization (D-9c pattern; ruled for these two tables by the
+        # coordinator on 2026-10-27T19:27Z).
+        TableEntry("llm_budget_periods", Category.OPERATIONAL, exported=True),
+        TableEntry("llm_budget_reservations", Category.OPERATIONAL, exported=True),
         TableEntry("worker_registrations", Category.SYSTEM, exported=False),
         # The permanent suppression record of a live source an operator took down
         # (P6-PRIV-4). Operator decision D-9d (2026-10-27): suppression key, time and
