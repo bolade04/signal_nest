@@ -41,6 +41,7 @@ from app.connectors.base import (
     FetchScope,
     SourceConnector,
 )
+from app.connectors.fetch_limits import SourceFetchReport
 from app.connectors.ratelimit import TokenBucket
 from app.connectors.retry import ConnectorFetchError, RetryPolicy, run_with_retry
 from app.connectors.sample_feeds import sample_feed_for_market
@@ -76,7 +77,10 @@ class RssNewsConnector(SourceConnector):
         rate_limiter: TokenBucket | None = None,
         retry_policy: RetryPolicy | None = None,
         now: Callable[[], datetime] | None = None,
+        source_key: str | None = None,
     ) -> None:
+        #: Stable, non-secret key this source is reported under in ``fetch_limits``.
+        self.source_key = source_key or self.name
         self._provider = feed_provider or sample_feed_for_market
         self._limiter = rate_limiter
         self._retry = retry_policy or RetryPolicy()
@@ -92,23 +96,43 @@ class RssNewsConnector(SourceConnector):
             data = self._fetch_bytes(scope.market)
         except ConnectorFetchError as exc:
             result.failures.append(exc.failure)
+            result.reports.append(self._report(scope, fetched=0, eligible=0, clipped=False))
             return result
 
+        # Look one entry past the fetch limit (never more): that single extra entry is
+        # what tells a clipped source from one that held exactly ``max_items``.
         try:
-            items = self._parse(data)
+            items = self._parse(data, max_entries=max(0, scope.max_items) + 1)
         except ConnectorFetchError as exc:
             result.failures.append(exc.failure)
+            result.reports.append(self._report(scope, fetched=0, eligible=0, clipped=False))
             return result
 
+        clipped = len(items) > scope.max_items
+        window = items[: scope.max_items]
         keywords = [k.lower() for k in scope.keywords]
-        for item in items[: scope.max_items]:
+        for item in window:
             signal = self._normalize(item, scope.market, result.retrieved_at)
             if keywords:
                 haystack = signal.content.lower()
                 if not any(k in haystack for k in keywords):
                     continue
             result.signals.append(signal)
+        result.reports.append(
+            self._report(scope, fetched=len(window), eligible=len(result.signals), clipped=clipped)
+        )
         return result
+
+    def _report(
+        self, scope: FetchScope, *, fetched: int, eligible: int, clipped: bool
+    ) -> SourceFetchReport:
+        return SourceFetchReport(
+            source_key=self.source_key,
+            max_items=scope.max_items,
+            fetched=fetched,
+            eligible_seen=eligible,
+            clipped_by_fetch_limit=clipped,
+        )
 
     # --- fetch + parse ---------------------------------------------------
 
@@ -120,7 +144,11 @@ class RssNewsConnector(SourceConnector):
 
         return run_with_retry(_once, policy=self._retry)
 
-    def _parse(self, data: bytes) -> list[dict]:
+    def _parse(self, data: bytes, *, max_entries: int | None = None) -> list[dict]:
+        """Parse ``data`` into at most ``max_entries`` item dicts (all when ``None``).
+
+        The XML itself is bounded by :data:`MAX_FEED_BYTES` before parsing; the entry
+        limit bounds the per-entry normalisation work on top of that."""
         _assert_safe_xml(data)
         try:
             root = DET.fromstring(
@@ -141,7 +169,9 @@ class RssNewsConnector(SourceConnector):
         source_title = (channel.findtext("title") or "").strip()
 
         items: list[dict] = []
-        for el in channel.findall("item"):
+        for el in channel.iterfind("item"):
+            if max_entries is not None and len(items) >= max_entries:
+                break
             items.append(
                 {
                     "title": (el.findtext("title") or "").strip(),

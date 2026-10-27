@@ -309,7 +309,20 @@ def test_refusal_is_recorded_and_isolated_per_workspace(factory, bound, connecto
         assert refused_job.last_error_summary == SIGNAL_VOLUME_ABOVE_BOUND
         assert refused_job.result_summary is None
         assert refused.status == ScoutRequestStatus.FAILED.value  # settled; runnable again
-        assert refused.stats == pipeline.refused_run_stats(scanned=bound + 1, bound=bound)
+        # The stub declares no fetch limit, so the refusal carries that fact (#268).
+        assert refused.stats == pipeline.refused_run_stats(
+            scanned=bound + 1,
+            bound=bound,
+            fetch_limits=[
+                {
+                    "source_key": "stub",
+                    "max_items": None,
+                    "clipped": False,
+                    "fetched": bound + 1,
+                    "eligible_seen": bound + 1,
+                }
+            ],
+        )
         assert _raw_count(s, refused_id) == refused_before  # no partial run written
 
         # --- The other workspace's run in the same loop was not affected.

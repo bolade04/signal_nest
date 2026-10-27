@@ -46,9 +46,12 @@ class SignalVolumeAboveBoundError(RuntimeError):
 
     reason = SIGNAL_VOLUME_ABOVE_BOUND
 
-    def __init__(self, *, scanned: int, bound: int) -> None:
+    def __init__(self, *, scanned: int, bound: int, fetch_limits: list[dict] | None = None) -> None:
         self.scanned = scanned
         self.bound = bound
+        #: Per-source fetch-limit facts of the refused run (``stats["fetch_limits"]``), so
+        #: the refusal shows what each source delivered. ``None`` when not recorded.
+        self.fetch_limits = fetch_limits
         super().__init__(
             f"{SIGNAL_VOLUME_ABOVE_BOUND}: {scanned} signals exceed the per-run "
             f"in-process bound of {bound}"

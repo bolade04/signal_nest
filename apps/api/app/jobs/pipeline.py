@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
+from app.connectors.fetch_limits import FETCH_LIMIT_REACHED, fetch_stats
 from app.core.config import get_settings
 from app.core.enums import (
     DecisionAction,
@@ -69,7 +70,7 @@ from app.scoring.opportunity import (
 from app.scoring.relevance import RELEVANCE_ACTION_FLOOR, score_relevance
 from app.scoring.types import SignalInput
 from app.scoring.validation import score_validation
-from app.scouting_requests.connectors import get_connector
+from app.scouting_requests.connectors import fetch_with_reports, get_connector
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import (
     NormalizedSignal,
@@ -83,14 +84,17 @@ logger = get_logger("signalnest.pipeline")
 DEDUPE_THRESHOLD = 0.92
 
 
-def refused_run_stats(*, scanned: int, bound: int) -> dict:
+def refused_run_stats(*, scanned: int, bound: int, fetch_limits: list[dict] | None = None) -> dict:
     """The ``ScoutRequest.stats`` of a run refused at the in-process bound (P6-PLAT-1 B).
 
     The four ordinary counts are present (nothing was analysed, so they are honest
     zeros apart from ``scanned``), plus the stable reason code and the bound the run
-    exceeded. Safe aggregates only - never content.
+    exceeded. When the per-source fetch-limit facts are known (``fetch_limits``), they are
+    carried too, with the ``partial_fetch`` marker: the fetch limit applies first (per
+    source), the bound second (per run, over the total). Safe aggregates only - never
+    content.
     """
-    return {
+    stats = {
         "scanned": scanned,
         "noise_filtered": 0,
         "signals_analyzed": 0,
@@ -99,6 +103,12 @@ def refused_run_stats(*, scanned: int, bound: int) -> dict:
         "refusal_reason": SIGNAL_VOLUME_ABOVE_BOUND,
         "bound": bound,
     }
+    if fetch_limits is not None:
+        stats["fetch_limits"] = fetch_limits
+        stats["partial_fetch"] = any(f.get("clipped") for f in fetch_limits)
+        if stats["partial_fetch"]:
+            stats["partial_fetch_reason"] = FETCH_LIMIT_REACHED
+    return stats
 
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
@@ -212,11 +222,16 @@ def _run(
         organization_id=request.organization_id,
         workspace_id=request.workspace_id,
     )
-    fixtures = connector.fetch(
+    # #268: the fetch limit applies first, per source, and each source reports against it
+    # (look-ahead of one entry); the bound below applies second, per run, to the total.
+    outcome = fetch_with_reports(
+        connector,
         market=market,
         keywords=request.keywords or ctx.keywords,
         source_types=request.source_types or [],
     )
+    fixtures = outcome.signals
+    fetch = fetch_stats(outcome.reports)
 
     scanned = len(fixtures)
     # P6-PLAT-1 (strategy B): the per-run in-process index is bounded. A run that
@@ -236,9 +251,11 @@ def _run(
                     "reason": exc.reason,
                     "scanned": exc.scanned,
                     "bound": exc.bound,
+                    "partial_fetch": fetch["partial_fetch"],
                 }
             },
         )
+        exc.fetch_limits = fetch["fetch_limits"]
         raise
     normalized: list[NormalizedSignal] = []
     # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
@@ -399,6 +416,7 @@ def _run(
         "noise_filtered": noise_filtered,
         "signals_analyzed": len(normalized),
         "opportunities": len(opportunities),
+        **fetch,
     }
     db.flush()
     logger.info(

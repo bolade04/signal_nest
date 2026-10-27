@@ -62,7 +62,9 @@ def _record_refused_run(
         ):
             return
         request.status = ScoutRequestStatus.FAILED.value
-        request.stats = refused_run_stats(scanned=exc.scanned, bound=exc.bound)
+        request.stats = refused_run_stats(
+            scanned=exc.scanned, bound=exc.bound, fetch_limits=exc.fetch_limits
+        )
         db.flush()
         log_event(
             logger,
