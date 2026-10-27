@@ -861,9 +861,32 @@ export interface paths {
         };
         /**
          * Export Organization
-         * @description Download every exported table of the organization (portability). Exactly OWNER.
+         * @description The organization export index (portability): the exact row count of every exported
+         *     table, its first page and the cursor of the next. Exactly OWNER.
          */
         get: operations["export_organization_api_v1_organizations__organization_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{organization_id}/export/{table}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Organization Table
+         * @description One keyset page of one exported table, in ``(created_at, id)`` order after ``cursor``.
+         *     Exactly OWNER. An unknown or not-exported table is 404; a cursor that is not valid for
+         *     the table is 422 ``invalid_cursor``; ``limit`` is 1..5000.
+         */
+        get: operations["export_organization_table_api_v1_organizations__organization_id__export__table__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2758,16 +2781,20 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
-        /** ExportedTableOut */
+        /**
+         * ExportedTableOut
+         * @description One table in the export index: its exact row count, the first page and the cursor of
+         *     the next one (None when the first page holds every row).
+         */
         ExportedTableOut: {
+            /** Next Cursor */
+            next_cursor: string | null;
             /** Row Count */
             row_count: number;
             /** Rows */
             rows: {
                 [key: string]: unknown;
             }[];
-            /** Truncated */
-            truncated: boolean;
         };
         /**
          * FeatureFlagsOut
@@ -3929,9 +3956,14 @@ export interface components {
         };
         /**
          * OrganizationExportOut
-         * @description Every exported table of the organization (schema version 1).
+         * @description The organization export index (schema version 2): per table the exact ``row_count``,
+         *     the first page and ``next_cursor``; follow the cursors with the table-page route.
          */
         OrganizationExportOut: {
+            /** Complete */
+            complete: boolean;
+            /** Consistency */
+            consistency: string;
             /** Generated At */
             generated_at: string;
             /** Members */
@@ -3940,8 +3972,10 @@ export interface components {
             }[];
             /** Not Exported */
             not_exported: string[];
-            /** Row Cap Per Table */
-            row_cap_per_table: number;
+            /** Page Size Cap */
+            page_size_cap: number;
+            /** Page Size Default */
+            page_size_default: number;
             /** Schema Version */
             schema_version: number;
             subject: components["schemas"]["ExportSubjectOut"];
@@ -3949,6 +3983,27 @@ export interface components {
             tables: {
                 [key: string]: components["schemas"]["ExportedTableOut"];
             };
+        };
+        /**
+         * OrganizationExportPageOut
+         * @description One keyset page of one exported table, after the cursor it was asked for.
+         */
+        OrganizationExportPageOut: {
+            /** Generated At */
+            generated_at: string;
+            /** Limit */
+            limit: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Rows */
+            rows: {
+                [key: string]: unknown;
+            }[];
+            /** Schema Version */
+            schema_version: number;
+            subject: components["schemas"]["ExportSubjectOut"];
+            /** Table */
+            table: string;
         };
         /**
          * OrganizationMemberOut
@@ -5920,6 +5975,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrganizationExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_organization_table_api_v1_organizations__organization_id__export__table__get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                table: string;
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationExportPageOut"];
                 };
             };
             /** @description Validation Error */

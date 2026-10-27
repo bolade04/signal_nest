@@ -1963,7 +1963,19 @@
         "type": "object"
       },
       "ExportedTableOut": {
+        "description": "One table in the export index: its exact row count, the first page and the cursor of\nthe next one (None when the first page holds every row).",
         "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
           "row_count": {
             "title": "Row Count",
             "type": "integer"
@@ -1975,16 +1987,12 @@
             },
             "title": "Rows",
             "type": "array"
-          },
-          "truncated": {
-            "title": "Truncated",
-            "type": "boolean"
           }
         },
         "required": [
-          "rows",
           "row_count",
-          "truncated"
+          "rows",
+          "next_cursor"
         ],
         "title": "ExportedTableOut",
         "type": "object"
@@ -5289,8 +5297,16 @@
         "type": "object"
       },
       "OrganizationExportOut": {
-        "description": "Every exported table of the organization (schema version 1).",
+        "description": "The organization export index (schema version 2): per table the exact ``row_count``,\nthe first page and ``next_cursor``; follow the cursors with the table-page route.",
         "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "consistency": {
+            "title": "Consistency",
+            "type": "string"
+          },
           "generated_at": {
             "title": "Generated At",
             "type": "string"
@@ -5310,8 +5326,12 @@
             "title": "Not Exported",
             "type": "array"
           },
-          "row_cap_per_table": {
-            "title": "Row Cap Per Table",
+          "page_size_cap": {
+            "title": "Page Size Cap",
+            "type": "integer"
+          },
+          "page_size_default": {
+            "title": "Page Size Default",
             "type": "integer"
           },
           "schema_version": {
@@ -5333,12 +5353,69 @@
           "schema_version",
           "generated_at",
           "subject",
-          "row_cap_per_table",
+          "page_size_default",
+          "page_size_cap",
+          "complete",
+          "consistency",
           "members",
           "tables",
           "not_exported"
         ],
         "title": "OrganizationExportOut",
+        "type": "object"
+      },
+      "OrganizationExportPageOut": {
+        "description": "One keyset page of one exported table, after the cursor it was asked for.",
+        "properties": {
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/ExportSubjectOut"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "generated_at",
+          "subject",
+          "table",
+          "limit",
+          "rows",
+          "next_cursor"
+        ],
+        "title": "OrganizationExportPageOut",
         "type": "object"
       },
       "OrganizationMemberOut": {
@@ -9366,7 +9443,7 @@
     },
     "/api/v1/organizations/{organization_id}/export": {
       "get": {
-        "description": "Download every exported table of the organization (portability). Exactly OWNER.",
+        "description": "The organization export index (portability): the exact row count of every exported\ntable, its first page and the cursor of the next. Exactly OWNER.",
         "operationId": "export_organization_api_v1_organizations__organization_id__export_get",
         "parameters": [
           {
@@ -9418,6 +9495,103 @@
           }
         },
         "summary": "Export Organization",
+        "tags": [
+          "privacy"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/export/{table}": {
+      "get": {
+        "description": "One keyset page of one exported table, in ``(created_at, id)`` order after ``cursor``.\nExactly OWNER. An unknown or not-exported table is 404; a cursor that is not valid for\nthe table is 422 ``invalid_cursor``; ``limit`` is 1..5000.",
+        "operationId": "export_organization_table_api_v1_organizations__organization_id__export__table__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationExportPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Organization Table",
         "tags": [
           "privacy"
         ]
