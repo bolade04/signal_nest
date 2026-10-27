@@ -243,6 +243,11 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert refused.returncode != 0
     assert "confirm" in (refused.stdout + refused.stderr)
     assert _version(pg_url) == [HEAD] and "source_takedowns" in _tables(pg_url)
+    # D-9d: the suppression record carries no actor, reason or reference column.
+    assert _columns(pg_url, "source_takedowns") == {
+        "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
+        "created_at", "updated_at",
+    }
     assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
 

@@ -6,6 +6,11 @@ for it right now. ``POST …/{source_key}/takedown`` disables a source permanent
 purges its signals in every tenant (:mod:`app.connectors.takedown`), answering with
 both what was purged and what remains, recounted after the purge.
 
+The takedown record itself holds only the source key, the time and counts (D-9d). The
+reason for a takedown is kept in the referenced request record, not in the product;
+the product keeps attribution (the acting operator) and the public ``reference`` in
+each affected workspace's audit log.
+
 Both routes require an authenticated operator (``require_operator``) and are
 platform-wide: a source is not a tenant resource.
 """
@@ -15,14 +20,21 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_operator
 from app.connectors.models import SourceTakedown
-from app.connectors.takedown import known_sources, source_signal_counts, takedown_source
+from app.connectors.takedown import (
+    REFERENCE_MAX_LENGTH,
+    known_sources,
+    source_signal_counts,
+    takedown_source,
+    validate_reference,
+)
 from app.core.config import get_settings
+from app.core.errors import ValidationDomainError
 from app.db.clock import as_utc
 from app.db.session import get_db
 from app.organizations.models import User
@@ -31,17 +43,17 @@ router = APIRouter(prefix="/internal/system/data-sources", tags=["internal"])
 
 
 class TakedownRepeatOut(BaseModel):
+    """One repeated takedown: when, and the counts it removed. Nothing identifying."""
+
     at: datetime
-    reason: str
-    reference: str | None
-    actor_user_id: str | None
     purged: dict[str, int]
 
 
 class TakedownOut(BaseModel):
+    """The permanent suppression record: key time and counts only (D-9d). Who took the
+    source down and the public reference are in each affected workspace's audit log."""
+
     taken_down_at: datetime
-    reason: str
-    reference: str | None
     #: What the first takedown removed; never overwritten by a repeat.
     purge_summary: dict[str, int]
     #: Each repeated takedown, oldest first.
@@ -77,8 +89,27 @@ class DataSourcesOut(BaseModel):
 
 
 class TakedownIn(BaseModel):
-    reason: str = Field(min_length=1, max_length=500)
-    reference: str | None = Field(default=None, max_length=200)
+    """A takedown request: the public id of the request record it answers, nothing else.
+
+    There is deliberately no free-text field. The reason for a takedown is kept in the
+    referenced request record, not in the product; a tenant reads its own audit log, so
+    no operator text may reach it (adversarial r2-MINOR-2; D-9e interim).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Public ticket / request id (1–200 printable characters, one line, no ``@``: never
+    #: an address or a URL with credentials). Copied into every affected workspace's
+    #: audit entry.
+    reference: str = Field(min_length=1, max_length=REFERENCE_MAX_LENGTH)
+
+    @field_validator("reference")
+    @classmethod
+    def _public_reference(cls, value: str) -> str:
+        try:
+            return validate_reference(value)
+        except ValidationDomainError as exc:
+            raise ValueError(str(exc)) from None
 
 
 class TakedownResultOut(BaseModel):
@@ -96,8 +127,6 @@ def _takedown_out(row: SourceTakedown | None) -> TakedownOut | None:
         return None
     return TakedownOut(
         taken_down_at=as_utc(row.taken_down_at),
-        reason=row.reason,
-        reference=row.reference,
         purge_summary=dict(row.purge_summary or {}),
         repeat_purges=[TakedownRepeatOut(**entry) for entry in (row.repeat_purges or [])],
     )
@@ -157,10 +186,16 @@ def take_down_data_source(
     user: User = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> TakedownResultOut:
+    """Take a live source down permanently and purge its signals in every tenant.
+
+    The reason for a takedown is kept in the referenced request record, not in the
+    product; the product keeps attribution and the public reference in each affected
+    workspace's audit log. The suppression record itself holds only the source key, the
+    time and counts.
+    """
     result = takedown_source(
         db,
         source_key=source_key,
-        reason=body.reason,
         reference=body.reference,
         actor_user_id=user.id,
     )

@@ -5,13 +5,19 @@ transaction it:
 
 1. records a :class:`~app.connectors.models.SourceTakedown` for the source key — from
    then on :mod:`app.connectors.live` never fetches that key, whatever its registry
-   record says;
+   record says. The record is the suppression itself and nothing more (D-9d): the key,
+   the time and aggregate counts. It never holds a user id, free text or a reference,
+   so nothing that is later anonymised or expired can re-enable the source;
 2. purges every signal the source produced, in **every** tenant: raw and normalized
    signals, their location evidence and intelligence records;
 3. deletes each opportunity built only from that source's signals (with its scores,
    validation evidence and the customers' feedback on it) and, for an opportunity that
    also cites other sources, removes the source's entries from its observed evidence;
-4. writes one audit entry in every affected workspace, naming what was removed there;
+4. writes one audit entry in every affected workspace, naming what was removed there,
+   who did it (``actor_user_id``) and the public ``reference`` of the request it
+   answers. That audit row — under the audit log's own retention — is where
+   attribution lives. The *reason* for a takedown is kept in the referenced request
+   record outside the product: the request carries no free text (D-9e interim);
 5. drops the source's feed bytes from this process's cache (a worker process drops
    them at its next scout run).
 
@@ -19,7 +25,8 @@ The result is **verifiable**: the remaining counts are recounted from the databa
 after the purge, not derived from what was deleted, and :func:`source_signal_counts`
 answers the same question at any later time. A takedown is permanent for its key and
 idempotent — repeating it re-runs the purge and reports the same zero remainder; the
-first purge's counts are kept and each repeat is appended to the record's history.
+first purge's counts are kept and each repeat appends ``{at, purged}`` (counts only)
+to the record's history.
 
 **Runs in flight.** A scout run reads takedowns when it starts, then fetches. Before it
 writes any live signal it takes each source's lock and re-reads the takedowns
@@ -68,6 +75,37 @@ _AUDIT_REASON = (
 )
 #: Most opportunity ids one audit entry lists per kind (the counts are always exact).
 _AUDIT_MAX_IDS = 500
+#: Longest accepted ``reference`` (a public ticket / request id).
+REFERENCE_MAX_LENGTH = 200
+
+
+def validate_reference(value: str) -> str:
+    """The public request id a takedown points to, or :class:`ValidationDomainError`.
+
+    1–200 characters on one line, never containing ``@`` — so it can be neither an
+    e-mail address nor a URL carrying credentials. It is copied into every affected
+    workspace's audit entry, where tenants can read it; the reason for the takedown
+    stays in the request record it names, outside the product.
+    """
+    reference = (value or "").strip()
+    if not reference:
+        raise ValidationDomainError(
+            "A takedown reference (the public ticket / request id) is required."
+        )
+    if len(reference) > REFERENCE_MAX_LENGTH:
+        raise ValidationDomainError(
+            f"reference must be at most {REFERENCE_MAX_LENGTH} characters."
+        )
+    if "@" in reference:
+        raise ValidationDomainError(
+            "reference must be a public ticket / request id: no '@' (no addresses, no "
+            "URL credentials)."
+        )
+    if any(ch.isspace() and ch != " " for ch in reference) or any(
+        ord(ch) < 32 or ord(ch) == 127 for ch in reference
+    ):
+        raise ValidationDomainError("reference must be a single line of printable text.")
+    return reference
 
 
 def _chunks(ids: list[str]):
@@ -341,16 +379,17 @@ def takedown_source(
     db: Session,
     *,
     source_key: str,
-    reason: str,
-    reference: str | None,
+    reference: str,
     actor_user_id: str | None,
 ) -> TakedownResult:
+    """Take ``source_key`` down (or repeat a takedown) on behalf of ``actor_user_id``.
+
+    ``reference`` and ``actor_user_id`` go into the affected workspaces' audit entries
+    only; the :class:`SourceTakedown` row records neither.
+    """
     if not SOURCE_KEY_PATTERN.match(source_key):
         raise ValidationDomainError("source_key must be a lowercase slug.")
-    reason = reason.strip()
-    if not reason:
-        raise ValidationDomainError("A takedown reason is required.")
-    reference = (reference or "").strip() or None
+    reference = validate_reference(reference)
     lock_sources(db, [source_key], exclusive=True)  # waits for runs writing this source
     existing = db.scalar(select(SourceTakedown).where(SourceTakedown.source_key == source_key))
     known = existing is not None or any(s.source_key == source_key for s in known_sources())
@@ -361,12 +400,7 @@ def takedown_source(
 
     takedown = existing
     if takedown is None:
-        takedown = SourceTakedown(
-            source_key=source_key,
-            reason=reason,
-            reference=reference,
-            actor_user_id=actor_user_id,
-        )
+        takedown = SourceTakedown(source_key=source_key)
         db.add(takedown)
         db.flush()
     purged, tenants = _purge(db, source_key)
@@ -374,16 +408,11 @@ def takedown_source(
         takedown.purge_summary = purged
     else:
         # The first purge's counts are the record of what the takedown removed; a
-        # repeat is appended, never written over them.
+        # repeat is appended, never written over them. Counts and a time only: the
+        # actor and the reference are in the audit entries, never in this row (D-9d).
         takedown.repeat_purges = [
             *(takedown.repeat_purges or []),
-            {
-                "at": datetime.now(UTC).isoformat(),
-                "reason": reason,
-                "reference": reference,
-                "actor_user_id": actor_user_id,
-                "purged": purged,
-            },
+            {"at": datetime.now(UTC).isoformat(), "purged": purged},
         ]
     audited = _audit_tenants(
         db,

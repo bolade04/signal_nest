@@ -24,11 +24,17 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
+from app.audit.models import AuditLog
 from app.brands.models import Brand
 from app.connectors.feedcache import feed_cache
 from app.connectors.models import SourceTakedown
 from app.connectors.replay import ReplayServer
-from app.connectors.takedown import lock_sources, source_signal_counts, takedown_source
+from app.connectors.takedown import (
+    AUDIT_ACTION,
+    lock_sources,
+    source_signal_counts,
+    takedown_source,
+)
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.jobs.pipeline import _run
@@ -132,10 +138,7 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
     assert only_taken and mixed
 
     with pg_factory() as s:
-        result = takedown_source(
-            s, source_key=TAKEN, reason="Publisher request", reference="TKD-PG",
-            actor_user_id=None,
-        )
+        result = takedown_source(s, source_key=TAKEN, reference="TKD-PG", actor_user_id=None)
         s.commit()
     assert result.verified
     zero = {"raw_signals": 0, "normalized_signals": 0, "opportunities_citing": 0}
@@ -156,15 +159,27 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
         assert not (only_taken & set(remaining))
         for oid in mixed:
             assert all(e.get("source_key") != TAKEN for e in remaining[oid].observed_evidence)
-        assert s.scalar(select(SourceTakedown.reference)) == "TKD-PG"
+        # D-9d: the row holds key, time and counts only; the public reference is in the
+        # affected workspaces' audit entries.
+        [row] = s.scalars(select(SourceTakedown)).all()
+        assert row.purge_summary == result.purged and row.repeat_purges == []
+        assert {c.name for c in SourceTakedown.__table__.columns} == {
+            "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
+            "created_at", "updated_at",
+        }
+        entries = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
+        assert {e.organization_id for e in entries} == orgs
+        assert {e.context["reference"] for e in entries} == {"TKD-PG"}
 
     with pg_factory() as s:  # idempotent repeat
-        again = takedown_source(
-            s, source_key=TAKEN, reason="again", reference=None, actor_user_id=None
-        )
+        again = takedown_source(s, source_key=TAKEN, reference="TKD-PG-2", actor_user_id=None)
         s.commit()
     assert again.already_taken_down and again.verified
     assert all(v == 0 for v in again.purged.values())
+    with pg_factory() as s:
+        [row] = s.scalars(select(SourceTakedown)).all()
+        assert [set(r) for r in row.repeat_purges] == [{"at", "purged"}]
+        assert row.repeat_purges[0]["purged"] == again.purged
 
 
 def _lock_timeout(session) -> None:

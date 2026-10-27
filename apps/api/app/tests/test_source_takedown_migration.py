@@ -25,6 +25,11 @@ from sqlalchemy.orm import sessionmaker
 API_DIR = Path(__file__).resolve().parents[2]
 REVISION = "da25533622b2"
 KEY = "metro-business"
+#: The persistent suppression record (D-9d): key, time, counts, row bookkeeping.
+MINIMAL_COLUMNS = {
+    "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
+    "created_at", "updated_at",
+}
 
 
 def _previous_revision() -> str:
@@ -137,6 +142,12 @@ def test_a_round_trip_restores_source_keys_so_a_takedown_still_reaches_them(tmp_
     try:
         raw = dict(con.execute("SELECT id, source_key FROM raw_signals"))
         norm = dict(con.execute("SELECT id, source_key FROM normalized_signals"))
+        # D-9d: the migrated table is the suppression record only — no actor, reason or
+        # reference column, hence no foreign key to users and no actor index.
+        assert _columns(con, "source_takedowns") == MINIMAL_COLUMNS
+        assert list(con.execute("PRAGMA foreign_key_list(source_takedowns)")) == []
+        indexes = [r[1] for r in con.execute("PRAGMA index_list(source_takedowns)")]
+        assert not any("actor" in name for name in indexes), indexes
     finally:
         con.close()
     assert raw == {"raw-live": KEY, "raw-fixture": None, "raw-bad-key": None}
@@ -148,13 +159,14 @@ def test_a_round_trip_restores_source_keys_so_a_takedown_still_reaches_them(tmp_
     try:
         with sessionmaker(bind=engine)() as db:
             result = takedown_source(
-                db, source_key=KEY, reason="Publisher request", reference=None,
-                actor_user_id=None,
+                db, source_key=KEY, reference="TKD-RT", actor_user_id=None,
             )
             db.commit()
             assert result.purged["raw_signals"] == 1
             assert result.purged["normalized_signals"] == 1
             assert result.verified and source_signal_counts(db, KEY)["raw_signals"] == 0
+            assert result.takedown.purge_summary == result.purged
+            assert result.takedown.repeat_purges == []
     finally:
         engine.dispose()
     con = sqlite3.connect(db_path)

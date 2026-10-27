@@ -103,18 +103,29 @@ simulated path or `not_covered` (the replay seed sets it for its own process).
   `not_covered`.
 * **Take one source down** (operator token):
   `POST /api/v1/internal/system/data-sources/{source_key}/takedown`
-  with `{"reason": "...", "reference": "<public ticket id>"}`. In one transaction it records
+  with `{"reference": "<public ticket / request id>"}` — required, 1–200 printable
+  characters on one line, no `@` (never an address or a URL with credentials). **There is
+  no free-text field.** The reason for a takedown is kept in the referenced request record,
+  not in the product; the product keeps attribution (the acting operator) and the public
+  reference in each affected workspace's audit log. In one transaction the call records
   the takedown (the key is never fetched again), purges the source's raw and normalized
   signals, their location evidence and intelligence records **in every tenant**, deletes
   every opportunity built only from that source **together with the customers' feedback on
   it** (and its scores and validation evidence), removes the source's entries from mixed
   opportunities' evidence, and writes **one audit entry in each affected workspace**
-  (`data_source.taken_down`: the counts removed there, the ids of the opportunities deleted
-  or redacted, the source key and the public reference — not the operator's free-text
-  reason). The answer carries `purged` counts and `remaining` counts **recounted from the
-  database**, and `verified: true` only when every remaining count is zero. Repeating it is
-  safe and re-runs the purge; the first purge's counts stay on the record
-  (`purge_summary`) and each repeat is appended to `repeat_purges`.
+  (`data_source.taken_down`, actor = the operator: the counts removed there, the ids of
+  the opportunities deleted or redacted, the source key and the public reference). The
+  answer carries `purged` counts and `remaining` counts **recounted from the database**,
+  and `verified: true` only when every remaining count is zero. Repeating it is safe and
+  re-runs the purge; the first purge's counts stay on the record (`purge_summary`) and
+  each repeat appends `{at, purged}` to `repeat_purges`.
+* **What the takedown record holds (D-9d):** `source_takedowns` is a permanent suppression
+  record and nothing more — the source key, the time it was taken down, and aggregate
+  counts (`purge_summary`, `repeat_purges[*].{at, purged}`). It never holds a user id, free
+  text or a reference, so it is not personal data and no erasure, anonymisation or expiry
+  of the audit log (which carries the attribution under its own retention) can re-enable
+  fetching the source. Attribution and the public reference are read from the affected
+  workspaces' audit entries while those exist.
 * **Cached feed bytes:** the API process that performs the takedown drops the source's
   cached bytes at once; each worker process drops them at its next scout run, before it
   fetches anything. Until then they may sit unused in a worker's memory — no run reads a
