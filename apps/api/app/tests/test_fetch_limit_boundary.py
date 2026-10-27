@@ -19,7 +19,7 @@ Replay feeds only: no network, no approved source.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors import rss as rss_mod
@@ -48,6 +48,7 @@ from app.jobs.context import ExecutionContext
 from app.main import app  # noqa: F401
 from app.scouting_requests.connectors import FixtureConnector, fetch_with_reports
 from app.scouting_requests.models import ScoutRequest
+from app.signals.models import RawSignal
 from app.tests._seed_support import clear_seeded_runs
 
 _LIMIT = 100
@@ -488,3 +489,58 @@ def test_partial_fetch_facts_never_collapse_the_two_reasons():
         SOURCE_FAILED,
         FETCH_LIMIT_REACHED,
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Review r3 MINOR-3: the bound and `scanned` count eligible signals, not fetched entries
+# --------------------------------------------------------------------------- #
+def _mixed(count: int, matching: int, tag: str) -> RssNewsConnector:
+    """``count`` entries of which the first ``matching`` carry the keyword."""
+    items = "".join(
+        f"<item><title>{'coffee' if i < matching else 'tea'} {tag} {i}</title>"
+        f"<link>https://replay.invalid/{tag}/{i}</link>"
+        f"<description>{tag}{i} u{tag}{i}</description>"
+        "<pubDate>Mon, 07 Jul 2025 09:00:00 +0000</pubDate></item>"
+        for i in range(count)
+    )
+    data = (
+        f'<?xml version="1.0"?><rss version="2.0"><channel><title>{tag}</title>'
+        f"{items}</channel></rss>"
+    ).encode()
+    return RssNewsConnector(feed_provider=lambda _m: data, source_key=f"replay:{tag}")
+
+
+def test_bound_and_scanned_count_eligible_signals_not_fetched_entries(factory, bound, monkeypatch):
+    # 60 + 60 entries are fetched (120 > N_max) but only 30 + 30 match the keyword: the
+    # 60 signals that would be indexed fit the bound, so the run completes (R5, R8).
+    _use(monkeypatch, MultiSourceConnector([_mixed(60, 30, "a"), _mixed(60, 30, "b")]))
+    with factory() as s:
+        before = s.scalar(
+            select(func.count())
+            .select_from(RawSignal)
+            .where(RawSignal.scout_request_id == _request_id())
+        )
+        result = pipeline._run(s, _request_id())
+        stats = dict(s.get(ScoutRequest, _request_id()).stats)
+        rows = (
+            s.scalar(
+                select(func.count())
+                .select_from(RawSignal)
+                .where(RawSignal.scout_request_id == _request_id())
+            )
+            - before
+        )
+        s.rollback()
+    assert "refused" not in stats
+    assert result["scanned"] == stats["scanned"] == rows == 60
+    assert [(f["fetched"], f["eligible_seen"]) for f in stats["fetch_limits"]] == [(60, 30)] * 2
+
+
+def test_refusal_with_one_clipped_source_is_marked_partial(factory, bound, monkeypatch):
+    # 1 + 150: only the second source is clipped; the refusal is still partial (R7).
+    _exc, stats = _refuse(
+        factory, MultiSourceConnector([_source(1, "a"), _source(150, "b")]), monkeypatch
+    )
+    assert [f["clipped"] for f in stats["fetch_limits"]] == [False, True]
+    assert stats["partial_fetch"] is True
+    assert stats["partial_fetch_reasons"] == [FETCH_LIMIT_REACHED]
