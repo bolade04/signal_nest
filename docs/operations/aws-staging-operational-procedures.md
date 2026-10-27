@@ -333,6 +333,33 @@ provider console monthly, and expect the ledger to read at or above the invoice
 for metered calls, never below. The E6 probe and any call made outside
 `app.llm.service` are not in the ledger.
 
+Residual limitations of the ledger — the complete list (each is also stated
+where it lives in the code, `app.llm.metering` and `app.llm.budget`):
+1. provider-side billing may differ from the price table; the ledger is a
+   ceiling on reserved worst-case cost, not an invoice (reconcile monthly);
+2. calls outside the metered service (the E6 probe, anything not through
+   `app.llm.service`) are not in the ledger;
+3. a budget lowered mid-month below the amount already reserved is not
+   retroactive: nothing is un-reserved, further reservations are refused;
+4. SQLite keeps the per-session behaviour (two runs bound before either
+   commits can together exceed the budget); the hard ceiling is PostgreSQL-only;
+5. the worst case assumes about 3 characters per input token: a reply whose
+   actual usage exceeds its estimate is settled at the actual, which raises
+   `reserved_usd` above the budget after the fact (then every reservation is
+   refused until the month rolls over, as above);
+6. a transport failure after the request body was sent is charged 0 (the
+   provider may have processed it; D-LLM-3 territory);
+7. if the reservation cannot be written (database unavailable) the attempt
+   raises before any call: the job fails as transient and the worker retries
+   it; the run's outputs are not marked `budget_limited`;
+8. the recovery sweep runs on every worker poll (two indexed queries per
+   poll, `app.jobs.worker.JobRunner.poll_once`);
+9. an undecodable reply and a reply with no usage block are charged the worst
+   case as a conservative basis pending D-LLM-3, not an accepted rule;
+10. a reservation that recovery released before its own process settled it is
+    charged its worst case; the late settlement still records the call's actual
+    usage (usage row, WARNING, metric) but the budget keeps the worst case.
+
 Nothing here provisions, populates or rotates a key, and nothing here is an
 approved quota or spending authority: the configured LLM budget and call-cap
 values are engineering defaults (D-LLM-5 is undecided); the ledger makes the
