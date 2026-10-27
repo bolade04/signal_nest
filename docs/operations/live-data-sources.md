@@ -14,7 +14,11 @@ change that adds the source record. Nothing in this document is that decision.
 1. **Live feeds** — every record in `APPROVED_SOURCES` that is enabled, `legal_status =
    approved`, carries an approval reference and date, serves the run's market **exactly**
    (case/spacing-insensitive equality, never a substring) and has not been taken down — but
-   only while `CONNECTOR_RSS_LIVE_ENABLED=true` and `CONNECTOR_RSS_KILL_SWITCH=false`.
+   only while `CONNECTOR_RSS_LIVE_ENABLED=true` and `CONNECTOR_RSS_KILL_SWITCH=false`, **and**
+   only for a workspace whose RSS capability the capability resolver admits (P6-CAP-1:
+   `CONNECTOR_RSS_ENABLED=true` globally and no workspace RSS disable override; a workspace
+   override can only turn live feeds off, never on). Any `no` is fail-closed: the run falls
+   through to the simulated paths or reports `not_covered`.
 2. **Sandbox RSS** (simulated) — when `CONNECTOR_RSS_ENABLED=true` and its policy admit it.
 3. **Demo fixture library** (simulated) — the four demo markets, unless
    `CONNECTOR_FIXTURE_FALLBACK_ENABLED=false`.
@@ -85,9 +89,12 @@ Add a `SourceRecord` to `APPROVED_SOURCES` in a reviewed pull request:
 | `enabled` | `True` only when everything above is recorded |
 
 Never put a person's name or address in a record: this repository is public. Then set
-`CONNECTOR_EGRESS_CONTACT_URL` and `CONNECTOR_RSS_LIVE_ENABLED=true` in the target
-environment (an operator act; staging egress also needs the window and network path that
-`docs/operations/staging-window.md` governs).
+`CONNECTOR_EGRESS_CONTACT_URL`, `CONNECTOR_RSS_LIVE_ENABLED=true` **and**
+`CONNECTOR_RSS_ENABLED=true` in the target environment (an operator act; staging egress also
+needs the window and network path that `docs/operations/staging-window.md` governs). The
+last flag is the capability resolver's global RSS decision: without it, or with a workspace
+RSS disable override in place, that workspace's runs get no live feeds and report the
+simulated path or `not_covered` (the replay seed sets it for its own process).
 
 ## 4. Stop, take down, verify
 

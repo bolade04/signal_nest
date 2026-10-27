@@ -4,10 +4,13 @@
 live feeds?". In order, any ``no`` ends the decision and the run falls back to the
 simulated paths (or reports ``not_covered``):
 
-1. ``connector_rss_kill_switch`` is off;
-2. ``connector_rss_live_enabled`` is on;
-3. the request's source types admit ``rss_news`` (an empty list admits every type);
-4. at least one record in the source registry is activatable (enabled, terms
+1. the capability resolver admits RSS for the request's workspace (P6-CAP-1:
+   ``connector_rss_enabled`` on globally and no workspace disable override; passed in
+   as ``rss_enabled``, which has no default, and checked before any target is computed);
+2. ``connector_rss_kill_switch`` is off;
+3. ``connector_rss_live_enabled`` is on;
+4. the request's source types admit ``rss_news`` (an empty list admits every type);
+5. at least one record in the source registry is activatable (enabled, terms
    approved, dated approval reference), serves the request's market **exactly**, and
    has not been taken down by an operator.
 
