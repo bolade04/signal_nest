@@ -13,9 +13,10 @@ provider, and the bound is only as true as they are):
   merge only ever joins tokens. Source: the byte-level BPE construction (Sennrich et al.
   2016; GPT-2 byte-level variant, Radford et al. 2019); OpenAI's tokenizers are public
   (``tiktoken``, ``cl100k_base``/``o200k_base``). **Anthropic's tokenizer is not
-  public**: for ``claude-*`` models F1 is the operator-ruled conservative premise
-  (coordinator ruling 2026-10-27T19:27Z: "tokens <= UTF-8 byte count of every text
-  component, plus the per-message/request overhead constant"), not a documented fact.
+  public**: for ``claude-*`` models F1 is a
+  coordinator engineering premise (lane brief 2026-10-27), not a provider document
+  and not an operator ruling; open for the operator to accept or to replace with a
+  provider-sourced figure.
   A model whose family is not in :data:`SUPPORTED_MODEL_FAMILIES` is unsupported and
   fails closed.
 * **F2 - overheads are constants.** Neither provider documents a per-message or
@@ -182,8 +183,10 @@ def worst_case_cost(
     controls, content blocks, unknown parameters); a ``model`` field that differs from
     the priced ``model``; a missing or non-positive output limit.
 
-    Conservative basis: F1 for Claude models is the operator's ruling, not a provider
-    document, and F2's constants are not provider figures (module docstring). The result
+    Conservative basis: F1 for Claude models is a coordinator engineering premise (lane brief
+    2026-10-27), not a provider document and not an operator ruling (open for the
+    operator to accept or to replace with a provider-sourced figure), and F2's
+    constants are not provider figures (module docstring). The result
     bounds what the application's price schedule says the request can cost; it is not
     the provider's invoice.
     """

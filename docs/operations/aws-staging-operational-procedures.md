@@ -326,8 +326,7 @@ server-tool charges and thinking tokens are excluded **because the request
 cannot carry them**: the function accepts only the keys and text-only message
 content the adapters send, and any other key, content block or `cache_control`
 makes the request *unbounded*. The bytes-per-token premise is a documented fact
-for the public OpenAI tokenizers and an **operator-ruled conservative premise**
-(2026-10-27) for Claude models, whose tokenizer is not public; the two overhead
+for the public OpenAI tokenizers and a **coordinator engineering premise (lane brief 2026-10-27), not a provider document and not an operator ruling; open for the operator to accept or to replace with a provider-sourced figure** for Claude models, whose tokenizer is not public; the two overhead
 constants are not provider figures. **Fail closed:** a model missing from the
 price schedule, a model family whose premise is not accepted, a body that is not
 one JSON object, an unknown parameter or content block, a missing output limit,
@@ -384,7 +383,7 @@ Residual limitations of the ledger — the complete list (each is also stated
 where it lives in the code, `app.llm.metering`, `app.llm.bound` and
 `app.llm.budget`):
 1. provider-side billing may differ from the price schedule; the bound's
-   tokenizer premise (operator-ruled for Claude) and overhead constants are
+   tokenizer premise (a coordinator engineering premise for Claude, not an operator ruling) and overhead constants are
    not provider figures; the ledger is a ceiling on reserved bounds, not an
    invoice (reconcile monthly);
 2. calls outside the metered service (the E6 probe, anything not through
