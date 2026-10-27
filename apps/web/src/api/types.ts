@@ -46,6 +46,7 @@ export type ChangePasswordRequest = S['ChangePasswordRequest'];
 // account ever gets (every token of it is refused afterwards).
 export type AccountExportOut = S['AccountExportOut'];
 export type OrganizationExportOut = S['OrganizationExportOut'];
+export type OrganizationExportPageOut = S['OrganizationExportPageOut'];
 export type AccountDeletionPreviewOut = S['AccountDeletionPreviewOut'];
 export type MembershipImpactOut = S['MembershipImpactOut'];
 export type AccountDeletionRequest = S['AccountDeletionRequest'];

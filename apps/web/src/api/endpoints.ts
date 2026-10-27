@@ -55,6 +55,7 @@ import type {
   OrganizationDeletionOut,
   OrganizationDeletionRequest,
   OrganizationExportOut,
+  OrganizationExportPageOut,
   OrganizationMemberOut,
   OrganizationOut,
   PasswordResetConfirmRequest,
@@ -209,8 +210,23 @@ export const getAccountDeletionPreview = (signal?: AbortSignal) =>
 export const deleteAccount = (body: AccountDeletionRequest, signal?: AbortSignal) =>
   apiRequest<AccountDeletionOut>('/account/delete', { method: 'POST', body, signal });
 
+// The organization export is complete but paged (D-9f): this index call, then one keyset
+// page per cursor (`next_cursor` null = the table is done). lib/organization-export.ts walks
+// them; it is the only caller.
 export const exportOrganization = (orgId: string, signal?: AbortSignal) =>
   apiRequest<OrganizationExportOut>(`/organizations/${orgId}/export`, { signal });
+
+export const exportOrganizationTablePage = (
+  orgId: string,
+  table: string,
+  cursor: string,
+  limit: number,
+  signal?: AbortSignal,
+) =>
+  apiRequest<OrganizationExportPageOut>(
+    `/organizations/${orgId}/export/${encodeURIComponent(table)}`,
+    { query: { cursor, limit }, signal },
+  );
 
 export const deleteOrganization = (orgId: string, body: OrganizationDeletionRequest, signal?: AbortSignal) =>
   apiRequest<OrganizationDeletionOut>(`/organizations/${orgId}/delete`, { method: 'POST', body, signal });

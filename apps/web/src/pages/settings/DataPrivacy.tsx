@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Trash2 } from 'lucide-react';
-import { useId, useRef, useState, type MutableRefObject } from 'react';
+import { useEffect, useId, useRef, useState, type MutableRefObject } from 'react';
 import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import { z } from 'zod';
@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toast';
 import { downloadJson, exportFilename } from '@/lib/download';
+import { assembleOrganizationExport } from '@/lib/organization-export';
 import { canManageOrganizationData, useActorRole } from '@/lib/roles';
 import { ACCOUNT_DELETED_NOTICE, calmFailureMessage } from '@/pages/auth/account-token';
 import { apiErrorCode } from '@/pages/invite/invite-token';
@@ -68,30 +69,54 @@ const IMPACT_COPY: Record<MembershipImpactOut['outcome'], (name: string) => stri
     `You are the only owner of ${name}, which has other members. Make another member an owner, or delete the organization, first.`,
 };
 
-/** "Download" for one export, with its own pending state and failure toast. */
-function ExportButton({ label, run }: { label: string; run: () => Promise<void> }) {
+/**
+ * "Download" for one export, with its own pending state, optional progress line and failure
+ * toast. `run` receives a progress reporter and an abort signal (raised when the button
+ * unmounts); a rejection shows the toast and downloads nothing.
+ */
+function ExportButton({
+  label,
+  run,
+}: {
+  label: string;
+  run: (report: (text: string) => void, signal: AbortSignal) => Promise<void>;
+}) {
   const [pending, setPending] = useState(false);
+  const [progress, setProgress] = useState('');
   const { toast } = useToast();
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
   const onClick = async () => {
     if (pending) return;
     setPending(true);
+    setProgress('');
+    const ctl = new AbortController();
+    controller.current = ctl;
     try {
-      await run();
+      await run(setProgress, ctl.signal);
     } catch (err) {
-      toast({
-        title: 'Could not download your data',
-        description: calmFailureMessage(err, 'Please try again.'),
-        intent: 'error',
-      });
+      if (!ctl.signal.aborted) {
+        toast({
+          title: 'Could not download your data',
+          description: calmFailureMessage(err, 'Please try again.'),
+          intent: 'error',
+        });
+      }
     } finally {
       setPending(false);
+      setProgress('');
     }
   };
   return (
-    <Button size="sm" variant="outline" onClick={() => void onClick()} disabled={pending} aria-busy={pending}>
-      {pending ? <Spinner className="size-4 text-current" /> : <Download className="size-4" />}
-      {label}
-    </Button>
+    <>
+      <Button size="sm" variant="outline" onClick={() => void onClick()} disabled={pending} aria-busy={pending}>
+        {pending ? <Spinner className="size-4 text-current" /> : <Download className="size-4" />}
+        {label}
+      </Button>
+      <span role="status" aria-live="polite" className="text-sm text-muted-foreground">
+        {pending ? progress : ''}
+      </span>
+    </>
   );
 }
 
@@ -292,15 +317,31 @@ export function OrganizationDataControls({
       <CardHeader>
         <CardTitle>Organization data</CardTitle>
         <CardDescription>
-          Download everything {organizationName} holds, or delete the organization and all of its workspaces.
+          Download everything {organizationName} holds (large organizations are fetched in pages, so it can take a moment), or delete the organization and all of its workspaces.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         <ExportButton
           label="Download organization data"
-          run={async () =>
-            downloadJson(exportFilename('organization'), await api.exportOrganization(organizationId))
-          }
+          run={async (report, signal) => {
+            // Complete, by pages (D-9f): every table is read to its end, then one file is made.
+            const file = await assembleOrganizationExport(
+              {
+                index: (s) => api.exportOrganization(organizationId, s),
+                page: (table, cursor, limit, s) =>
+                  api.exportOrganizationTablePage(organizationId, table, cursor, limit, s),
+              },
+              {
+                signal,
+                onProgress: (p) =>
+                  report(
+                    `Preparing your download: ${p.tablesDone} of ${p.tablesTotal} tables, ` +
+                      `${p.rowsReceived.toLocaleString('en-US')} of ${p.rowsExpected.toLocaleString('en-US')} rows`,
+                  ),
+              },
+            );
+            downloadJson(exportFilename('organization'), file);
+          }}
         />
         <DeleteOrganizationDialog organizationId={organizationId} organizationName={organizationName} />
       </CardContent>

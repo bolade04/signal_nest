@@ -11,6 +11,8 @@ import type {
   AccountExportOut,
   OrganizationDeletionOut,
   OrganizationDeletionRequest,
+  OrganizationExportOut,
+  OrganizationExportPageOut,
 } from '@/api/types';
 import { useAuth } from '@/auth/AuthContext';
 import { orgModel, type ModelRole } from '@/test/handlers';
@@ -268,6 +270,121 @@ describe('export', () => {
       reader.readAsText(blobs[0]!);
     });
     expect(JSON.parse(text)).toEqual(EXPORT);
+  });
+});
+
+// D-9f -- the organization download is complete: the index, then keyset pages per table.
+const ORG_SUBJECT = { type: 'organization', user_id: null, organization_id: 'org-1' } as const;
+const usageRow = (i: number) => ({ id: `u-${String(i).padStart(5, '0')}`, organization_id: 'org-1', cost_usd: 0.001 });
+const USAGE_TOTAL = 5003;
+
+function orgIndex(over: Partial<OrganizationExportOut['tables']> = {}): OrganizationExportOut {
+  return {
+    schema_version: 2,
+    generated_at: '2026-10-27T00:00:00+00:00',
+    subject: ORG_SUBJECT,
+    page_size_default: 1000,
+    page_size_cap: 2500,
+    complete: false,
+    consistency: 'No snapshot isolation.',
+    members: [],
+    tables: {
+      brands: { row_count: 2, rows: [{ id: 'b-1' }, { id: 'b-2' }], next_cursor: null },
+      llm_usage_events: {
+        row_count: USAGE_TOTAL,
+        rows: Array.from({ length: 1000 }, (_, i) => usageRow(i)),
+        next_cursor: 'c-1000',
+      },
+      ...over,
+    },
+    not_exported: ['users'],
+  };
+}
+
+function serveOrgExport(index: OrganizationExportOut, pageRequests: URL[], failAt?: string) {
+  server.use(
+    http.get(P('/organizations/:orgId/export'), () => HttpResponse.json(index)),
+    http.get(P('/organizations/:orgId/export/:table'), ({ request, params }) => {
+      const url = new URL(request.url);
+      pageRequests.push(url);
+      const cursor = url.searchParams.get('cursor')!;
+      if (cursor === failAt) return HttpResponse.json({ error: { code: 'x', message: 'boom' } }, { status: 500 });
+      const start = Number(cursor.slice(2));
+      const limit = Number(url.searchParams.get('limit'));
+      const end = Math.min(start + limit, USAGE_TOTAL);
+      const body: OrganizationExportPageOut = {
+        schema_version: 2,
+        generated_at: '2026-10-27T00:00:01+00:00',
+        subject: ORG_SUBJECT,
+        table: String(params.table),
+        limit,
+        rows: Array.from({ length: end - start }, (_, i) => usageRow(start + i)),
+        next_cursor: end < USAGE_TOTAL ? `c-${end}` : null,
+      };
+      return HttpResponse.json(body);
+    }),
+  );
+}
+
+async function downloadedOrganizationFile(screen: Screen): Promise<{ file: any; click: ReturnType<typeof vi.spyOn> }> {
+  const blobs: Blob[] = [];
+  Object.assign(URL, {
+    createObjectURL: vi.fn((blob: Blob) => (blobs.push(blob), 'blob:org')),
+    revokeObjectURL: vi.fn(),
+  });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  await screen.user.click(screen.getByRole('button', { name: /download organization data/i }));
+  await waitFor(() => expect(click).toHaveBeenCalledTimes(1), { timeout: 10000 });
+  const text = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsText(blobs[0]!);
+  });
+  return { file: JSON.parse(text), click };
+}
+
+describe('organization export is complete (D-9f)', () => {
+  it('walks every page of every table and assembles one file with each row exactly once', async () => {
+    const pageRequests: URL[] = [];
+    serveOrgExport(orgIndex(), pageRequests);
+    const screen = await settingsAs('owner');
+    const { file } = await downloadedOrganizationFile(screen);
+    const ids: string[] = file.tables.llm_usage_events.rows.map((r: { id: string }) => r.id);
+    expect(ids).toHaveLength(USAGE_TOTAL);
+    expect(new Set(ids).size).toBe(USAGE_TOTAL);
+    expect(ids[0]).toBe('u-00000');
+    expect(ids[USAGE_TOTAL - 1]).toBe('u-05002');
+    expect(file.tables.brands.rows).toEqual([{ id: 'b-1' }, { id: 'b-2' }]);
+    expect(file.tables.llm_usage_events).toMatchObject({ row_count: USAGE_TOTAL, rows_received: USAGE_TOTAL });
+    expect(file.complete).toBe(true);
+    expect(file.assembly).toMatchObject({ pages_fetched: 3, changed_during_download: false });
+    // pages ask for the cap the index states, follow the cursor the server gave, and only that table
+    expect(pageRequests.map((u) => [u.pathname.split('/').pop(), u.searchParams.get('cursor'), u.searchParams.get('limit')])).toEqual([
+      ['llm_usage_events', 'c-1000', '2500'],
+      ['llm_usage_events', 'c-3500', '2500'],
+    ]);
+    expect(JSON.stringify(file)).not.toContain('truncated');
+  });
+
+  it('downloads nothing and says so when any page fails', async () => {
+    const pageRequests: URL[] = [];
+    serveOrgExport(orgIndex(), pageRequests, 'c-3500');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const screen = await settingsAs('owner');
+    await screen.user.click(screen.getByRole('button', { name: /download organization data/i }));
+    expect(await screen.findByText('Could not download your data')).toBeInTheDocument();
+    expect(pageRequests).toHaveLength(2);
+    expect(click).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /download organization data/i })).toBeEnabled();
+  });
+
+  it('flags a download during which rows changed instead of claiming a snapshot', async () => {
+    const pageRequests: URL[] = [];
+    serveOrgExport(orgIndex({ brands: { row_count: 3, rows: [{ id: 'b-1' }, { id: 'b-2' }], next_cursor: null } }), pageRequests);
+    const screen = await settingsAs('owner');
+    const { file } = await downloadedOrganizationFile(screen);
+    expect(file.tables.brands).toMatchObject({ row_count: 3, rows_received: 2 });
+    expect(file.assembly.changed_during_download).toBe(true);
   });
 });
 
