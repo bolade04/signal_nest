@@ -122,10 +122,10 @@ simulated path or `not_covered` (the replay seed sets it for its own process).
 * **What the takedown record holds (D-9d):** `source_takedowns` is a permanent suppression
   record and nothing more — the source key, the time it was taken down, and aggregate
   counts (`purge_summary`, `repeat_purges[*].{at, purged}`). It never holds a user id, free
-  text or a reference, so it is not personal data and no erasure, anonymisation or expiry
-  of the audit log (which carries the attribution under its own retention) can re-enable
-  fetching the source. Attribution and the public reference are read from the affected
-  workspaces' audit entries while those exist.
+  text or a reference, and no erasure, anonymisation or expiry of the audit log (which
+  carries the attribution under its own retention) can re-enable fetching the source.
+  Attribution and the public reference are read from the affected workspaces' audit
+  entries while those exist.
 * **Cached feed bytes:** the API process that performs the takedown drops the source's
   cached bytes at once; each worker process drops them at its next scout run, before it
   fetches anything. Until then they may sit unused in a worker's memory — no run reads a
