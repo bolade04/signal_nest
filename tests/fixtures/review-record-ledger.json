@@ -12,6 +12,12 @@
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-10-27-P6-CI6-PROOFS-ACCT": {
+        "approver": "P6-CI6-PROOFS-01 draft tranche (operator ruling 2026-10-27: the LLM budget accounting proofs are explicit and non-skippable in their authoritative CI path; coordinator continuation 2026-10-27T19:27Z; lane W8-CI8-IMPL in the CI-6 role, evidence set P6-W8-CI6-PROOFS-01; this record is not itself an approval artifact)",
+        "established": "2026-10-27",
+        "scope": "P6-CI-4/5 PostgreSQL proofs step, REPOSITORY PART ONLY (no AWS call, no deployment, no permission change, no new service, no relaxed gate): the NARROW amendment of .github/workflows/ci.yml in job backend-quality step \"PostgreSQL proofs\" (ungraded step; its existing no-skip/xfail/xpass inspection is unchanged) that adds app.tests.test_postgres_llm_accounting to the dotted-module (--pyargs) list so the LLM budget reservation/settlement accounting proofs run as a required, non-skippable result, together with the single re-pin of tests/fixtures/executed-state-contract.json site_taxonomy.WORKFLOW to the emitter value for the amended workflow and the tests/test_i28s_command_roots.py COMMENT_LINE shift the added lines force. Derived against the P6-CI-8 coverage amendment (REV-2026-10-27-P6-CI8-COVERAGE-REPORT). docs/testing.md is the same tranche but not CI-contract material.",
+        "status": "ACTIVE"
+    },
     "REV-2026-10-27-P6-CI8-COVERAGE-REPORT": {
         "approver": "P6-CI8-COVERAGE-REPORT-01 draft tranche (operator ruling 2026-10-27T14:47:19Z: P6-CI-8 initially reports coverage without a newly invented threshold; lane W8-CI8-IMPL, evidence set P6-W8-CI8-IMPL-01; the coordinator opens the draft PR; this record is not itself an approval artifact)",
         "established": "2026-10-27",

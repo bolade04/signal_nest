@@ -569,7 +569,8 @@ jobs:
           if-no-files-found: warn
 
       - name: PostgreSQL proofs (P6-CI-4 migration chain, P6-CI-5 job-store concurrency)
-        # The two PostgreSQL proof modules run again on their own, as a REQUIRED result
+        # The PostgreSQL proof modules (migration chain, job-store concurrency, LLM budget accounting)
+        # run again on their own, as a REQUIRED result
         # of this check: against the disposable service above, each test in a database
         # of its own (created and dropped per test; never the shared one). With
         # TEST_POSTGRES_URL unset they FAIL here (CI=true), never skip; an unreachable
@@ -586,6 +587,7 @@ jobs:
           .venv/bin/python -m pytest --pyargs \
             app.tests.test_postgres_migration_proof \
             app.tests.test_postgres_job_store_concurrency \
+            app.tests.test_postgres_llm_accounting \
             -q -rsxX -p no:cacheprovider 2>&1 | tee ../../ci-logs/backend-postgres-proofs.log
           echo "== no PostgreSQL proof may be skipped or xfailed =="
           if grep -Eiq "skipped|xfail|xpass" ../../ci-logs/backend-postgres-proofs.log; then
