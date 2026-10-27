@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
-from app.connectors.fetch_limits import FETCH_LIMIT_REACHED, fetch_stats
+from app.connectors.fetch_limits import fetch_stats, partial_fetch_facts
 from app.core.config import get_settings
 from app.core.enums import (
     DecisionAction,
@@ -105,9 +105,7 @@ def refused_run_stats(*, scanned: int, bound: int, fetch_limits: list[dict] | No
     }
     if fetch_limits is not None:
         stats["fetch_limits"] = fetch_limits
-        stats["partial_fetch"] = any(f.get("clipped") for f in fetch_limits)
-        if stats["partial_fetch"]:
-            stats["partial_fetch_reason"] = FETCH_LIMIT_REACHED
+        stats.update(partial_fetch_facts(fetch_limits))
     return stats
 
 

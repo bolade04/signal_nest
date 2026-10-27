@@ -22,14 +22,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors import rss as rss_mod
-from app.connectors.base import FetchScope
+from app.connectors.base import FailureKind, FetchScope
 from app.connectors.fetch_limits import (
     FETCH_LIMIT_REACHED,
+    SOURCE_FAILED,
     SourceFetchReport,
     fetch_stats,
+    partial_fetch_facts,
 )
 from app.connectors.multi import MultiSourceConnector
+from app.connectors.ratelimit import TokenBucket
 from app.connectors.registry import resolve_connector
+from app.connectors.retry import ConnectorFetchError, RetryPolicy
 from app.connectors.rss import RssNewsConnector
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
@@ -152,6 +156,8 @@ def test_a_connector_double_without_reports_is_reported_not_left_silent():
             "clipped": False,
             "fetched": 2,
             "eligible_seen": 2,
+            "failed": False,
+            "failure_reason": None,
         }
     ]
 
@@ -177,6 +183,8 @@ def test_fetch_stats_shape_is_pinned():
                 "clipped": True,
                 "fetched": 100,
                 "eligible_seen": 100,
+                "failed": False,
+                "failure_reason": None,
             },
             {
                 "source_key": "b",
@@ -184,10 +192,12 @@ def test_fetch_stats_shape_is_pinned():
                 "clipped": False,
                 "fetched": 60,
                 "eligible_seen": 60,
+                "failed": False,
+                "failure_reason": None,
             },
         ],
         "partial_fetch": True,
-        "partial_fetch_reason": FETCH_LIMIT_REACHED,
+        "partial_fetch_reasons": [FETCH_LIMIT_REACHED],
     }
     assert fetch_stats([whole]) == {
         "fetch_limits": [
@@ -197,6 +207,8 @@ def test_fetch_stats_shape_is_pinned():
                 "clipped": False,
                 "fetched": 60,
                 "eligible_seen": 60,
+                "failed": False,
+                "failure_reason": None,
             }
         ],
         "partial_fetch": False,
@@ -264,7 +276,7 @@ def test_150_entry_source_through_the_real_registry_is_clipped_and_says_so(
         s.rollback()
     assert result["scanned"] == stats["scanned"] == _LIMIT  # scanned = actually processed
     assert stats["partial_fetch"] is True
-    assert stats["partial_fetch_reason"] == FETCH_LIMIT_REACHED
+    assert stats["partial_fetch_reasons"] == [FETCH_LIMIT_REACHED]
     assert stats["fetch_limits"] == [
         {
             "source_key": "rss_news",
@@ -272,6 +284,8 @@ def test_150_entry_source_through_the_real_registry_is_clipped_and_says_so(
             "clipped": True,
             "fetched": 100,
             "eligible_seen": 100,
+            "failed": False,
+            "failure_reason": None,
         }
     ]
     assert "refused" not in stats  # the run succeeded: a clip is not a refusal
@@ -285,7 +299,7 @@ def test_exactly_100_entries_is_complete_not_partial(factory, bound, monkeypatch
         stats = dict(s.get(ScoutRequest, _request_id()).stats)
         s.rollback()
     assert stats["scanned"] == _LIMIT
-    assert stats["partial_fetch"] is False and "partial_fetch_reason" not in stats
+    assert stats["partial_fetch"] is False and "partial_fetch_reasons" not in stats
     assert stats["fetch_limits"][0]["clipped"] is False
 
 
@@ -337,7 +351,7 @@ def test_two_clipped_sources_are_refused_on_the_clipped_total_with_both_facts(
     assert exc.scanned == 200  # fetch limits first (100 + 100), then the bound on the sum
     assert stats["refusal_reason"] == SIGNAL_VOLUME_ABOVE_BOUND
     assert stats["partial_fetch"] is True
-    assert stats["partial_fetch_reason"] == FETCH_LIMIT_REACHED
+    assert stats["partial_fetch_reasons"] == [FETCH_LIMIT_REACHED]
     assert [f["clipped"] for f in stats["fetch_limits"]] == [True, True]
 
 
@@ -353,4 +367,123 @@ def test_two_sources_50_plus_50_fit_exactly_without_clip_or_refusal(factory, bou
     assert [(f["source_key"], f["clipped"]) for f in stats["fetch_limits"]] == [
         ("replay:a", False),
         ("replay:b", False),
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# A failed source never looks like an empty one (review r3 MINOR-1)
+# --------------------------------------------------------------------------- #
+def _bytes_source(data: bytes, tag: str = "bad", **kw) -> RssNewsConnector:
+    return RssNewsConnector(feed_provider=lambda _m: data, source_key=f"replay:{tag}", **kw)
+
+
+def _raising_source(kind: FailureKind, tag: str, **kw) -> RssNewsConnector:
+    def provider(_m):
+        raise ConnectorFetchError(kind, "static detail")
+
+    return RssNewsConnector(feed_provider=provider, source_key=f"replay:{tag}", **kw)
+
+
+class _NoTokens(TokenBucket):
+    def __init__(self) -> None:  # no clock, no capacity: always refuses
+        pass
+
+    def try_acquire(self, *_a, **_k) -> bool:
+        return False
+
+
+def _broken_after_120() -> bytes:
+    good = _feed(120, "brk").decode()
+    return good.replace("</channel></rss>", "<item><title>oops</channel></rss>").encode()
+
+
+def _doctype() -> bytes:
+    return b'<?xml version="1.0"?><!DOCTYPE rss [<!ENTITY a "b">]><rss><channel></channel></rss>'
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        (_bytes_source(b"<rss>" + b"x" * (rss_mod.MAX_FEED_BYTES + 1)), "feed_too_large"),
+        (_bytes_source(_doctype()), "xml_unsafe"),
+        (_bytes_source(_broken_after_120()), "xml_malformed"),
+        (_bytes_source(b'<rss version="2.0"></rss>'), "xml_malformed"),
+        (
+            RssNewsConnector(
+                feed_provider=lambda _m: _feed(5, "x"), rate_limiter=_NoTokens(), source_key="r"
+            ),
+            "rate_limited",
+        ),
+        (
+            _raising_source(FailureKind.TIMEOUT, "slow", retry_policy=RetryPolicy(max_attempts=2)),
+            "retries_exhausted",
+        ),
+        (_raising_source(FailureKind.NOT_CONFIGURED, "nc"), "fetch_error"),
+    ],
+    ids=[
+        "feed-too-large",
+        "doctype",
+        "malformed-after-the-limit-120",
+        "no-channel",
+        "rate-limited",
+        "retries-exhausted",
+        "fetch-error",
+    ],
+)
+def test_every_failure_branch_reports_a_failed_source_with_its_reason(source, reason):
+    result = source.collect(FetchScope(market="Dallas, TX"))
+    assert result.signals == []
+    [report] = result.reports  # R6: the failure branch always reports
+    assert report.failed is True and report.failure_reason == reason
+    # A rejected document is a failed source: it is never "100 good entries processed".
+    assert (report.fetched, report.eligible_seen, report.clipped_by_fetch_limit) == (0, 0, False)
+    assert len(result.failures) == 1
+
+
+def test_a_run_with_a_failed_source_is_partial_and_keeps_the_clip_fact(factory, bound, monkeypatch):
+    _use(
+        monkeypatch,
+        MultiSourceConnector([_bytes_source(_broken_after_120(), "bad"), _source(150, "big")]),
+    )
+    with factory() as s:
+        result = pipeline._run(s, _request_id())
+        stats = dict(s.get(ScoutRequest, _request_id()).stats)
+        s.rollback()
+    assert result["scanned"] == stats["scanned"] == _LIMIT  # only the healthy source's 100
+    assert stats["partial_fetch"] is True
+    # Both facts are kept; neither collapses into the other.
+    assert stats["partial_fetch_reasons"] == [SOURCE_FAILED, FETCH_LIMIT_REACHED]
+    bad, big = stats["fetch_limits"]
+    assert (bad["failed"], bad["failure_reason"], bad["clipped"]) == (True, "xml_malformed", False)
+    assert (big["failed"], big["clipped"]) == (False, True)
+
+
+def test_one_failed_source_alone_is_not_complete_coverage(factory, bound, monkeypatch):
+    _use(monkeypatch, _bytes_source(_doctype()))
+    with factory() as s:
+        pipeline._run(s, _request_id())
+        stats = dict(s.get(ScoutRequest, _request_id()).stats)
+        s.rollback()
+    assert stats["scanned"] == 0
+    assert stats["partial_fetch"] is True and stats["partial_fetch_reasons"] == [SOURCE_FAILED]
+    assert stats["fetch_limits"][0]["failure_reason"] == "xml_unsafe"
+
+
+def test_a_refusal_also_shows_a_failed_source(factory, bound, monkeypatch):
+    members = [_bytes_source(_doctype(), "bad"), _source(60, "a"), _source(60, "b")]
+    _exc, stats = _refuse(factory, MultiSourceConnector(members), monkeypatch)
+    assert stats["refusal_reason"] == SIGNAL_VOLUME_ABOVE_BOUND
+    assert stats["partial_fetch"] is True and stats["partial_fetch_reasons"] == [SOURCE_FAILED]
+    assert [f["failed"] for f in stats["fetch_limits"]] == [True, False, False]
+
+
+def test_partial_fetch_facts_never_collapse_the_two_reasons():
+    assert partial_fetch_facts([{"clipped": False, "failed": False}]) == {"partial_fetch": False}
+    assert partial_fetch_facts([{"failed": True}]) == {
+        "partial_fetch": True,
+        "partial_fetch_reasons": [SOURCE_FAILED],
+    }
+    assert partial_fetch_facts([{"clipped": True}, {"failed": True}])["partial_fetch_reasons"] == [
+        SOURCE_FAILED,
+        FETCH_LIMIT_REACHED,
     ]

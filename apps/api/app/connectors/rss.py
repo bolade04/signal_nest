@@ -38,10 +38,19 @@ from app.connectors.base import (
     ConnectorResult,
     ConnectorSignal,
     FailureKind,
+    FetchFailure,
     FetchScope,
     SourceConnector,
 )
-from app.connectors.fetch_limits import SourceFetchReport
+from app.connectors.fetch_limits import (
+    FEED_TOO_LARGE,
+    FETCH_ERROR,
+    RATE_LIMITED,
+    RETRIES_EXHAUSTED,
+    XML_MALFORMED,
+    XML_UNSAFE,
+    SourceFetchReport,
+)
 from app.connectors.ratelimit import TokenBucket
 from app.connectors.retry import ConnectorFetchError, RetryPolicy, run_with_retry
 from app.connectors.sample_feeds import sample_feed_for_market
@@ -52,10 +61,27 @@ MAX_FEED_BYTES = 2 * 1024 * 1024
 FeedProvider = Callable[[str | None], bytes]
 
 
+_TOO_LARGE_DETAIL = "feed exceeds size limit"
+
+
+def failure_reason(failure: FetchFailure) -> str:
+    """The closed ``failure_reason`` code of a classified failure (no free text)."""
+    kind = failure.kind
+    if kind is FailureKind.UNSAFE_CONTENT:
+        return FEED_TOO_LARGE if failure.detail == _TOO_LARGE_DETAIL else XML_UNSAFE
+    if kind is FailureKind.PARSE_ERROR:
+        return XML_MALFORMED
+    if kind is FailureKind.RATE_LIMITED:
+        return RATE_LIMITED
+    if kind.retryable:  # timeout / network / upstream error that outlasted the retries
+        return RETRIES_EXHAUSTED
+    return FETCH_ERROR
+
+
 def _assert_safe_xml(data: bytes) -> None:
     """Reject XML that declares a DOCTYPE or entity, or exceeds the size cap."""
     if len(data) > MAX_FEED_BYTES:
-        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, "feed exceeds size limit")
+        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _TOO_LARGE_DETAIL)
     head = data[:4096].lstrip().lower()
     if b"<!doctype" in head or b"<!entity" in head or b"<!doctype" in data.lower():
         raise ConnectorFetchError(
@@ -96,7 +122,7 @@ class RssNewsConnector(SourceConnector):
             data = self._fetch_bytes(scope.market)
         except ConnectorFetchError as exc:
             result.failures.append(exc.failure)
-            result.reports.append(self._report(scope, fetched=0, eligible=0, clipped=False))
+            result.reports.append(self._failed_report(scope, exc.failure))
             return result
 
         # Look one entry past the fetch limit (never more): that single extra entry is
@@ -105,7 +131,7 @@ class RssNewsConnector(SourceConnector):
             items = self._parse(data, max_entries=max(0, scope.max_items) + 1)
         except ConnectorFetchError as exc:
             result.failures.append(exc.failure)
-            result.reports.append(self._report(scope, fetched=0, eligible=0, clipped=False))
+            result.reports.append(self._failed_report(scope, exc.failure))
             return result
 
         clipped = len(items) > scope.max_items
@@ -122,6 +148,20 @@ class RssNewsConnector(SourceConnector):
             self._report(scope, fetched=len(window), eligible=len(result.signals), clipped=clipped)
         )
         return result
+
+    def _failed_report(self, scope: FetchScope, failure: FetchFailure) -> SourceFetchReport:
+        # The source contributed nothing. ``fetched`` 0 is not "the source was empty":
+        # ``failed`` and ``failure_reason`` say it failed (a document rejected as a whole,
+        # e.g. malformed XML after the limit, is a failed source, never 100 good entries).
+        return SourceFetchReport(
+            source_key=self.source_key,
+            max_items=scope.max_items,
+            fetched=0,
+            eligible_seen=0,
+            clipped_by_fetch_limit=False,
+            failed=True,
+            failure_reason=failure_reason(failure),
+        )
 
     def _report(
         self, scope: FetchScope, *, fetched: int, eligible: int, clipped: bool

@@ -320,6 +320,8 @@ def test_refusal_is_recorded_and_isolated_per_workspace(factory, bound, connecto
                     "clipped": False,
                     "fetched": bound + 1,
                     "eligible_seen": bound + 1,
+                    "failed": False,
+                    "failure_reason": None,
                 }
             ],
         )

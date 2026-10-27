@@ -23,6 +23,17 @@ DEFAULT_MAX_ITEMS_PER_SOURCE = 100
 
 #: Stable reason code of a run whose input was clipped by a per-source fetch limit.
 FETCH_LIMIT_REACHED = "fetch_limit_reached"
+#: Stable reason code of a run in which at least one source failed (and so contributed
+#: nothing): a failed source is never presented as an empty one.
+SOURCE_FAILED = "source_failed"
+
+#: Per-source failure reasons (``failure_reason``); closed, static, secret-free.
+FEED_TOO_LARGE = "feed_too_large"
+XML_UNSAFE = "xml_unsafe"
+XML_MALFORMED = "xml_malformed"
+RATE_LIMITED = "rate_limited"
+RETRIES_EXHAUSTED = "retries_exhausted"
+FETCH_ERROR = "fetch_error"
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,11 @@ class SourceFetchReport:
     fetched: int
     eligible_seen: int
     clipped_by_fetch_limit: bool
+    #: True when the source contributed nothing because it failed (byte cap, unsafe or
+    #: malformed XML, rate limit, exhausted retries): ``fetched`` is then 0 and says
+    #: nothing about what the source held. ``failure_reason`` is one of the closed codes.
+    failed: bool = False
+    failure_reason: str | None = None
 
     def as_stats(self) -> dict:
         """The JSON object stored under ``stats["fetch_limits"]``."""
@@ -50,6 +66,8 @@ class SourceFetchReport:
             "clipped": self.clipped_by_fetch_limit,
             "fetched": self.fetched,
             "eligible_seen": self.eligible_seen,
+            "failed": self.failed,
+            "failure_reason": self.failure_reason,
         }
 
 
@@ -65,17 +83,31 @@ def fetch_limits_stats(reports: list[SourceFetchReport]) -> list[dict]:
     return [r.as_stats() for r in reports]
 
 
+def partial_fetch_facts(fetch_limits: list[dict]) -> dict:
+    """``partial_fetch`` and ``partial_fetch_reasons`` from per-source stats entries.
+
+    The run did not read everything its sources held when any source was clipped by its
+    fetch limit (``fetch_limit_reached``) or failed (``source_failed``). Both facts are
+    kept: the reasons list names each that applies and never collapses one into the
+    other. ``partial_fetch_reasons`` is present only when ``partial_fetch`` is true.
+    """
+    reasons = []
+    if any(f.get("failed") for f in fetch_limits):
+        reasons.append(SOURCE_FAILED)
+    if any(f.get("clipped") for f in fetch_limits):
+        reasons.append(FETCH_LIMIT_REACHED)
+    out: dict = {"partial_fetch": bool(reasons)}
+    if reasons:
+        out["partial_fetch_reasons"] = reasons
+    return out
+
+
 def is_partial_fetch(reports: list[SourceFetchReport]) -> bool:
-    return any(r.clipped_by_fetch_limit for r in reports)
+    return partial_fetch_facts(fetch_limits_stats(reports))["partial_fetch"]
 
 
 def fetch_stats(reports: list[SourceFetchReport]) -> dict:
     """The fetch facts a run's ``stats`` carry: ``fetch_limits``, ``partial_fetch`` and,
-    only when a source was clipped, ``partial_fetch_reason``."""
-    out: dict = {
-        "fetch_limits": fetch_limits_stats(reports),
-        "partial_fetch": is_partial_fetch(reports),
-    }
-    if out["partial_fetch"]:
-        out["partial_fetch_reason"] = FETCH_LIMIT_REACHED
-    return out
+    only when a source was clipped or failed, ``partial_fetch_reasons``."""
+    limits = fetch_limits_stats(reports)
+    return {"fetch_limits": limits, **partial_fetch_facts(limits)}
