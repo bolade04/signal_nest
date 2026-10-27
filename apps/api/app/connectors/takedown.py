@@ -40,6 +40,7 @@ writers, and a run holds the write lock from its start, which gives the same ord
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -77,17 +78,26 @@ _AUDIT_REASON = (
 _AUDIT_MAX_IDS = 500
 #: Longest accepted ``reference`` (a public ticket / request id).
 REFERENCE_MAX_LENGTH = 200
+#: Unicode categories a reference may never contain: C0/C1 controls (Cc), format
+#: characters such as zero-width and bidi overrides (Cf), private use (Co), surrogates
+#: (Cs), line and paragraph separators (Zl, Zp). The value is shown to tenants in their
+#: audit log and to operators in the registry; a bidi override could make a "ticket id"
+#: read as something else (delta review r6, C-r6-2).
+_INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Zl", "Zp"})
 
 
 def validate_reference(value: str) -> str:
     """The public request id a takedown points to, or :class:`ValidationDomainError`.
 
     1–200 characters on one line, never containing ``@`` — so it can be neither an
-    e-mail address nor a URL carrying credentials. It is copied into every affected
+    e-mail address nor a URL carrying credentials — and no control, format, private-use,
+    surrogate or line/paragraph-separator character. It is copied into every affected
     workspace's audit entry, where tenants can read it; the reason for the takedown
     stays in the request record it names, outside the product.
     """
-    reference = (value or "").strip()
+    # Only ordinary spaces are trimmed: a line separator or control at either end is
+    # refused below rather than silently dropped.
+    reference = (value or "").strip(" ")
     if not reference:
         raise ValidationDomainError(
             "A takedown reference (the public ticket / request id) is required."
@@ -102,7 +112,8 @@ def validate_reference(value: str) -> str:
             "URL credentials)."
         )
     if any(ch.isspace() and ch != " " for ch in reference) or any(
-        ord(ch) < 32 or ord(ch) == 127 for ch in reference
+        ord(ch) < 32 or ord(ch) == 127 or unicodedata.category(ch) in _INVISIBLE_CATEGORIES
+        for ch in reference
     ):
         raise ValidationDomainError("reference must be a single line of printable text.")
     return reference

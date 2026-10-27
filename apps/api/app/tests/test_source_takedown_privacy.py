@@ -42,10 +42,12 @@ from app.connectors.takedown import (
     AUDIT_ACTION,
     active_takedowns,
     takedown_source,
+    validate_reference,
     without_taken_down,
 )
 from app.core.config import Settings, get_settings
 from app.core.enums import ScoutRequestStatus
+from app.core.errors import ValidationDomainError
 from app.organizations.models import User
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal
@@ -189,6 +191,50 @@ def world(tmp_path) -> Iterator[World]:
             _seed_tenant(s, ORG_B, WS_B, "tenant-b")
             s.commit()
         yield World(env=env, factory=factory)
+
+
+# --------------------------------------------------------------------------- #
+# The public reference: one line of visible text
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param("TKD-1\u009b", id="C1 control (CSI, Cc)"),
+        pytest.param("TKD-\u200b1", id="zero width space (Cf)"),
+        pytest.param("TKD-1\u202e", id="right-to-left override (Cf)"),
+        pytest.param("TKD-1\u2028", id="line separator (Zl)"),
+        pytest.param("TKD-1\u2029", id="paragraph separator (Zp)"),
+        pytest.param("TKD-1\ue000", id="private use (Co)"),
+        pytest.param("TKD-1\udcff", id="surrogate escape (Cs)"),
+        pytest.param("TKD-1\x07", id="C0 control"),
+        pytest.param("TKD-1\x7f", id="DEL"),
+        pytest.param("TKD-1\nmemo", id="newline"),
+        pytest.param("TKD-1\tmemo", id="tab"),
+        pytest.param("counsel@example.com", id="address"),
+        pytest.param("https://user:secret@tracker.example/T-1", id="URL credentials"),
+        pytest.param("x" * 201, id="too long"),
+        pytest.param("   ", id="blank"),
+    ],
+)
+def test_a_reference_never_carries_invisible_or_control_characters(bad: str):
+    """The reference is shown to tenants (audit log) and operators (registry): no C0/C1
+    control, format (zero-width, bidi override), private-use, surrogate or line/paragraph
+    separator character may hide in it, on top of the no-'@', one-line, 1-200 rules
+    (delta review r6, C-r6-2)."""
+    with pytest.raises(ValidationDomainError):
+        validate_reference(bad)
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        pytest.param("TKD-2026-0042", id="ticket id"),
+        pytest.param("  REQ 7 / Zürich Straße — café  ", id="accented text with spaces"),
+        pytest.param("Žádost č. 12 (Ñandú)", id="accented letters and punctuation"),
+    ],
+)
+def test_ordinary_visible_text_is_an_acceptable_reference(good: str):
+    assert validate_reference(good) == good.strip()
 
 
 # --------------------------------------------------------------------------- #
