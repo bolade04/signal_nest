@@ -163,8 +163,9 @@ def connector_counts(monkeypatch):
     """Route the pipeline's connector resolution to the stub, per workspace."""
     counts: dict[str, int] = {}
 
-    def _get_connector(*, source_types=None, market=None, db=None, organization_id=None,
-                       workspace_id=None):
+    def _get_connector(
+        *, source_types=None, market=None, db=None, organization_id=None, workspace_id=None
+    ):
         return _StubConnector(counts, workspace_id)
 
     monkeypatch.setattr(pipeline, "get_connector", _get_connector)
@@ -184,8 +185,9 @@ def _raw_count(s, request_id: str) -> int:
 # --------------------------------------------------------------------------- #
 # The pipeline refuses before any work
 # --------------------------------------------------------------------------- #
-def test_run_above_the_bound_is_refused_before_any_work(factory, bound, connector_counts,
-                                                         monkeypatch):
+def test_run_above_the_bound_is_refused_before_any_work(
+    factory, bound, connector_counts, monkeypatch
+):
     request_id = _seeded_request_id()
     with factory() as s:
         request = s.get(ScoutRequest, request_id)
@@ -226,9 +228,7 @@ def _second_workspace(factory) -> str:
     """A second workspace (same organization) with its own brand and scout request."""
     with factory() as s:
         seeded = s.get(ScoutRequest, _seeded_request_id())
-        ws = Workspace(
-            organization_id=seeded.organization_id, name="Second", slug="second-ws"
-        )
+        ws = Workspace(organization_id=seeded.organization_id, name="Second", slug="second-ws")
         s.add(ws)
         s.flush()
         brand = Brand(organization_id=seeded.organization_id, workspace_id=ws.id, name="B2")
@@ -359,8 +359,11 @@ def _context_for(request: ScoutRequest, **overrides: str) -> ExecutionContext:
 
 @pytest.mark.parametrize(
     "foreign",
-    [{"organization_id": "org-other"}, {"workspace_id": "ws-other"},
-     {"organization_id": "org-other", "workspace_id": "ws-other"}],
+    [
+        {"organization_id": "org-other"},
+        {"workspace_id": "ws-other"},
+        {"organization_id": "org-other", "workspace_id": "ws-other"},
+    ],
     ids=["other-organization", "other-workspace", "both"],
 )
 def test_record_refused_run_writes_nothing_for_a_foreign_tenant_context(factory, foreign):

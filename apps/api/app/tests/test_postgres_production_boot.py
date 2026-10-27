@@ -47,11 +47,32 @@ API_DIR = Path(__file__).resolve().parents[2]
 #: sees exactly the profile under test (CI exports APP_MODE/ENVIRONMENT/VECTOR_BACKEND/
 #: LLM_PROVIDER for the ordinary suite).
 _SCRUB_PREFIXES = (
-    "APP_MODE", "ENVIRONMENT", "DATABASE_URL", "SN_MIGRATION_MODE", "SECRET_KEY",
-    "REDIS_", "CACHE_", "QUEUE_", "RATE_LIMIT_", "STORAGE_", "S3_", "VECTOR_",
-    "EMBEDDING_", "LLM_", "ANTHROPIC_", "OPENAI_", "MAIL_", "PUBLIC_WEB_ORIGIN",
-    "GEOCODER_", "METRICS_", "TRACING_", "SIGNALNEST_", "CORS_", "FORWARDED_",
-    "REQUIRE_WORKER_FLEET", "SN_BOOT_PROOF_REDIS",
+    "APP_MODE",
+    "ENVIRONMENT",
+    "DATABASE_URL",
+    "SN_MIGRATION_MODE",
+    "SECRET_KEY",
+    "REDIS_",
+    "CACHE_",
+    "QUEUE_",
+    "RATE_LIMIT_",
+    "STORAGE_",
+    "S3_",
+    "VECTOR_",
+    "EMBEDDING_",
+    "LLM_",
+    "ANTHROPIC_",
+    "OPENAI_",
+    "MAIL_",
+    "PUBLIC_WEB_ORIGIN",
+    "GEOCODER_",
+    "METRICS_",
+    "TRACING_",
+    "SIGNALNEST_",
+    "CORS_",
+    "FORWARDED_",
+    "REQUIRE_WORKER_FLEET",
+    "SN_BOOT_PROOF_REDIS",
 )
 
 #: Non-secret production backend selections. The ECS migration task today carries only
@@ -173,7 +194,7 @@ def _boot_production_api(url: str) -> dict:
     assert "redis.invalid" not in out and "placeholder-never-sent" not in out
     lines = [ln for ln in result.stdout.splitlines() if ln.startswith("BOOT-PROOF: ")]
     assert len(lines) == 1, out
-    return json.loads(lines[0][len("BOOT-PROOF: "):])
+    return json.loads(lines[0][len("BOOT-PROOF: ") :])
 
 
 def test_production_full_profile_boots_and_is_ready(pg_url):
@@ -182,7 +203,9 @@ def test_production_full_profile_boots_and_is_ready(pg_url):
     expected_redis = "real" if os.environ.get("TEST_REDIS_URL") else "doubled by fakeredis"
     assert proof["redis"] == expected_redis
     assert (proof["environment"], proof["app_mode"], proof["migration_mode"]) == (
-        "production", "full", False,
+        "production",
+        "full",
+        False,
     )
     assert proof["vector_backend"] == "bruteforce"
     assert proof["vector_inprocess_production_approved"] is True
