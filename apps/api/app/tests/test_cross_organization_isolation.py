@@ -1367,6 +1367,37 @@ class TestOrganizationPrivacy:
         )
         _assert_membership_403(foreign)
 
+    def test_export_cursor_pages_hold_only_the_requesters_rows(self, world: World, pov: Pov):
+        """Follow ``next_cursor`` with ``limit=1`` (every page after the first is a cursor
+        page): tables isolated by the organization filter alone (members, workspaces, audit
+        logs) and by it plus the workspace list (scout requests). A tenant filter lost on
+        cursor pages only would put the other organization's rows on a later page."""
+        a, b = pov.a, pov.b
+        foreign = (b.org_id, b.ws_id, b.owner_id, b.marketer_id, b.request_id)
+        for table in ("organization_members", "workspaces", "audit_logs", "scout_requests"):
+            base = f"/organizations/{a.org_id}/export/{table}"
+            pages, rows, cursor = 0, [], None
+            while True:
+                params = {"limit": 1} | ({"cursor": cursor} if cursor else {})
+                r = pov.send("GET", base, params=params)
+                assert r.status_code == 200, (table, r.text)
+                for value in foreign:
+                    assert value not in r.text, (table, pages, value)
+                body = r.json()
+                assert len(body["rows"]) <= 1
+                rows += body["rows"]
+                pages += 1
+                cursor = body["next_cursor"]
+                if cursor is None:
+                    break
+                assert pages < 500, table
+            assert rows, table
+            ids = [row["id"] for row in rows]
+            assert len(ids) == len(set(ids)), table
+            assert {row["organization_id"] for row in rows} == {a.org_id}, table
+            if table == "organization_members":
+                assert pages >= 2  # at least one real cursor page was followed
+
     def test_delete_foreign_org_403_and_nothing_deleted(self, world: World, pov: Pov):
         a, b = pov.a, pov.b
         before = {
@@ -1589,6 +1620,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", f"{ORG}/export"): ("TestOrganizationPrivacy::test_export_own_200_scoped_foreign_403",),
     ("GET", f"{ORG}/export/{{table}}"): (
         "TestOrganizationPrivacy::test_export_page_own_scoped_foreign_403_and_non_owner_refused",
+        "TestOrganizationPrivacy::test_export_cursor_pages_hold_only_the_requesters_rows",
     ),
     ("POST", f"{ORG}/delete"): (
         "TestOrganizationPrivacy::test_delete_foreign_org_403_and_nothing_deleted",
