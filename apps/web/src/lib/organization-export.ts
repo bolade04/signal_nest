@@ -16,7 +16,8 @@ import type { OrganizationExportOut, OrganizationExportPageOut } from '@/api/typ
  *     tables: { <name>: { row_count, rows_received, rows: [...every row...] } } }
  * `row_count` is the table's exact count when the index was read; `rows_received` is what
  * the pages delivered. They differ only if rows were created or deleted during the download
- * (`changed_during_download` is then true): there is no snapshot isolation, a row created
+ * (`changed_during_download` is then true; false means only that the counts matched, not that
+ * nothing changed -- a created and a deleted row cancel out): there is no snapshot isolation, a row created
  * after the walk passed its position is not included, a row deleted before its page was
  * read is absent.
  */
