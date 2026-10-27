@@ -148,9 +148,15 @@ Source: `apps/api/app/scouting_requests/routes.py`.
 - **Structured log events** (via `log_event`, see [observability.md](./observability.md)):
   `scout_schedule_created`, `scout_schedule_paused`, `scout_schedule_resumed`,
   `scout_schedule_deleted`, and per-fire `scout_schedule_tick`
-  (`outcome`, `run_enqueued`, `coalesced`). A healthy live schedule emits one
-  `scout_schedule_tick` per interval with `run_enqueued=true` (or
-  `coalesced=true` when a run was already in flight).
+  (`outcome`, `run_enqueued`, `coalesced`, `request_paused`). A healthy live schedule
+  emits one `scout_schedule_tick` per interval with `run_enqueued=true` (or
+  `coalesced=true` when a run was already in flight, or `outcome=request_paused`
+  while the customer has paused the scout request itself: no run is fanned out, the
+  schedule stays enabled and the chain reseeds, so resuming the request restores
+  scheduled scouting at the next boundary). A paused request's already-queued run is
+  skipped by the worker (`result_summary.outcome=skipped_request_paused`) rather
+  than executed, and a pause landing mid-run keeps the request paused
+  (`paused_during_run`) with the run's findings and stats stored.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete

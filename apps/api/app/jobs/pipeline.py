@@ -76,6 +76,16 @@ logger = get_logger("signalnest.pipeline")
 
 DEDUPE_THRESHOLD = 0.92
 
+# Run outcomes reported in the ``scout_request.execute`` job's ``result_summary`` (D-25).
+RUN_COMPLETED = "completed"
+# The request was paused when the job reached it: no fetch, no model call, status kept.
+SKIPPED_REQUEST_PAUSED = "skipped_request_paused"
+# The request was paused while this run was in flight: findings and stats are kept, the
+# pause wins over the run's terminal status write.
+PAUSED_DURING_RUN = "paused_during_run"
+# The request left ``running`` some other way while the run was in flight; not settled.
+STATUS_CHANGED_DURING_RUN = "status_changed_during_run"
+
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
     market = request.resolved_market
@@ -163,6 +173,17 @@ def _run(
             raise JobContextError(
                 "Job execution context location does not match the scout request."
             )
+
+    # D-25: a paused request does no new work. A run queued before the pause (or a
+    # scheduled run whose tick raced it) is skipped here -- before any connector fetch
+    # or model call -- with the request's status left exactly as the customer set it.
+    # The skip is the job's result: recorded on the job record, nothing to retry.
+    if request.status == ScoutRequestStatus.PAUSED.value:
+        logger.info(
+            "scout.skipped",
+            extra={"extra_fields": {"request": request.id, "outcome": SKIPPED_REQUEST_PAUSED}},
+        )
+        return {"scout_request_id": request.id, "outcome": SKIPPED_REQUEST_PAUSED}
 
     request.status = ScoutRequestStatus.RUNNING.value
     db.flush()
@@ -346,7 +367,6 @@ def _run(
     opportunities = _build_opportunities(db, request, ctx, coverage, market, normalized, meter)
     meter.flush(db)
 
-    request.status = ScoutRequestStatus.COMPLETED.value
     request.last_run_at = datetime.now(UTC)
     request.stats = {
         "scanned": scanned,
@@ -355,11 +375,32 @@ def _run(
         "opportunities": len(opportunities),
     }
     db.flush()
+
+    # D-25: settle the request as ``completed`` only if it is still in the ``running``
+    # state this run set. The status is re-read from the row, so a pause that landed
+    # while the run was in flight wins: what the run produced (findings, stats,
+    # ``last_run_at``) is kept, the request stays paused.
+    db.refresh(request, attribute_names=["status"])
+    if request.status == ScoutRequestStatus.RUNNING.value:
+        request.status = ScoutRequestStatus.COMPLETED.value
+        outcome = RUN_COMPLETED
+    elif request.status == ScoutRequestStatus.PAUSED.value:
+        outcome = PAUSED_DURING_RUN
+    else:
+        outcome = STATUS_CHANGED_DURING_RUN
+    db.flush()
     logger.info(
         "scout.completed",
-        extra={"extra_fields": {"request": request.id, **request.stats, **meter.summary()}},
+        extra={
+            "extra_fields": {
+                "request": request.id,
+                "outcome": outcome,
+                **request.stats,
+                **meter.summary(),
+            }
+        },
     )
-    return {"scout_request_id": request.id, **request.stats}
+    return {"scout_request_id": request.id, "outcome": outcome, **request.stats}
 
 
 def _build_opportunities(

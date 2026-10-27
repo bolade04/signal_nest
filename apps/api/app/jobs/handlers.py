@@ -68,8 +68,11 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     with metered_run(meter):
         result = _run(ctx.db, scout_request_id, ctx.context)
 
-    # ``_run`` returns only safe aggregate counts (scanned / noise_filtered /
-    # signals_analyzed / opportunities), which is exactly the shape we persist.
+    # ``_run`` returns only safe aggregates -- the run ``outcome`` (``completed``,
+    # ``skipped_request_paused`` when the request was paused before the job reached
+    # it, ``paused_during_run`` when the pause landed mid-run; D-25) and, for a run
+    # that executed, the counts (scanned / noise_filtered / signals_analyzed /
+    # opportunities) -- which is exactly the shape we persist.
     return dict(result)
 
 

@@ -45,7 +45,7 @@ from app.audit.service import record_audit
 from app.capabilities.registry import Capability
 from app.capabilities.resolver import CapabilityResolution, resolve_capability
 from app.core.config import get_settings
-from app.core.enums import ScheduleInterval, ScheduleState
+from app.core.enums import ScheduleInterval, ScheduleState, ScoutRequestStatus
 from app.core.errors import ConflictError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.db.base import utcnow
@@ -71,6 +71,9 @@ _INTERVAL_DELTAS: dict[ScheduleInterval, timedelta] = {
 #: Provenance marker written onto a scheduled run's payload so the customer-safe
 #: run-history projection can honestly label it ``scheduled`` (SB-A contract).
 SCHEDULED_TRIGGER = "scheduled"
+# Tick outcome while the schedule's scout request is paused (D-25): no run is fanned
+# out, the chain still reseeds, so a resumed request is scouted at the next boundary.
+REQUEST_PAUSED_OUTCOME = "request_paused"
 
 #: Statuses that mean a scout request already has execution work in flight, so a
 #: scheduled run must coalesce (skip) rather than pile a second run on top.
@@ -396,11 +399,16 @@ def run_schedule_tick(
        for that workspace.
     3. **Enabled gate.** A paused schedule likewise stops the chain.
     4. **Cancellation.** An operator-cancelled tick stops the chain.
-    5. **Overlap coalescing.** If the request already has an execution in flight the
+    5. **Request pause (D-25).** While the scout request itself is ``paused`` no run is
+       fanned out (``request_paused``), but the schedule stays enabled and the chain
+       continues exactly like a coalesced tick: resuming the request lets scheduled
+       scouting pick up at the next boundary without the customer touching the
+       schedule. The request pause is honoured here, not by pausing the schedule row.
+    6. **Overlap coalescing.** If the request already has an execution in flight the
        scheduled run is *skipped* (not queued twice), but the schedule continues.
-    6. **Fan-out.** Otherwise enqueue exactly one ``scout_request.execute`` run,
+    7. **Fan-out.** Otherwise enqueue exactly one ``scout_request.execute`` run,
        idempotent on ``schedule:{id}:{occurrence}`` and labelled ``scheduled``.
-    7. **Self-chain.** Compute the next future occurrence (missed boundaries
+    8. **Self-chain.** Compute the next future occurrence (missed boundaries
        skipped, never back-filled), enqueue the successor tick, and advance
        ``last_tick_at`` / ``next_run_at``.
 
@@ -417,14 +425,16 @@ def run_schedule_tick(
     if is_cancelled is not None and is_cancelled():
         return {"outcome": "cancelled", "run_enqueued": False, "chained": False}
 
-    coalesced = has_active_execution(
+    request = db.get(ScoutRequest, schedule.scout_request_id)
+    request_paused = request is not None and request.status == ScoutRequestStatus.PAUSED.value
+    coalesced = not request_paused and has_active_execution(
         db,
         organization_id=schedule.organization_id,
         workspace_id=schedule.workspace_id,
         scout_request_id=schedule.scout_request_id,
     )
     run_enqueued = False
-    if not coalesced:
+    if not request_paused and not coalesced:
         enqueue_scout_request(
             db,
             organization_id=schedule.organization_id,
@@ -457,9 +467,16 @@ def run_schedule_tick(
         scout_request_id=schedule.scout_request_id,
         run_enqueued=run_enqueued,
         coalesced=coalesced,
+        request_paused=request_paused,
     )
+    if run_enqueued:
+        outcome = "fanned_out"
+    elif request_paused:
+        outcome = REQUEST_PAUSED_OUTCOME
+    else:
+        outcome = "coalesced"
     return {
-        "outcome": "fanned_out" if run_enqueued else "coalesced",
+        "outcome": outcome,
         "run_enqueued": run_enqueued,
         "coalesced": coalesced,
         "chained": True,
