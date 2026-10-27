@@ -73,6 +73,8 @@ WORKER_ACTIVE = "worker_active"
 
 # LLM budget ledger (D-LLM-1 option B): reservations charged their worst case by recovery
 LLM_RESERVATIONS_RELEASED_TOTAL = "llm_reservations_released_total"
+#: A call settled after recovery had already released its reservation (usage row still written)
+LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL = "llm_settlements_after_release_total"
 
 # Dependencies (Redis / object store / database)
 REDIS_NOTIFY_TOTAL = "redis_notify_total"
@@ -104,6 +106,7 @@ METRIC_NAMES: frozenset[str] = frozenset(
         WORKER_LEASE_RECOVERED_TOTAL,
         WORKER_ACTIVE,
         LLM_RESERVATIONS_RELEASED_TOTAL,
+        LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
         REDIS_NOTIFY_TOTAL,
         DEPENDENCY_OPERATION_TOTAL,
         DEPENDENCY_OPERATION_DURATION_MS,

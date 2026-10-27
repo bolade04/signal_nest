@@ -32,7 +32,12 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
-from app.core.metrics import LLM_RESERVATIONS_RELEASED_TOTAL, InMemoryMetrics, configure_metrics
+from app.core.metrics import (
+    LLM_RESERVATIONS_RELEASED_TOTAL,
+    LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
+    InMemoryMetrics,
+    configure_metrics,
+)
 from app.db.models import Base
 from app.jobs import handlers as job_handlers
 from app.jobs.context import ExecutionContext
@@ -226,6 +231,78 @@ def test_release_charges_a_leaked_reservation_its_worst_case(factory):
         # The remainder is still spendable, exactly budget - 2w.
         assert _reserve(db, "b:1:0", Decimal("0.01"), budget)
         assert not _reserve(db, "b:1:1", Decimal("0.001"), budget)
+
+
+def test_a_settlement_after_release_moves_no_money_but_records_the_call(factory, caplog):
+    """MINOR-1 (review r1): recovery won the race against a live call. The worst case
+    stands as the charge; the call's usage row is still written, with a WARNING and a
+    metric, so reconciliation sees the actual."""
+    w, budget = Decimal("0.02"), Decimal("1")
+    with factory() as db:
+        job = _enqueue(db, "late")
+        assert _reserve(db, f"{job}:1:0", w, budget, job_id=job)
+        assert ledger.release_for_job(db, job_id=job, now=T0, outcome="terminal") == 1
+        db.commit()
+        metrics = InMemoryMetrics()
+        configure_metrics(metrics)
+        try:
+            late = ledger.settle(
+                db, attempt_key=f"{job}:1:0", settled_usd=CALL_COST, now=T0, usage=_usage(CALL_COST)
+            )
+            db.commit()
+        finally:
+            configure_metrics(None)
+        assert late is False  # no money moved ...
+        period = _period(db)
+        assert (period.reserved_usd, period.settled_usd) == (w, w)
+        row = _reservation(db, f"{job}:1:0")
+        assert (row.state, row.settled_usd) == ("released", w)
+        usage = db.scalar(select(LLMUsageEvent))  # ... but the call is recorded
+        assert (usage.job_id, usage.cost_usd, usage.outcome) == (job, 0.0105, "ok")
+        assert metrics.counter_value(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome="released") == 1
+        record = next(r for r in caplog.records if r.getMessage() == "llm.settlement_after_release")
+        assert record.levelname == "WARNING"
+        # A usage-less repeat (no call data) writes nothing more.
+        assert not ledger.settle(db, attempt_key=f"{job}:1:0", settled_usd=CALL_COST, now=T0)
+        db.commit()
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+
+
+def test_the_expiry_sweep_defers_to_a_live_job_lease(factory):
+    """MINOR-1 (review r1): a reservation past its expiry whose job still holds a live
+    lease is left alone; once the lease has lapsed (or the job is no longer running) it
+    expires by the clock."""
+    from app.jobs.models import Job
+
+    w, budget = Decimal("0.01"), Decimal("1")
+    with factory() as db:
+        heartbeating = _enqueue(db, "heartbeating")
+        lapsed = _enqueue(db, "lapsed")
+        for key, job in ((f"{heartbeating}:1:0", heartbeating), (f"{lapsed}:1:0", lapsed)):
+            assert _reserve(db, key, w, budget, now=T0 - timedelta(hours=1), job_id=job)
+        for job, lease in (
+            (heartbeating, T0 + timedelta(days=1)),
+            (lapsed, T0 - timedelta(seconds=1)),
+        ):
+            row = db.get(Job, job)
+            row.status = JobStatus.RUNNING.value
+            row.lease_expires_at = lease
+        db.commit()
+        assert ledger.release_expired(db, now=T0) == 1
+        db.commit()
+        states = {r.attempt_key: r.state for r in db.scalars(select(LLMBudgetReservation))}
+        assert states == {f"{heartbeating}:1:0": "reserved", f"{lapsed}:1:0": "expired"}
+        # The lease lapses: the next sweep expires it.
+        db.get(Job, heartbeating).lease_expires_at = T0 - timedelta(seconds=1)
+        db.commit()
+        assert ledger.release_expired(db, now=T0) == 1
+        db.commit()
+        assert _reservation(db, f"{heartbeating}:1:0").state == "expired"
+
+
+def test_the_expiry_window_covers_the_clients_per_phase_timeouts():
+    s = _settings(llm_timeout_seconds=30, worker_lease_seconds=30.0)
+    assert ledger.reservation_expiry(s, T0) == T0 + timedelta(seconds=3 * 30 + 30 + 60)
 
 
 def test_sweep_releases_expired_and_terminal_reservations_only(factory):

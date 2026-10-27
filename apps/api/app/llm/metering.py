@@ -76,7 +76,13 @@ reservation therefore under-spends the budget, never over-spends it, and nothing
 that was reserved is unrecorded: a reserved-but-unsettled call has its reservation
 row, a settled call has both rows. If the settlement write itself fails, the
 reservation likewise stays at ``w`` until recovery. If the reservation cannot be
-written (database unavailable), the attempt raises and no call is made.
+written (database unavailable), the attempt raises and no call is made. When
+recovery releases a reservation before its own process settles it (a call that
+outlived the expiry window on a job whose lease is gone, or a lost attempt still
+running), the worst case stands as the charge and the late settlement still writes
+the call's usage row, logged at WARNING (``llm.settlement_after_release``) and counted
+(``llm_settlements_after_release_total``); the sweep never expires a reservation whose
+job still holds a live lease.
 
 **SQLite (and any meter without a session factory): the same-session path.** A
 second connection cannot reserve while the run's own session holds the database's

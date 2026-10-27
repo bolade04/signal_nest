@@ -21,7 +21,11 @@ reserved call, keyed by attempt).
   number of processes reserving against one workspace serialise correctly.
 * :func:`settle` - records a ``reserved`` row's settled amount (``settled_usd +=
   settled``) and writes the usage row; keyed by ``attempt_key`` and conditional on the
-  row still being ``reserved``, so a second settlement of the same key is a no-op. The
+  row still being ``reserved``, so a second settlement of the same key is a no-op. A
+  settlement that arrives after recovery already released or expired the row changes
+  no money (the worst case stands) but still writes the call's usage row, logs
+  ``llm.settlement_after_release`` at WARNING and counts
+  ``llm_settlements_after_release_total``, so reconciliation sees the actual. The
   budget stays consumed by the call's **worst case**: settlement never lowers
   ``reserved_usd`` (it raises it, by ``settled - w``, only when the provider reported
   more than the estimate). ``reserved_usd`` is therefore always at least the sum of the
@@ -31,7 +35,10 @@ reserved call, keyed by attempt).
   writes a reservation row that is already settled, plus the period and usage rows,
   idempotently per attempt key. Nothing precedes the call on this path.
 * :func:`release_for_job`, :func:`release_expired`, :func:`release_terminal` and
-  :func:`sweep` - recovery. A ``reserved`` row that is released is charged its worst
+  :func:`sweep` - recovery. The expiry sweep leaves a reservation alone while its job
+  still holds a live lease (``jobs.lease_expires_at`` in the future on a claimed or
+  running job): the process that reserved it is heartbeating, so the call may still be
+  in flight however long it has taken. A ``reserved`` row that is released is charged its worst
   case: **an unknown outcome is charged its worst case**, because the process that
   reserved it may have made the call before it died. Releasing, like settling, never
   lowers ``reserved_usd``; it only adds the amount to ``settled_usd``. A leaked
@@ -51,14 +58,18 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.logging import get_logger, log_event
-from app.core.metrics import LLM_RESERVATIONS_RELEASED_TOTAL, get_metrics
+from app.core.metrics import (
+    LLM_RESERVATIONS_RELEASED_TOTAL,
+    LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
+    get_metrics,
+)
 from app.jobs.models import Job
-from app.jobs.status import TERMINAL_STATUSES
+from app.jobs.status import TERMINAL_STATUSES, JobStatus
 from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
 
 logger = get_logger("signalnest.llm")
@@ -69,6 +80,10 @@ RELEASED = "released"
 EXPIRED = "expired"
 
 _MICRO = Decimal("0.000001")
+#: ``httpx.Client(timeout=T)`` applies ``T`` to each phase of one request (connect,
+#: write, read; pool acquisition besides), so one live provider call can legitimately
+#: last about this many timeouts before the client gives up.
+HTTP_TIMEOUT_PHASES = 3
 #: Margin added to the longest a reserved call can legitimately stay unsettled.
 RESERVATION_EXPIRY_MARGIN_SECONDS = 60.0
 
@@ -86,13 +101,17 @@ def period_start_for(now: datetime) -> date:
 def reservation_expiry(settings: Settings, now: datetime) -> datetime:
     """When a reservation made at ``now`` counts as leaked if still unsettled.
 
-    One reserved call is bounded by the provider timeout; the lease window covers the
+    ``expires_at = now + HTTP_TIMEOUT_PHASES x llm_timeout_seconds + worker_lease_seconds
+    + RESERVATION_EXPIRY_MARGIN_SECONDS``: one reserved call is bounded by the client's
+    real worst case (the per-phase timeout, three phases); the lease window covers the
     worker's own bookkeeping around it; the margin absorbs clock differences between
-    hosts. A reservation past this instant whose process is in fact alive is released
-    at its worst case, which is conservative, never an over-spend.
+    hosts. The sweep additionally defers to a live job lease (:func:`release_expired`).
+    A reservation past this instant whose process is in fact alive is released at its
+    worst case, which is conservative, never an over-spend; its late settlement still
+    records the call (:func:`settle`).
     """
     seconds = (
-        float(settings.llm_timeout_seconds)
+        HTTP_TIMEOUT_PHASES * float(settings.llm_timeout_seconds)
         + float(settings.worker_lease_seconds)
         + RESERVATION_EXPIRY_MARGIN_SECONDS
     )
@@ -217,8 +236,12 @@ def settle(
     """Record the reservation ``attempt_key``'s settled amount; write its usage row.
 
     Idempotent: only a row still ``reserved`` is settled (one conditional update), so a
-    second call for the same key - or a call after recovery released the row - changes
-    nothing and returns ``False``. The period keeps the call's worst case as consumed
+    second call for the same key changes nothing and returns ``False``. A call whose
+    reservation recovery already ``released`` or ``expired`` (the sweep or a rebind won
+    the race against a live call) also returns ``False`` and moves no money - the
+    worst case stands as the charge - but its usage row IS still written when
+    ``usage`` is given, with a WARNING and a metric, so the call's actual usage and
+    outcome reach reconciliation. The period keeps the call's worst case as consumed
     budget; ``settled_usd`` records what the call was charged, and only a charge above
     the worst case raises ``reserved_usd``. ``usage`` holds the usage row's own columns
     (``scout_request_id``, ``task``, ``provider``, ``model``, tokens, ``cost_usd``,
@@ -227,7 +250,11 @@ def settle(
     reservation = db.scalar(
         select(LLMBudgetReservation).where(LLMBudgetReservation.attempt_key == attempt_key)
     )
-    if reservation is None or reservation.state != RESERVED:
+    if reservation is None:
+        return False
+    if reservation.state != RESERVED:
+        if reservation.state in (RELEASED, EXPIRED) and usage is not None:
+            _record_late_settlement(db, reservation, usage)
         return False
     claimed = db.execute(
         update(LLMBudgetReservation)
@@ -259,6 +286,26 @@ def settle(
         db.add(_usage_row(reservation, usage))
     db.flush()
     return True
+
+
+def _record_late_settlement(
+    db: Session, reservation: LLMBudgetReservation, usage: dict[str, Any]
+) -> None:
+    """The usage row of a call settled after recovery released its reservation."""
+    db.add(_usage_row(reservation, usage))
+    db.flush()
+    get_metrics().increment(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome=reservation.state)
+    log_event(
+        logger,
+        "llm.settlement_after_release",
+        level=logging.WARNING,
+        component="llm",
+        outcome=reservation.state,
+        job_id=reservation.job_id,
+        attempt_key=reservation.attempt_key,
+        reservation_state=reservation.state,
+        call_outcome=usage.get("outcome"),
+    )
 
 
 def record_settled(
@@ -382,10 +429,25 @@ def release_for_job(db: Session, *, job_id: str, now: datetime, outcome: str) ->
 
 
 def release_expired(db: Session, *, now: datetime) -> int:
-    """Charge every ``reserved`` row past its ``expires_at`` its worst case (``expired``)."""
+    """Charge every ``reserved`` row past its ``expires_at`` its worst case (``expired``).
+
+    A row whose job still holds a live lease (claimed or running, ``lease_expires_at``
+    at or after ``now``) is left alone whatever its ``expires_at``: its process is
+    heartbeating and the call may still be in flight. Rows with no job, with a job
+    that is no longer claimed/running, or whose lease has lapsed expire by the clock.
+    """
+    live_lease = (
+        Job.status.in_([JobStatus.CLAIMED.value, JobStatus.RUNNING.value])
+        & Job.lease_expires_at.is_not(None)
+        & (Job.lease_expires_at >= now)
+    )
     rows = db.scalars(
-        select(LLMBudgetReservation).where(
-            LLMBudgetReservation.state == RESERVED, LLMBudgetReservation.expires_at < now
+        select(LLMBudgetReservation)
+        .outerjoin(Job, Job.id == LLMBudgetReservation.job_id)
+        .where(
+            LLMBudgetReservation.state == RESERVED,
+            LLMBudgetReservation.expires_at < now,
+            or_(Job.id.is_(None), ~live_lease),
         )
     ).all()
     released = _release_rows(db, list(rows), now=now, state=EXPIRED)

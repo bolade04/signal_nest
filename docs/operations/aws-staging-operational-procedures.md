@@ -309,7 +309,13 @@ an undecodable reply and a reply with no usage block settle at the worst case
 (the undecodable-reply charge is a conservative basis pending D-LLM-3). A call
 whose process died between reservation and settlement keeps its worst case as
 the month's spend ("an unknown outcome is charged its worst case"); the
-reservation row is its record. The ledger therefore bounds what the product
+reservation row is its record. If recovery releases a reservation before its own
+process settles it (the expiry sweep, which never touches a reservation whose job
+still holds a live lease, or a retried attempt's rebind), the worst case stands as
+the charge and the late settlement still writes the call's usage row, logged at
+WARNING (`llm.settlement_after_release`) and counted
+(`llm_settlements_after_release_total`), so reconciliation sees the actual. The
+ledger therefore bounds what the product
 *starts*; the provider's invoice remains the only statement of what was
 *billed* - reconcile `llm_budget_periods` and `llm_usage_events` against the
 provider console monthly, and expect the ledger to read at or above the invoice

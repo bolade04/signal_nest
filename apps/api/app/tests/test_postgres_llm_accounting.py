@@ -22,6 +22,10 @@ an engine of its own, barrier-synchronised):
   repeat) is charged once with one usage row;
 * P5 reservation recovery: the worker's sweep releases expired reservations and those
   of terminal jobs, leaves live ones alone, and is idempotent;
+* P6 recovery racing a live call (review r1 MINOR-1): the sweep runs while a call is in
+  flight past its expiry; with the job's lease live the reservation survives and the
+  call settles normally; with the lease gone the reservation expires at its worst case
+  and the late settlement still writes the usage row and counts the metric;
 * tenant isolation, month rollover, and the run endpoint's gate: eight concurrent
   callers all pass the read-only gate, and the reservations behind them admit exactly
   the one call that still fits.
@@ -49,13 +53,19 @@ from sqlalchemy import func, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.metrics import (
+    LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
+    InMemoryMetrics,
+    configure_metrics,
+)
 from app.jobs.models import Job
 from app.jobs.status import JobStatus
 from app.jobs.store import DurableJobStore
 from app.jobs.worker import JobRunner
 from app.llm import budget as ledger
-from app.llm.metering import LLMBudgetExhaustedError, ensure_run_allowed
+from app.llm.metering import LLMBudgetExhaustedError, LLMMeter, ensure_run_allowed
 from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
+from app.llm.service import LLMService
 from app.organizations.models import Organization, Workspace
 from app.tests import _llm_reserve_child as child
 from app.tests._auth2_support import pg_database, require_postgres
@@ -502,6 +512,100 @@ def test_p5_the_sweep_releases_expired_and_terminal_reservations_and_nothing_els
         period = _period(db, now=now)
         assert (period.reserved_usd, period.settled_usd) == (4 * w, 2 * w)
         assert ledger.sweep(db, now=now) == {"expired": 0, "terminal": 0}  # idempotent
+
+
+# --------------------------------------------------------------------------- #
+# P6 - recovery racing a live call
+# --------------------------------------------------------------------------- #
+class _BlockingProvider(child.FixedCostProvider):
+    """A fixed-cost fake whose call waits until the test lets it return."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.proceed = threading.Event()
+
+    def generate(self, request, prompt_name, prompt_version):
+        self.entered.set()
+        assert self.proceed.wait(JOIN_SECONDS)
+        return super().generate(request, prompt_name, prompt_version)
+
+
+@pytest.mark.parametrize("lease_live", [True, False], ids=["live-lease", "lease-gone"])
+def test_p6_the_sweep_defers_to_a_live_lease_and_a_late_settlement_still_records_the_call(
+    pg_url, factory, lease_live
+):
+    settings = child.settings_for(1.0)
+    now = datetime.now(UTC)
+    with factory() as db:
+        job_id = _enqueue(db, "inflight")
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(
+                status=JobStatus.RUNNING.value,
+                lease_expires_at=now + timedelta(days=1)
+                if lease_live
+                else now - timedelta(seconds=1),
+            )
+        )
+        db.commit()
+    provider = _BlockingProvider()
+    service = LLMService(provider, sleep=lambda _s: None, settings=settings)
+    meter = LLMMeter(settings, job_id=job_id, attempt=1, session_factory=factory)
+    with factory() as run_session:
+        meter.bind(run_session, organization_id=ORG, workspace_id=WS, scout_request_id=None)
+    errors: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            service.run("classify_signal", child.RUN_INPUTS, meter=meter)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the test
+            errors.append(exc)
+
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        assert provider.entered.wait(
+            JOIN_SECONDS
+        )  # the reservation is committed, the call is in flight
+        with factory() as db:
+            (row,) = _reservations(db)
+            assert row.state == "reserved"
+            w = row.reserved_usd
+            # The sweep runs well past the reservation's expiry while the call is still in flight.
+            swept = ledger.sweep(db, now=row.expires_at + timedelta(seconds=1))
+            db.commit()
+            assert swept == {"expired": 0 if lease_live else 1, "terminal": 0}
+        provider.proceed.set()
+        thread.join(JOIN_SECONDS)
+        assert not thread.is_alive() and not errors, errors
+    finally:
+        configure_metrics(None)
+    with factory() as db:
+        (row,) = _reservations(db)
+        usage = db.scalar(select(LLMUsageEvent))
+        period = _period(db)
+        assert (usage.job_id, usage.cost_usd, usage.outcome) == (
+            job_id,
+            0.0105,
+            "ok",
+        )  # always recorded
+        if lease_live:
+            assert (row.state, row.settled_usd) == ("settled", child.FIXED_COST)
+            assert (period.reserved_usd, period.settled_usd) == (w, child.FIXED_COST)
+            assert (
+                metrics.counter_value(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome="expired") == 0
+            )
+        else:
+            assert (row.state, row.settled_usd) == ("expired", w)  # the worst case stands
+            assert (period.reserved_usd, period.settled_usd) == (w, w)
+            assert (
+                metrics.counter_value(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome="expired") == 1
+            )
+    assert meter.spent == pytest.approx(float(child.FIXED_COST))
 
 
 # --------------------------------------------------------------------------- #
