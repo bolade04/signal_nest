@@ -421,7 +421,7 @@ PUBLIC = {
     ("POST", f"{API}/auth/password-reset/request"),
     ("POST", f"{API}/auth/password-reset/confirm"),
 }
-OPERATOR_ROUTE_COUNT = 19
+OPERATOR_ROUTE_COUNT = 20  # 19 + GET .../data-sources/{source_key}/cases (D-9e)
 
 
 # --------------------------------------------------------------------------- #
@@ -583,7 +583,9 @@ class TestPolicyTableCompleteness:
         # membership-only workspace route.
         # 118 -> 120 (P6-PRIV-4): GET /internal/system/data-sources and POST
         # /internal/system/data-sources/{source_key}/takedown, both operator-only.
-        assert len(served) == 120
+        # 120 -> 121 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
+        # operator-only read of the restricted takedown case record.
+        assert len(served) == 121
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
