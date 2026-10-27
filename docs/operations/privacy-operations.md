@@ -321,28 +321,30 @@ token out of shell history and out of evidence):
 
 ```sh
 # 1. The index: members, exact row counts, first pages, next cursors.
-curl -sS -H "Authorization: Bearer $TOKEN" "$API/organizations/$ORG/export" > index.json
+curl -sS --fail -H "Authorization: Bearer $TOKEN" "$API/organizations/$ORG/export" > index.json || exit 1
 
 # 2. For each table whose next_cursor is not null, follow the cursors until it is null.
 table=llm_usage_events
 cursor=$(jq -r ".tables.$table.next_cursor // empty" index.json)
 n=0
 while [ -n "$cursor" ]; do
-  n=$((n+1))
+  n=$((n+1)); page=$(printf '%06d' "$n")
   curl -sS --fail -H "Authorization: Bearer $TOKEN" \
     --get --data-urlencode "cursor=$cursor" --data-urlencode "limit=5000" \
-    "$API/organizations/$ORG/export/$table" > "$table.page-$n.json" || exit 1
-  cursor=$(jq -r '.next_cursor // empty' "$table.page-$n.json")
+    "$API/organizations/$ORG/export/$table" > "$table.page-$page.json" || exit 1
+  cursor=$(jq -r '.next_cursor // empty' "$table.page-$page.json")
 done
 
-# 3. The table is the index's rows followed by each page's rows, in page order.
+# 3. The table is the index's rows followed by each page's rows, in page order (the
+#    zero-padded page numbers make the shell glob list them in order).
 jq -s '[.[].rows] | add' <(jq ".tables.$table" index.json) "$table".page-*.json
 ```
 
-Check every table: the count of rows received must equal the index's `row_count`. A
-difference means rows were created or deleted while you downloaded (there is no snapshot
+Check every table: the count of rows received should equal the index's `row_count`. A
+difference means rows were created or deleted while you downloaded; equal counts do not prove
+nothing changed (a created and a deleted row cancel out) (there is no snapshot
 isolation; see `data-inventory.md`, *Portability*); download again. A non-2xx answer stops the
 loop: a 403 is a role (exactly OWNER) or membership problem, a 422 `invalid_cursor` a cursor
-that is not the one the previous page returned, and `limit` above 5000 is refused. Nothing in
+that is not well-formed for the table (use the one the previous page returned), and `limit` above 5000 is refused. Nothing in
 this procedure writes anything, and no usage or accounting figure is adjusted to match an
 export.

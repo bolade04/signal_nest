@@ -175,7 +175,7 @@ mechanism, with the procedure an operator follows.
 |---|---|---|
 | `GET /api/v1/account/export` | the signed-in account | profile, memberships, sessions (no tokens), invitations it accepted, and the others addressed to the account (no token digests; the others **only when its address is verified**, as `email_keyed_data` states), invitations it sent (no invitee address), feedback it submitted, audit events it performed (action, entity type, time, organization); no `llm_usage_events` rows (no user key: no supported relationship to an account) |
 | `GET /api/v1/organizations/{id}/export` | exact role OWNER | the **export index**: the subject, `members` (id, email and name), `page_size_default` (1000) and `page_size_cap` (5000), `complete`, a `consistency` statement, `not_exported`, and for every exported tenant table its **exact `row_count`**, its **first page** of rows and the `next_cursor` of the next page (null when the first page holds every row; `complete` is true when that holds for every table) |
-| `GET /api/v1/organizations/{id}/export/{table}?cursor=&limit=` | exact role OWNER | one **page** of one exported table, in `(created_at, id)` order after `cursor` (absent = the first page); `limit` 1–5000 (default 1000; above 5000 is refused with 422); the answer carries `rows` and `next_cursor` (null = the table is finished). An unknown or not-exported table is one and the same 404; a cursor that was not issued for that table is 422 `invalid_cursor` |
+| `GET /api/v1/organizations/{id}/export/{table}?cursor=&limit=` | exact role OWNER | one **page** of one exported table, in `(created_at, id)` order after `cursor` (absent = the first page); `limit` 1–5000 (default 1000; above 5000 is refused with 422); the answer carries `rows` and `next_cursor` (null = the table is finished). An unknown or not-exported table is one and the same 404; a cursor that is not well-formed for that table (not URL-safe base64 of a JSON array of exactly three bounded strings `[table, created_at, id]` without control characters, or naming another table) is 422 `invalid_cursor`; any well-formed cursor naming the table is accepted |
 
 Tables, rows and columns are those the inventory marks exported: every tenant table of the
 organization (invitations without token digests; all workspace content, signals and results;
@@ -189,11 +189,15 @@ completely retrievable by walking its pages; the per-page bound (5,000 rows) is 
 bound, and the exact-OWNER authorization and the tenant filter apply to every page. Nothing
 about the usage ledger's rows or any accounting balance is changed to fit an export.
 
-**Cursors** are opaque (the base64 of the table name and the last row's `(created_at, id)`).
-The server validates one against the table it is used with and refuses anything else; a
-cursor only positions a read inside the requesting organization's own rows (the tenant filter
-is applied to every page), so a forged or foreign cursor cannot reach another organization's
-data. There is no `offset` pagination.
+**Cursors** are opaque to the client (URL-safe base64 of `[table, created_at, id]`) and are
+**validated, not signed**. The server accepts a cursor only if it is well-formed for the table
+it is used with (exactly three strings, the table named, an ISO-8601 timestamp of at most 40
+characters, a non-empty id of at most 128, no control, format or NUL characters) and refuses
+everything else with 422 `invalid_cursor`. It does not check that the server issued it: **any
+well-formed cursor naming the table is accepted**, and a forged position can only move where
+the read starts inside the requesting organization's own rows, because the tenant filter is
+applied to every page (a foreign row's key and a missing key give identical answers). There is
+no `offset` pagination.
 
 **Concurrent changes.** No snapshot isolation is claimed: each page is read on its own, and
 the index carries `generated_at`. A traversal that starts at the index and follows the
@@ -204,17 +208,26 @@ before the cursor is not seen by that traversal; **a row deleted before its page
 absent**; a row already delivered stays delivered; **no row is delivered twice**. The index
 `row_count` is the exact count when the index was read; if the rows received differ, the data
 changed during the download (the browser download records this as
-`assembly.changed_during_download`). For a stable copy, repeat the download when it reports a
-change, or run it when the organization is quiet.
+`assembly.changed_during_download = true`). Equal counts do **not** prove nothing changed (a
+row created and another deleted leaves the count equal): `changed_during_download = false`
+means only that the counts matched. For a stable copy, run the download when the organization
+is quiet and repeat it when a difference is reported.
 
-**Page cost.** A page is one indexed read: `WHERE <tenant filter> AND (created_at, id) >
-cursor ORDER BY created_at, id LIMIT n+1`. For tables that carry a non-null `workspace_id`
-beside `organization_id` (`llm_usage_events` among them) the workspace list is added to the
-filter so the database seeks `(workspace_id, created_at)` (`ix_llm_usage_events_workspace_created`
-for the usage ledger) instead of scanning every tenant's rows; a test reads the SQLite
-`EXPLAIN QUERY PLAN` for this. The PostgreSQL plan is read in CI. Rows after the cursor in the
-organization are sorted per page, so the cost of a page grows with what is left of that
-organization's table, not with other tenants'.
+**Page cost.** A page is the query `WHERE <tenant filter> AND (created_at, id) > cursor ORDER
+BY created_at, id LIMIT n+1`. Measured on SQLite (`EXPLAIN QUERY PLAN`, pinned by a test for
+`llm_usage_events`): the database seeks a tenant index, then reads and sorts **all of the
+organization's rows of that table** with a temporary b-tree on every page; the keyset
+predicate is not an index range. For tables that carry a non-null `workspace_id` beside
+`organization_id` (`llm_usage_events` among them) the workspace list is added to the filter so
+the seek uses `(workspace_id, created_at)` (`ix_llm_usage_events_workspace_created`) instead
+of scanning every tenant's rows; the other tables use their single-column tenant index. The
+response of a page is bounded (at most 5,000 rows); the database work per page is linear in
+that organization's table, so **a full walk of one table costs O(n²/page) row reads** for
+n rows. That is accepted for the unpaid pilot. **No PostgreSQL plan is read by any test** (the
+PostgreSQL proofs in CI do not cover this query); the PostgreSQL behaviour is reasoned from the
+SQL, not measured. Follow-up **FU-246-1**: an index that makes the keyset an index range, for
+example `(organization_id, created_at, id)` or per-table keyset indexes; it needs a migration
+and is deliberately not part of this change.
 
 **Browser download.** *Settings → Organization data → Download organization data* reads the
 index, follows every table's cursors (pages of the stated cap), shows progress, stops at the
