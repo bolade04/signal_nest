@@ -26,16 +26,25 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.audit.models import AuditLog
 from app.brands.models import Brand
-from app.connectors.takedown import AUDIT_ACTION, takedown_source
-from app.core.config import get_settings
+from app.connectors.live import SourceTarget, live_targets_for
+from app.connectors.models import SourceTakedown
+from app.connectors.sources import LegalStatus, SourceRecord
+from app.connectors.takedown import (
+    AUDIT_ACTION,
+    active_takedowns,
+    takedown_source,
+    without_taken_down,
+)
+from app.core.config import Settings, get_settings
 from app.core.enums import ScoutRequestStatus
 from app.organizations.models import User
 from app.scouting_requests.models import ScoutRequest
@@ -77,6 +86,38 @@ MINIMAL_COLUMNS = {
     "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
     "created_at", "updated_at",
 }
+
+
+def _record(key: str) -> SourceRecord:
+    return SourceRecord(
+        source_key=key,
+        connector="rss_news",
+        display_name=key,
+        publisher="Proof Publisher",
+        feed_url=f"https://{key}.example/feed.xml",
+        markets=(MARKET,),
+        tos_url=f"https://{key}.example/terms",
+        approval_reference="DEC-PROOF-1",
+        approved_on=date(2026, 1, 1),
+        legal_status=LegalStatus.APPROVED,
+        enabled=True,
+    )
+
+
+TARGETS = [
+    SourceTarget(source=_record(k), fetch_url=_record(k).feed_url, delivery="live")
+    for k in (KEY, OTHER)
+]
+
+
+def _live_settings() -> Settings:
+    return Settings(
+        _env_file=None,
+        connector_rss_live_enabled=True,
+        connector_rss_kill_switch=False,
+        connector_rss_replay_origin=None,
+        connector_egress_contact_url="https://signalnest.example/bot",
+    )
 
 
 def _seed_tenant(s: Session, org: str, ws: str, slug: str) -> None:
@@ -252,3 +293,91 @@ def test_the_service_records_a_repeat_as_time_and_counts_only(world: World):
     _assert_nothing_identifying(
         world.row(), forbidden={ALICE, BOB, REFERENCE, REPEAT_REFERENCE}, repeats=1
     )
+
+
+# --------------------------------------------------------------------------- #
+# Suppression persistence
+# --------------------------------------------------------------------------- #
+def _signal(key: str) -> SimpleNamespace:
+    return SimpleNamespace(attribution={"source_key": key}, content=key)
+
+
+def _assert_still_suppressed(s: Session, *, step: str) -> None:
+    takedowns = active_takedowns(s)
+    assert KEY in takedowns and OTHER not in takedowns, step
+    # The live gate (app.connectors.live) refuses the source and nothing else.
+    allowed = live_targets_for(
+        market=MARKET, source_types=(), takedowns=takedowns, settings=_live_settings(),
+        targets=TARGETS,
+    )
+    assert [t.source.source_key for t in allowed] == [OTHER], step
+    # A run in flight re-checks under the lock and drops the source's signals.
+    kept = without_taken_down(s, [_signal(KEY), _signal(OTHER), _signal(KEY)])
+    assert [sig.content for sig in kept] == [OTHER], step
+
+
+def test_suppression_survives_erasure_anonymisation_and_expiry_of_every_metadata(
+    world: World,
+):
+    world.take_down(ALICE, REFERENCE)
+    world.take_down(ALICE, REPEAT_REFERENCE)
+    with world.session() as s:
+        _assert_still_suppressed(s, step="after the takedown and a repeat")
+
+    # 1. The actor's user row is deleted.
+    with world.session() as s:
+        s.execute(delete(User).where(User.id == ALICE))
+        s.commit()
+    with world.session() as s:
+        _assert_still_suppressed(s, step="actor deleted")
+
+    # 2. The per-workspace audit rows are anonymised (actor NULL, context cleared).
+    with world.session() as s:
+        s.execute(
+            update(AuditLog)
+            .where(AuditLog.action == AUDIT_ACTION)
+            .values(actor_user_id=None, context={}, new_state={}, reason=None)
+        )
+        s.commit()
+    with world.session() as s:
+        assert s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
+        _assert_still_suppressed(s, step="audit rows anonymised")
+
+    # 3. Every audit row for the source is deleted (audit expiry).
+    with world.session() as s:
+        s.execute(delete(AuditLog).where(AuditLog.action == AUDIT_ACTION))
+        s.execute(delete(AuditLog).where(AuditLog.entity_type == "source_takedown"))
+        s.commit()
+    with world.session() as s:
+        assert s.scalars(select(AuditLog)).all() == []
+        _assert_still_suppressed(s, step="audit rows expired")
+
+    # 4. The counts on the record itself are cleared.
+    with world.session() as s:
+        s.execute(
+            update(SourceTakedown)
+            .where(SourceTakedown.source_key == KEY)
+            .values(purge_summary={}, repeat_purges=[])
+        )
+        s.commit()
+    with world.session() as s:
+        row = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == KEY))
+        assert row.purge_summary == {} and row.repeat_purges == []
+        _assert_still_suppressed(s, step="counts cleared")
+
+    # The registry still shows the takedown (to a remaining operator), with nothing
+    # identifying in it, and the key cannot be taken down "for the first time" again.
+    listing = world.env.client.get(
+        f"{API}/internal/system/data-sources",
+        headers={"Authorization": f"Bearer {bearer(world.env, BOB)}"},
+    )
+    assert listing.status_code == 200, listing.text
+    entry = {e["source_key"]: e for e in listing.json()["sources"]}[KEY]
+    assert entry["takedown"] == {
+        "taken_down_at": entry["takedown"]["taken_down_at"],
+        "purge_summary": {},
+        "repeat_purges": [],
+    }
+    assert entry["activatable"] is False and entry["stored"]["raw_signals"] == 0
+    again = world.take_down(BOB, "TKD-PRIV-2")
+    assert again["already_taken_down"] is True
