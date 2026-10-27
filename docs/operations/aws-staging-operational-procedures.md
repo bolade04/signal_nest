@@ -294,61 +294,110 @@ longest expected scout run (and the worker `stopTimeout` at or above it, as
 `infra/aws/modules/ecs` already requires) and rotating at a low-traffic time
 still reduce the number of attempts abandoned this way.
 
-**Per-workspace LLM budget ledger (D-LLM-1 option B, `app.llm.budget`).** The
-guarantee the code gives, verbatim from `app.llm.metering`: *On PostgreSQL, the
-sum of worst-case costs of all provider calls started by a workspace in a UTC
-calendar month never exceeds the workspace budget as configured at reservation
-time, across any number of processes. Not covered: provider-side billing
-differences from the price table; calls made outside the metered service (E6
-probe); budget changes mid-month lowering below already-reserved amounts;
-SQLite, where the guarantee degrades to per-session (documented, tests pin the
-degraded behaviour).* The worst case of a call is the meter's estimate (about 3
-characters per input token plus `max_tokens` output at the model's table
-price); settlement is never below the usage the provider reported; a timeout,
-an undecodable reply and a reply with no usage block settle at the worst case
-(the undecodable-reply charge is a conservative basis pending D-LLM-3). Two
-consequences of that basis: `reserved_usd` may exceed the configured budget
-after the fact, by the sum over settled calls of (actual − worst case)⁺ — the
-guarantee is on the worst cases of calls *started* — after which every further
-reservation is refused until the month rolls over (measured in review r1: a
-reply of 200 000 input and 1 000 output tokens at the sonnet-4-6 table price
-settled at USD 0.615 against a budget of USD 0.10; the next reservation and the
-run endpoint were then refused with "USD 0.61 of 0.10"); and a rejected,
-rate-limited or unavailable attempt is charged 0 at settlement but has consumed
-its worst case of the month at reservation, which the service's retries
-multiply (a 429 or 5xx storm consumes (`llm_max_retries` + 1) × worst case per
-logical call with no spend). A call
-whose process died between reservation and settlement keeps its worst case as
-the month's spend ("an unknown outcome is charged its worst case"); the
-reservation row is its record. If recovery releases a reservation before its own
+**Per-workspace LLM budget ledger (D-LLM-1 option B, `app.llm.budget`, `app.llm.bound`).** The
+guarantee the code gives, verbatim from `app.llm.metering`: *On PostgreSQL, the sum of the worst-case cost bounds of all provider calls
+started by a workspace in a UTC calendar month never exceeds the workspace
+budget as configured at reservation time, across any number of processes. A
+call's bound is `worst_case_cost` of the exact request bytes under the
+configured price schedule (UTF-8 bytes bound the tokens, plus stated overhead
+constants, plus the request's output limit, in exact decimal arithmetic
+rounded up at 1e-6), and a call whose cost cannot be bounded is not made. This
+is the application's defined budget guarantee; it is not a statement about the
+provider's invoice. Not covered: provider-side billing differences from the
+price schedule, including the tokenizer premise and overhead constants the
+bound rests on (stated in `app.llm.bound`); calls made outside the metered
+service (E6 probe); budget changes mid-month lowering below already-reserved
+amounts; SQLite, where the guarantee degrades to per-session (documented,
+tests pin the degraded behaviour).*
+
+**The cost basis (`app.llm.bound.worst_case_cost`).** A call's worst case is a
+pure function of the request body exactly as the transport sends it (the
+adapters serialise once and send those bytes; a spy on the `httpx` request
+proves the bound sees the same bytes), the model and the price schedule
+(`llm_prices_usd_per_mtok`): input tokens are bounded by the UTF-8 byte count
+of the whole body (a byte-level BPE tokenizer emits at most one token per byte)
+plus two **stated conservative constants** (128 tokens per request, 16 per
+message, `system` counted as a message), output tokens by the request's own
+`max_tokens` / `max_completion_tokens`, and the cost is computed in exact
+decimal arithmetic and **rounded up** at the ledger's 1e-6 (never below 1e-6).
+Components covered: **input tokens and output tokens** at the schedule's
+`[input, output]` USD per million tokens. Cache writes and reads, tool and
+server-tool charges and thinking tokens are excluded **because the request
+cannot carry them**: the function accepts only the keys and text-only message
+content the adapters send, and any other key, content block or `cache_control`
+makes the request *unbounded*. The bytes-per-token premise is a documented fact
+for the public OpenAI tokenizers and an **operator-ruled conservative premise**
+(2026-10-27) for Claude models, whose tokenizer is not public; the two overhead
+constants are not provider figures. **Fail closed:** a model missing from the
+price schedule, a model family whose premise is not accepted, a body that is not
+one JSON object, an unknown parameter or content block, a missing output limit,
+or a provider that cannot show its request bytes is refused before any call with
+the distinct reason `cost_unbounded` (never a zero reservation); the pipeline
+marks the output `budget_limited` as for any refused attempt. With the shipped
+defaults (`claude-sonnet-4-6`, the classify prompt, `max_tokens` 1 024) one call
+reserves about USD 0.02.
+
+**Application guarantee versus the provider's invoice.** The ledger is a
+ceiling on the *reserved bounds* the application computes from its own price
+schedule. It is not the invoice: the provider bills by its own tokenizer, price
+list and tiers. Expect the ledger to read at or above the invoice for metered
+calls; reconcile `llm_budget_periods` and `llm_usage_events` against the provider
+console monthly. If a provider ever reports usage above a call's bound (the
+premise failed), the call is still charged **its bound** — `reserved_usd` never
+exceeds the budget, an after-the-fact refusal cannot repair a budget already
+exceeded, so the ledger must not be the thing that exceeds it — and the event is
+logged at ERROR (`llm.cost_bound_violated`), counted
+(`llm_cost_bound_violations_total`) and recorded on the period
+(`bound_violations`), with the provider-reported usage kept in the usage row.
+Any non-zero `bound_violations` means the premise or the price schedule must be
+re-examined before the ledger is trusted for that model; the invoice may then
+exceed the ledger by the excess.
+
+**Uncertain outcomes are charged the worst case.** A timeout, a connection
+failure *after the request was sent* (read, write or protocol error: the
+provider may have processed it; only connect-phase errors, before any byte can
+have left, are known-free), an undecodable reply and a reply with no usage block
+settle at the call's bound (the undecodable-reply charge is a conservative basis
+pending D-LLM-3). A call whose process died between reservation and settlement
+keeps its worst case as the month's spend ("an unknown outcome is charged its
+worst case"); the reservation row is its record. A rejected, rate-limited or
+unavailable (4xx, 429, 5xx) attempt is charged 0 at settlement but has consumed
+its bound at reservation, and the service's retries multiply that
+((`llm_max_retries` + 1) × bound per logical call with no spend).
+
+**Settlement after recovery.** If recovery releases a reservation before its own
 process settles it (the expiry sweep, which never touches a reservation whose job
-still holds a live lease, or a retried attempt's rebind), the worst case stands as
-the charge and the late settlement still writes the call's usage row, logged at
-WARNING (`llm.settlement_after_release`) and counted
-(`llm_settlements_after_release_total`), so reconciliation sees the actual. The
-ledger therefore bounds what the product
-*starts*; the provider's invoice remains the only statement of what was
-*billed* - reconcile `llm_budget_periods` and `llm_usage_events` against the
-provider console monthly, and expect the ledger to read at or above the invoice
-for metered calls, never below. The E6 probe and any call made outside
-`app.llm.service` are not in the ledger.
+still holds a live lease, or a retried attempt's rebind), the worst case stands
+as the charge and the late settlement still writes the call's usage row —
+**exactly once per attempt**, however many processes or repeats settle late (a
+conditional claim, proven on PostgreSQL with concurrent and repeated settlements
+after `released` and after `expired`) — logged at WARNING
+(`llm.settlement_after_release`) and counted
+(`llm_settlements_after_release_total`). A settlement or recovery that finds its
+workspace or organization deleted writes nothing: it logs and counts
+(`llm_settlements_orphaned_total`) and never recreates a period, reservation or
+usage row. The ledger therefore bounds what the product *starts*; the provider's
+invoice remains the only statement of what was *billed*. The E6 probe and any call
+made outside `app.llm.service` are not in the ledger.
 
 Residual limitations of the ledger — the complete list (each is also stated
-where it lives in the code, `app.llm.metering` and `app.llm.budget`):
-1. provider-side billing may differ from the price table; the ledger is a
-   ceiling on reserved worst-case cost, not an invoice (reconcile monthly);
+where it lives in the code, `app.llm.metering`, `app.llm.bound` and
+`app.llm.budget`):
+1. provider-side billing may differ from the price schedule; the bound's
+   tokenizer premise (operator-ruled for Claude) and overhead constants are
+   not provider figures; the ledger is a ceiling on reserved bounds, not an
+   invoice (reconcile monthly);
 2. calls outside the metered service (the E6 probe, anything not through
    `app.llm.service`) are not in the ledger;
 3. a budget lowered mid-month below the amount already reserved is not
    retroactive: nothing is un-reserved, further reservations are refused;
 4. SQLite keeps the per-session behaviour (two runs bound before either
    commits can together exceed the budget); the hard ceiling is PostgreSQL-only;
-5. the worst case assumes about 3 characters per input token: a reply whose
-   actual usage exceeds its estimate is settled at the actual, which raises
-   `reserved_usd` above the budget after the fact (then every reservation is
-   refused until the month rolls over, as above);
-6. a transport failure after the request body was sent is charged 0 (the
-   provider may have processed it; D-LLM-3 territory);
+5. a reply whose usage exceeds its bound (premise failure) is charged the bound,
+   not the usage: the ledger stays within the budget and `bound_violations`
+   says the invoice may exceed it;
+6. a transport failure *before* the request was sent (connect phase) is charged
+   0; every failure after dispatch is charged the worst case;
 7. if the reservation cannot be written (database unavailable) the attempt
    raises before any call: the job fails as transient and the worker retries
    it; the run's outputs are not marked `budget_limited`;
@@ -358,7 +407,12 @@ where it lives in the code, `app.llm.metering` and `app.llm.budget`):
    case as a conservative basis pending D-LLM-3, not an accepted rule;
 10. a reservation that recovery released before its own process settled it is
     charged its worst case; the late settlement still records the call's actual
-    usage (usage row, WARNING, metric) but the budget keeps the worst case.
+    usage (one usage row, WARNING, metric) but the budget keeps the worst case;
+11. the bound is conservative by design: its input part is about three times
+    the earlier characters-per-token estimate (for the shipped defaults, whose
+    output limit dominates, a call reserves about 25% more: USD 0.0213 against
+    0.0171), so a budget admits fewer calls than the provider would bill for;
+    tightening it needs a documented tokenizer.
 
 Nothing here provisions, populates or rotates a key, and nothing here is an
 approved quota or spending authority: the configured LLM budget and call-cap

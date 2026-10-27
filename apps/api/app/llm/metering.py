@@ -15,10 +15,10 @@
   seen.
 * **Per-workspace budget** - the workspace's model spend in a calendar month (UTC)
   must stay within ``llm_workspace_monthly_budget_usd``. Before each provider call
-  the call's worst case is reserved against the month: ~3 characters per input
-  token and a reply of ``max_tokens``, at the model's price. That over-estimates for
-  most English text, but it is an estimate, not a bound: text that tokenises at
-  fewer than 3 characters per token (CJK, emoji, some symbols) is under-estimated.
+  the call's worst case is reserved against the month: :func:`app.llm.bound.worst_case_cost`
+  of the exact request bytes (UTF-8 bytes bound the input tokens, plus stated overhead
+  constants, plus the request's output limit, at the model's price, rounded up at
+  1e-6). A call whose cost cannot be bounded is not made.
 * **Refusal state** - a run is refused at the API with HTTP 429
   ``llm_budget_exhausted`` once the month's budget is spent
   (:func:`ensure_run_allowed`); inside a run, an attempt that would cross the cap or
@@ -35,13 +35,19 @@
 Budget guarantee (D-LLM-1 option B; ledger in :mod:`app.llm.budget`)
 =====================================================================
 
-**The guarantee.** On PostgreSQL, the sum of worst-case costs of all provider calls
-started by a workspace in a UTC calendar month never exceeds the workspace budget as
-configured at reservation time, across any number of processes. Not covered:
-provider-side billing differences from the price table; calls made outside the
-metered service (E6 probe); budget changes mid-month lowering below
-already-reserved amounts; SQLite, where the guarantee degrades to per-session
-(documented, tests pin the degraded behaviour).
+**The guarantee.** On PostgreSQL, the sum of the worst-case cost bounds of all
+provider calls started by a workspace in a UTC calendar month never exceeds the
+workspace budget as configured at reservation time, across any number of processes. A
+call's bound is `worst_case_cost` of the exact request bytes under the configured
+price schedule (UTF-8 bytes bound the tokens, plus stated overhead constants, plus the
+request's output limit, in exact decimal arithmetic rounded up at 1e-6), and a call
+whose cost cannot be bounded is not made. This is the application's defined budget
+guarantee; it is not a statement about the provider's invoice. Not covered: provider-
+side billing differences from the price schedule, including the tokenizer premise and
+overhead constants the bound rests on (stated in `app.llm.bound`); calls made outside
+the metered service (E6 probe); budget changes mid-month lowering below already-
+reserved amounts; SQLite, where the guarantee degrades to per-session (documented,
+tests pin the degraded behaviour).
 
 **How.** With a session factory (the durable worker gives the meter one) on a
 PostgreSQL bind, the meter runs the *shared-ledger* path: before every provider
@@ -55,27 +61,30 @@ transaction, keyed by the attempt (job id, worker attempt, call ordinal), and th
 usage row is written in that same transaction - at settlement, not at run end. A
 second settlement of the same key is a no-op.
 
-**Conservative cost basis.** The reserved amount ``w`` is the worst-case estimate
-above, and it is what the call consumes of the budget: settlement records the charge
-but never lowers the consumed amount (a charge above ``w`` raises it), so the sum the
-guarantee speaks of is exactly the ledger's ``reserved_usd``; the run endpoint's 429
-reports that amount. Settlement is never below the usage the provider reported, even
-when that exceeds ``w``. A timeout settles at ``w`` (the provider may have processed it). A
-reply that arrived but could not be decoded, and a reply carrying no usage block,
-settle at ``w`` - a conservative basis pending D-LLM-3, not an accepted rule. A
-reply the provider rejected or could not serve (4xx, 429, 5xx) and a failed
-connection are charged nothing, as before; a connection that fails after the request
-was sent is therefore a residual (the provider may have processed it). Two
-consequences of this basis: (i) ``reserved_usd`` may exceed the configured budget
-after the fact, by the sum over settled calls of (actual - w)+ - the guarantee is on
-the worst cases of calls *started*, and once the ledger is over the budget every
-further reservation is refused until the month rolls over (measured in review r1: a
-reply of 200 000 input and 1 000 output tokens at the sonnet-4-6 table price settled
-at USD 0.615 against a budget of USD 0.10, after which the next reservation and the
-run endpoint were refused with "USD 0.61 of 0.10"); (ii) a rejected, rate-limited or
-unavailable attempt is charged 0 at settlement but has consumed its worst case ``w``
-of the month at reservation, and the service's retries multiply that: a 429 or 5xx
-storm consumes (``llm_max_retries`` + 1) x w per logical call with no spend.
+**Cost basis (the application's, not the provider's).** The reserved amount ``w`` is
+``worst_case_cost`` of the request bytes the transport sends (:mod:`app.llm.bound`
+states the derivation, its premises with their sources, the pricing components it
+covers - input and output tokens; cache, tool and thinking charges are excluded because
+the request cannot carry them - and every fail-closed case). A request that cannot be
+bounded is refused with the distinct reason ``cost_unbounded`` and reserves nothing.
+``w`` is what the call consumes of the budget: settlement records the charge but never
+changes the consumed amount, so the sum the guarantee speaks of is exactly the ledger's
+``reserved_usd``; the run endpoint's 429 reports that amount. **Invariant: actual <=
+reserved.** If a provider ever reports usage above ``w`` (the bound's premise failed),
+the charge stays ``w`` - an after-the-fact refusal cannot repair an exceeded budget, so
+``reserved_usd`` must never be what exceeds it - and the event is logged at ERROR,
+counted (``llm_cost_bound_violations_total``) and recorded on the period
+(``bound_violations``); the usage row keeps the reported figures. A timeout settles at
+``w`` (the provider may have processed it); so does a **connection failure after the
+request was sent** (read, write or protocol error: the outcome is unknown, not
+known-free; only connect-phase errors, before any byte can have left, cost nothing),
+an undecodable reply, and a reply carrying no usage block (the last two are a
+conservative basis pending D-LLM-3, not an accepted rule). A reply the provider
+rejected or could not serve (4xx, 429, 5xx) is charged nothing at settlement but has
+consumed its ``w`` of the month at reservation, and the service's retries multiply that:
+a 429 or 5xx storm consumes (``llm_max_retries`` + 1) x ``w`` per logical call with no
+spend. The ledger bounds what the application *starts* under its own price schedule; the
+provider's invoice remains the only statement of what was billed.
 
 **Unknown outcomes.** If the process dies between reserving and settling, the
 reservation stays at ``w`` and is the record of that call. Recovery (the worker's
@@ -90,9 +99,13 @@ written (database unavailable), the attempt raises and no call is made. When
 recovery releases a reservation before its own process settles it (a call that
 outlived the expiry window on a job whose lease is gone, or a lost attempt still
 running), the worst case stands as the charge and the late settlement still writes
-the call's usage row, logged at WARNING (``llm.settlement_after_release``) and counted
-(``llm_settlements_after_release_total``); the sweep never expires a reservation whose
-job still holds a live lease.
+the call's usage row - exactly once per attempt, however many processes or repeats
+settle late (a conditional claim) - logged at WARNING (``llm.settlement_after_release``)
+and counted (``llm_settlements_after_release_total``); the sweep never expires a
+reservation whose job still holds a live lease. A settlement, release or sweep that finds
+its workspace or organization deleted writes nothing: it logs and counts
+(``llm_settlements_orphaned_total``), and never recreates a period, reservation or usage
+row.
 
 **SQLite (and any meter without a session factory): the same-session path.** A
 second connection cannot reserve while the run's own session holds the database's
