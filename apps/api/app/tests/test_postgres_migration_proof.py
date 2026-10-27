@@ -248,6 +248,12 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
         "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
         "created_at", "updated_at",
     }
+    # D-9e: the operator's private reason lives in a separate case record (no retention
+    # column: no duration is approved yet).
+    assert _columns(pg_url, "source_takedown_cases") == {
+        "id", "takedown_id", "source_key", "reason", "external_reference",
+        "actor_user_id", "created_at",
+    }
     assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
 
@@ -258,6 +264,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
     assert "source_takedowns" not in _tables(pg_url)
+    assert "source_takedown_cases" not in _tables(pg_url)
     # The revisions below head are untouched.
     assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")

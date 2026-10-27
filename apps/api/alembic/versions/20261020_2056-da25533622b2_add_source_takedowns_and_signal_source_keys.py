@@ -7,11 +7,17 @@ Live-data provenance and takedown (Phase 6, P6-DATA-1 / P6-PRIV-4):
   nothing else (D-9d: no user id, free text or reference — attribution and the public
   request id live in each affected workspace's ``audit_logs``). While a row exists the
   source is never fetched; the key is never reused.
+* ``source_takedown_cases`` — the restricted operator case record of each takedown
+  request (D-9e): an opaque case id (the only reference tenants' audit entries carry),
+  the operator's private free-text ``reason`` and ``external_reference``, the acting
+  operator (``actor_user_id``, ``SET NULL`` on account erasure) and the time. Not
+  exported to customers; its retention duration is pending the operator's separately
+  approved policy, so none is set.
 * ``raw_signals.source_key`` / ``normalized_signals.source_key`` — the approved live
   source that produced a signal, so a takedown can find and purge every signal it
   produced in every tenant. ``NULL`` for simulated fixture and sandbox signals.
 
-**Additive and safe on a live database**: one new table, two nullable indexed columns
+**Additive and safe on a live database**: two new tables, two nullable indexed columns
 on existing tables, nothing dropped or rewritten. The upgrade
 backfills ``source_key`` from the provenance every live signal also carries in
 ``raw_metadata`` / ``ingest_metadata`` (``provenance.source_key``). On a database that
@@ -19,7 +25,7 @@ never ran live egress no row carries provenance and the backfill changes nothing
 a downgrade/upgrade round trip it restores the keys, so a takedown still reaches every
 signal its source produced.
 
-Rollback: ``downgrade`` drops the two indexes and columns and the table. Any recorded
+Rollback: ``downgrade`` drops the two indexes and columns and the tables. Any recorded
 takedown is lost with it, so a downgrade must not run while live egress is enabled:
 code below this revision does not consult takedowns and would fetch a taken-down
 source again. Signals keep their provenance in ``raw_metadata``/``ingest_metadata``,
@@ -59,6 +65,23 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('source_key')
     )
+    op.create_table('source_takedown_cases',
+    sa.Column('takedown_id', sa.String(length=32), nullable=False),
+    sa.Column('source_key', sa.String(length=64), nullable=False),
+    sa.Column('reason', sa.Text(), nullable=False),
+    sa.Column('external_reference', sa.String(length=200), nullable=True),
+    sa.Column('actor_user_id', sa.String(length=32), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('id', sa.String(length=32), nullable=False),
+    sa.ForeignKeyConstraint(['actor_user_id'], ['users.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['takedown_id'], ['source_takedowns.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    with op.batch_alter_table('source_takedown_cases', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_source_takedown_cases_actor_user_id'), ['actor_user_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_source_takedown_cases_source_key'), ['source_key'], unique=False)
+        batch_op.create_index(batch_op.f('ix_source_takedown_cases_takedown_id'), ['takedown_id'], unique=False)
+
     with op.batch_alter_table('normalized_signals', schema=None) as batch_op:
         batch_op.add_column(sa.Column('source_key', sa.String(length=64), nullable=True))
         batch_op.create_index(batch_op.f('ix_normalized_signals_source_key'), ['source_key'], unique=False)
@@ -112,5 +135,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_normalized_signals_source_key'))
         batch_op.drop_column('source_key')
 
+    op.drop_table('source_takedown_cases')
     op.drop_table('source_takedowns')
     # ### end Alembic commands ###

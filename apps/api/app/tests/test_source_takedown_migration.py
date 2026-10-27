@@ -30,6 +30,12 @@ MINIMAL_COLUMNS = {
     "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
     "created_at", "updated_at",
 }
+#: The restricted operator case record (D-9e): opaque id, private reason and external
+#: reference, actor (SET NULL on erasure), time. No retention column: none is approved.
+CASE_COLUMNS = {
+    "id", "takedown_id", "source_key", "reason", "external_reference", "actor_user_id",
+    "created_at",
+}
 
 
 def _previous_revision() -> str:
@@ -131,9 +137,9 @@ def test_a_round_trip_restores_source_keys_so_a_takedown_still_reaches_them(tmp_
     con = sqlite3.connect(db_path)
     try:
         assert "source_key" not in _columns(con, "raw_signals")
-        assert "source_takedowns" not in {
-            r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "source_takedowns" not in tables
+        assert "source_takedown_cases" not in tables
     finally:
         con.close()
 
@@ -148,11 +154,23 @@ def test_a_round_trip_restores_source_keys_so_a_takedown_still_reaches_them(tmp_
         assert list(con.execute("PRAGMA foreign_key_list(source_takedowns)")) == []
         indexes = [r[1] for r in con.execute("PRAGMA index_list(source_takedowns)")]
         assert not any("actor" in name for name in indexes), indexes
+        # D-9e: the private reason lives in the separate case table, which cascades from
+        # the suppression row and sets the actor NULL when the account is erased.
+        assert _columns(con, "source_takedown_cases") == CASE_COLUMNS
+        fks = {
+            (r[2], r[3], r[6])
+            for r in con.execute("PRAGMA foreign_key_list(source_takedown_cases)")
+        }
+        assert fks == {
+            ("source_takedowns", "takedown_id", "CASCADE"),
+            ("users", "actor_user_id", "SET NULL"),
+        }
     finally:
         con.close()
     assert raw == {"raw-live": KEY, "raw-fixture": None, "raw-bad-key": None}
     assert norm == {"norm-live": KEY}
 
+    import app.db.models  # noqa: F401  (the whole mapped schema, as the application loads it)
     from app.connectors.takedown import source_signal_counts, takedown_source
 
     engine = create_engine(f"sqlite:///{db_path}")
