@@ -331,6 +331,8 @@ E7_POLICY: tuple[Policy, ...] = (
     ),
     # P6-PRIV-1: organization export (read-only) and deletion are exactly OWNER.
     _row("GET", f"{_O}/export", "organization", ORG_OWNER, ORG_EXACT, OK_200),
+    # D-9f: one keyset page of one exported table, the same authority as the index.
+    _row("GET", f"{_O}/export/{{table}}", "organization", ORG_OWNER, ORG_EXACT, OK_200),
     _row("POST", f"{_O}/delete", "organization", ORG_OWNER, ORG_EXACT, _body_422()),
     # --- membership only, workspace scope (get_tenant_context, no role checker) ------------
     *(_row("GET", f"{_W}/{c}", "workspace", ALL_ROLES, MEMBER_WS, OK_200) for c in _CONTEXT),
@@ -555,7 +557,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 57,
+            "role_gated": 58,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -568,7 +570,7 @@ class TestPolicyTableCompleteness:
         assert by_category == {
             RANK_FLOOR: 48,
             WS_EXACT: 1,
-            ORG_EXACT: 8,
+            ORG_EXACT: 9,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
@@ -594,7 +596,9 @@ class TestPolicyTableCompleteness:
         # .../reactivate, each a RANK_FLOOR row above.
         # 117 -> 118 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability, a
         # membership-only workspace route.
-        assert len(served) == 123
+        # 123 -> 124 (D-9f): GET /organizations/{organization_id}/export/{table}, an ORG_EXACT
+        # OWNER row above.
+        assert len(served) == 124
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -602,7 +606,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 85
+        assert len(rows) == 86
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -854,6 +858,7 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
     for name, value in (
         ("{workspace_id}", world.workspace_id),
         ("{organization_id}", world.organization_id),
+        ("{table}", "brands"),  # an exported table: the OWNER probe reads a real page
     ):
         path = path.replace(name, value)
     for name in (

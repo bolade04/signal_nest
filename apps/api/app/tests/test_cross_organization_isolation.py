@@ -1337,6 +1337,36 @@ class TestOrganizationPrivacy:
         assert a.ws_id in text and a.request_id in text
         _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/export"))
 
+    def test_export_page_own_scoped_foreign_403_and_non_owner_refused(
+        self, world: World, pov: Pov
+    ):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/export/scout_requests")
+        assert own.status_code == 200, own.text
+        body = own.json()
+        assert body["table"] == "scout_requests" and a.request_id in own.text
+        assert {row["organization_id"] for row in body["rows"]} == {a.org_id}
+        for foreign in (b.org_id, b.ws_id, b.owner_id, b.request_id):
+            assert foreign not in own.text
+        # the other organization's OWNER (this pov) cannot page A's tables, whatever the table
+        _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/export/scout_requests"))
+        # the tenancy gate precedes table and cursor validation: nothing about B is revealed
+        _assert_membership_403(
+            pov.send("GET", f"/organizations/{b.org_id}/export/no_such_table?cursor=x")
+        )
+        # a member who is not an OWNER is refused on their own organization's tables, and
+        # on the other organization's as a non-member
+        own_path = f"{API}/organizations/{a.org_id}/export/scout_requests"
+        refused = pov.world.send("GET", own_path, a.marketer_token)
+        assert _error(refused) == (
+            403, "permission_denied", "Role 'marketer' is not permitted for this action."
+        )
+        assert a.request_id not in refused.text
+        foreign = pov.world.send(
+            "GET", f"{API}/organizations/{b.org_id}/export/scout_requests", a.marketer_token
+        )
+        _assert_membership_403(foreign)
+
     def test_delete_foreign_org_403_and_nothing_deleted(self, world: World, pov: Pov):
         a, b = pov.a, pov.b
         before = {
@@ -1557,6 +1587,9 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         *_PAGED_TEST,
     ),
     ("GET", f"{ORG}/export"): ("TestOrganizationPrivacy::test_export_own_200_scoped_foreign_403",),
+    ("GET", f"{ORG}/export/{{table}}"): (
+        "TestOrganizationPrivacy::test_export_page_own_scoped_foreign_403_and_non_owner_refused",
+    ),
     ("POST", f"{ORG}/delete"): (
         "TestOrganizationPrivacy::test_delete_foreign_org_403_and_nothing_deleted",
         "TestOrganizationPrivacy::test_delete_positive_on_a_throwaway_organization",
@@ -1641,8 +1674,9 @@ class TestCoverageCompleteness:
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
         # 71 -> 85: P6-PLAT-9 +9, P6-UI-023 +2, P6-UI-006 +1 (83), P6-PRIV-1 +2 (organization
-        # export and deletion); the equalities above prove no other operation came or went.
-        assert len(served) == 85
+        # export and deletion); 85 -> 86: D-9f +1 (organization export table page); the
+        # equalities above prove no other operation came or went.
+        assert len(served) == 86
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
