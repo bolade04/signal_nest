@@ -157,6 +157,22 @@ TABLES: dict[str, TableEntry] = {
         # with its workspace/organization, to be revisited before paid launch.
         TableEntry("llm_usage_events", Category.OPERATIONAL, exported=True),
         TableEntry("worker_registrations", Category.SYSTEM, exported=False),
+        # The permanent suppression record of a live source an operator took down
+        # (P6-PRIV-4). Operator decision D-9d (2026-10-27): suppression key, time and
+        # counts only; attribution is in audit_logs, whose affected-workspace rows
+        # (``data_source.taken_down``) carry the acting operator, a fixed generic
+        # explanation and the opaque case id under that table's retention. Platform-wide
+        # (no tenant key): never exported; no retention class — the row *is* the
+        # suppression and is kept as long as the key must stay down.
+        TableEntry("source_takedowns", Category.SYSTEM, exported=False),
+        # The restricted operator case record of each takedown request (operator decision
+        # D-9e, 2026-10-27): the free-text reason and the operator's own ticket id, the
+        # acting operator (``actor_user_id`` is SET NULL when that account is erased) and
+        # the opaque case id that customer-visible audit entries carry. Operator-only
+        # (GET /internal/system/data-sources/{key}/cases); never exported; never in a
+        # tenant API, log or metric. Retention duration pending operator decision (D-9e
+        # access/retention policy): no retention class and no duration is set here.
+        TableEntry("source_takedown_cases", Category.COMPLIANCE, exported=False),
     )
 }
 

@@ -16,9 +16,13 @@ Two proofs, on a database of this module's own:
   deleted (audit expiry); ``purge_summary`` / ``repeat_purges`` cleared. Anonymising or
   expiring metadata can never re-enable fetching a taken-down source.
 
-The account-deletion route is not on this branch (#246); the actor is deleted through
-the ORM with the schema's own ON DELETE rules (``PRAGMA foreign_keys=ON``), which is
-what that route's erasure walk would do to the foreign keys.
+The first proof deletes the actor through the ORM with the schema's own ON DELETE rules
+(``PRAGMA foreign_keys=ON``). With P6-PRIV-1 merged, further variants use the real
+mechanisms: the retention sweep expiring the ``audit_logs`` class, and the account-deletion
+route erasing the operator's account together with the organization it is the only
+member of (which anonymises and deletes that tenant's audit rows) -- the case records
+stay, with the actor link cleared -- and the organization export, which never carries the
+private reason (D-9e).
 """
 
 from __future__ import annotations
@@ -26,11 +30,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.audit.models import AuditLog
@@ -49,13 +53,16 @@ from app.connectors.takedown import (
 from app.core.config import Settings, get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.errors import ValidationDomainError
-from app.organizations.models import User
+from app.organizations.models import Organization, User
+from app.privacy import retention
+from app.privacy.inventory import RetentionClass
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal
 from app.tests._auth2_support import (
     ALICE,
     BOB,
     EMAIL,
+    OLD_PASSWORD,
     ORG_A,
     ORG_B,
     WS_A,
@@ -474,3 +481,120 @@ def test_suppression_survives_erasure_anonymisation_and_expiry_of_every_metadata
     assert entry["activatable"] is False and entry["stored"]["raw_signals"] == 0
     again = world.take_down(BOB, "TKD-PRIV-2")
     assert again["already_taken_down"] is True
+
+
+def test_suppression_survives_the_retention_sweep_expiring_the_audit_rows(world: World):
+    """The audit_logs retention class purges the per-workspace takedown entries (the only
+    rows that carry attribution and the case id); the suppression and the operator case
+    records are untouched (no retention class covers the case record: pending D-9e)."""
+    world.take_down(ALICE, REFERENCE)
+    world.take_down(ALICE, REPEAT_REFERENCE)
+    with world.session() as s:
+        entries = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
+        assert len(entries) == 2
+        # Older than any cut-off the sweep can compute from the smallest duration.
+        s.execute(
+            update(AuditLog)
+            .where(AuditLog.action == AUDIT_ACTION)
+            .values(created_at=datetime.now(UTC) - timedelta(days=400))
+        )
+        s.commit()
+    outcomes = {
+        o.data_class: o
+        for o in retention.sweep(
+            world.factory,
+            classes=(RetentionClass.AUDIT_LOGS,),
+            settings=Settings(_env_file=None, retention_audit_logs_days=1),
+        )
+    }
+    outcome = outcomes[RetentionClass.AUDIT_LOGS.value]
+    assert outcome.status == "purged" and outcome.complete
+    assert outcome.deleted.get("audit_logs") == 2
+    with world.session() as s:
+        assert s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all() == []
+        row = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == KEY))
+        assert row is not None and len(row.repeat_purges) == 1
+        assert s.scalar(select(func.count()).select_from(SourceTakedownCase)) == 2
+        _assert_still_suppressed(s, step="audit rows expired by the retention sweep")
+
+
+def test_suppression_survives_the_account_deletion_route(world: World):
+    """The operator deletes their own account through POST /account/delete. BOB is the
+    only member of ORG_B, so the walk erases that organization too (tenant content,
+    its audit rows anonymised); the platform-wide suppression record is not reachable
+    from either and stays exactly as it was. The case records are kept, actor cleared."""
+    first = world.take_down(BOB, REFERENCE)
+    second = world.take_down(BOB, REPEAT_REFERENCE)
+    before = world.row()
+    r = world.env.client.post(
+        f"{API}/account/delete",
+        headers={"Authorization": f"Bearer {bearer(world.env, BOB)}"},
+        json={"current_password": OLD_PASSWORD, "confirmation": "DELETE"},
+    )
+    assert r.status_code == 200, r.text
+    receipt = r.json()
+    assert receipt["user_id"] == BOB and receipt["verification"]["references_cleared"] is True
+    assert [o["organization_id"] for o in receipt["deleted_organizations"]] == [ORG_B]
+    with world.session() as s:
+        assert s.get(User, BOB) is None and s.get(Organization, ORG_B) is None
+        remaining = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
+        # Both entries are retained with the actor anonymised; ORG_B's, whose organization
+        # was erased with the account, is fully anonymised (context cleared), while ORG_A's
+        # still carries the opaque case id.
+        assert {e.organization_id for e in remaining} == {ORG_A, ORG_B}
+        assert all(e.actor_user_id is None for e in remaining)
+        assert all(e.context == {} for e in remaining if e.organization_id == ORG_B)
+        assert all(
+            e.context["case_id"] == first["case_id"]
+            for e in remaining
+            if e.organization_id == ORG_A
+        )
+        cases = s.scalars(select(SourceTakedownCase).order_by(SourceTakedownCase.created_at)).all()
+        assert [c.id for c in cases] == [first["case_id"], second["case_id"]]
+        assert all(c.actor_user_id is None for c in cases)  # SET NULL; the case is kept
+        assert [c.reason for c in cases] == [REASON, REPEAT_REASON]
+        assert world.row() == before
+        _assert_still_suppressed(s, step="actor erased through the account-deletion route")
+    _assert_nothing_identifying(
+        world.row(),
+        forbidden={BOB, EMAIL[BOB], REFERENCE, REPEAT_REFERENCE, REASON, REPEAT_REASON},
+        repeats=1,
+    )
+
+
+def test_the_private_takedown_text_never_reaches_the_organization_or_account_export(
+    world: World,
+):
+    """D-9e: the operator's reason and ticket id are in the case record only. The
+    organization export (every page of every exported table) and the account export of the
+    operator carry the tenant audit row -- generic sentence and case id -- and nothing the
+    operator typed; neither takedown table is exported."""
+    taken = world.take_down(ALICE, REFERENCE)
+    headers = {"Authorization": f"Bearer {bearer(world.env, ALICE)}"}
+    index = world.env.client.get(f"{API}/organizations/{ORG_A}/export", headers=headers)
+    assert index.status_code == 200, index.text
+    body = index.json()
+    assert "source_takedowns" not in body["tables"]
+    assert "source_takedown_cases" not in body["tables"]
+    assert {"source_takedowns", "source_takedown_cases"} <= set(body["not_exported"])
+    pages = [body]
+    for table, first in body["tables"].items():
+        cursor = first.get("next_cursor")
+        while cursor:
+            page = world.env.client.get(
+                f"{API}/organizations/{ORG_A}/export/{table}",
+                headers=headers,
+                params={"cursor": cursor, "limit": 5000},
+            )
+            assert page.status_code == 200, page.text
+            pages.append(page.json())
+            cursor = page.json().get("next_cursor")
+    rendered = json.dumps(pages, default=str)
+    # Positive control: the export did carry the tenant audit row of the takedown.
+    assert AUDIT_ACTION in rendered and taken["case_id"] in rendered
+    for private in (REASON, REFERENCE, "Counsel memo"):
+        assert private not in rendered, private
+    account = world.env.client.get(f"{API}/account/export", headers=headers)
+    assert account.status_code == 200, account.text
+    for private in (REASON, REFERENCE, "Counsel memo"):
+        assert private not in account.text, private
