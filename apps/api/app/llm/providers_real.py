@@ -19,6 +19,13 @@ provider's error *type* and request id - never a response body, prompt text or k
 The HTTP client is injectable so tests replay recorded responses through
 ``httpx.MockTransport``; no test reaches a live provider.
 
+Cookies: the process holds one provider, and so one client, for every tenant
+(``app.llm.service.llm_service``). The adapter gives that client - its own or an
+injected one - a cookie jar whose policy refuses every cookie (:class:`_NoCookiePolicy`):
+a cookie a reply to one tenant's call tries to set is never stored, so it is never sent
+with another tenant's request. There is no shared cookie state to clear, or to race on
+between worker threads.
+
 Wire shapes (Anthropic): ``POST /v1/messages`` with ``x-api-key`` and
 ``anthropic-version: 2023-06-01``; reply ``content`` is a list of typed blocks,
 ``stop_reason`` is one of ``end_turn | max_tokens | stop_sequence | tool_use |
@@ -34,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 
 import httpx
@@ -177,6 +185,20 @@ def _token_count(usage: Any, key: str) -> int:
     return value
 
 
+class _NoCookiePolicy(DefaultCookiePolicy):
+    """A cookie policy that accepts no cookie from any reply.
+
+    httpx 0.28 stores a reply's cookies with ``Cookies.extract_cookies`` ->
+    ``CookieJar.extract_cookies``, which keeps a cookie only if the policy's
+    ``set_ok`` allows it. Refusing every cookie there keeps the jar empty, so the
+    client has no cookie to merge into any later request, on any thread. The policy
+    holds no state, and the jar it guards never holds any.
+    """
+
+    def set_ok(self, cookie: Any, request: Any) -> bool:
+        return False
+
+
 class _HTTPProvider:
     name = ""
 
@@ -192,6 +214,11 @@ class _HTTPProvider:
         self.model = model
         self.timeout = timeout
         self._client = client if client is not None else httpx.Client(timeout=timeout)
+        # Never keep provider cookies: one client serves every tenant
+        # (P6-LLM-4). A bare ``CookieJar`` becomes the client's jar itself
+        # (``httpx.Cookies(jar)``); this also drops any cookie an injected client was
+        # built with.
+        self._client.cookies = CookieJar(policy=_NoCookiePolicy())
 
     def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> httpx.Response:
         try:
