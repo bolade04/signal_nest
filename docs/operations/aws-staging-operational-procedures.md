@@ -197,7 +197,12 @@ The application holds a single signing key (no dual-key window), so rotation
 restart. Procedure: generate a new strong value → §3 population → restart
 API/worker tasks in one window → expect forced re-authentication. Schedule
 deliberately; this is not a zero-downtime rotation. (Key-versioning support
-would be a separate application change.)
+would be a separate application change.) `SECRET_KEY` is also the HMAC key of
+the opaque per-workspace tenant reference sent to the LLM provider
+(`app.llm.metering.tenant_reference`), so rotating it **changes every tenant
+reference**: the provider sees each workspace under a new identifier from the
+first call a new task makes. Usage rows (`llm_usage_events`) carry workspace
+ids, not the reference, so metering and budgets are unaffected.
 
 ### 5.2 `DATABASE_URL` — application-role credential rotation
 
@@ -236,10 +241,63 @@ only if the **endpoint** changes (e.g., replication-group replacement) —
 recompose and repopulate then. Do not invent an auth-token rotation path; one
 does not exist under the current locked design.
 
-### 5.4 `LLM_API_KEY` — provider rotation
-Issue a new key at the provider (dedicated staging key, low spend cap) → §3
-population → restart api/worker → revoke the old key at the provider. Provider
-revocation is the authoritative kill switch.
+### 5.4 `LLM_API_KEY` — provider rotation (restart-based)
+The credential contract is **one platform-owned provider key per environment**
+(`<name_prefix>/LLM_API_KEY`), shared by every tenant; there are no per-tenant
+keys. Rotation is **restart-based**: no running process ever re-reads the key.
+
+**Which processes hold the key, and when they read it.**
+- **API tasks** (`uvicorn app.main:app`) and **worker tasks**
+  (`python -m app.jobs.worker`) both receive `LLM_API_KEY` (the `api` and
+  `worker` secret subsets in `infra/aws/modules/ecs`). ECS resolves the secret
+  once, at **task start**, into the container environment.
+- In both processes, importing the application imports
+  `app.llm.service`, whose module-level `llm_service` builds the provider at
+  **import time** from `get_settings()`. `get_settings()` is cached for the
+  life of the process (`@lru_cache`), and the provider keeps the key it was
+  built with. The API process holds the key this way even though it does not
+  call the provider itself (runs execute on the worker).
+- The one-shot **migration** task does not receive `LLM_API_KEY` and does not
+  import `app.llm.service`. The E6 live probe (`python -m app.llm.live_probe`,
+  a separately authorized one-off task) reads the key when it starts.
+- Consequence: a new key takes effect **only in tasks started after the secret
+  changes**. A task that is already running keeps sending the old key until it
+  stops; there is no reload signal and no in-process refresh.
+
+**Procedure.** Issue a new key at the provider (dedicated staging key, low
+spend cap) → §3 population → **replace every API and every worker task**
+(all services, all tasks, including any scaled-out or one-off task started
+before the change) **while the old key is still valid** → confirm no task
+started before the secret change is still running → only then revoke the old
+key at the provider. Revoking first, or leaving any old task running, makes
+that task's provider calls fail (permanent provider errors) until it is
+replaced. Provider revocation remains the authoritative kill switch; in an
+exposure incident (§5.5) revoke immediately and accept those failures.
+
+**In-flight jobs during the task replacement.** A worker task being replaced
+gets `SIGTERM`: it stops claiming jobs and waits up to
+`worker_shutdown_grace_seconds` (one shared deadline for all slots,
+`JobRunner.join`) for in-flight attempts to finish. An attempt that finishes
+inside that grace completes normally on the **old** key and its usage rows are
+recorded as usual (in the run's transaction, or by the after-rollback write if
+the attempt fails); that is why the old key must stay valid until the old
+tasks are gone. The unrecorded case is narrower: an attempt **still running
+when the grace ends** (the slot threads are daemon threads, so the process
+exits under them), when a second signal shortens the grace to
+`worker_force_shutdown_grace_seconds`, or when the task is killed (`SIGKILL`
+at the task's `stopTimeout`) is abandoned mid-attempt. Its usage is held only
+in memory and is **not recorded**; its lease expires and a worker on a new
+task re-runs the job with the new key, starting from the recorded spend only.
+This is the existing "worker dies mid-attempt" unrecorded-spend gap
+documented in `app.llm.metering`; rotation does not close it. Keeping
+`worker_shutdown_grace_seconds` above the longest expected scout run (and the
+worker `stopTimeout` at or above it, as `infra/aws/modules/ecs` already
+requires) and rotating at a low-traffic time reduce, but do not remove, that
+exposure.
+
+Nothing here provisions, populates or rotates a key, and nothing here is an
+approved quota or spending authority: the configured LLM budget and call-cap
+values are engineering defaults, not a hard ceiling on provider spend.
 
 ### 5.5 Incident boundary (INFRA-6 vs INFRA-7)
 **INFRA-6 owns the mechanics** above: how to safely place a new value and roll
