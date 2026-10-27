@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 
@@ -57,9 +58,10 @@ from app.llm.base import (
     LLMUnavailableError,
     LLMUsage,
 )
+from app.llm.bound import encode_body
 from app.llm.prompts import SYSTEM_PROMPT, render_prompt
 
-__all__ = ["SYSTEM_PROMPT", "AnthropicProvider", "OpenAIProvider"]
+__all__ = ["SYSTEM_PROMPT", "AnthropicProvider", "OpenAIProvider", "PreparedCall"]
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -80,6 +82,27 @@ _RETRYABLE_STATUS = frozenset({408, 409})
 _FENCED_JSON = re.compile(r"\A```(?:json)?[ \t]*\n(.*)\n```\Z", re.DOTALL)
 _ERROR_TYPE = re.compile(r"[a-z_]{1,64}")
 _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+@dataclass(frozen=True)
+class PreparedCall:
+    """One provider request exactly as it is sent: URL, headers and the body bytes.
+
+    ``content`` is what the transport writes as the request body, byte for byte
+    (:func:`app.llm.bound.encode_body`); the budget bound is computed from the same
+    bytes (:func:`app.llm.bound.worst_case_cost`).
+    """
+
+    url: str
+    headers: dict[str, str]
+    content: bytes
+
+
+#: httpx errors raised before any request byte can have left: connecting (TCP/TLS) and
+#: acquiring a pooled connection. Every other transport error (a write or read error, a
+#: protocol error, a dropped connection) may have happened after the provider received
+#: the request, so its outcome is unknown and is charged the worst case.
+_NOT_DISPATCHED = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 
 def _render(request: LLMRequest) -> str:
@@ -220,15 +243,27 @@ class _HTTPProvider:
         # built with.
         self._client.cookies = CookieJar(policy=_NoCookiePolicy())
 
-    def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> httpx.Response:
+    def _prepare(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> PreparedCall:
+        return PreparedCall(
+            url=url,
+            headers={**headers, "content-type": "application/json"},
+            content=encode_body(body),
+        )
+
+    def _post(self, call: PreparedCall) -> httpx.Response:
         try:
-            resp = self._client.post(url, headers=headers, json=body, timeout=self.timeout)
+            resp = self._client.post(
+                call.url, headers=call.headers, content=call.content, timeout=self.timeout
+            )
         except httpx.TimeoutException as exc:
             raise LLMTimeoutError(f"{self.name} request timed out") from exc
         except httpx.TransportError as exc:
-            raise LLMUnavailableError(
+            unavailable = LLMUnavailableError(
                 f"{self.name} connection failed ({type(exc).__name__})"
-            ) from exc
+            )
+            # Request body possibly sent, no response: unknown, not known-free usage.
+            unavailable.outcome_unknown = not isinstance(exc, _NOT_DISPATCHED)
+            raise unavailable from exc
         _raise_for_status(resp, self.name)
         return resp
 
@@ -263,8 +298,7 @@ class OpenAIProvider(_HTTPProvider):
     ):
         super().__init__(api_key, model or "gpt-4o-mini", timeout, client=client)
 
-    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
-        started = time.perf_counter()
+    def prepare(self, request: LLMRequest) -> PreparedCall:
         body: dict[str, Any] = {
             "model": self.model,
             "temperature": request.temperature,
@@ -277,7 +311,11 @@ class OpenAIProvider(_HTTPProvider):
         }
         if request.tenant_ref:
             body["user"] = request.tenant_ref
-        resp = self._post(OPENAI_CHAT_URL, {"Authorization": f"Bearer {self.api_key}"}, body)
+        return self._prepare(OPENAI_CHAT_URL, {"Authorization": f"Bearer {self.api_key}"}, body)
+
+    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
+        started = time.perf_counter()
+        resp = self._post(self.prepare(request))
         data = _json_body(resp, self.name)
         raw_usage = data.get("usage")
         usage = LLMUsage(
@@ -314,8 +352,7 @@ class AnthropicProvider(_HTTPProvider):
     ):
         super().__init__(api_key, model or "claude-sonnet-4-6", timeout, client=client)
 
-    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
-        started = time.perf_counter()
+    def prepare(self, request: LLMRequest) -> PreparedCall:
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": request.max_tokens,
@@ -327,11 +364,15 @@ class AnthropicProvider(_HTTPProvider):
         if request.tenant_ref:
             # Opaque per-tenant reference for the provider's abuse signals (P6-LLM-4).
             body["metadata"] = {"user_id": request.tenant_ref}
-        resp = self._post(
+        return self._prepare(
             ANTHROPIC_MESSAGES_URL,
             {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION},
             body,
         )
+
+    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
+        started = time.perf_counter()
+        resp = self._post(self.prepare(request))
         data = _json_body(resp, self.name)
         raw_usage = data.get("usage")
         usage = LLMUsage(

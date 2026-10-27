@@ -20,17 +20,21 @@ reserved call, keyed by attempt).
   COMMITTED a waiter re-evaluates the condition after the lock is released, so any
   number of processes reserving against one workspace serialise correctly.
 * :func:`settle` - records a ``reserved`` row's settled amount (``settled_usd +=
-  settled``) and writes the usage row; keyed by ``attempt_key`` and conditional on the
-  row still being ``reserved``, so a second settlement of the same key is a no-op. A
-  settlement that arrives after recovery already released or expired the row changes
-  no money (the worst case stands) but still writes the call's usage row, logs
+  charge``) and writes the usage row; keyed by ``attempt_key`` and conditional on the
+  row still being ``reserved``, so a second or concurrent settlement of the same key is
+  a no-op. A settlement that arrives after recovery already released or expired the row
+  changes no money (the worst case stands) but still writes the call's usage row - once,
+  claimed by ``usage_recorded_at`` however many processes settle late - logs
   ``llm.settlement_after_release`` at WARNING and counts
   ``llm_settlements_after_release_total``, so reconciliation sees the actual. The
-  budget stays consumed by the call's **worst case**: settlement never lowers
-  ``reserved_usd`` (it raises it, by ``settled - w``, only when the provider reported
-  more than the estimate). ``reserved_usd`` is therefore always at least the sum of the
-  worst cases of every call started this month, which is what makes the guarantee
-  stated in :mod:`app.llm.metering` exact rather than "up to the estimate error".
+  budget stays consumed by the call's **worst-case bound**: settlement never lowers
+  ``reserved_usd``, and never raises it either: the charge is ``min(reported,
+  reservation)``. The bound is a true upper bound (:mod:`app.llm.bound`), so a report
+  above it means its premise failed: ERROR ``llm.cost_bound_violated``, counter
+  ``llm_cost_bound_violations_total``, ``bound_violations`` on the period; the bound
+  stays the charge, so ``reserved_usd`` never exceeds the budget. A settlement for a
+  reservation whose workspace or organization was deleted only logs and counts
+  (``llm_settlements_orphaned_total``); it never recreates a row.
 * :func:`record_settled` - the same-session path (SQLite, or no session factory):
   writes a reservation row that is already settled, plus the period and usage rows,
   idempotently per attempt key. Nothing precedes the call on this path.
@@ -44,11 +48,12 @@ reserved call, keyed by attempt).
   lowers ``reserved_usd``; it only adds the amount to ``settled_usd``. A leaked
   reservation under-spends the budget, never over-spends it.
 
-Cost basis (conservative): the worst case ``w`` is the meter's estimate (ceil(prompt
-characters / 3) input tokens plus ``max_tokens`` output tokens at the model's price).
-Settlement is never below the usage the provider reported; a timeout, an undecodable
-or usage-less reply settle at ``w`` (the undecodable-reply charge is a conservative
-basis pending D-LLM-3, not an accepted rule).
+Cost basis (conservative): the worst case ``w`` is :func:`app.llm.bound.worst_case_cost`
+of the exact request body (bytes bound tokens, plus stated overhead constants, plus
+``max_tokens`` at the model's price, rounded up at 1e-6), and an attempt whose cost cannot
+be bounded is not made. A timeout, a connection failure after the request was sent, an
+undecodable or usage-less reply settle at ``w`` (the undecodable-reply charge is a
+conservative basis pending D-LLM-3, not an accepted rule).
 """
 
 from __future__ import annotations
@@ -59,18 +64,24 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.logging import get_logger, log_event
 from app.core.metrics import (
+    LLM_COST_BOUND_VIOLATIONS_TOTAL,
     LLM_RESERVATIONS_RELEASED_TOTAL,
     LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
+    LLM_SETTLEMENTS_ORPHANED_TOTAL,
     get_metrics,
 )
 from app.jobs.models import Job
 from app.jobs.status import TERMINAL_STATUSES, JobStatus
+from app.llm.bound import Unbounded, worst_case_cost
 from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
+
+__all__ = ["Unbounded", "worst_case_cost"]  # the bound lives in app.llm.bound
 
 logger = get_logger("signalnest.llm")
 
@@ -235,76 +246,165 @@ def settle(
 ) -> bool:
     """Record the reservation ``attempt_key``'s settled amount; write its usage row.
 
-    Idempotent: only a row still ``reserved`` is settled (one conditional update), so a
-    second call for the same key changes nothing and returns ``False``. A call whose
-    reservation recovery already ``released`` or ``expired`` (the sweep or a rebind won
-    the race against a live call) also returns ``False`` and moves no money - the
-    worst case stands as the charge - but its usage row IS still written when
-    ``usage`` is given, with a WARNING and a metric, so the call's actual usage and
-    outcome reach reconciliation. The period keeps the call's worst case as consumed
-    budget; ``settled_usd`` records what the call was charged, and only a charge above
-    the worst case raises ``reserved_usd``. ``usage`` holds the usage row's own columns
-    (``scout_request_id``, ``task``, ``provider``, ``model``, tokens, ``cost_usd``,
-    ``outcome``); the tenant and job columns come from the reservation.
+    Idempotent and race-free. Only a row still ``reserved`` is settled (one conditional
+    update that also claims the attempt's usage row, ``usage_recorded_at``), so a second
+    or concurrent settlement of the same key changes nothing and returns ``False``. A
+    call whose reservation recovery already ``released`` or ``expired`` (the sweep or a
+    rebind won the race against a live call, including a race lost between our read and
+    our update) also returns ``False`` and moves no money - the worst case stands as the
+    charge - but its usage row IS written, once however many times or from however many
+    processes the late settlement arrives (:func:`_record_late_settlement`), with a
+    WARNING and a metric, so the call's actual usage and outcome reach reconciliation.
+
+    The charge is ``min(settled_usd, reservation)``: the reservation is a true upper bound
+    (:func:`app.llm.bound.worst_case_cost`), so a larger reported usage means the bound's
+    premise failed. That is logged at ERROR, counted (``llm_cost_bound_violations_total``)
+    and recorded on the period (``bound_violations``); the bound stays the charge, the
+    usage row keeps what the provider reported, and ``reserved_usd`` never exceeds the
+    budget by it. Settlement never lowers ``reserved_usd``. ``usage`` holds the usage
+    row's own columns; the tenant and job columns come from the reservation.
+
+    A reservation that no longer exists (its workspace or organization was deleted)
+    writes nothing: it is logged and counted (``llm_settlements_orphaned_total``) only.
     """
     reservation = db.scalar(
         select(LLMBudgetReservation).where(LLMBudgetReservation.attempt_key == attempt_key)
     )
     if reservation is None:
+        _orphaned(attempt_key, "settle")
         return False
     if reservation.state != RESERVED:
-        if reservation.state in (RELEASED, EXPIRED) and usage is not None:
-            _record_late_settlement(db, reservation, usage)
+        _late_settlement(db, reservation, usage, now=now)
         return False
+    worst = usd(reservation.reserved_usd)
+    charge = min(settled_usd, worst)
     claimed = db.execute(
         update(LLMBudgetReservation)
         .where(
             LLMBudgetReservation.id == reservation.id,
             LLMBudgetReservation.state == RESERVED,
         )
-        .values(state=SETTLED, settled_usd=settled_usd, settled_at=now, updated_at=now),
+        .values(
+            state=SETTLED,
+            settled_usd=charge,
+            settled_at=now,
+            updated_at=now,
+        ),
         execution_options={"synchronize_session": False},
     )
     if claimed.rowcount != 1:
         return False
-    worst = usd(reservation.reserved_usd)
-    above_worst = settled_usd - worst if settled_usd > worst else Decimal(0)
-    db.execute(
+    violated = settled_usd > worst
+    period_claimed = db.execute(
         update(LLMBudgetPeriod)
         .where(
             LLMBudgetPeriod.workspace_id == reservation.workspace_id,
             LLMBudgetPeriod.period_start == reservation.period_start,
         )
         .values(
-            reserved_usd=LLMBudgetPeriod.reserved_usd + above_worst,
-            settled_usd=LLMBudgetPeriod.settled_usd + settled_usd,
+            settled_usd=LLMBudgetPeriod.settled_usd + charge,
+            bound_violations=LLMBudgetPeriod.bound_violations + (1 if violated else 0),
             updated_at=now,
         ),
         execution_options={"synchronize_session": False},
     )
+    if violated:
+        _report_violation(reservation, reported=settled_usd, bound=worst, stage="settle")
     if usage is not None:
-        db.add(_usage_row(reservation, usage))
+        _add_usage(db, reservation, usage, attempt_key)
+    elif period_claimed.rowcount != 1:
+        _orphaned(attempt_key, "settle")
     db.flush()
     return True
 
 
-def _record_late_settlement(
-    db: Session, reservation: LLMBudgetReservation, usage: dict[str, Any]
+def _add_usage(
+    db: Session, reservation: LLMBudgetReservation, usage: dict[str, Any], attempt_key: str
 ) -> None:
-    """The usage row of a call settled after recovery released its reservation."""
-    db.add(_usage_row(reservation, usage))
-    db.flush()
-    get_metrics().increment(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome=reservation.state)
+    """Insert the usage row; if its parent vanished meanwhile, log and count instead."""
+    try:
+        with db.begin_nested():
+            db.add(_usage_row(reservation, usage))
+            db.flush()
+    except IntegrityError:
+        _orphaned(attempt_key, "usage_row")
+
+
+def _late_settlement(
+    db: Session,
+    reservation: LLMBudgetReservation,
+    usage: dict[str, Any] | None,
+    *,
+    now: datetime,
+) -> None:
+    """A settlement for a reservation that is no longer ``reserved``.
+
+    ``settled``: a duplicate - nothing to do. ``released``/``expired``: record the
+    usage row exactly once (the ``usage_recorded_at`` claim), count it, and flag a
+    bound violation if the call reported more than the reservation.
+    """
+    if usage is None or reservation.state not in (RELEASED, EXPIRED):
+        return
+    state = reservation.state
+    worst = usd(reservation.reserved_usd)
+    reported = usd(usage.get("cost_usd", 0))
+    violated = reported > worst
+    if violated:
+        db.execute(
+            update(LLMBudgetPeriod)
+            .where(
+                LLMBudgetPeriod.workspace_id == reservation.workspace_id,
+                LLMBudgetPeriod.period_start == reservation.period_start,
+            )
+            .values(
+                bound_violations=LLMBudgetPeriod.bound_violations + 1,
+                updated_at=now,
+            ),
+            execution_options={"synchronize_session": False},
+        )
+        _report_violation(reservation, reported=reported, bound=worst, stage="late_settle")
+    _add_usage(db, reservation, usage, reservation.attempt_key)
+    get_metrics().increment(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome=state)
     log_event(
         logger,
         "llm.settlement_after_release",
         level=logging.WARNING,
         component="llm",
-        outcome=reservation.state,
+        outcome=state,
         job_id=reservation.job_id,
         attempt_key=reservation.attempt_key,
-        reservation_state=reservation.state,
+        reservation_state=state,
         call_outcome=usage.get("outcome"),
+    )
+
+
+def _report_violation(
+    reservation: LLMBudgetReservation, *, reported: Decimal, bound: Decimal, stage: str
+) -> None:
+    get_metrics().increment(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome=stage)
+    log_event(
+        logger,
+        "llm.cost_bound_violated",
+        level=logging.ERROR,
+        component="llm",
+        outcome="bound_violated",
+        job_id=reservation.job_id,
+        attempt_key=reservation.attempt_key,
+        reported_usd=str(reported),
+        bound_usd=str(bound),
+    )
+
+
+def _orphaned(attempt_key: str, stage: str) -> None:
+    """A late callback for a reservation whose tenant was deleted: log and count only."""
+    get_metrics().increment(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome=stage)
+    log_event(
+        logger,
+        "llm.settlement_orphaned",
+        level=logging.WARNING,
+        component="llm",
+        outcome=stage,
+        attempt_key=attempt_key,
     )
 
 
@@ -318,14 +418,21 @@ def record_settled(
     settled_usd: Decimal,
     now: datetime,
     usage: dict[str, Any] | None = None,
+    worst_usd: Decimal | None = None,
 ) -> bool:
     """The same-session path: record one finished call as an already-settled reservation.
 
     Writes the reservation row (``settled``, reserved = settled = the charge), adds the
     charge to the period's ``reserved_usd`` and ``settled_usd``, and writes the usage
     row - all in the caller's transaction, once per attempt key: a key already present
-    changes nothing and returns ``False``.
+    changes nothing and returns ``False``. When ``worst_usd`` (the call's bound) is given
+    and the reported charge exceeds it, the charge is the bound and the violation is
+    logged, counted and recorded on the period, as in :func:`settle`.
     """
+    violated = worst_usd is not None and settled_usd > worst_usd
+    reported = settled_usd
+    if violated:
+        settled_usd = worst_usd
     period_start = period_start_for(now)
     insert = _dialect_insert(db)
     inserted = db.execute(
@@ -364,10 +471,24 @@ def record_settled(
         .values(
             reserved_usd=LLMBudgetPeriod.reserved_usd + settled_usd,
             settled_usd=LLMBudgetPeriod.settled_usd + settled_usd,
+            bound_violations=LLMBudgetPeriod.bound_violations + (1 if violated else 0),
             updated_at=now,
         ),
         execution_options={"synchronize_session": False},
     )
+    if violated:
+        get_metrics().increment(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="same_session")
+        log_event(
+            logger,
+            "llm.cost_bound_violated",
+            level=logging.ERROR,
+            component="llm",
+            outcome="bound_violated",
+            job_id=job_id,
+            attempt_key=attempt_key,
+            reported_usd=str(reported),
+            bound_usd=str(worst_usd),
+        )
     if usage is not None:
         db.add(
             LLMUsageEvent(

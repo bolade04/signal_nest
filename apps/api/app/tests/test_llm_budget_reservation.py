@@ -33,6 +33,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
 from app.core.metrics import (
+    LLM_COST_BOUND_VIOLATIONS_TOTAL,
     LLM_RESERVATIONS_RELEASED_TOTAL,
     LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
     InMemoryMetrics,
@@ -57,7 +58,7 @@ from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
 from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
 from app.organizations.models import Organization, Workspace
-from app.tests._llm_offline import offline_llm, offline_settings
+from app.tests._llm_offline import offline_llm, offline_settings, wire_payload
 
 KEY = "fixture-key"
 MODEL = "claude-sonnet-4-6"
@@ -193,14 +194,31 @@ def test_settle_records_the_actual_once_keeps_the_worst_case_and_writes_the_usag
         assert (usage.workspace_id, usage.organization_id, usage.cost_usd) == (WS, ORG, 0.0105)
 
 
-def test_settlement_is_never_below_the_reported_actual_even_above_the_worst_case(factory):
+def test_a_report_above_the_bound_charges_the_bound_and_counts_a_violation(factory, caplog):
+    """The bound is a true upper bound: usage above it means its premise failed. The
+    bound stays the charge (reserved_usd never exceeds the budget), the usage row keeps
+    what the provider reported, and the violation is logged, counted and on the period."""
     w, budget, actual = Decimal("0.01"), Decimal("0.05"), Decimal("0.03")
-    with factory() as db:
-        assert _reserve(db, "k:0", w, budget)
-        assert ledger.settle(db, attempt_key="k:0", settled_usd=actual, now=T0)
-        db.commit()
-        period = _period(db)
-        assert (period.reserved_usd, period.settled_usd) == (actual, actual)  # raised above w
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with factory() as db, caplog.at_level("ERROR", logger="signalnest.llm"):
+            assert _reserve(db, "k:0", w, budget)
+            assert ledger.settle(
+                db, attempt_key="k:0", settled_usd=actual, now=T0, usage=_usage(actual)
+            )
+            db.commit()
+            period = _period(db)
+            assert (period.reserved_usd, period.settled_usd) == (w, w)  # the bound, kept
+            assert period.bound_violations == 1
+            assert _reservation(db, "k:0").settled_usd == w
+            assert db.scalar(select(LLMUsageEvent.cost_usd)) == 0.03  # the report, recorded
+            assert [r.message for r in caplog.records if r.levelname == "ERROR"] == [
+                "llm.cost_bound_violated"
+            ]
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="settle") == 1
 
 
 def test_settling_an_unknown_key_changes_nothing(factory):
@@ -414,6 +432,15 @@ def _bound(factory, settings: Settings, *, shared: bool | None, job_id=None, att
     return meter
 
 
+def _worst(meter: LLMMeter, content: str = "x") -> Decimal:
+    """The bound the meter reserves for one ``classify_signal`` call carrying ``content``."""
+    bound = meter.worst_case(
+        "anthropic", MODEL, wire_payload(MODEL, content=content, tenant_ref=meter.tenant_ref)
+    )
+    assert isinstance(bound, Decimal)
+    return bound
+
+
 def test_sqlite_defaults_to_the_same_session_path_even_with_a_session_factory(factory):
     meter = _bound(factory, _settings(), shared=None)
     assert meter.shared_ledger is False
@@ -452,10 +479,10 @@ def test_shared_path_reserves_before_the_call_and_settles_with_the_usage_row(fac
 
     meter = _bound(factory, s, shared=True, job_id="job-shared", attempt=3)
     assert meter.shared_ledger
-    worst = Decimal(str(meter.worst_case_usd("anthropic", MODEL, 0, 1)))  # > 0
+    worst = _worst(meter)
     _service(s, handler).run("classify_signal", {"content": "x"}, meter=meter)
     assert len(seen) == 1 and seen[0]["states"] == ["reserved"] and seen[0]["usage_rows"] == 0
-    assert seen[0]["reserved"] > worst  # the full worst case of the call, before it was made
+    assert seen[0]["reserved"] == worst  # the full bound of the call, before it was made
     with factory() as db:
         period = _period(db)
         row = db.scalar(select(LLMBudgetReservation))
@@ -474,11 +501,12 @@ def test_shared_path_reserves_before_the_call_and_settles_with_the_usage_row(fac
 
 def test_shared_path_refuses_across_meters_once_the_ledger_is_full(factory):
     """Two runs sharing one ledger: the second sees the first's reservation at once."""
-    s = _settings(llm_workspace_monthly_budget_usd=0.02)
+    probe = _bound(factory, _settings(), shared=True)
+    w = _worst(probe)
+    s = _settings(llm_workspace_monthly_budget_usd=float(w * Decimal("1.5")))
     first = _bound(factory, s, shared=True)
     second = _bound(factory, s, shared=True)
-    w = first.worst_case_usd("anthropic", MODEL, len("x"), s.llm_max_output_tokens)
-    assert w <= 0.02 < 2 * w  # exactly one call fits
+    assert w <= Decimal(str(s.llm_workspace_monthly_budget_usd)) < 2 * w  # exactly one fits
     calls = []
     _service(s, lambda r: calls.append(1) or _reply(CLASSIFIED)).run(
         "classify_signal", {"content": "x"}, meter=first
@@ -541,20 +569,22 @@ def test_same_session_path_writes_the_ledger_at_flush(factory):
 
 def test_same_session_path_is_only_a_per_session_guarantee(factory):
     """The documented SQLite degradation: two runs bound before either commits both spend."""
-    s = _settings(llm_workspace_monthly_budget_usd=0.02)
+    w = _worst(_bound(factory, _settings(), shared=False))
+    budget = w * Decimal("1.2")  # one call fits; two together (at 0.018 each) do not
+    s = _settings(llm_workspace_monthly_budget_usd=float(budget))
     first = _bound(factory, s, shared=False)
     second = _bound(factory, s, shared=False)
     calls = []
     for meter in (first, second):
-        _service(s, lambda r: calls.append(1) or _reply(CLASSIFIED)).run(
+        _service(s, lambda r: calls.append(1) or _reply(CLASSIFIED, tokens=(1000, 1000))).run(
             "classify_signal", {"content": "x"}, meter=meter
         )
-    assert len(calls) == 2  # together above the 0.02 budget's single call
+    assert len(calls) == 2  # together above the budget that admits a single call
     with factory() as db:
         first.flush(db)
         second.flush(db)
         db.commit()
-        assert _period(db).reserved_usd == 2 * CALL_COST > Decimal("0.02")
+        assert _period(db).reserved_usd == Decimal("0.036") > budget
     # A run bound after those commits sees them and is refused.
     third = _bound(factory, s, shared=False)
     with pytest.raises(LLMBudgetExceededError):
@@ -566,9 +596,6 @@ def test_same_session_path_is_only_a_per_session_guarantee(factory):
 @pytest.mark.parametrize("shared", [True, False], ids=["shared-ledger", "same-session"])
 def test_conservative_cost_basis(factory, shared):
     s = _settings(llm_max_retries=0, llm_workspace_monthly_budget_usd=5.0)
-    w = _bound(factory, s, shared=shared).worst_case_usd(
-        "anthropic", MODEL, 0, s.llm_max_output_tokens
-    )
     cases = {
         "timeout": (httpx.ReadTimeout("slow"), LLMTimeoutError, "worst"),
         "undecodable": (
@@ -577,6 +604,18 @@ def test_conservative_cost_basis(factory, shared):
             "worst",
         ),
         "no_usage_block": (_reply(CLASSIFIED, tokens=None), None, "worst"),
+        # Step 2: a connection that fails AFTER the request was sent is unknown, not free.
+        "connection_reset_after_send": (httpx.ReadError("reset"), LLMUnavailableError, "worst"),
+        "write_error_during_send": (httpx.WriteError("broken pipe"), LLMUnavailableError, "worst"),
+        "remote_protocol_error": (
+            httpx.RemoteProtocolError("closed"),
+            LLMUnavailableError,
+            "worst",
+        ),
+        # Provably not dispatched (nothing can have left): free as before. A pool or
+        # connect timeout is a timeout, and a timeout keeps its worst-case rule.
+        "connect_error": (httpx.ConnectError("refused"), LLMUnavailableError, 0.0),
+        "pool_timeout": (httpx.PoolTimeout("no connection"), LLMTimeoutError, "worst"),
         "unavailable": (
             httpx.Response(529, json={"type": "error", "error": {}}),
             LLMUnavailableError,
@@ -586,6 +625,7 @@ def test_conservative_cost_basis(factory, shared):
     }
     for name, (step, error, expected) in cases.items():
         meter = _bound(factory, s, shared=shared)
+        w = _worst(meter, "")
 
         def handler(request, step=step):
             if isinstance(step, Exception):
@@ -599,9 +639,7 @@ def test_conservative_cost_basis(factory, shared):
                 _service(s, handler).run("classify_signal", {"content": ""}, meter=meter)
         charged = meter.spent
         if expected == "worst":
-            assert charged >= w and charged == pytest.approx(
-                meter.worst_case_usd("anthropic", MODEL, 1, s.llm_max_output_tokens), abs=w
-            ), name
+            assert charged == pytest.approx(float(w)), name
         else:
             assert charged == pytest.approx(expected), name
         if shared:

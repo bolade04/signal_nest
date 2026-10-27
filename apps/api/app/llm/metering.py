@@ -146,11 +146,10 @@ from app.core.errors import SignalNestError
 from app.core.logging import get_logger
 from app.llm import budget as ledger
 from app.llm.base import LLMError, LLMMalformedError, LLMResponse, LLMTimeoutError
+from app.llm.bound import Unbounded, worst_case_cost
 from app.llm.models import LLMUsageEvent
 
 logger = get_logger("signalnest.llm")
-
-_CHARS_PER_TOKEN = 3  # low for English (over-estimates); CJK/emoji can be under it
 
 SessionFactory = Callable[[], Session]
 
@@ -160,7 +159,11 @@ class LLMBudgetExceededError(LLMError):
 
     def __init__(self, message: str, reason: str):
         super().__init__(message)
-        self.reason = reason  # "run_call_cap" | "workspace_budget"
+        #: "run_call_cap" | "workspace_budget" | "cost_unbounded"
+        self.reason = reason
+        #: For "cost_unbounded", why the cost could not be bounded
+        #: (:class:`app.llm.bound.Unbounded` ``reason``); otherwise ``None``.
+        self.detail: str | None = None
 
 
 class LLMMeterBindingError(RuntimeError):
@@ -287,6 +290,8 @@ class LLMMeter:
         self._run_key = job_id or f"run-{uuid.uuid4().hex}"
         #: The reservation awaiting settlement: (attempt_key, worst case) or None.
         self._pending: tuple[str, Decimal] | None = None
+        #: The bound of the attempt in flight (set by :meth:`before_attempt`).
+        self._worst: Decimal | None = None
         self._bound = False
         self.prior_attempts = 0
         self._organization_id: str | None = None
@@ -298,6 +303,8 @@ class LLMMeter:
         self.spent = 0.0
         self.refusals: dict[str, int] = {}
         self._records: list[dict[str, Any]] = []
+        #: The bound of each record, in step (same-session path).
+        self._bounds: list[Decimal] = []
 
     def bind(
         self,
@@ -389,9 +396,19 @@ class LLMMeter:
     def tenant_ref(self) -> str | None:
         return self._tenant_ref
 
-    def worst_case_usd(self, provider: str, model: str, prompt_chars: int, max_tokens: int):
-        tokens_in = -(-prompt_chars // _CHARS_PER_TOKEN)
-        return cost_usd(self.settings, provider, model, tokens_in, max_tokens)
+    def worst_case(
+        self, provider: str, model: str, payload: bytes | None
+    ) -> Decimal | Unbounded:
+        """The attempt's worst-case cost bound (:func:`app.llm.bound.worst_case_cost`).
+
+        ``payload`` is the request body exactly as the transport sends it; ``None``
+        (a provider that cannot show its bytes) is unbounded. The mock costs nothing.
+        """
+        if provider == "mock":
+            return Decimal(0)
+        if payload is None:
+            return Unbounded("no_wire_payload")
+        return worst_case_cost(model, payload, self.settings.llm_prices_usd_per_mtok)
 
     def attempt_key(self, call: int) -> str:
         """The key of this run's ``call``-th call: job (or run token), attempt, call."""
@@ -411,21 +428,27 @@ class LLMMeter:
         finally:
             session.close()
 
-    def before_attempt(self, provider: str, model: str, prompt_chars: int, max_tokens: int):
+    def before_attempt(self, provider: str, model: str, payload: bytes | None):
         """Raise :class:`LLMBudgetExceededError` instead of making a disallowed attempt.
 
-        On the shared-ledger path the budget check is the reservation itself: the
+        ``payload`` is the request body exactly as it will be sent. A request whose cost
+        cannot be bounded is refused with reason ``cost_unbounded`` (never reserved as
+        zero). On the shared-ledger path the budget check is the reservation itself: the
         call's worst case is reserved, and committed, before this returns.
         """
+        self._worst = None
         if provider != "mock":
             if self.attempts >= self.settings.llm_max_calls_per_run:
                 self._refuse("run_call_cap")
-            worst = self.worst_case_usd(provider, model, prompt_chars, max_tokens)
+            worst = self.worst_case(provider, model, payload)
+            if isinstance(worst, Unbounded):
+                self._refuse("cost_unbounded", detail=worst.reason)
             budget = self.settings.llm_workspace_monthly_budget_usd
             if self._shared:
-                self._reserve(ledger.usd(worst), ledger.usd(budget))
-            elif self.month_to_date + self.spent + worst > budget:
+                self._reserve(worst, ledger.usd(budget))
+            elif self.month_to_date + self.spent + float(worst) > budget:
                 self._refuse("workspace_budget")
+            self._worst = worst
         self.attempts += 1
 
     def _reserve(self, worst: Decimal, budget: Decimal) -> None:
@@ -449,16 +472,19 @@ class LLMMeter:
             self._refuse("workspace_budget")
         self._pending = (key, worst)
 
-    def _refuse(self, reason: str) -> None:
+    def _refuse(self, reason: str, *, detail: str | None = None) -> None:
         self.refusals[reason] = self.refusals.get(reason, 0) + 1
-        raise LLMBudgetExceededError(f"LLM call not made: {reason}", reason)
+        error = LLMBudgetExceededError(
+            f"LLM call not made: {reason}" + (f" ({detail})" if detail else ""), reason
+        )
+        error.detail = detail
+        raise error
 
     def _charge(
         self,
         provider: str,
         model: str,
-        prompt_chars: int,
-        max_tokens: int,
+        worst: Decimal,
         usage,
         response: LLMResponse | None,
         error: Exception | None,
@@ -466,15 +492,16 @@ class LLMMeter:
         """The conservative cost of one attempt (see the module docstring)."""
         if provider == "mock":
             return 0.0
-        worst = self.worst_case_usd(provider, model, prompt_chars, max_tokens)
         if usage is not None and (usage.input_tokens or usage.output_tokens):
             return cost_usd(self.settings, provider, model, usage.input_tokens, usage.output_tokens)
         if response is not None or usage is not None:
-            return worst  # the provider replied but reported no usage: the worst case
+            return float(worst)  # the provider replied but reported no usage: the worst case
         if isinstance(error, LLMTimeoutError):
-            return worst  # the provider may have processed it
+            return float(worst)  # the provider may have processed it
         if isinstance(error, LLMMalformedError):
-            return worst  # an undecodable reply: conservative basis pending D-LLM-3
+            return float(worst)  # an undecodable reply: conservative basis pending D-LLM-3
+        if getattr(error, "outcome_unknown", False):
+            return float(worst)  # request sent, no response: unknown, not known-free
         return 0.0  # rejected, rate limited, unavailable or never connected
 
     def after_attempt(
@@ -483,15 +510,17 @@ class LLMMeter:
         task: str,
         provider: str,
         model: str,
-        prompt_chars: int,
-        max_tokens: int,
         response: LLMResponse | None = None,
         error: Exception | None = None,
     ) -> float:
+        if self._worst is None and provider != "mock":
+            raise LLMMeterBindingError("after_attempt without a before_attempt that bounded it")
+        worst = self._worst if self._worst is not None else Decimal(0)
+        self._worst = None
         usage = response.usage if response is not None else getattr(error, "usage", None)
         tokens_in = usage.input_tokens if usage else 0
         tokens_out = usage.output_tokens if usage else 0
-        cost = self._charge(provider, model, prompt_chars, max_tokens, usage, response, error)
+        cost = self._charge(provider, model, worst, usage, response, error)
         self.spent = round(self.spent + cost, 6)
         record = {
             "task": task,
@@ -516,6 +545,7 @@ class LLMMeter:
             )
         else:
             self._records.append(record)
+            self._bounds.append(worst)
         return cost
 
     def summary(self) -> dict[str, Any]:
@@ -546,4 +576,5 @@ class LLMMeter:
                 settled_usd=ledger.usd(record["cost_usd"]),
                 now=now,
                 usage={"scout_request_id": self.scout_request_id, **record},
+                worst_usd=self._bounds[call] if record["provider"] != "mock" else None,
             )

@@ -186,12 +186,12 @@ def _join(procs: list[mp.Process]) -> list[int | None]:
 
 def _run_worst_case() -> Decimal:
     """The worst case each run body reserves per call (the service's prompt measure)."""
-    return child.worst_case(child.service_prompt_chars())
+    return child.worst_case()
 
 
 def _crash_worst_case() -> Decimal:
     """The worst case the crash body reserves (a fixed prompt size)."""
-    return child.worst_case(child.CRASH_PROMPT_CHARS)
+    return child.worst_case(child.CRASH_CONTENT, tenant=False)
 
 
 # --------------------------------------------------------------------------- #

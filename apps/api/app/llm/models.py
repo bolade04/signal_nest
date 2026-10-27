@@ -96,6 +96,12 @@ class LLMBudgetPeriod(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     reserved_usd: Mapped[Decimal] = mapped_column(USD, nullable=False, default=Decimal(0))
     settled_usd: Mapped[Decimal] = mapped_column(USD, nullable=False, default=Decimal(0))
+    #: How many settled calls reported usage above their reserved bound
+    #: (:func:`app.llm.bound.worst_case_cost` is violated: its premise failed). The
+    #: call is still charged its bound; this counter is what reconciliation reads.
+    bound_violations: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
 
 #: Reservation states. ``reserved``: the call may be in flight; ``settled``: charged

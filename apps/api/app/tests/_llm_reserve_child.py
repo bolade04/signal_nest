@@ -35,27 +35,27 @@ FIXED_COST = Decimal("0.010500")
 DB_TIMEOUT_MS = 10_000
 #: The inputs the P1/P3 run bodies send through the service.
 RUN_INPUTS = {"content": "x" * 100}
-#: The prompt size the crash body reserves for (it never renders a prompt).
-CRASH_PROMPT_CHARS = 300
 
 
-def service_prompt_chars() -> int:
-    """What ``LLMService.run`` measures for ``RUN_INPUTS`` (system prompt + rendered)."""
-    from app.llm.prompts import SYSTEM_PROMPT, render_prompt
+def wire_payload(content: str = "x", tenant_ref: str | None = None) -> bytes:
+    """The body bytes the adapter would send for ``content`` (what the meter bounds)."""
+    from app.tests._llm_offline import wire_payload as wire
 
+    return wire(MODEL, content=content, max_tokens=1024, tenant_ref=tenant_ref)
+
+
+#: A tenant reference has a fixed length ("t_" + 32 hex), so any value bounds the same.
+TENANT_REF = "t_" + "0" * 32
+#: The content the crash body reserves for (it never renders a prompt through the service).
+CRASH_CONTENT = "c" * 100
+
+
+def worst_case(content: str = RUN_INPUTS["content"], *, tenant: bool = True) -> Decimal:
+    """The worst case the meter reserves for one call with ``content`` (budget-free)."""
     settings = settings_for(1.0)
-    rendered = render_prompt("classify_signal", RUN_INPUTS, settings.llm_max_untrusted_chars)
-    return len(SYSTEM_PROMPT) + len(rendered)
-
-
-def worst_case(prompt_chars: int) -> Decimal:
-    """The worst case the meter reserves for one call of ``prompt_chars`` (budget-free)."""
-    settings = settings_for(1.0)
-    return ledger.usd(
-        LLMMeter(settings).worst_case_usd(
-            "anthropic", MODEL, prompt_chars, settings.llm_max_output_tokens
-        )
-    )
+    payload = wire_payload(content, TENANT_REF if tenant else None)
+    bound = LLMMeter(settings).worst_case("anthropic", MODEL, payload)
+    return ledger.usd(bound)
 
 
 def settings_for(budget: float, **overrides: Any) -> Settings:
@@ -85,6 +85,12 @@ class FixedCostProvider:
 
     def __init__(self) -> None:
         self.calls = 0
+
+    def prepare(self, request: LLMRequest):
+        """The exact bytes an Anthropic adapter would send (what the meter bounds)."""
+        from app.llm.providers_real import AnthropicProvider
+
+        return AnthropicProvider(KEY, MODEL, 5).prepare(request)
 
     def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
         self.calls += 1
@@ -196,7 +202,7 @@ def reserve_then_die(
             workspace_id=workspace_id,
             scout_request_id=None,
         )
-    meter.before_attempt("anthropic", MODEL, CRASH_PROMPT_CHARS, settings.llm_max_output_tokens)
+    meter.before_attempt("anthropic", MODEL, wire_payload(CRASH_CONTENT))
     if make_call:
         provider.generate(LLMRequest(task="classify_signal", inputs={"content": "x"}), "p", "v")
     reserved_event.set()

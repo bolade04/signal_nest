@@ -6,12 +6,12 @@ PostgreSQL (D-LLM-1 option B, ``app.llm.budget``):
 * ``llm_budget_periods`` - one row per workspace and UTC calendar month (unique
   ``workspace_id, period_start``; surrogate ``id`` like every other table, for the
   privacy export, erasure walk and verification): ``reserved_usd`` (the budget
-  consumed: each call's worst case, or its charge when above the estimate) and
-  ``settled_usd``. The budget check is one conditional ``UPDATE`` of this row.
+  consumed: the sum of each call's worst-case bound) and ``settled_usd`` and
+  ``bound_violations`` (settled calls whose reported usage exceeded their bound). The budget check is one conditional ``UPDATE`` of this row.
 * ``llm_budget_reservations`` - one row per reserved provider call, keyed by attempt
   (``attempt_key`` unique: job id, worker attempt, call ordinal) so settlement is
   idempotent and a reservation whose process died can be recovered; ``state``
-  (reserved | settled | released | expired), ``expires_at`` for the sweep.
+  (reserved | settled | released | expired), ``expires_at`` for the sweep,
 
 Purely **additive and safe on a live database**:
 
@@ -52,6 +52,7 @@ def upgrade() -> None:
     sa.Column('organization_id', sa.String(length=32), nullable=False),
     sa.Column('reserved_usd', sa.Numeric(precision=12, scale=6), nullable=False),
     sa.Column('settled_usd', sa.Numeric(precision=12, scale=6), nullable=False),
+    sa.Column('bound_violations', sa.Integer(), server_default='0', nullable=False),
     sa.Column('id', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
