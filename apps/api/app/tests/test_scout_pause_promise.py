@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings, get_settings
@@ -68,7 +68,7 @@ DRAFT = ScoutRequestStatus.DRAFT.value
 def factory(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("scout_pause_promise")
     engine = create_engine(
-        f"sqlite:///{tmp/'pause.db'}",
+        f"sqlite:///{tmp / 'pause.db'}",
         connect_args={"check_same_thread": False},
         future=True,
     )
@@ -184,6 +184,18 @@ def _tick(s, schedule: ScoutSchedule, tick: Job) -> dict:
     )
 
 
+def _pause_row(db, rid: str) -> None:
+    """Write ``paused`` to the request row without touching the session's ORM
+    instance -- what a pause committed from another session looks like to a run that
+    already loaded the request."""
+    db.execute(
+        update(ScoutRequest)
+        .where(ScoutRequest.id == rid)
+        .values(status=PAUSED)
+        .execution_options(synchronize_session=False)
+    )
+
+
 def _context(req: ScoutRequest) -> ExecutionContext:
     return ExecutionContext.for_scout_request(
         organization_id=req.organization_id,
@@ -238,7 +250,7 @@ def test_clause_paused_request_gets_no_scheduled_run(s):
     s.flush()
     out = _tick(s, schedule, tick)
     assert out["run_enqueued"] is False, out
-    assert out["outcome"] == sched.REQUEST_PAUSED_OUTCOME
+    assert out["outcome"] == "request_paused"
     assert _execs(s, req.id) == []
 
 
@@ -322,6 +334,32 @@ def test_clause_paused_request_is_not_executed_by_an_already_queued_job(s, no_fe
     assert req.last_run_at == last_run_before
 
 
+def test_clause_pause_landing_between_the_load_and_the_claim_is_not_overwritten(
+    s, monkeypatch, no_fetch
+):
+    """The entry guard's window (review r1 F4): the run loaded the request as
+    ``draft`` and the customer's pause commits before the run claims ``running``.
+    The claim is a compare-and-set, so it matches no row, the request stays paused,
+    nothing is fetched and the job records the skip."""
+    req = _request(s)
+    real_scope_matches = pipeline.scope_matches
+
+    def pause_then_match(*args, **kwargs):
+        # Called between the request load and the running claim; the loaded instance
+        # still says ``draft``.
+        assert req.status == DRAFT
+        _pause_row(s, req.id)
+        return real_scope_matches(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "scope_matches", pause_then_match)
+    with offline_llm():
+        result = pipeline._run(s, req.id, _context(req))
+
+    assert result == {"scout_request_id": req.id, "outcome": "skipped_request_paused"}
+    s.expire_all()
+    assert s.get(ScoutRequest, req.id).status == PAUSED
+
+
 def test_clause_queued_run_for_a_paused_request_finishes_skipped_in_its_job_record(
     factory, committed, no_fetch
 ):
@@ -357,10 +395,7 @@ def test_clause_queued_run_for_a_paused_request_finishes_skipped_in_its_job_reco
     with factory() as session:
         job = session.get(Job, job_id)
         assert job.status == JobStatus.SUCCEEDED.value
-        assert job.result_summary == {
-            "scout_request_id": rid,
-            "outcome": pipeline.SKIPPED_REQUEST_PAUSED,
-        }
+        assert job.result_summary == {"scout_request_id": rid, "outcome": "skipped_request_paused"}
         assert session.get(ScoutRequest, rid).status == PAUSED
 
 
@@ -376,14 +411,19 @@ def test_clause_pause_landing_mid_run_is_not_flipped_to_completed(s, monkeypatch
 
     def pause_then_build(db, request, *args, **kwargs):
         assert request.status == ScoutRequestStatus.RUNNING.value
-        request.status = PAUSED  # the customer's pause lands while the run is in flight
-        db.flush()
+        # The customer's pause lands while the run is in flight. It is written to the
+        # row the way another session's commit would be seen: the run's own ORM
+        # instance still says ``running``, so only a fresh re-read of the row can
+        # observe it (review r1 F1).
+        _pause_row(db, request.id)
+        assert request.status == ScoutRequestStatus.RUNNING.value
         return real_build(db, request, *args, **kwargs)
 
     monkeypatch.setattr(pipeline, "_build_opportunities", pause_then_build)
     with offline_llm():
         result = pipeline._run(s, req.id, _context(req))
 
+    s.expire_all()
     assert s.get(ScoutRequest, req.id).status == PAUSED
     assert result["outcome"] == pipeline.PAUSED_DURING_RUN
     # What the run produced is kept: stats and the run timestamp are stored.
@@ -399,6 +439,19 @@ def test_clause_uninterrupted_run_still_completes(s):
     assert s.get(ScoutRequest, req.id).status == ScoutRequestStatus.COMPLETED.value
     assert result["outcome"] == "completed"
     assert result["scanned"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# The outcome literals are a contract (runbook, log and job-record consumers)
+# --------------------------------------------------------------------------- #
+def test_outcome_literals_are_the_documented_contract():
+    """The runbook and anything reading ``result_summary.outcome`` or the
+    ``scout_schedule_tick`` event depend on these exact strings, not on the symbol
+    names (review r1 F2)."""
+    assert sched.REQUEST_PAUSED_OUTCOME == "request_paused"
+    assert pipeline.SKIPPED_REQUEST_PAUSED == "skipped_request_paused"
+    assert pipeline.PAUSED_DURING_RUN == "paused_during_run"
+    assert pipeline.RUN_COMPLETED == "completed"
 
 
 # --------------------------------------------------------------------------- #

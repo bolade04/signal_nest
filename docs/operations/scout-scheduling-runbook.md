@@ -155,8 +155,12 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   schedule stays enabled and the chain reseeds, so resuming the request restores
   scheduled scouting at the next boundary). A paused request's already-queued run is
   skipped by the worker (`result_summary.outcome=skipped_request_paused`) rather
-  than executed, and a pause landing mid-run keeps the request paused
-  (`paused_during_run`) with the run's findings and stats stored.
+  than executed. A pause issued while a run is in flight never un-pauses the request:
+  on PostgreSQL the run holds the request row's lock, so the HTTP pause is serialised
+  after the run's commit (the job records `completed`, the request then ends
+  `paused`); a pause written without that lock is seen by the run's final status
+  re-read and the job records `paused_during_run`. Either way the run's findings and
+  stats are kept.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete

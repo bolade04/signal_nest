@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
@@ -83,7 +83,10 @@ SKIPPED_REQUEST_PAUSED = "skipped_request_paused"
 # The request was paused while this run was in flight: findings and stats are kept, the
 # pause wins over the run's terminal status write.
 PAUSED_DURING_RUN = "paused_during_run"
-# The request left ``running`` some other way while the run was in flight; not settled.
+# The request left ``running`` for a status other than ``paused`` while the run was in
+# flight (only possible when the status is written without the row lock the run holds,
+# e.g. a pause followed by a resume inside the run's transaction); no producer in the
+# shipped routes today. The run is not settled; what it produced is kept.
 STATUS_CHANGED_DURING_RUN = "status_changed_during_run"
 
 
@@ -147,6 +150,15 @@ def metered_run(meter: LLMMeter) -> Iterator[LLMMeter]:
         _run_meter.reset(token)
 
 
+def _skip_paused(request: ScoutRequest) -> dict:
+    """The skip result for a paused request: nothing fetched, nothing called, status kept."""
+    logger.info(
+        "scout.skipped",
+        extra={"extra_fields": {"request": request.id, "outcome": SKIPPED_REQUEST_PAUSED}},
+    )
+    return {"scout_request_id": request.id, "outcome": SKIPPED_REQUEST_PAUSED}
+
+
 def _run(
     db: Session,
     scout_request_id: str,
@@ -179,14 +191,24 @@ def _run(
     # or model call -- with the request's status left exactly as the customer set it.
     # The skip is the job's result: recorded on the job record, nothing to retry.
     if request.status == ScoutRequestStatus.PAUSED.value:
-        logger.info(
-            "scout.skipped",
-            extra={"extra_fields": {"request": request.id, "outcome": SKIPPED_REQUEST_PAUSED}},
-        )
-        return {"scout_request_id": request.id, "outcome": SKIPPED_REQUEST_PAUSED}
+        return _skip_paused(request)
 
-    request.status = ScoutRequestStatus.RUNNING.value
-    db.flush()
+    # Claim the run with a compare-and-set, the same idiom as the manual-run route:
+    # ``running`` is written only if the row is still not paused, so a pause committed
+    # between the load above and this write is not overwritten -- it wins, and the run
+    # is skipped exactly as if the pause had been seen on load.
+    claimed = db.execute(
+        update(ScoutRequest)
+        .where(
+            ScoutRequest.id == request.id,
+            ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+        )
+        .values(status=ScoutRequestStatus.RUNNING.value)
+        .execution_options(synchronize_session=False)
+    )
+    db.refresh(request, attribute_names=["status"])
+    if claimed.rowcount != 1:
+        return _skip_paused(request)
 
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
     # opaque tenant reference sent to the provider.
@@ -379,7 +401,11 @@ def _run(
     # D-25: settle the request as ``completed`` only if it is still in the ``running``
     # state this run set. The status is re-read from the row, so a pause that landed
     # while the run was in flight wins: what the run produced (findings, stats,
-    # ``last_run_at``) is kept, the request stays paused.
+    # ``last_run_at``) is kept, the request stays paused. (On PostgreSQL the row lock
+    # taken by the claim above serialises an HTTP pause after this transaction's
+    # commit; the re-read then still sees ``running`` and the pause lands afterwards.
+    # ``paused_during_run`` is observed only when the pause is written without that
+    # lock.)
     db.refresh(request, attribute_names=["status"])
     if request.status == ScoutRequestStatus.RUNNING.value:
         request.status = ScoutRequestStatus.COMPLETED.value
