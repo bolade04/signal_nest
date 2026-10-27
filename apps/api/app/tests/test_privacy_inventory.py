@@ -27,6 +27,7 @@ from app.privacy.inventory import (
     RetentionClass,
 )
 from app.privacy.retention import _ROOTS
+from app.tests._platform_support import pgvector_build
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DOC = REPO_ROOT / "docs" / "operations" / "data-inventory.md"
@@ -96,6 +97,12 @@ def test_retention_classes_are_partitioned_and_rooted():
 ALL_SET = {c.setting_name: 30 for c in RetentionClass}
 
 
+def _build(kwargs: dict) -> Settings:
+    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
+    with pgvector_build():
+        return Settings(**kwargs)
+
+
 def _production(**overrides) -> dict:
     kwargs = dict(
         _env_file=None,
@@ -108,6 +115,7 @@ def _production(**overrides) -> dict:
         storage_backend="s3",
         s3_bucket="example-bucket",
         vector_backend="pgvector",
+        rate_limit_backend="redis",
         secret_key="a-real-production-secret-value-0123456789",
         llm_provider="anthropic",
         llm_api_key="inert-test-value",
@@ -128,13 +136,13 @@ def test_every_retention_setting_exists_and_is_unset_by_default():
 
 
 def test_production_with_every_duration_set_is_accepted():
-    assert Settings(**_production()).is_production
+    assert _build(_production()).is_production
 
 
 @pytest.mark.parametrize("data_class", list(RetentionClass))
 def test_production_refuses_to_start_with_any_duration_unset(data_class):
     with pytest.raises(ValueError) as exc:
-        Settings(**_production(**{data_class.setting_name: None}))
+        _build(_production(**{data_class.setting_name: None}))
     assert f"{data_class.setting_name} must be set explicitly in production" in str(exc.value)
 
 
@@ -142,12 +150,12 @@ def test_staging_and_development_accept_unset_durations():
     for environment in ("development", "test"):
         Settings(_env_file=None, environment=environment)
     staging = _production(environment="staging", **{c.setting_name: None for c in RetentionClass})
-    assert Settings(**staging).environment == "staging"
+    assert _build(staging).environment == "staging"
 
 
 def test_the_migration_actor_is_exempt():
     kwargs = _production(migration_mode=True, **{c.setting_name: None for c in RetentionClass})
-    assert Settings(**kwargs).migration_mode
+    assert _build(kwargs).migration_mode
 
 
 @pytest.mark.parametrize("value", [0, -1, 36501])

@@ -62,6 +62,24 @@ Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
 - **Action:** [incident_response.md](./incident_response.md) §6 — identify
   `job_type`/`error_class`, fix, requeue.
 
+### 5a. Scheduled scouting tick failed (P6-PLAT-6)
+- **Purpose:** a recurring schedule lost an occurrence. The chain normally survives
+  (the tick's terminal-failure hook re-seeds the next occurrence), but a customer's
+  scheduled run did not happen, and a chain that could not be re-seeded stops.
+- **Signal:** `increase(jobs_dead_lettered_total{job_type="scout_schedule.tick"})` +
+  `increase(jobs_failed_total{job_type="scout_schedule.tick"})` (both dead-letter paths
+  — retries exhausted, and lease expired with no attempts left — are counted). Log
+  alternative: the ERROR event `scout_schedule_tick_failed`; page-worthy when
+  `chained=false` with `outcome` other than `disabled` / `schedule_missing`. Pollable
+  fallback: `/api/v1/internal/system/overview` `schedules.state_counts.stalled > 0`.
+- **Threshold / window:** any increase over 1h (ticks fire at most daily per schedule).
+- **Severity:** SEV3; SEV2 when `stalled > 0` (recurrence stopped).
+- **False positives:** a deliberate pause/delete racing an in-flight tick (logged with
+  `outcome=disabled` / `schedule_missing`, `chained=false`).
+- **Action:** [scout-scheduling-runbook.md](./scout-scheduling-runbook.md) "Health
+  checks" — inspect the failed tick's `error_class`; resume any `stalled` schedule
+  after fixing the cause.
+
 ### 6. Job failure ratio high
 - **Purpose:** elevated handler failures.
 - **Signal:** `rate(jobs_failed_total + jobs_retried_total)` / `rate(jobs_claimed_total)`.
@@ -204,6 +222,13 @@ Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
   accordingly.
 - **Action:** distinguish abuse from organic load; if distributed enforcement is
   required, see the rate-limit decision in the security review.
+- *(2026-10-20, `P6-PLAT-3`)* With `RATE_LIMIT_BACKEND=redis` the limit is shared
+  across replicas, and the per-process note above applies only to the `memory`
+  backend. While Redis cannot answer, watch
+  `dependency_operation_total{dependency="redis",operation="rate_limit"}`
+  (`outcome="degraded"`: limiting fell back to per process; `outcome="denied"`:
+  `deny` mode answered `503`) and the `rate_limit.shared_store_unavailable` warning
+  (see [deployment.md](./deployment.md), runtime contract).
 
 ## Enabling checklist
 

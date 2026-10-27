@@ -6,13 +6,14 @@ This sub-batch ships only the *types*: the capabilities-local typed errors
 these tests exercise shape/immutability and error status/code mapping in isolation
 (mirroring the resolver's result-shape tests).
 
-They also stand guard over the resolver's live-gate import boundary: after Phase 4B-A
-exactly one live gate (the opportunity-feedback route) is a sanctioned resolver consumer,
-while the scheduling and RSS live gates must remain unwired.
+They also stand guard over the live gates' decision source: since P6-CAP-1 every live
+gate (feedback, scheduling, RSS) decides through the resolver, and no production module
+other than the raw-global reflection reads a capability flag directly.
 """
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 from pathlib import Path
 
@@ -138,24 +139,52 @@ def test_override_page_empty_defaults_are_coherent() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Import-boundary guard: only the sanctioned feedback gate consumes the resolver
+# Decision-source guard: every live gate decides through the resolver (P6-CAP-1)
 # --------------------------------------------------------------------------- #
-def test_resolver_consumed_only_by_the_sanctioned_feedback_gate() -> None:
-    # Phase 4B-A sanctions exactly ONE live gate — the opportunity-feedback route — as a
-    # resolver consumer, and it MUST route its capability decision through the central
-    # deny-biased resolver (no raw-flag shortcut). Every other live gate must remain
-    # unwired so no capability can silently activate through it: the scheduling
-    # read/write gates and the RSS connector selection still must not import the
-    # resolver. (The sanctioned operator surface consumes the resolver too, but it is
-    # not a live customer gate and is out of scope for this guard.)
-    feedback_gate = (API_DIR / "app/feedback/routes.py").read_text(encoding="utf-8")
-    assert "resolve_capability" in feedback_gate  # sanctioned live consumer (4B-A)
+#: The module holding each capability's single decision call site.
+_DECISION_SITES = {
+    "opportunity_feedback": Path("app/feedback/routes.py"),  # Phase 4B-A
+    "scout_scheduling": Path("app/scouting_requests/schedules.py"),  # P6-CAP-1
+    "connector_rss": Path("app/scouting_requests/connectors.py"),  # P6-CAP-1
+}
+#: The raw global flags. Reading one directly is how a gate bypasses the resolver.
+_RAW_FLAGS = frozenset(
+    {"opportunity_feedback_enabled", "scout_scheduling_enabled", "connector_rss_enabled"}
+)
+#: The only production module allowed to read them: the deliberately raw-global
+#: ``FeatureFlagsOut`` reflection on ``GET /system/capabilities`` (P6-CAP-2).
+_RAW_FLAG_READERS = frozenset({Path("app/system/routes.py")})
 
-    for module_path in (
-        Path("app/scouting_requests/routes.py"),
-        Path("app/scouting_requests/schedules.py"),
-        Path("app/connectors/registry.py"),
-    ):
-        source = (API_DIR / module_path).read_text(encoding="utf-8")
-        assert "capabilities.resolver" not in source, module_path
-        assert "resolve_capability" not in source, module_path
+
+def test_every_live_gate_decides_through_the_resolver() -> None:
+    # Before P6-CAP-1 this guard asserted the opposite for scheduling and RSS — that
+    # they must NOT import the resolver — which pinned the defect the row describes.
+    for capability, module_path in _DECISION_SITES.items():
+        tree = ast.parse((API_DIR / module_path).read_text(encoding="utf-8"))
+        calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None))
+            == "resolve_capability"
+        ]
+        assert calls, f"{capability}: {module_path} must decide via resolve_capability"
+
+
+def test_no_gate_reads_a_raw_capability_flag() -> None:
+    # An attribute read like ``get_settings().scout_scheduling_enabled`` anywhere in
+    # production code would re-open the P6-CAP-1 bypass. Docstring/comment mentions
+    # are not reads; only ``ast.Attribute`` nodes count.
+    offenders = []
+    for path in sorted((API_DIR / "app").rglob("*.py")):
+        rel = path.relative_to(API_DIR)
+        if "tests" in rel.parts or rel in _RAW_FLAG_READERS:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in _RAW_FLAGS:
+                offenders.append(f"{rel}:{node.lineno} .{node.attr}")
+    assert not offenders, offenders
+    # The allow-listed reader really does read them (the entry is not vacuous).
+    reflection = ast.parse((API_DIR / "app/system/routes.py").read_text(encoding="utf-8"))
+    reads = {n.attr for n in ast.walk(reflection) if isinstance(n, ast.Attribute)}
+    assert _RAW_FLAGS <= reads

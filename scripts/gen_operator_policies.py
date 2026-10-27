@@ -1237,6 +1237,241 @@ def window_transition_effective_policy(expiry: str, api_fqdn: str, *, issuance: 
     return {"Version": "2012-10-17", "Statement": inline["Statement"] + reads["Statement"] + ceiling["Statement"]}
 
 
+# --- P6-CI-6 key apply (PKT-K0 K0-2, freeze allowlist AL-2a, 2026-10-21): the SEPARATE, EXPIRING key-apply principal ---
+#
+# PR #230 added two customer-managed keys (module.edge spa, module.observability audit) with aliases, moved three buckets to
+# SSE-KMS, set the CloudTrail key and widened the two app_s3 task-role policies. The root takes no targeted apply, so ONE
+# non-targeted root apply must carry those changes plus the merged-but-never-applied carry-overs (the #197 API alias record
+# CREATE and budget update, the #194 api_ses_send create). No reviewed principal holds those writes (W0, the temporary operator
+# and the window principal deny or lack them — tests/test_closure_independence.py keeps that pending state pinned for them).
+# This principal exists ONLY for that apply and is retired right after its readback.
+#
+# OPERATOR DECISIONS (2026-10-23): D-K1-3 = (b-wide) — kms:PutKeyPolicy is ALLOWED on "*" (expiring, region-conditioned)
+# so that the CreateKey policy-lockout check can find it on the caller's effective permissions; it is carved out of the
+# flat ceiling and stays explicitly denied on the two existing CMKs and with BypassPolicyLockoutSafetyCheck = true. This
+# does NOT establish that AWS's lockout check accepts the conditioned Allow: a MalformedPolicyDocumentException or an
+# AccessDenied naming kms:PutKeyPolicy is a STOP (no retry, no widening, never the bypass flag). D-K1-2: the must-not
+# carve-outs as rendered (+ kms:PutKeyPolicy), each re-denied off its scope; D-K1-4: expiry <= 24 h; D-K1-5/6/7 (i): no
+# tag-conditioned Deny, no KeySpec/KeyUsage conditions. D-K1-1 = A (root-console provisioning; no repository change).
+#
+# Same split form as the window principal (Identity Center allows ONE inline policy per permission set; its non-whitespace
+# limit is 10,240 == the IAM role inline aggregate; customer managed policies are 6,144 each):
+#   key_apply_inline_policy        permission-set INLINE: state backend + the key-apply writes + explicit denies + fences
+#   key_apply_read_closure_policy  CUSTOMER MANAGED 1: REFRESH_CLOSURE with the KMS reads widened to key/* (expiring)
+#   key_apply_deny_ceiling_policy  CUSTOMER MANAGED 2: the flat ceiling minus KEY_APPLY_SCOPED_CAPABILITIES (never expiring)
+#   key_apply_effective_policy     the three concatenated (analysis only; never provisioned as one document)
+# The independently authored expectation is infra/aws/operator-closure-contract.json -> key_apply_closure.
+
+KEY_APPLY_PURPOSE = "key_apply"
+
+# The key-apply write surface, grouped by the resource change it serves. Scopes and conditions are applied in
+# _key_apply_inline_statements; this collection is the ACTION truth key_apply_closure is compared against.
+KEY_APPLY_WRITES = {
+    # the two new keys: CreateKey (no resource exists yet) + tag-on-create
+    "kms_key_create": ["kms:CreateKey", "kms:TagResource"],
+    # enable_key_rotation = true, called right after CreateKey on an id unknown in advance
+    "kms_key_configure": ["kms:EnableKeyRotation"],
+    # the two aliases (authorized against the alias AND the target key)
+    "kms_alias_create": ["kms:CreateAlias"],
+    # D-K1-3 (b-wide): the CreateKey policy-lockout check requires the CALLER to hold kms:PutKeyPolicy on the new key; the
+    # provider never calls PutKeyPolicy on create (PKT-K2 readback: CloudTrail must show none). Resource "*" (the key does
+    # not exist when the check runs); the two existing CMKs stay denied by KeyApplyDenyWritesOnTheExistingKeys.
+    "kms_key_policy_lockout_check": ["kms:PutKeyPolicy"],
+    # SPA, audit and application bucket default encryption
+    "bucket_encryption": ["s3:PutEncryptionConfiguration"],
+    # the audit trail's kms_key_id
+    "trail_key": ["cloudtrail:UpdateTrail"],
+    # app_s3 api + worker (AppBucketKmsViaS3Only) and the #194 api_ses_send create
+    "task_role_policies": ["iam:PutRolePolicy"],
+    # carry-overs that ride the same apply: the budget update and the API alias record CREATE
+    "budget_update": ["budgets:ModifyBudget"],
+    "dns_record": ["route53:ChangeResourceRecordSets"],
+    "dns_change_poll": ["route53:GetChange"],
+}
+
+# The forbidden capabilities the key-apply principal holds SCOPED: subtracted from its flat ceiling and re-denied
+# everywhere else by NotResource fences — or, for kms:PutKeyPolicy (D-K1-3 = b-wide, 2026-10-23), by the explicit Deny on
+# the two existing CMKs (KeyApplyDenyWritesOnTheExistingKeys) and the bypass-flag Deny (KeyApplyDenyRiskyKeyShapes).
+KEY_APPLY_SCOPED_CAPABILITIES = frozenset({
+    "s3:GetObject",                    # state object
+    "s3:PutObject",                    # state object
+    "dynamodb:GetItem",                # lock table
+    "dynamodb:PutItem",                # lock table
+    "dynamodb:DeleteItem",             # lock table
+    "kms:Decrypt",                     # state CMK only, ViaService-conditioned
+    "iam:PutRolePolicy",               # the two task roles, boundary-conditioned
+    "cloudtrail:UpdateTrail",          # the one trail
+    "s3:PutEncryptionConfiguration",   # the three buckets (denied to W0 only; not a must-not action)
+    "kms:PutKeyPolicy",                # D-K1-3 (b-wide): the lockout check only; never on the two existing CMKs
+})
+
+
+def _key_apply_names() -> dict:
+    """Module-deterministic names the key-apply scopes bind to (pinned to the .tf text by tests)."""
+    return {
+        # aws_kms_key.spa / .audit tags.Name = "${var.name_prefix}-<kind>-cmk"
+        "key_tag_names": [f"{PREFIX}-{kind}-cmk" for kind in ("spa", "audit")],
+        # aws_kms_alias.spa / .audit name = "alias/${var.name_prefix}/<kind>"
+        "alias_names": [f"alias/{PREFIX}/{kind}" for kind in ("spa", "audit")],
+        # The tag keys CreateKey sends: the root default_tags common set (infra/aws/locals.tf common_tags) + Name.
+        "tag_keys": sorted(["Alias", "CostCenter", "DataClass", "Environment", "ManagedBy", "Name", "Owner", "Phase",
+                            "Project"]),
+        "task_role_names": [f"{PREFIX}-api-task", f"{PREFIX}-worker-task"],
+        "budget_name": f"{PREFIX}-monthly",
+    }
+
+
+def key_apply_resource_arns() -> dict:
+    """The exact resource scopes of the key-apply principal, as ARN strings/patterns."""
+    n = _key_apply_names()
+    kms = lambda path: f"arn:{identity.PARTITION}:kms:{REGION}:{ACCOUNT}:{path}"  # noqa: E731
+    return {
+        "key_star": kms("key/*"),
+        "aliases": [kms(name) for name in n["alias_names"]],
+        "existing_keys": [ARN["cmk_state"], ARN["cmk_secrets"]],
+        "buckets": [identity.s3_bucket_arn(b) for b in (SPA_BUCKET_NAME, AUDIT_BUCKET_NAME, APP_BUCKET_NAME)],
+        "trail": ARN["trail"],
+        "task_roles": [identity.iam_role_arn(r) for r in n["task_role_names"]],
+        "budget": f"arn:{identity.PARTITION}:budgets::{ACCOUNT}:budget/{n['budget_name']}",
+        "hosted_zone": identity.route53_hosted_zone_arn(),
+        "change": f"arn:{identity.PARTITION}:route53:::change/*",
+    }
+
+
+def _key_apply_authorize(expiry: str, issuance: str | None) -> None:
+    import expiry_authorization
+
+    expiry_authorization.authorize(
+        issuance=issuance if issuance is not None else expiry_authorization.ACTIVE_ISSUANCE_UTC,
+        expiry=expiry, purpose=KEY_APPLY_PURPOSE)
+    require_valid_expiry(expiry)
+
+
+def _key_apply_read_statements(expiry: str) -> list[dict]:
+    c = REFRESH_CLOSURE
+    r = key_apply_resource_arns()
+    e = lambda cond=None: _expiring(expiry, cond)  # noqa: E731
+    return [
+        {"Sid": "KeyApplyEstateReadRegional", "Effect": "Allow", "Action": c["star_regional"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "KeyApplyRdsDescribeInstancesStar", "Effect": "Allow", "Action": c["rds_star"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "KeyApplyRdsReadExact", "Effect": "Allow", "Action": c["rds_exact"], "Resource": [ARN["db"], ARN["pg"], ARN["subgrp"]], "Condition": e()},
+        {"Sid": "KeyApplyBucketReadWorkload", "Effect": "Allow", "Action": c["s3_bucket"], "Resource": WORKLOAD_BUCKETS, "Condition": e()},
+        # The new key ids exist only after CreateKey, and the provider reads each key right after creating it: METADATA reads
+        # on key/* in the region, NOT tag-conditioned (AWS documents that tag changes can take minutes to affect KMS
+        # authorization; a denied read after CreateKey leaves a created, tainted key whose replacement needs a must-not
+        # action). No Decrypt/Encrypt/GenerateDataKey here.
+        {"Sid": "KeyApplyKmsReadAllKeysInRegion", "Effect": "Allow", "Action": c["kms_exact"], "Resource": r["key_star"], "Condition": e(REGION_COND)},
+        {"Sid": "KeyApplySecretsMetadataRead", "Effect": "Allow", "Action": c["secrets"], "Resource": f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:{PREFIX}/*", "Condition": e()},
+        {"Sid": "KeyApplyIamRoleRead", "Effect": "Allow", "Action": c["iam_read"], "Resource": f"arn:aws:iam::{ACCOUNT}:role/{PREFIX}-*", "Condition": e()},
+        {"Sid": "KeyApplyRoute53Read", "Effect": "Allow", "Action": c["route53"], "Resource": r["hosted_zone"], "Condition": e()},
+        {"Sid": "KeyApplyCloudFrontRead", "Effect": "Allow", "Action": c["cloudfront_read"], "Resource": [ARN["distribution"], ARN["oac"]], "Condition": e()},
+        {"Sid": "KeyApplyAuditTrailReadExact", "Effect": "Allow", "Action": c["cloudtrail_read_exact"], "Resource": ARN["trail"], "Condition": e()},
+        {"Sid": "KeyApplyAuditTrailListStar", "Effect": "Allow", "Action": c["cloudtrail_read_star"], "Resource": "*", "Condition": e(REGION_COND)},
+        {"Sid": "KeyApplyBudgetsRead", "Effect": "Allow", "Action": c["budgets"], "Resource": f"arn:aws:budgets::{ACCOUNT}:budget/*", "Condition": e()},
+        {"Sid": "KeyApplyTaskDefinitionDescribeStar", "Effect": "Allow", "Action": W0_APPLY_CLOSURE["task_definition_describe"], "Resource": "*", "Condition": e(REGION_COND)},
+    ]
+
+
+def _key_apply_inline_statements(expiry: str, api_fqdn: str) -> list[dict]:
+    w = W0_APPLY_CLOSURE
+    x = KEY_APPLY_WRITES
+    r = key_apply_resource_arns()
+    n = _key_apply_names()
+    e = lambda cond=None: _expiring(expiry, cond)  # noqa: E731
+    create_tags = {"StringEquals": {"aws:RequestedRegion": REGION, "aws:RequestTag/Name": n["key_tag_names"]},
+                   "ForAllValues:StringEquals": {"aws:TagKeys": n["tag_keys"]}}
+    return [
+        # --- state backend: identical scopes to the reviewed W0 apply surface ------------------------------------------
+        {"Sid": "KeyApplyStateBucketRead", "Effect": "Allow", "Action": w["state_bucket_read"], "Resource": ARN["state_bucket"], "Condition": e()},
+        {"Sid": "KeyApplyStateObjectReadWrite", "Effect": "Allow", "Action": w["state_object_rw"], "Resource": ARN["state_object"], "Condition": e()},
+        {"Sid": "KeyApplyStateLock", "Effect": "Allow", "Action": w["state_lock"], "Resource": ARN["lock"], "Condition": e()},
+        {"Sid": "KeyApplyStateCmkUseViaBackendServices", "Effect": "Allow", "Action": w["state_cmk_use"], "Resource": ARN["cmk_state"],
+         "Condition": e({"StringEquals": {"kms:ViaService": [f"dynamodb.{REGION}.amazonaws.com", f"s3.{REGION}.amazonaws.com"]}})},
+        # --- the two keys: CreateKey has no resource and no aws:ResourceTag (the key does not exist yet); bounded by the
+        # request tags the module sends. Key spec/usage are not IAM-conditioned (the repository evaluator models no IfExists);
+        # the module pins them and the reviewed plan rejects any other shape. --------------------------------------------
+        {"Sid": "KeyApplyCreateTheTwoKeys", "Effect": "Allow", "Action": ["kms:CreateKey"], "Resource": "*", "Condition": e(create_tags)},
+        # Which resource the tag-on-create authorization evaluates is NOT STATED offline: "*" with the same request tags.
+        {"Sid": "KeyApplyTagOnCreate", "Effect": "Allow", "Action": ["kms:TagResource"], "Resource": "*", "Condition": e(create_tags)},
+        {"Sid": "KeyApplyEnableRotation", "Effect": "Allow", "Action": x["kms_key_configure"], "Resource": r["key_star"], "Condition": e(REGION_COND)},
+        {"Sid": "KeyApplyCreateTheTwoAliases", "Effect": "Allow", "Action": x["kms_alias_create"], "Resource": r["aliases"] + [r["key_star"]], "Condition": e()},
+        # D-K1-3 (b-wide, 2026-10-23): for the CreateKey policy-lockout check. Neither "*" nor key/* limits it to the two new
+        # keys; the existing-key Deny, the bypass Deny, the expiry, the region, K1.R and the R0 row-6 census bound it.
+        {"Sid": "KeyApplyLockoutCheckPutKeyPolicy", "Effect": "Allow", "Action": x["kms_key_policy_lockout_check"], "Resource": "*", "Condition": e(REGION_COND)},
+        # --- the other writes, each on its exact resource -----------------------------------------------------------------
+        {"Sid": "KeyApplyBucketEncryption", "Effect": "Allow", "Action": x["bucket_encryption"], "Resource": r["buckets"], "Condition": e()},
+        {"Sid": "KeyApplyTrailKey", "Effect": "Allow", "Action": x["trail_key"], "Resource": r["trail"], "Condition": e()},
+        {"Sid": "KeyApplyTaskRoleInlinePoliciesBounded", "Effect": "Allow", "Action": x["task_role_policies"], "Resource": r["task_roles"],
+         "Condition": e({"StringEquals": {"iam:PermissionsBoundary": ARN["boundary"]}})},
+        {"Sid": "KeyApplyBudgetBound", "Effect": "Allow", "Action": x["budget_update"], "Resource": r["budget"], "Condition": e()},
+        {"Sid": "KeyApplyApiAliasCreateOnly", "Effect": "Allow", "Action": x["dns_record"], "Resource": r["hosted_zone"],
+         "Condition": e({"ForAllValues:StringEquals": {
+             "route53:ChangeResourceRecordSetsNormalizedRecordNames": [api_fqdn],
+             "route53:ChangeResourceRecordSetsRecordTypes": ["A"],
+             "route53:ChangeResourceRecordSetsActions": ["CREATE"]}})},
+        {"Sid": "KeyApplyRoute53ChangePoll", "Effect": "Allow", "Action": x["dns_change_poll"], "Resource": r["change"], "Condition": e()},
+        # --- never-expiring explicit denies ------------------------------------------------------------------------------
+        {"Sid": "KeyApplyDenyRiskyKeyShapes", "Effect": "Deny", "Action": ["kms:CreateKey", "kms:PutKeyPolicy"], "Resource": "*",
+         "Condition": {"Bool": {"kms:BypassPolicyLockoutSafetyCheck": "true"}}},
+        {"Sid": "KeyApplyDenyMultiRegionKeys", "Effect": "Deny", "Action": ["kms:CreateKey"], "Resource": "*",
+         "Condition": {"Bool": {"kms:MultiRegion": "true"}}},
+        {"Sid": "KeyApplyDenyWritesOnTheExistingKeys", "Effect": "Deny",
+         "Action": ["kms:CreateAlias", "kms:EnableKeyRotation", "kms:PutKeyPolicy", "kms:TagResource", "kms:UntagResource"],
+         "Resource": r["existing_keys"]},
+        # --- fences: the carved capabilities and the zone/alias scopes re-denied everywhere else (never expiring) --------
+        {"Sid": "KeyApplyDenyOtherAliases", "Effect": "Deny", "Action": x["kms_alias_create"], "NotResource": r["aliases"] + [r["key_star"]]},
+        {"Sid": "KeyApplyDenyStateObjectOutside", "Effect": "Deny", "Action": w["state_object_rw"], "NotResource": ARN["state_object"]},
+        {"Sid": "KeyApplyDenyLockOutside", "Effect": "Deny", "Action": w["state_lock"], "NotResource": ARN["lock"]},
+        {"Sid": "KeyApplyDenyStateCmkUseOutside", "Effect": "Deny", "Action": w["state_cmk_use"], "NotResource": ARN["cmk_state"]},
+        {"Sid": "KeyApplyDenyInlinePolicyOutsideTaskRoles", "Effect": "Deny", "Action": x["task_role_policies"], "NotResource": r["task_roles"]},
+        {"Sid": "KeyApplyDenyTrailUpdateOutside", "Effect": "Deny", "Action": x["trail_key"], "NotResource": r["trail"]},
+        {"Sid": "KeyApplyDenyEncryptionChangeOutside", "Effect": "Deny", "Action": x["bucket_encryption"], "NotResource": r["buckets"]},
+        {"Sid": "KeyApplyDenyRecordChangesOutsideZone", "Effect": "Deny", "Action": x["dns_record"], "NotResource": r["hosted_zone"]},
+    ]
+
+
+def _key_apply_ceiling_statement() -> dict:
+    return {"Sid": "KeyApplyDenyDangerous", "Effect": "Deny",
+            "Action": sorted((set(PERMANENT_DENY) | set(FORBIDDEN_CAPABILITIES)) - KEY_APPLY_SCOPED_CAPABILITIES),
+            "Resource": "*"}
+
+
+def require_key_apply_policy_quotas(inline: dict, read_closure: dict, deny_ceiling: dict) -> dict:
+    """Measure the FILLED documents against the quotas; refuse to emit an unprovisionable one."""
+    return require_window_policy_quotas(inline, read_closure, deny_ceiling)
+
+
+def key_apply_read_closure_policy(expiry: str, *, issuance: str | None = None) -> dict:
+    """CUSTOMER MANAGED policy 1 — the refresh read closure with the KMS reads widened to key/*, expiring."""
+    _key_apply_authorize(expiry, issuance)
+    return _require_managed_quota({"Version": "2012-10-17", "Statement": _key_apply_read_statements(expiry)},
+                                  "key-apply read-closure")
+
+
+def key_apply_deny_ceiling_policy() -> dict:
+    """CUSTOMER MANAGED policy 2 — the flat ceiling. Never expires (a Deny that lapses stops protecting)."""
+    return _require_managed_quota({"Version": "2012-10-17", "Statement": [_key_apply_ceiling_statement()]},
+                                  "key-apply deny-ceiling")
+
+
+def key_apply_inline_policy(expiry: str, api_fqdn: str, *, issuance: str | None = None) -> dict:
+    """The permission set's INLINE policy — state backend, the key-apply writes, explicit denies, fences."""
+    _key_apply_authorize(expiry, issuance)
+    api_fqdn = require_valid_api_fqdn(api_fqdn)
+    doc = {"Version": "2012-10-17", "Statement": _key_apply_inline_statements(expiry, api_fqdn)}
+    require_key_apply_policy_quotas(doc, key_apply_read_closure_policy(expiry, issuance=issuance),
+                                    key_apply_deny_ceiling_policy())
+    return doc
+
+
+def key_apply_effective_policy(expiry: str, api_fqdn: str, *, issuance: str | None = None) -> dict:
+    """The three documents concatenated — what the reserved role EFFECTIVELY evaluates (analysis only)."""
+    inline = key_apply_inline_policy(expiry, api_fqdn, issuance=issuance)
+    reads = key_apply_read_closure_policy(expiry, issuance=issuance)
+    ceiling = key_apply_deny_ceiling_policy()
+    return {"Version": "2012-10-17", "Statement": inline["Statement"] + reads["Statement"] + ceiling["Statement"]}
+
+
 def require_valid_expiry(expiry: object) -> None:
     """Reject a missing, placeholder or malformed expiry at GENERATION time."""
     if expiry is None or expiry == "":
@@ -1253,7 +1488,9 @@ def main() -> int:
     parser.add_argument("--emit",
                         choices=["permanent-w0", "bootstrap-temp", "icpermadmin-provisioning-delta",
                                  "window-transition-inline", "window-transition-read-closure",
-                                 "window-transition-deny-ceiling", "window-transition-effective"],
+                                 "window-transition-deny-ceiling", "window-transition-effective",
+                                 "key-apply-inline", "key-apply-read-closure", "key-apply-deny-ceiling",
+                                 "key-apply-effective"],
                         default="permanent-w0")
     # GATE 4N-I10 DEFECT 4. This CLI still defaulted to "<EXPIRY-ISO8601>". Gate 4N-I8
     # removed the placeholder from the FUNCTION signature and I reported the defect closed —
@@ -1302,10 +1539,12 @@ def main() -> int:
 
     window_emits = ("window-transition-inline", "window-transition-read-closure",
                     "window-transition-deny-ceiling", "window-transition-effective")
-    if args.emit not in window_emits:
+    # P6-CI-6 key apply (K0-2): the same operator-held inputs and rules as the window emits.
+    key_apply_emits = ("key-apply-inline", "key-apply-read-closure", "key-apply-deny-ceiling", "key-apply-effective")
+    if args.emit not in window_emits + key_apply_emits:
         for flag, value in (("--api-fqdn", args.api_fqdn), ("--issuance", args.issuance)):
             if value is not None:
-                parser.error(f"{flag} is only meaningful with the window-transition emits")
+                parser.error(f"{flag} is only meaningful with the window-transition and key-apply emits")
 
     if args.emit == "bootstrap-temp":
         if args.expiry is None:
@@ -1328,6 +1567,25 @@ def main() -> int:
                     parser.error(f"--api-fqdn is REQUIRED with --emit {args.emit}; there is no default")
                 build = (window_transition_inline_policy if args.emit == "window-transition-inline"
                          else window_transition_effective_policy)
+                doc = build(args.expiry, args.api_fqdn, issuance=args.issuance)
+        except ValueError as exc:
+            parser.error(str(exc))
+    elif args.emit == "key-apply-deny-ceiling":
+        if args.expiry is not None:
+            parser.error("--expiry is meaningless for the deny ceiling; a Deny that lapses stops protecting")
+        doc = key_apply_deny_ceiling_policy()
+    elif args.emit in key_apply_emits:
+        if args.expiry is None:
+            parser.error(f"--expiry is REQUIRED with --emit {args.emit}; there is no default")
+        try:
+            if args.emit == "key-apply-read-closure":
+                if args.api_fqdn is not None:
+                    parser.error("--api-fqdn is not an input of the read-closure document")
+                doc = key_apply_read_closure_policy(args.expiry, issuance=args.issuance)
+            else:
+                if args.api_fqdn is None:
+                    parser.error(f"--api-fqdn is REQUIRED with --emit {args.emit}; there is no default")
+                build = key_apply_inline_policy if args.emit == "key-apply-inline" else key_apply_effective_policy
                 doc = build(args.expiry, args.api_fqdn, issuance=args.issuance)
         except ValueError as exc:
             parser.error(str(exc))

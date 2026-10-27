@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "87198ab57b59"
+HEAD = "47028898175f"
 TABLE = "workspace_capability_overrides"
 
 
@@ -199,29 +199,24 @@ def test_all_capability_flags_remain_dark() -> None:
         assert getattr(settings, get_policy(capability).global_flag_attr) is False
 
 
-def test_resolver_ships_but_stays_unconsumed_by_live_gates() -> None:
+def test_resolver_ships_and_every_live_gate_consumes_it() -> None:
     # Phase 4A-C.2 shipped the resolver, so it now imports cleanly...
     resolver = importlib.import_module("app.capabilities.resolver")
     assert hasattr(resolver, "resolve_capability")
     assert hasattr(resolver, "decide_capability")
 
-    # Phase 4B-A sanctions exactly ONE live gate as a resolver consumer — the
-    # opportunity-feedback route — which routes its capability decision through the
-    # deny-biased resolver. Every OTHER live gate must remain unwired so no capability
-    # can silently activate through it: the scheduling read/write gates and the RSS
-    # connector selection still keep their direct global-flag checks and must not
-    # import the resolver.
-    feedback_gate = (API_DIR / "app/feedback/routes.py").read_text(encoding="utf-8")
-    assert "resolve_capability" in feedback_gate  # sanctioned live consumer (4B-A)
-
+    # ...and every live gate decides through it: feedback since Phase 4B-A, scheduling
+    # and RSS since P6-CAP-1 (this test asserted the opposite for those two until then,
+    # which pinned the raw-flag bypass). The precise AST guards — one decision call
+    # site per capability, no raw-flag read outside the raw-global reflection — live in
+    # ``test_capability_override_types.py``; this keeps the migration-era check honest.
     for module_path in (
-        Path("app/scouting_requests/routes.py"),
+        Path("app/feedback/routes.py"),
         Path("app/scouting_requests/schedules.py"),
-        Path("app/connectors/registry.py"),
+        Path("app/scouting_requests/connectors.py"),
     ):
         source = (API_DIR / module_path).read_text(encoding="utf-8")
-        assert "capabilities.resolver" not in source, module_path
-        assert "resolve_capability" not in source, module_path
+        assert "resolve_capability(" in source, module_path
 
 
 # --------------------------------------------------------------------------- #

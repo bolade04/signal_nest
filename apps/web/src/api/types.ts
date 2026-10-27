@@ -1,4 +1,4 @@
-import type { components } from './schema';
+import type { components, operations } from './schema';
 
 type S = components['schemas'];
 
@@ -76,6 +76,7 @@ export type ScoutScheduleOut = S['ScoutScheduleOut'];
 export type ScoutScheduleCreate = S['ScoutScheduleCreate'];
 export type ScheduleInterval = S['ScheduleInterval'];
 export type ScheduleState = S['ScheduleState'];
+export type SchedulingCapability = S['SchedulingCapabilityOut'];
 
 export type JobOut = S['JobOut'];
 export type JobListOut = S['JobListOut'];
@@ -152,7 +153,14 @@ export interface OpportunityFilters {
   market?: string | null;
   min_score?: number;
   search?: string | null;
-  sort?: string;
+  sort?: OpportunitySort;
   order?: string;
   limit?: number;
 }
+
+/** The feed's sort keys, as the API declares them (an unknown key is a 422). */
+export type OpportunitySort = NonNullable<
+  NonNullable<
+    operations['list_opportunities_api_v1_workspaces__workspace_id__opportunities_get']['parameters']['query']
+  >['sort']
+>;

@@ -121,7 +121,10 @@ concern; every row's disposition is **non-secret configuration**.
 `api_prefix` (`API_PREFIX`).
 
 **Observability / tracing:** `service_name` (`SERVICE_NAME`), `log_format`
-(`LOG_FORMAT`), `metrics_enabled` (`METRICS_ENABLED`), `tracing_enabled`
+(`LOG_FORMAT`), `metrics_enabled` (`METRICS_ENABLED`), `metrics_exporter`
+(`METRICS_EXPORTER`), `metrics_namespace` (`METRICS_NAMESPACE`),
+`metrics_flush_interval_seconds` (`METRICS_FLUSH_INTERVAL_SECONDS`; the three P6-INF-5
+exporter fields, added after the §3.7 count was taken), `tracing_enabled`
 (`TRACING_ENABLED`), `tracing_exporter` (`TRACING_EXPORTER`), `tracing_sample_ratio`
 (`TRACING_SAMPLE_RATIO`), `tracing_export_timeout_seconds`
 (`TRACING_EXPORT_TIMEOUT_SECONDS`), `tracing_shutdown_flush_seconds`
@@ -179,7 +182,12 @@ concern; every row's disposition is **non-secret configuration**.
 
 **LLM (non-secret):** `llm_provider` (`LLM_PROVIDER`, staging=`openai`|`anthropic`),
 `llm_model` (`LLM_MODEL`), `llm_timeout_seconds` (`LLM_TIMEOUT_SECONDS`),
-`llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`).
+`llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`),
+`llm_max_output_tokens` (`LLM_MAX_OUTPUT_TOKENS`), `llm_retry_after_cap_seconds`
+(`LLM_RETRY_AFTER_CAP_SECONDS`), `llm_max_untrusted_chars` (`LLM_MAX_UNTRUSTED_CHARS`),
+`llm_max_calls_per_run` (`LLM_MAX_CALLS_PER_RUN`), `llm_workspace_monthly_budget_usd`
+(`LLM_WORKSPACE_MONTHLY_BUDGET_USD`), `llm_prices_usd_per_mtok`
+(`LLM_PRICES_USD_PER_MTOK`, JSON), `llm_price_source` (`LLM_PRICE_SOURCE`).
 
 **Readiness probes:** `readiness_probe_timeout_seconds`
 (`READINESS_PROBE_TIMEOUT_SECONDS`), `readiness_total_timeout_seconds`
@@ -271,6 +279,10 @@ appearing in a web artifact is a G5 failure (`G5-10`).
   secret by ARN (and, where pinned, a specific version stage), so a rotation is picked
   up on the next task start with no image rebuild. Operational rotation *procedures*
   are owned by INFRA-6; this document owns only the inventory and disposition contract.
+  `LLM_API_KEY` is one platform key per environment, read once per process (at import,
+  through cached settings), so its rotation means replacing every API and worker task
+  while the old key is still valid
+  ([operational procedures §5.4](./aws-staging-operational-procedures.md)).
 - **Failure.** A missing, empty, malformed, disabled-version, or inaccessible required
   secret must **fail closed**: the actor fails at `Settings` construction / task start
   rather than serving traffic with a degraded or default credential. No silent

@@ -42,6 +42,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import Settings
 from app.db import seed as seed_mod
 from app.privacy.inventory import RetentionClass
+from app.tests._platform_support import pgvector_build
 
 # A DSN whose every component is an unmistakable sentinel. If any of these
 # substrings reaches an error message, a log or stderr, the refusal is leaking
@@ -79,6 +80,7 @@ def _settings(environment: str, database_url: str, **extra: Any) -> Settings:
             "queue_backend": "redis",
             "cache_backend": "redis",
             "vector_backend": "pgvector",
+            "rate_limit_backend": "redis",
             "storage_backend": "s3",
             "redis_url": "redis://unused.invalid:6379/0",
             "s3_bucket": "unused",
@@ -86,9 +88,11 @@ def _settings(environment: str, database_url: str, **extra: Any) -> Settings:
             **{c.setting_name: 30 for c in RetentionClass},
             **extra,
         }
-    return Settings(
-        _env_file=None, environment=environment, database_url=database_url, **extra
-    )
+    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
+    with pgvector_build():
+        return Settings(
+            _env_file=None, environment=environment, database_url=database_url, **extra
+        )
 
 
 def _sqlite_factory(tmp_path) -> sessionmaker:

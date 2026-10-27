@@ -32,6 +32,14 @@ const STATE_META: Record<
     intent: 'warning',
     hint: 'Recurring scouting is enabled, but this schedule has not been activated yet. Activate it to start the recurring runs.',
   },
+  // P6-PLAT-6: the chain stopped after a scheduled attempt failed and could not be
+  // re-seeded. Distinct from activation_required so a failure never reads as "not
+  // started yet"; Activate is the restart.
+  stalled: {
+    label: 'Stalled',
+    intent: 'warning',
+    hint: 'A scheduled run attempt failed and recurring runs stopped. Activate the schedule to restart them.',
+  },
 };
 
 export function SchedulePanel({
@@ -49,7 +57,7 @@ export function SchedulePanel({
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
 
   const actions = useScheduleActions(workspaceId, requestId);
-  const { isEnabled: schedulingEnabled } = useScheduleCapability();
+  const { isEnabled: schedulingEnabled } = useScheduleCapability(workspaceId);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Gating the dialog on `schedulingEnabled` only *hides* it while dark; the
@@ -204,6 +212,15 @@ function ScheduleView({
       {meta.hint ? <p className="text-xs text-muted-foreground">{meta.hint}</p> : null}
 
       <Separator />
+
+      {/* One occurrence was lost but recurrence continued (a stalled row says so in
+          its own hint). Only while live: "runs continue" would be false while dark. */}
+      {schedulingEnabled && schedule.state === 'active' && schedule.last_tick_failed_at ? (
+        <p className="text-xs text-muted-foreground">
+          A scheduled run attempt failed {formatRelative(schedule.last_tick_failed_at)}. Recurring
+          runs continue.
+        </p>
+      ) : null}
 
       <div className="space-y-1.5 text-muted-foreground">
         <div className="flex justify-between">

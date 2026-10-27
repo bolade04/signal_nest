@@ -31,7 +31,6 @@ import secrets
 import time
 from typing import Any, Protocol
 
-from app.core.config import Settings, get_settings
 from app.core.errors import RedisNotifyFailedError
 from app.core.logging import get_logger
 
@@ -168,14 +167,18 @@ class RedisAdvisoryLock:
             return False
 
 
-def build_job_notifier(settings: Settings | None = None) -> JobNotifier:
-    """Select the wake-up notifier for the configured queue backend."""
-    settings = settings or get_settings()
-    if settings.queue_backend == "redis":  # pragma: no cover - full mode only
-        from app.infra.cache import build_redis_client
+def build_job_notifier() -> JobNotifier:
+    """The process's wake-up notifier: none is selected in this build (P6-PLAT-2).
 
-        client = build_redis_client(settings)
-        return RedisJobNotifier(client, channel=settings.redis_notify_channel)
+    A wake-up helps only if an idle worker listens for it, and the worker does not: it
+    finds work by polling the job store every ``worker_poll_interval_seconds``
+    (``Worker._loop``), and nothing calls :meth:`RedisJobNotifier.wait_for_job`.
+    Publishing to a channel no one subscribes to is a Redis round trip per enqueue
+    for nothing, and readiness would have to report a transport that cannot do its
+    job. So no setting selects :class:`RedisJobNotifier` until one change wires the
+    worker's idle wait to it together with the publisher. ``queue_backend=redis`` is
+    still accepted (the staging task environment sets it) and selects nothing.
+    """
     return NullJobNotifier()
 
 

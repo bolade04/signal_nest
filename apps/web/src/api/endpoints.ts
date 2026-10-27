@@ -1,4 +1,4 @@
-import { apiRequest } from './client';
+import { apiRequest, apiRequestPage } from './client';
 import type {
   FeedbackCapability,
   AccountDeletionOut,
@@ -69,6 +69,7 @@ import type {
   ScoutRunResult,
   ScoutScheduleCreate,
   ScoutScheduleOut,
+  SchedulingCapability,
   SessionOut,
   SourcePrefIn,
   TelemetryStatus,
@@ -318,6 +319,17 @@ export const updateLocation = (workspaceId: string, locationId: string, body: Lo
     body,
   });
 
+// P6-UI-023: a location is retired, never deleted, so its history keeps its market.
+export const deactivateLocation = (workspaceId: string, locationId: string) =>
+  apiRequest<LocationOut>(`/workspaces/${workspaceId}/locations/${locationId}/deactivate`, {
+    method: 'POST',
+  });
+
+export const reactivateLocation = (workspaceId: string, locationId: string) =>
+  apiRequest<LocationOut>(`/workspaces/${workspaceId}/locations/${locationId}/reactivate`, {
+    method: 'POST',
+  });
+
 export const getGeoCoverage = (workspaceId: string, locationId: string, signal?: AbortSignal) =>
   apiRequest<GeoCoverageOut>(
     `/workspaces/${workspaceId}/locations/${locationId}/geo-coverage`,
@@ -377,9 +389,20 @@ export const runScoutRequest = (workspaceId: string, requestId: string) =>
 
 // ---- Scout schedules (SB-C; dark-deployed recurrence) ----
 // The read is available to any member even while the feature is dark; mutations
-// require an editor role and answer 503 (capability_unavailable) while disabled.
+// require an editor role and answer 503 (capability_unavailable) while scheduling
+// resolves disabled FOR THAT WORKSPACE (P6-CAP-1: the capability resolver, in which a
+// workspace override outranks the global flag).
 const schedulePath = (workspaceId: string, requestId: string) =>
   `/workspaces/${workspaceId}/scout-requests/${requestId}/schedule`;
+
+// Workspace-effective scheduling availability (P6-UI-006), decided by the same
+// resolver call the schedule mutation gate enforces with. Member-gated like the
+// schedule read, and deliberately NOT capability-gated: it answers 200
+// {enabled:false} while dark rather than 503.
+export const getSchedulingCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<SchedulingCapability>(`/workspaces/${workspaceId}/scheduling-capability`, {
+    signal,
+  });
 
 export const getScoutSchedule = (workspaceId: string, requestId: string, signal?: AbortSignal) =>
   apiRequest<ScoutScheduleOut>(schedulePath(workspaceId, requestId), { signal });
@@ -431,6 +454,18 @@ export const listOpportunities = (
 ) =>
   apiRequest<OpportunityCard[]>(`/workspaces/${workspaceId}/opportunities`, {
     query: { ...filters },
+    signal,
+  });
+
+/** One page of the feed (P6-PLAT-12). `total` is the whole filtered count, not the page. */
+export const listOpportunityPage = (
+  workspaceId: string,
+  filters: OpportunityFilters,
+  cursor: string | null,
+  signal?: AbortSignal,
+) =>
+  apiRequestPage<OpportunityCard>(`/workspaces/${workspaceId}/opportunities`, {
+    query: { ...filters, cursor },
     signal,
   });
 

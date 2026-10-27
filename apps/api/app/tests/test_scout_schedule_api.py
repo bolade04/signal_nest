@@ -8,8 +8,9 @@ scouting-schedule API.
     DELETE /api/v1/workspaces/{ws}/scout-requests/{id}/schedule
 
 Runs against the throwaway four-market demo seed (Dallas, London, Lagos, Nairobi) with
-``get_db`` overridden. The seed creates no schedules and no durable ``Job`` rows, so any
-schedule/tick observed here was produced by the code under test.
+``get_db`` overridden. The seed creates no schedules, and its own scout runs (P6-UI-009)
+are cleared after seeding, so any schedule/tick observed here was produced by the code
+under test.
 
 Covers only what the backend service suite (``test_scout_schedules.py``) does not: the
 HTTP contract + customer-safe projection, role-based authorization (read-any / mutate-
@@ -38,6 +39,7 @@ from app.main import app
 from app.organizations.models import OrganizationMember, User
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.tests._auth2_support import live_bearer
+from app.tests._seed_support import clear_seeded_runs
 
 API = get_settings().api_prefix
 
@@ -53,6 +55,7 @@ _ALLOWED_KEYS = {
     "enabled",
     "next_run_at",
     "last_tick_at",
+    "last_tick_failed_at",
     "created_at",
     "updated_at",
 }
@@ -144,6 +147,7 @@ def factory(tmp_path_factory):
     seed_mod.SessionLocal = make
     try:
         seed_mod.seed(reset=True)
+        clear_seeded_runs(make)
         with make() as s:
             # A non-member (exists + active, not in the demo org) → 403 everywhere.
             s.add(

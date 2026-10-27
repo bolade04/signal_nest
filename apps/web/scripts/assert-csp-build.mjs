@@ -51,6 +51,22 @@ export const NEVER_FETCHED_ORIGINS = new Set([
   'https://reactjs.org', // React's error-decoder link in production error messages
   'http://fb.me', // a dead PropTypes warning string
   'https://example.com', // a form placeholder
+  // React Router 7 (P6-CI-7). Its package exports only its unminified build to bundlers, so
+  // its messages and URL-parsing bases ship with the bundle. None is ever requested:
+  'https://reactrouter.com', // "… must be used within a data router.  See https://reactrouter.com/…" error text
+  'https://github.com', // useSearchParams warning text naming a URLSearchParams polyfill on github.com
+  // The base of `new URL(path, "http://localhost")` when there is no window, and the default
+  // navigation URL; in the browser the router resolves against window.location instead. An
+  // API base of exactly http://localhost therefore fails the policy check below (fail-closed).
+  'http://localhost',
+  // zod 4 (P6-SEC-ZOD4). Its JSON Schema conversion writes a `$schema` dialect identifier —
+  // `result.$schema = "…/draft/2020-12/schema"` and the draft-07 / draft-04 forms
+  // (node_modules/zod/v4/core/to-json-schema.js). A `$schema` value identifies a dialect; it is
+  // never retrieved, and the file contains no fetch or XHR. This app never calls toJSONSchema at
+  // all, so the literals are unreferenced code the bundler retains. Same kind of entry as the
+  // w3.org namespace URIs above.
+  'https://json-schema.org',
+  'http://json-schema.org',
 ]);
 
 /** The SPA policy, exactly. `frame-ancestors` is absent: a <meta> policy ignores it. */

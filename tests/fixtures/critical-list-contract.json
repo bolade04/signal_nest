@@ -92,6 +92,7 @@
   "deny_requirements.py::AWS_SERVICE_SAFETY": "SECURITY_CRITICAL_LIST",
   "deny_requirements.py::_KINDS": "SECURITY_CRITICAL_LIST",
   "deny_requirements.py::_PRINCIPAL_SCOPES": "SECURITY_CRITICAL_LIST",
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": "SECURITY_CRITICAL_LIST",
   "deny_requirements.py::_PROBE_CONTEXT": "TEST_ONLY",
   "deny_triangulation.py::IN_WINDOW": "TEST_ONLY",
   "deny_triangulation.py::PASSING": "SECURITY_CRITICAL_LIST",
@@ -464,7 +465,10 @@
   "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
   "policy_inventory.py::DISCOVERY_ARGS": "SECURITY_CRITICAL_LIST",
   "action_classifier.py::WINDOW_TRANSITION_METADATA": "NON_SECURITY_CONFIGURATION",
-  "allow_model.py::WINDOW_CONTEXT": "TEST_ONLY"
+  "allow_model.py::WINDOW_CONTEXT": "TEST_ONLY",
+  "gen_operator_policies.py::KEY_APPLY_WRITES": "SECURITY_CRITICAL_LIST",
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
+  "action_classifier.py::KEY_APPLY_METADATA": "NON_SECURITY_CONFIGURATION"
  },
  "completeness_consumers": {
   "reviewer_retrieval_state.py::STATES": {
@@ -661,6 +665,7 @@
   "deny_requirements.py::AWS_SERVICE_SAFETY": "BH-A1c: SECURITY_CRITICAL_SOURCE (requirement-authority, PRODUCTION_AUTHORITY). SOURCE 3 \u2014 AWS service-safety requirement set, independent of the generators; a load-bearing A1a deny-source dependency",
   "deny_requirements.py::_KINDS": "BH-A1c: SECURITY_CRITICAL_SOURCE (closed-enum, PRODUCTION_AUTHORITY). a kind not in _KINDS fails closed; adding an unreviewed kind would let a 'permanent' requirement be mis-typed and its no-expiry check skipped",
   "deny_requirements.py::_PRINCIPAL_SCOPES": "BH-A1c: SECURITY_CRITICAL_SOURCE (authority, PRODUCTION_AUTHORITY). a blanked/new principal cannot pass by being unrecognised; authoritative \u2014 guarantee = positive presence + unknown-phrase-is-a-finding",
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": "BH-A1c: SECURITY_CRITICAL_SOURCE (authority, PRODUCTION_AUTHORITY). Operator ruling 2026-10-23 (O11 option 1): the authored table of requirement amendments the operator has ruled (today exactly one: O11 x key_apply x kms:PutKeyPolicy), their provenance, the provenance fields every amendment record must carry and the closed status set. An amendment record applies only when its provenance equals this table, so adding a ruling or a pair WIDENS (it lifts the universal Resource \"*\" Deny check for that pair); review-pinned.",
   "deny_requirements.py::_PROBE_CONTEXT": "BH-A1c: TEST_ONLY_LOAD_BEARING (eval-context, TEST_PARAMETER_ONLY). test/harness scaffold; load-bearing only for a mandatory proof, not a deployed policy source",
   "deny_triangulation.py::IN_WINDOW": "BH-A1c: TEST_ONLY_LOAD_BEARING (eval-context, TEST_PARAMETER_ONLY). test/harness scaffold; load-bearing only for a mandatory proof, not a deployed policy source",
   "deny_triangulation.py::PASSING": "BH-A1c: SECURITY_CRITICAL_SOURCE (outcome-set, PRODUCTION_AUTHORITY). adding a failing outcome (e.g. REQUIRED_BUT_MISSING) to PASSING would make a missing deny count as pass \u2014 defeating the whole triangulation; risk is A",
@@ -874,7 +879,10 @@
   "gen_operator_policies.py::WINDOW_SCOPED_CAPABILITIES": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_DERIVED (derived). Carves the window principal's seven scoped capabilities OUT of its flat deny ceiling (the W0 idiom); adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence; window_transition_closure.scoped_capabilities compared exactly) plus the review pin.",
   "policy_inventory.py::DISCOVERY_ARGS": "P6-W0-TRANSITION (2026-10-02): SECURITY_CRITICAL_SOURCE (discovery input). Binds a generator's required positional parameters BY NAME to the values discovery renders with; a parameter name absent here is GENERATION_FAILED (fail-closed), and a changed value renders a different document under validation. Review-pinned so a discovery input cannot drift silently; the hostname is the synthetic fixture value.",
   "action_classifier.py::WINDOW_TRANSITION_METADATA": "a fixed configuration value or literal set, not an enforced scope (SOURCE-1 categorisation of the window principal's actions from the Service Authorization Reference access levels; merged into ACTION_METADATA, whose consumer fails closed on UNKNOWN)",
-  "allow_model.py::WINDOW_CONTEXT": "BH-A1b: TEST_ONLY_LOAD_BEARING (eval-context). the in-window evaluation context (clock, region, reviewed boundary) for the window principal's ceiling proof; not a deployed policy source; load-bearing for the proof's determinism only"
+  "allow_model.py::WINDOW_CONTEXT": "BH-A1b: TEST_ONLY_LOAD_BEARING (eval-context). the in-window evaluation context (clock, region, reviewed boundary) for the window principal's ceiling proof; not a deployed policy source; load-bearing for the proof's determinism only",
+  "gen_operator_policies.py::KEY_APPLY_WRITES": "P6-CI-6 key apply (K0-2, 2026-10-21): SECURITY_CRITICAL_SOURCE (allow). The key-apply principal's write surface (the two keys, their rotation and aliases, the kms:PutKeyPolicy the CreateKey lockout check requires (D-K1-3 = b-wide, operator decision 2026-10-23), three bucket encryptions, the trail key, the two task-role policies, the budget, the API alias record CREATE) driving its inline Allow statements; widening is caught by the INDEPENDENT operator-closure-contract section key_apply_closure (compared exactly by tests/test_key_apply_policy.py) plus the review pin.",
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": "P6-CI-6 key apply (K0-2, 2026-10-21): SECURITY_CRITICAL_DERIVED (derived). Carves the key-apply principal's ten scoped capabilities OUT of its flat deny ceiling (the W0/window idiom); adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence; key_apply_closure.scoped_capabilities compared exactly) plus the review pin. kms:PutKeyPolicy IS a member since the operator decision of 2026-10-23 (D-K1-3 = b-wide): Allowed on * (expiring, region-conditioned) for the CreateKey lockout check, re-denied by the explicit Deny on the two existing CMKs and the bypass-flag Deny rather than a NotResource fence.",
+  "action_classifier.py::KEY_APPLY_METADATA": "a fixed configuration value or literal set, not an enforced scope (SOURCE-1 categorisation of the key-apply principal's KMS writes from the Service Authorization Reference access levels read 2026-10-21; merged into ACTION_METADATA, whose consumer fails closed on UNKNOWN)"
  },
  "a1a_adjudication": {
   "gen_bootstrap_operator_policy.py::BOUNDARY_ATTACH_ACTIONS": {
@@ -1767,6 +1775,51 @@
     "spec_needed": true,
     "complexity": "MEDIUM"
    }
+  },
+  "gen_operator_policies.py::KEY_APPLY_WRITES": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "allow",
+   "generator": "gen_operator_policies.py::key_apply_inline_policy",
+   "emitted": {
+    "effect": "Allow",
+    "sid": "KeyApplyCreateTheTwoKeys+KeyApplyTagOnCreate+KeyApplyEnableRotation+KeyApplyCreateTheTwoAliases+KeyApplyLockoutCheckPutKeyPolicy+KeyApplyBucketEncryption+KeyApplyTrailKey+KeyApplyTaskRoleInlinePoliciesBounded+KeyApplyBudgetBound+KeyApplyApiAliasCreateOnly+KeyApplyRoute53ChangePoll"
+   },
+   "oracle_family": "AUTHORED_CONTRACT",
+   "expected_authority": "infra/aws/operator-closure-contract.json section key_apply_closure (a separate source gen_operator_policies never reads; compared exactly by tests/test_key_apply_policy.py)",
+   "observed_authority": "emitted write Allow actions of gen_operator_policies.py::key_apply_inline_policy()",
+   "independence": "adding a member widens the key-apply principal's granted privilege; the widening is caught by the INDEPENDENT closure contract section (exact set equality of the grouped write actions) and the review-pin drop-backstop; expected root != the source list",
+   "comparison": "EXACT (union of the grouped write actions == key_apply_closure write groups)",
+   "positive_presence": "INVALID_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-CI-6 key apply (K0-2, 2026-10-21): the separate, expiring principal for the ONE root apply carrying the PR #230 keys; operator decisions D-K1-1\u20267 recorded 2026-10-23 (D-K1-3 = b-wide).",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "effect": "Allow",
+    "spec_needed": true,
+    "independent_ceiling": "infra/aws/operator-closure-contract.json section key_apply_closure",
+    "complexity": "MEDIUM"
+   }
+  },
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": {
+   "cls": "SECURITY_CRITICAL_DERIVED",
+   "kind": "derived",
+   "generator": "gen_operator_policies.py::key_apply_deny_ceiling_policy",
+   "emitted": null,
+   "oracle_family": "PROVENANCE_DERIVATION",
+   "expected_authority": "key_apply_closure.scoped_capabilities (authored) + must_not_contract (the forbidden set the carve is taken from)",
+   "observed_authority": "emitted policy of gen_operator_policies.py::key_apply_effective_policy(): each excepted action in an Allow Sid AND absent from the flat Deny Sid AND re-denied by its NotResource fence",
+   "independence": "carves exceptions OUT of the FORBIDDEN deny (derived from must_not_contract); adding a member REMOVES that action from the flat deny -> widens. Verified by emitted-policy correspondence (tests/test_key_apply_policy.py) and the contract's exact scoped_capabilities comparison",
+   "comparison": "PROVENANCE_CORRESPONDENCE (exception set == contract scoped_capabilities) + EMITTED_POLICY(in Allow AND not in flat Deny AND fenced)",
+   "positive_presence": "CONDITIONALLY_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
+   "note": "P6-CI-6 key apply (K0-2, 2026-10-21): frozenset of capabilities excluded from the key-apply principal's flat ceiling and re-denied by NotResource fences (state object/lock/state CMK as W0; the two task roles; the one trail; the three buckets) and, for kms:PutKeyPolicy (D-K1-3 = b-wide, 2026-10-23), by the explicit Deny on the two existing CMKs and the bypass-flag Deny.",
+   "bh_b": {
+    "resolver": "emitted_policy",
+    "spec_needed": true,
+    "complexity": "MEDIUM"
+   }
   }
  },
  "_a1a_comment": "GATE 4N-I28BH-A1a: policy-generation deny/allow source classification + emitted-policy oracle DESIGN for the 34 A1a collections. Class is the 7-class semantic taxonomy; the string in 'classifications' is the validator projection. Completeness consumers are NOT implemented here (BH-B). No A1a collection was reclassified DOWNWARD from a security class.",
@@ -2335,6 +2388,27 @@
    "positive_presence": "INVALID_EMPTY",
    "widen_on_add": false,
    "widen_on_remove": true,
+   "a1a_dependency": null,
+   "bh_b": {
+    "resolver": "authoritative_source_no_enumerable_oracle",
+    "spec_needed": true,
+    "complexity": "SMALL"
+   }
+  },
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": {
+   "cls": "SECURITY_CRITICAL_SOURCE",
+   "kind": "authority",
+   "module": "deny_requirements.py",
+   "final_consumer": "principals_actually_deny_their_requirements() via _active_amendments()/_amended_pair_problems()",
+   "authority_domain": "PRODUCTION_AUTHORITY",
+   "oracle_family": "AUTHORITATIVE_SOURCE_NO_ENUMERABLE_ORACLE",
+   "expected_authority": "the operator rulings themselves (operator reply 2026-10-23 section 1, sha256 e2a963e3...); an amendment record whose provenance differs from this table is refused",
+   "observed_authority": "the ACTIVE amendment records of the loaded amendment source (tests/fixtures/synthetic-requirement-amendments.json or SIGNALNEST_REQUIREMENT_AMENDMENTS_PATH)",
+   "independence": "dual key: neither the table alone nor a fixture record alone lifts the universal check; the replacement expectations are written from the ruling text (identity-module protected keys, expiry_authorization expiry, anchor region), never read off the generated policy",
+   "comparison": "AUTHORITATIVE_SUPERSET",
+   "positive_presence": "CONDITIONALLY_EMPTY",
+   "widen_on_add": true,
+   "widen_on_remove": false,
    "a1a_dependency": null,
    "bh_b": {
     "resolver": "authoritative_source_no_enumerable_oracle",
