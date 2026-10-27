@@ -311,3 +311,38 @@ interactions are recorded rather than left implicit:
   anonymisation routine) or the two rows conflict.
 - The retention purge deletes audit records older than the `audit_logs` duration; under
   `P6-PRIV-3` that must also remain possible for the retention role.
+
+## 6. Reproducing a complete organization export (D-9f)
+
+The organization export is complete but paged; the web download assembles it. To produce the
+same file from a shell for an organization OWNER's session (`$API`, `$ORG` and `$TOKEN` are the
+API base URL including `/api/v1`, the organization id and that OWNER's bearer token; keep the
+token out of shell history and out of evidence):
+
+```sh
+# 1. The index: members, exact row counts, first pages, next cursors.
+curl -sS -H "Authorization: Bearer $TOKEN" "$API/organizations/$ORG/export" > index.json
+
+# 2. For each table whose next_cursor is not null, follow the cursors until it is null.
+table=llm_usage_events
+cursor=$(jq -r ".tables.$table.next_cursor // empty" index.json)
+n=0
+while [ -n "$cursor" ]; do
+  n=$((n+1))
+  curl -sS --fail -H "Authorization: Bearer $TOKEN" \
+    --get --data-urlencode "cursor=$cursor" --data-urlencode "limit=5000" \
+    "$API/organizations/$ORG/export/$table" > "$table.page-$n.json" || exit 1
+  cursor=$(jq -r '.next_cursor // empty' "$table.page-$n.json")
+done
+
+# 3. The table is the index's rows followed by each page's rows, in page order.
+jq -s '[.[].rows] | add' <(jq ".tables.$table" index.json) "$table".page-*.json
+```
+
+Check every table: the count of rows received must equal the index's `row_count`. A
+difference means rows were created or deleted while you downloaded (there is no snapshot
+isolation; see `data-inventory.md`, *Portability*); download again. A non-2xx answer stops the
+loop: a 403 is a role (exactly OWNER) or membership problem, a 422 `invalid_cursor` a cursor
+that is not the one the previous page returned, and `limit` above 5000 is refused. Nothing in
+this procedure writes anything, and no usage or accounting figure is adjusted to match an
+export.

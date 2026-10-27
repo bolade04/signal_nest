@@ -117,7 +117,8 @@ authorization (exact role OWNER) and tenant filter (operator decisions `D-9a`/`D
 supported relationship between an account and the organization's usage, and organization-wide
 usage is not attributed to an individual account. Its actual lifecycle is the one above: no
 retention sweep touches it; its rows exist exactly as long as their workspace and go with the
-organization deletion walk.
+organization deletion walk. Its rows are exported completely, page by page, like every other
+exported table (see *Portability* below).
 
 `alembic_version` holds only the schema revision.
 
@@ -173,6 +174,60 @@ mechanism, with the procedure an operator follows.
 | Endpoint | Who | Contains |
 |---|---|---|
 | `GET /api/v1/account/export` | the signed-in account | profile, memberships, sessions (no tokens), invitations it accepted, and the others addressed to the account (no token digests; the others **only when its address is verified**, as `email_keyed_data` states), invitations it sent (no invitee address), feedback it submitted, audit events it performed (action, entity type, time, organization); no `llm_usage_events` rows (no user key: no supported relationship to an account) |
-| `GET /api/v1/organizations/{id}/export` | exact role OWNER | every tenant table of the organization (members with id, email and name; invitations without token digests; all workspace content, signals and results; audit records), with credential and derived columns excluded (`token_hash`, `hashed_password`, `embedding`, `centroid`) and a per-table row cap reported as `truncated`; `llm_usage_events` (tenant-linked usage metadata, all recorded columns, scoped by `organization_id`; `D-9b`, 2026-10-27) is included; jobs and job events are operational and excluded |
+| `GET /api/v1/organizations/{id}/export` | exact role OWNER | the **export index**: the subject, `members` (id, email and name), `page_size_default` (1000) and `page_size_cap` (5000), `complete`, a `consistency` statement, `not_exported`, and for every exported tenant table its **exact `row_count`**, its **first page** of rows and the `next_cursor` of the next page (null when the first page holds every row; `complete` is true when that holds for every table) |
+| `GET /api/v1/organizations/{id}/export/{table}?cursor=&limit=` | exact role OWNER | one **page** of one exported table, in `(created_at, id)` order after `cursor` (absent = the first page); `limit` 1–5000 (default 1000; above 5000 is refused with 422); the answer carries `rows` and `next_cursor` (null = the table is finished). An unknown or not-exported table is one and the same 404; a cursor that was not issued for that table is 422 `invalid_cursor` |
+
+Tables, rows and columns are those the inventory marks exported: every tenant table of the
+organization (invitations without token digests; all workspace content, signals and results;
+audit records), with credential and derived columns excluded (`token_hash`, `hashed_password`,
+`embedding`, `centroid`); `llm_usage_events` (tenant-linked usage metadata, all recorded
+columns, scoped by `organization_id`; `D-9b`, 2026-10-27) is included; jobs and job events are
+operational and excluded. **No row is dropped for size** (operator ruling `D-9f`, 2026-10-27):
+the earlier per-table cap that reported `truncated`, and so kept only the oldest 5,000 rows
+of a large table (for the usage ledger, losing the current month), is gone. Every table is
+completely retrievable by walking its pages; the per-page bound (5,000 rows) is the resource
+bound, and the exact-OWNER authorization and the tenant filter apply to every page. Nothing
+about the usage ledger's rows or any accounting balance is changed to fit an export.
+
+**Cursors** are opaque (the base64 of the table name and the last row's `(created_at, id)`).
+The server validates one against the table it is used with and refuses anything else; a
+cursor only positions a read inside the requesting organization's own rows (the tenant filter
+is applied to every page), so a forged or foreign cursor cannot reach another organization's
+data. There is no `offset` pagination.
+
+**Concurrent changes.** No snapshot isolation is claimed: each page is read on its own, and
+the index carries `generated_at`. A traversal that starts at the index and follows the
+cursors sees, for each table: a row created after the traversal began **is included only if
+its `(created_at, id)` key sorts after the cursor in use** (so an ordinary new row, stamped
+now, is picked up while the walk is before the end of that table); a row created with a key
+before the cursor is not seen by that traversal; **a row deleted before its page is read is
+absent**; a row already delivered stays delivered; **no row is delivered twice**. The index
+`row_count` is the exact count when the index was read; if the rows received differ, the data
+changed during the download (the browser download records this as
+`assembly.changed_during_download`). For a stable copy, repeat the download when it reports a
+change, or run it when the organization is quiet.
+
+**Page cost.** A page is one indexed read: `WHERE <tenant filter> AND (created_at, id) >
+cursor ORDER BY created_at, id LIMIT n+1`. For tables that carry a non-null `workspace_id`
+beside `organization_id` (`llm_usage_events` among them) the workspace list is added to the
+filter so the database seeks `(workspace_id, created_at)` (`ix_llm_usage_events_workspace_created`
+for the usage ledger) instead of scanning every tenant's rows; a test reads the SQLite
+`EXPLAIN QUERY PLAN` for this. The PostgreSQL plan is read in CI. Rows after the cursor in the
+organization are sorted per page, so the cost of a page grows with what is left of that
+organization's table, not with other tenants'.
+
+**Browser download.** *Settings → Organization data → Download organization data* reads the
+index, follows every table's cursors (pages of the stated cap), shows progress, stops at the
+first failed request without producing a file, and then saves **one** JSON file
+(`signalnest-organization-export-YYYY-MM-DD.json`, `schema_version` 2): the index document
+with `complete: true`, `tables.<name> = { row_count, rows_received, rows }` holding every
+row, and `assembly = { started_at, finished_at, pages_fetched, changed_during_download }`.
+The file is built in the browser's memory (streaming is not required for the pilot).
+An operator can reproduce the same export with `curl` loops (`privacy-operations.md` §6).
+
+**The account export is not paged**: it holds one person's own rows (profile, memberships,
+sessions, tokens' metadata, the invitations, feedback, overrides and audit events that account
+produced), which one account's activity bounds; it does not carry tenant tables, and no
+`llm_usage_events` row.
 
 Exports are read-only: they write nothing, not even an audit record.
