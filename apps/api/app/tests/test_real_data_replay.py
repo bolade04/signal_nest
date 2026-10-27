@@ -18,6 +18,7 @@ through the unmodified scout pipeline. Nothing leaves the machine.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import shutil
 from collections.abc import Iterator
@@ -33,10 +34,12 @@ from sqlalchemy.orm import sessionmaker
 
 from app.audit.models import AuditLog
 from app.brands.models import Brand
+from app.connectors import registry as registry_mod
 from app.connectors import replay as replay_mod
 from app.connectors import takedown as takedown_mod
 from app.connectors.coverage import CoverageReason
 from app.connectors.feedcache import feed_cache
+from app.connectors.live import live_connector_for
 from app.connectors.models import SourceTakedown
 from app.connectors.replay import (
     UNCOVERED_MARKET,
@@ -546,6 +549,21 @@ def test_live_feeds_need_the_workspace_rss_decision():
     assert off.coverage.reason is CoverageReason.NO_SOURCE_FOR_MARKET and off.signals == []
     assert on.coverage.reason is CoverageReason.LIVE_SOURCES
     feed_cache.clear()
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [live_connector_for, fetch_signals, registry_mod.resolve_connector],
+    ids=["live_connector_for", "fetch_signals", "resolve_connector"],
+)
+def test_the_rss_decision_cannot_be_omitted_by_any_caller(fn):
+    """P6-CAP-1 (delta review r3, C-r3-2): ``rss_enabled`` is keyword-only with no default
+    on every connector entry point, so no caller can bypass the per-workspace decision by
+    omission. A default of ``True`` would silently reopen live egress."""
+    parameter = inspect.signature(fn, eval_str=True).parameters["rss_enabled"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.annotation is bool
 
 
 def test_the_kill_switch_returns_a_live_market_to_not_covered():
