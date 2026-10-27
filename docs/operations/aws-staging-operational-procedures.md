@@ -306,7 +306,18 @@ degraded behaviour).* The worst case of a call is the meter's estimate (about 3
 characters per input token plus `max_tokens` output at the model's table
 price); settlement is never below the usage the provider reported; a timeout,
 an undecodable reply and a reply with no usage block settle at the worst case
-(the undecodable-reply charge is a conservative basis pending D-LLM-3). A call
+(the undecodable-reply charge is a conservative basis pending D-LLM-3). Two
+consequences of that basis: `reserved_usd` may exceed the configured budget
+after the fact, by the sum over settled calls of (actual − worst case)⁺ — the
+guarantee is on the worst cases of calls *started* — after which every further
+reservation is refused until the month rolls over (measured in review r1: a
+reply of 200 000 input and 1 000 output tokens at the sonnet-4-6 table price
+settled at USD 0.615 against a budget of USD 0.10; the next reservation and the
+run endpoint were then refused with "USD 0.61 of 0.10"); and a rejected,
+rate-limited or unavailable attempt is charged 0 at settlement but has consumed
+its worst case of the month at reservation, which the service's retries
+multiply (a 429 or 5xx storm consumes (`llm_max_retries` + 1) × worst case per
+logical call with no spend). A call
 whose process died between reservation and settlement keeps its worst case as
 the month's spend ("an unknown outcome is charged its worst case"); the
 reservation row is its record. If recovery releases a reservation before its own

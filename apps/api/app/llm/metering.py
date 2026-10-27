@@ -65,7 +65,17 @@ reply that arrived but could not be decoded, and a reply carrying no usage block
 settle at ``w`` - a conservative basis pending D-LLM-3, not an accepted rule. A
 reply the provider rejected or could not serve (4xx, 429, 5xx) and a failed
 connection are charged nothing, as before; a connection that fails after the request
-was sent is therefore a residual (the provider may have processed it).
+was sent is therefore a residual (the provider may have processed it). Two
+consequences of this basis: (i) ``reserved_usd`` may exceed the configured budget
+after the fact, by the sum over settled calls of (actual - w)+ - the guarantee is on
+the worst cases of calls *started*, and once the ledger is over the budget every
+further reservation is refused until the month rolls over (measured in review r1: a
+reply of 200 000 input and 1 000 output tokens at the sonnet-4-6 table price settled
+at USD 0.615 against a budget of USD 0.10, after which the next reservation and the
+run endpoint were refused with "USD 0.61 of 0.10"); (ii) a rejected, rate-limited or
+unavailable attempt is charged 0 at settlement but has consumed its worst case ``w``
+of the month at reservation, and the service's retries multiply that: a 429 or 5xx
+storm consumes (``llm_max_retries`` + 1) x w per logical call with no spend.
 
 **Unknown outcomes.** If the process dies between reserving and settling, the
 reservation stays at ``w`` and is the record of that call. Recovery (the worker's
