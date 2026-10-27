@@ -49,7 +49,7 @@ from app.infra.mail import (
     SesMailSender,
     send_mail,
 )
-from app.tests._platform_support import pgvector_build
+from app.tests._platform_support import production_vector_kwargs
 
 REGION = "us-east-1"
 ENDPOINT = f"https://email.{REGION}.amazonaws.com"
@@ -416,7 +416,9 @@ _PRODUCTION_STACK = {
     "redis_url": "redis://unused.invalid:6379/0",
     "storage_backend": "s3",
     "s3_bucket": "unused",
-    "vector_backend": "pgvector",
+    # P6-PLAT-1 (strategy B): the acknowledged bounded in-process backend, as production
+    # really validates it - no patched build fact.
+    **production_vector_kwargs(),
     "rate_limit_backend": "redis",
 }
 _VALID_LIVE_MAIL = {
@@ -436,9 +438,7 @@ def _settings(environment: str, **overrides) -> Settings:
     if environment == "production":
         kwargs |= _PRODUCTION_STACK
     kwargs.update(overrides)
-    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
-    with pgvector_build():
-        return Settings(**kwargs)
+    return Settings(**kwargs)
 
 
 def _rejected(environment: str, needle: str, **overrides) -> None:

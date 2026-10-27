@@ -61,7 +61,7 @@
 | API service | **ECS/Fargate** task (`uvicorn app.main:app`, port 8000) behind an ALB | **Mandatory before canary** |
 | Background worker | **ECS/Fargate** service (`python -m app.jobs.worker`, no port) | **Mandatory before canary** |
 | Migration task | **ECS run-task** (one-shot `python -m app.db.migrate`) | **Mandatory before canary** |
-| PostgreSQL + pgvector | **RDS for PostgreSQL** (managed) | **Mandatory before canary** |
+| PostgreSQL ~~+ pgvector~~ *(2026-10-27: no pgvector by decision, see §G)* | **RDS for PostgreSQL** (managed) | **Mandatory before canary** |
 | Redis / Valkey | **ElastiCache** (managed) | **Mandatory before canary** if the staging profile selects a Redis-backed cache/queue coordination path (see §H) |
 | Object storage | **S3** bucket(s) | **Mandatory before canary** |
 | Container registry | **ECR** | **Mandatory before canary** |
@@ -185,12 +185,18 @@ creates no role or policy.**
 
 - **Managed PostgreSQL** (RDS), **private access only**, **encryption at rest and in
   transit**, a **dedicated staging database**, **no customer data**.
-- **pgvector** extension enabled (production-shaped mode requires a persistent vector
-  backend — `config.py`). *(2026-10-20, `P6-PLAT-1`: no code uses the extension, and
+- ~~**pgvector** extension enabled (production-shaped mode requires a persistent vector
+  backend — `config.py`).~~ *(2026-10-20, `P6-PLAT-1`: no code uses the extension, and
   `vector_backend=pgvector` is now refused at startup in every environment until a
   pgvector path is implemented. Staging runs the default `bruteforce`, and the composed
-  root omits `VECTOR_BACKEND`. Whether to enable the extension at all is the open
-  P6-PLAT-1 operator decision.)*
+  root omits `VECTOR_BACKEND`.)* **Decided 2026-10-27 (operator, D-PLAT-1 strategy B):
+  the extension is not enabled. The production vector configuration is in-process per-run similarity, bound N_max = 100 signals per run (engineering capacity bound, not a quota); no cross-run or history-wide similarity; pgvector refused until implemented (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists.
+  Production accepts `vector_backend=bruteforce` only with
+  `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` and a bound within the build's hard
+  ceiling (`VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN`, default 100, ceiling 100); a run that
+  would index more signals is refused (status `failed`, reason
+  `signal_volume_above_bound`), never truncated or chunked. The migration actor's
+  task environment needs no `REDIS_URL` (`migration_mode` opens no Redis connection).**
 - **Migrations** run as a **controlled one-time ECS task** using the **approved image**
   (`python -m app.db.migrate`); replicas never migrate (`docs/operations/deployment.md`,
   `docs/operations/migrations.md`).

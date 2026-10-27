@@ -35,7 +35,13 @@ from app.core.enums import (
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
 from app.geography.markets import market_from_parts
-from app.infra.vector import build_index, embed_text
+from app.infra.vector import (
+    SIGNAL_VOLUME_ABOVE_BOUND,
+    SignalVolumeAboveBoundError,
+    build_index,
+    check_inprocess_bound,
+    embed_text,
+)
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
 from app.intelligence.models import AnalysisInput, OpportunityCandidate
@@ -75,6 +81,24 @@ from app.signals.models import (
 logger = get_logger("signalnest.pipeline")
 
 DEDUPE_THRESHOLD = 0.92
+
+
+def refused_run_stats(*, scanned: int, bound: int) -> dict:
+    """The ``ScoutRequest.stats`` of a run refused at the in-process bound (P6-PLAT-1 B).
+
+    The four ordinary counts are present (nothing was analysed, so they are honest
+    zeros apart from ``scanned``), plus the stable reason code and the bound the run
+    exceeded. Safe aggregates only - never content.
+    """
+    return {
+        "scanned": scanned,
+        "noise_filtered": 0,
+        "signals_analyzed": 0,
+        "opportunities": 0,
+        "refused": True,
+        "refusal_reason": SIGNAL_VOLUME_ABOVE_BOUND,
+        "bound": bound,
+    }
 
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
@@ -167,9 +191,10 @@ def _run(
     request.status = ScoutRequestStatus.RUNNING.value
     db.flush()
 
+    settings = get_settings()
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
     # opaque tenant reference sent to the provider.
-    meter = (meter or _run_meter.get() or LLMMeter(get_settings())).bind(
+    meter = (meter or _run_meter.get() or LLMMeter(settings)).bind(
         db,
         organization_id=request.organization_id,
         workspace_id=request.workspace_id,
@@ -194,6 +219,27 @@ def _run(
     )
 
     scanned = len(fixtures)
+    # P6-PLAT-1 (strategy B): the per-run in-process index is bounded. A run that
+    # would index more signals than the bound is refused here, before any signal is
+    # stored, embedded or compared - no partial dedupe, no chunking, no truncation.
+    # The handler records the refusal as the run's outcome (status failed, stats
+    # carrying the reason code); it is per run, per workspace, so it never affects
+    # another workspace's run.
+    try:
+        check_inprocess_bound(scanned, settings)
+    except SignalVolumeAboveBoundError as exc:
+        logger.warning(
+            "scout.refused",
+            extra={
+                "extra_fields": {
+                    "request": request.id,
+                    "reason": exc.reason,
+                    "scanned": exc.scanned,
+                    "bound": exc.bound,
+                }
+            },
+        )
+        raise
     normalized: list[NormalizedSignal] = []
     # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
     # index is the configured vector backend (P6-PLAT-1); there is no fallback.

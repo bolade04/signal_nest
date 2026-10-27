@@ -44,7 +44,7 @@ from app.system.probes import (
     _check_rate_limit,
     _check_vector,
 )
-from app.tests._platform_support import pgvector_build
+from app.tests._platform_support import pgvector_build, production_vector_kwargs
 
 
 # --------------------------------------------------------------------------- #
@@ -357,7 +357,9 @@ def _prod(**overrides: object) -> dict[str, object]:
         rate_limit_backend="redis",
         storage_backend="s3",
         s3_bucket="prod-bucket",
-        vector_backend="pgvector",
+        # P6-PLAT-1 (strategy B): the acknowledged bounded in-process backend, as
+        # production really validates it - no patched build fact.
+        **production_vector_kwargs(),
         llm_provider="openai",
         llm_api_key="sk-test",
         mail_backend="ses",
@@ -378,8 +380,7 @@ class TestRateLimitSettings:
         with pytest.raises(ValidationError) as exc:
             Settings(**_prod(rate_limit_backend="memory"))
         assert "environment=production requires a shared rate-limit backend" in str(exc.value)
-        with pgvector_build():
-            assert Settings(**_prod()).rate_limit_backend == "redis"
+        assert Settings(**_prod()).rate_limit_backend == "redis"
 
     def test_redis_limiter_requires_redis_url(self):
         with pytest.raises(ValidationError) as exc:
@@ -568,13 +569,24 @@ class TestVectorBackend:
         assert "vector_backend=pgvector is not implemented in this build" in str(exc.value)
 
     def test_the_build_fact_is_the_only_thing_refusing_production_pgvector(self):
+        kwargs = _prod(vector_backend="pgvector", vector_inprocess_production_approved=False)
+        with pytest.raises(ValidationError):
+            Settings(**kwargs)
         with pgvector_build():
-            assert Settings(**_prod()).vector_backend == "pgvector"
+            assert Settings(**kwargs).vector_backend == "pgvector"
 
     def test_readiness_reports_the_backend_that_runs(self):
-        status, summary, _detail, _retry = _check_vector(Settings(_env_file=None))
+        status, summary, detail, _retry = _check_vector(Settings(_env_file=None))
         assert status is ProbeStatus.HEALTHY
         assert "brute-force" in summary
+        # P6-PLAT-1 (strategy B): the bound and the absence of cross-run similarity are
+        # reported, with the bound read from settings.
+        assert "N_max=100" in summary
+        assert detail == (
+            "in-process per-run similarity; bound N_max=100 signals per run "
+            "(engineering capacity bound); no cross-run, cross-workspace or "
+            "history-wide similarity"
+        )
         pg = Settings.model_construct(
             vector_backend="pgvector", database_url="postgresql://u:p@db.invalid/d"
         )

@@ -104,7 +104,7 @@ row has its own setting, named in the measured note below)*:
 | Queue | in-process | Redis |
 | Durable job queue | SQLite-backed store + worker | ~~(Redis/Celery/etc. — Phase 3B)~~ the same store on PostgreSQL |
 | Cache | in-memory | Redis |
-| Vector search | numpy brute-force | pgvector |
+| Vector search | numpy brute-force | ~~pgvector~~ in-process per-run similarity, bound N_max = 100 signals per run *(2026-10-27, `P6-PLAT-1` strategy B; see the note below)* |
 | Storage | local filesystem | S3 |
 | LLM | deterministic mock | OpenAI / Anthropic |
 
@@ -209,6 +209,17 @@ on; they do not revise the notes above, which describe the code they name. Nothi
   decision is implemented.** Nothing in CI or staging starts with `ENVIRONMENT=production` (CI runs `test`,
   the staging task environments are `staging`). The `vector` probe builds the configured index (`healthy` for
   brute force; `not_configured` for an unimplemented backend).
+  *(2026-10-27 — operator decision D-PLAT-1, **strategy B**, supersedes the production refusal above:
+  production accepts `vector_backend=bruteforce` only as the explicitly acknowledged bounded in-process
+  backend — `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` and `VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN` within
+  the build's hard ceiling `VECTOR_INPROCESS_HARD_CEILING = 100` (a value above it is refused in every
+  environment). The contract is in-process per-run similarity, bound N_max = 100 signals per run (engineering capacity bound, not a quota); no cross-run or history-wide similarity; pgvector refused until implemented (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists. The pipeline checks the
+  bound before building the run's index: a run that would index more signals is refused — no partial
+  dedupe, no chunking, no truncation — and the refusal is recorded (durable job `failed` /
+  `non_retryable` with summary `signal_volume_above_bound`; the scout request `failed` with `stats`
+  carrying `refusal_reason` and the counts); it is per run, per workspace. Readiness and the runtime report
+  state the bound from settings. The migration actor (`migration_mode`) is exempt from the
+  `cache_backend`/`queue_backend=redis requires redis_url` rules: it opens no Redis connection.)*
 - **Rate limiting (`P6-PLAT-3`).** `rate_limit_backend` selects the counter store. `memory` is a bounded,
   per-process fixed-window counter (at most 10,000 clients; closed windows dropped first, then the oldest
   open one). `redis` is a counter shared by every replica: one `MULTI`/`EXEC` per request of

@@ -45,6 +45,13 @@ _MAX_SUPPORT_CONTACT_LENGTH = 200
 #: False. It is a fact about the code, not a deployment setting: it becomes True in
 #: the change that implements pgvector, never through the environment.
 PGVECTOR_IMPLEMENTED = False
+#: Hard ceiling on ``vector_inprocess_max_signals_per_run`` (P6-PLAT-1, strategy B:
+#: operator decision 2026-10-27). The in-process per-run similarity index is bounded
+#: by an engineering capacity bound, not a quota; a configured bound above this
+#: ceiling is refused in every environment, so the setting can never re-create the
+#: unbounded path. Like ``PGVECTOR_IMPLEMENTED`` it is a fact about this build
+#: (measured on the brute-force path), never raised through the environment.
+VECTOR_INPROCESS_HARD_CEILING = 100
 # --- end P6 platform services -----------------------------------------------
 
 
@@ -520,6 +527,21 @@ class Settings(BaseSettings):
     #: counter (the per-replica limit) and logs + counts the degradation; ``deny``
     #: answers 503 until Redis answers again.
     rate_limit_redis_failure_mode: Literal["local", "deny"] = "local"
+
+    # --- P6 platform services: bounded in-process similarity (P6-PLAT-1 B) -----
+    #: Most signals one scout run may index in the in-process per-run similarity
+    #: index (``vector_backend=bruteforce``). A run that would index more is refused
+    #: before the index is built - never truncated, chunked or partially deduplicated.
+    #: An engineering capacity bound (measured: the dedupe stage is linear in n per
+    #: signal, quadratic per run), not a subscription quota; it is capped by
+    #: ``VECTOR_INPROCESS_HARD_CEILING`` in every environment.
+    vector_inprocess_max_signals_per_run: int = 100
+    #: The operator's explicit acknowledgement that production runs the bounded
+    #: in-process per-run backend: similarity is computed per run, in process, with
+    #: no cross-run, cross-workspace or history-wide similarity (no vector store).
+    #: A positive statement in the task environment, never an absence: without it
+    #: production keeps refusing ``vector_backend=bruteforce``.
+    vector_inprocess_production_approved: bool = False
     # --- end P6 platform services --------------------------------------------
 
     # --- Derived helpers -----------------------------------------------------
@@ -600,10 +622,17 @@ class Settings(BaseSettings):
         if self.app_mode == "full":
             if self.is_sqlite:
                 errors.append("app_mode=full requires a PostgreSQL database_url")
-            if self.queue_backend == "redis" and not self.redis_url:
-                errors.append("queue_backend=redis requires redis_url")
-            if self.cache_backend == "redis" and not self.redis_url:
-                errors.append("cache_backend=redis requires redis_url")
+            # The one-shot migration actor (``migration_mode``) opens no Redis
+            # connection: ``app.db.migrate`` imports neither the cache nor the queue
+            # adapters (only Alembic, the engine and the schema reader), so a Redis
+            # URL in its task environment would be an unused secret. Ordinary
+            # full-mode startup keeps requiring it; the PostgreSQL rule above holds
+            # for the migration actor too.
+            if not self.migration_mode:
+                if self.queue_backend == "redis" and not self.redis_url:
+                    errors.append("queue_backend=redis requires redis_url")
+                if self.cache_backend == "redis" and not self.redis_url:
+                    errors.append("cache_backend=redis requires redis_url")
 
         # Production must run on the production-shaped runtime end to end. Local
         # zero-dependency backends are development conveniences and must never be
@@ -631,10 +660,24 @@ class Settings(BaseSettings):
                     "environment=production requires durable object storage "
                     "(storage_backend=local is local-only)"
                 )
-            if self.vector_backend == "bruteforce":
+            # P6-PLAT-1 (strategy B, operator decision 2026-10-27): production runs
+            # the in-process per-run similarity only as an explicitly acknowledged,
+            # bounded backend - the acknowledgement is a positive statement in the
+            # task environment and the bound must sit within the build's hard
+            # ceiling. Without both, the original refusal stands. This path has no
+            # cross-run, cross-workspace or history-wide similarity.
+            if self.vector_backend == "bruteforce" and not (
+                self.vector_inprocess_production_approved
+                and 1
+                <= self.vector_inprocess_max_signals_per_run
+                <= VECTOR_INPROCESS_HARD_CEILING
+            ):
                 errors.append(
                     "environment=production requires a persistent vector backend "
-                    "(vector_backend=bruteforce is local-only)"
+                    "(vector_backend=bruteforce is local-only); set "
+                    "VECTOR_INPROCESS_PRODUCTION_APPROVED=true to run the explicitly "
+                    "acknowledged bounded in-process backend (N_max <= "
+                    f"{VECTOR_INPROCESS_HARD_CEILING})"
                 )
 
         # The one-shot migration actor applies schema DDL and needs only
@@ -967,13 +1010,21 @@ class Settings(BaseSettings):
         # --- P6 platform services (P6-PLAT-1 / P6-PLAT-3) -------------------
         # P6-PLAT-1: a vector backend this build does not implement is refused in
         # every environment rather than silently run as brute force. Production
-        # also refuses bruteforce (above), so until the P6-PLAT-1 decision is
-        # implemented production has no accepted vector_backend - by design.
+        # accepts bruteforce only as the explicitly acknowledged bounded in-process
+        # backend (above); pgvector stays refused until implemented (P6-LLM-7
+        # deferred), so B-5 is not applicable while no pgvector path exists.
         if self.vector_backend == "pgvector" and not PGVECTOR_IMPLEMENTED:
             errors.append(
                 "vector_backend=pgvector is not implemented in this build (no vector "
                 "extension, column or query exists, so it would silently run the "
                 "in-process brute-force path)"
+            )
+        # P6-PLAT-1 (strategy B): the per-run bound of the in-process index is
+        # refused above the build's hard ceiling in every environment.
+        if not 1 <= self.vector_inprocess_max_signals_per_run <= VECTOR_INPROCESS_HARD_CEILING:
+            errors.append(
+                "vector_inprocess_max_signals_per_run must be between 1 and "
+                f"{VECTOR_INPROCESS_HARD_CEILING} (VECTOR_INPROCESS_HARD_CEILING)"
             )
         # P6-PLAT-3: production counts requests in the shared store so the limit
         # holds across replicas. The one-shot migration actor serves no HTTP and

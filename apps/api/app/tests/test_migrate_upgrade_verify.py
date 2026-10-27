@@ -381,3 +381,79 @@ def test_explicit_downgrade_fails_closed_without_reraise(
     assert len(records) == 1
     assert records[0].extra_fields["error_class"] == "RuntimeError"
     assert "db.invalid" not in caplog.text
+
+
+# --------------------------------------------------------------------------
+# P6-PLAT-1 (strategy B): the migration actor's unnecessary Redis requirement
+# --------------------------------------------------------------------------
+# ``python -m app.db.migrate`` opens no Redis connection (it imports neither the cache
+# nor the queue adapters - pinned in ``test_inprocess_signal_bound``), so the one-shot
+# actor validates without ``redis_url`` even where the task environment selects the
+# Redis backends. Ordinary full-mode startup keeps requiring it.
+_PRODUCTION_MIGRATION_ACTOR = {
+    "environment": "production",
+    "app_mode": "full",
+    "migration_mode": True,
+    "database_url": _PG_URL,
+    # The non-secret production backend selections the task environment carries.
+    "cache_backend": "redis",
+    "queue_backend": "redis",
+    "rate_limit_backend": "redis",
+    "storage_backend": "s3",
+    "vector_backend": "bruteforce",
+    "vector_inprocess_production_approved": True,
+}
+
+
+def test_production_migration_actor_validates_without_redis_url() -> None:
+    s = Settings(_env_file=None, **_PRODUCTION_MIGRATION_ACTOR)
+    assert s.migration_mode is True and s.is_production is True
+    assert s.redis_url is None
+    assert (s.cache_backend, s.queue_backend, s.rate_limit_backend) == ("redis",) * 3
+
+
+def test_staging_migration_actor_validates_without_redis_url() -> None:
+    s = Settings(
+        _env_file=None,
+        **{**_PRODUCTION_MIGRATION_ACTOR, "environment": "staging"},
+    )
+    assert s.migration_mode is True and s.redis_url is None
+
+
+def test_production_full_mode_still_requires_redis_url() -> None:
+    # The exemption is the migration actor's alone: every runtime actor keeps the rule.
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            _env_file=None,
+            **{**_PRODUCTION_MIGRATION_ACTOR, "migration_mode": False},
+            secret_key="a-strong-non-default-secret-value",
+            llm_provider="anthropic",
+            llm_api_key="fabricated-key",
+            s3_bucket="unused",
+            mail_backend="ses",
+            mail_from_address="no-reply@example.com",
+            mail_ses_region="us-east-1",
+            public_web_origin="https://app.example.com",
+        )
+    message = str(exc.value)
+    for rule in (
+        "queue_backend=redis requires redis_url",
+        "cache_backend=redis requires redis_url",
+        "rate_limit_backend=redis requires redis_url",
+    ):
+        assert rule in message, message
+
+
+def test_migration_actor_keeps_every_other_production_rule() -> None:
+    # Only the Redis presence rules are relaxed: the PostgreSQL, app_mode, cache,
+    # storage and vector-acknowledgement rules still apply to the migration actor.
+    for override, needle in (
+        ({"database_url": "sqlite:///./x.db"}, "requires a PostgreSQL database"),
+        ({"app_mode": "local"}, "environment=production requires app_mode=full"),
+        ({"cache_backend": "memory"}, "requires a shared cache backend"),
+        ({"storage_backend": "local"}, "requires durable object storage"),
+        ({"vector_inprocess_production_approved": False}, "persistent vector backend"),
+        ({"vector_backend": "pgvector"}, "vector_backend=pgvector is not implemented"),
+    ):
+        with pytest.raises(ValueError, match=needle):
+            Settings(_env_file=None, **{**_PRODUCTION_MIGRATION_ACTOR, **override})
