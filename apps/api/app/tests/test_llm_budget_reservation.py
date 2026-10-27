@@ -727,3 +727,24 @@ def test_the_handler_builds_a_per_attempt_meter_with_the_ledger_seam(factory, mo
         assert meter._session_factory is not None
         assert meter._session_factory().get_bind() is db.get_bind()
         assert _reservation(db, f"{job}:1:0").state == "released"
+
+
+def test_the_durable_handler_is_the_only_production_caller_of_the_pipeline_run():
+    """INFO-4 (review r1): ``pipeline._run``'s bare ``LLMMeter(get_settings())`` fallback
+    has no session factory (the same-session path even on PostgreSQL). It must stay
+    reachable only from tests: every production import or call of ``_run`` is the durable
+    handler, which supplies a shared-ledger meter through ``metered_run``."""
+    import re
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1]
+    callers = set()
+    for path in app_dir.rglob("*.py"):
+        if "tests" in path.relative_to(app_dir).parts or path.name == "pipeline.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"from app\.jobs\.pipeline import[^\n]*\b_run\b|pipeline\._run\b", text):
+            callers.add(path.relative_to(app_dir).as_posix())
+    assert callers == {"jobs/handlers.py"}
+    handler = (app_dir / "jobs" / "handlers.py").read_text(encoding="utf-8")
+    assert "session_factory=sessionmaker(" in handler and "with metered_run(meter):" in handler
