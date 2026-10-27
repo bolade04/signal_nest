@@ -3,9 +3,10 @@
 Adds the two tables behind the per-workspace monthly LLM budget's hard ceiling on
 PostgreSQL (D-LLM-1 option B, ``app.llm.budget``):
 
-* ``llm_budget_periods`` - one row per workspace and UTC calendar month (primary key
-  ``workspace_id, period_start``): ``reserved_usd`` (worst case of every call reserved
-  and not yet settled, plus the settled amount of every call that finished) and
+* ``llm_budget_periods`` - one row per workspace and UTC calendar month (unique
+  ``workspace_id, period_start``; surrogate ``id`` like every other table, for the
+  privacy export, erasure walk and verification): ``reserved_usd`` (the budget
+  consumed: each call's worst case, or its charge when above the estimate) and
   ``settled_usd``. The budget check is one conditional ``UPDATE`` of this row.
 * ``llm_budget_reservations`` - one row per reserved provider call, keyed by attempt
   (``attempt_key`` unique: job id, worker attempt, call ordinal) so settlement is
@@ -51,11 +52,13 @@ def upgrade() -> None:
     sa.Column('organization_id', sa.String(length=32), nullable=False),
     sa.Column('reserved_usd', sa.Numeric(precision=12, scale=6), nullable=False),
     sa.Column('settled_usd', sa.Numeric(precision=12, scale=6), nullable=False),
+    sa.Column('id', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('workspace_id', 'period_start')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('workspace_id', 'period_start', name='uq_llm_budget_periods_workspace_period')
     )
     with op.batch_alter_table('llm_budget_periods', schema=None) as batch_op:
         batch_op.create_index('ix_llm_budget_periods_organization_id', ['organization_id'], unique=False)

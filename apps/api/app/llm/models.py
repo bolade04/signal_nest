@@ -17,7 +17,17 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -55,7 +65,7 @@ class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     outcome: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
-class LLMBudgetPeriod(Base, TimestampMixin):
+class LLMBudgetPeriod(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """One workspace's reserved and settled model spend for one UTC calendar month.
 
     ``reserved_usd`` is the budget consumed: the sum, over this month's reservations,
@@ -63,17 +73,24 @@ class LLMBudgetPeriod(Base, TimestampMixin):
     estimate) - the number the budget check compares and the run endpoint reads.
     ``settled_usd`` is what the finished calls were charged (actual usage, or the worst
     case for an unknown outcome); it is at most ``reserved_usd`` except for charges
-    above the estimate. The hot row is updated by short transactions only.
+    above the estimate. The hot row is updated by short transactions only. One row per
+    ``(workspace_id, period_start)`` (unique); the surrogate ``id`` is what the privacy
+    export, erasure walk and verification address rows by, like every other table.
     """
 
     __tablename__ = "llm_budget_periods"
-    __table_args__ = (Index("ix_llm_budget_periods_organization_id", "organization_id"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "period_start", name="uq_llm_budget_periods_workspace_period"
+        ),
+        Index("ix_llm_budget_periods_organization_id", "organization_id"),
+    )
 
     workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
     )
     #: First day of the UTC calendar month this row accounts for.
-    period_start: Mapped[date] = mapped_column(Date, primary_key=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
     organization_id: Mapped[str] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )

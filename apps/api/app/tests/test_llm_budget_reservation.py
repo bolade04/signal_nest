@@ -119,7 +119,12 @@ def _usage(cost: Decimal) -> dict:
 
 
 def _period(db, ws=WS, now=T0) -> LLMBudgetPeriod | None:
-    return db.get(LLMBudgetPeriod, (ws, ledger.period_start_for(now)))
+    return db.scalar(
+        select(LLMBudgetPeriod).where(
+            LLMBudgetPeriod.workspace_id == ws,
+            LLMBudgetPeriod.period_start == ledger.period_start_for(now),
+        )
+    )
 
 
 def _reservation(db, key: str) -> LLMBudgetReservation:

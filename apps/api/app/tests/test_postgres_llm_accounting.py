@@ -120,7 +120,12 @@ def factory(engine: Engine) -> sessionmaker:
 
 
 def _period(db: Session, ws: str = WS, now: datetime | None = None) -> LLMBudgetPeriod | None:
-    return db.get(LLMBudgetPeriod, (ws, ledger.period_start_for(now or datetime.now(UTC))))
+    return db.scalar(
+        select(LLMBudgetPeriod).where(
+            LLMBudgetPeriod.workspace_id == ws,
+            LLMBudgetPeriod.period_start == ledger.period_start_for(now or datetime.now(UTC)),
+        )
+    )
 
 
 def _reservations(db: Session) -> list[LLMBudgetReservation]:
