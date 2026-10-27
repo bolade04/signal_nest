@@ -584,7 +584,8 @@ class TestVectorBackend:
         assert "N_max=100" in summary
         assert detail == (
             "in-process per-run similarity; bound N_max=100 signals per run "
-            "(engineering capacity bound); no cross-run, cross-workspace or "
+            "(engineering capacity bound); per-source fetch limit 100 items "
+            "(independent of the run bound); no cross-run, cross-workspace or "
             "history-wide similarity"
         )
         pg = Settings.model_construct(

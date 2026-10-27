@@ -32,6 +32,7 @@ from enum import StrEnum
 
 from sqlalchemy import inspect, text
 
+from app.connectors.fetch_limits import DEFAULT_MAX_ITEMS_PER_SOURCE
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal, engine
@@ -279,8 +280,9 @@ def _check_vector(settings: Settings) -> tuple[ProbeStatus, str, str | None, boo
         f"in-process brute-force per-run similarity available (bound N_max={bound} "
         "signals per run)",
         f"in-process per-run similarity; bound N_max={bound} signals per run "
-        "(engineering capacity bound); no cross-run, cross-workspace or history-wide "
-        "similarity",
+        "(engineering capacity bound); per-source fetch limit "
+        f"{DEFAULT_MAX_ITEMS_PER_SOURCE} items (independent of the run bound); no "
+        "cross-run, cross-workspace or history-wide similarity",
         False,
     )
 

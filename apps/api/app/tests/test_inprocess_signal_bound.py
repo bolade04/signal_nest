@@ -421,7 +421,8 @@ def test_record_refused_run_ignores_an_unknown_request(factory):
 # --------------------------------------------------------------------------- #
 _DETAIL = (
     "in-process per-run similarity; bound N_max={n} signals per run "
-    "(engineering capacity bound); no cross-run, cross-workspace or history-wide similarity"
+    "(engineering capacity bound); per-source fetch limit 100 items (independent of the run "
+    "bound); no cross-run, cross-workspace or history-wide similarity"
 )
 
 

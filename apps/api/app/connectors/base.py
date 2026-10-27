@@ -21,7 +21,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from app.connectors.fetch_limits import FetchOutcome, SourceFetchReport
+from app.connectors.fetch_limits import (
+    DEFAULT_MAX_ITEMS_PER_SOURCE,
+    FetchOutcome,
+    SourceFetchReport,
+)
 
 
 class FailureKind(StrEnum):
@@ -74,7 +78,7 @@ class FetchScope:
     market: str | None
     keywords: tuple[str, ...] = ()
     source_types: tuple[str, ...] = ()
-    max_items: int = 100
+    max_items: int = DEFAULT_MAX_ITEMS_PER_SOURCE
 
 
 @dataclass

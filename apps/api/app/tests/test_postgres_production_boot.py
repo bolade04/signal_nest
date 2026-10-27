@@ -220,7 +220,8 @@ def test_production_full_profile_boots_and_is_ready(pg_url):
     assert "N_max=100 signals per run" in vector["summary"]
     assert vector["detail"] == (
         "in-process per-run similarity; bound N_max=100 signals per run "
-        "(engineering capacity bound); no cross-run, cross-workspace or history-wide "
+        "(engineering capacity bound); per-source fetch limit 100 items "
+        "(independent of the run bound); no cross-run, cross-workspace or history-wide "
         "similarity"
     )
     # The required backends were actively verified against the disposable PostgreSQL

@@ -17,6 +17,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+#: The per-source fetch limit (``FetchScope.max_items`` default): entries read per source
+#: per run, independent of the per-run in-process bound.
+DEFAULT_MAX_ITEMS_PER_SOURCE = 100
+
 #: Stable reason code of a run whose input was clipped by a per-source fetch limit.
 FETCH_LIMIT_REACHED = "fetch_limit_reached"
 
