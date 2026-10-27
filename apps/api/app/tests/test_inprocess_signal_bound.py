@@ -37,7 +37,8 @@ from app.infra.vector import (
     SignalVolumeAboveBoundError,
     check_inprocess_bound,
 )
-from app.jobs import pipeline
+from app.jobs import handlers, pipeline
+from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.service import enqueue_scout_request
 from app.jobs.status import JobErrorCode, JobStatus
@@ -341,6 +342,62 @@ def test_refusal_is_recorded_and_isolated_per_workspace(factory, bound, connecto
         )
         assert other_history.items[0].status == JobStatus.SUCCEEDED.value
         assert other_history.items[0].stats.scanned == 3
+
+
+# --------------------------------------------------------------------------- #
+# The after-rollback writer's own tenant guard (defence in depth: ``_run``'s
+# ``scope_matches`` guard raises before the bound check, so only a direct call
+# reaches it - review r1 MINOR-1, mutant M4)
+# --------------------------------------------------------------------------- #
+def _context_for(request: ScoutRequest, **overrides: str) -> ExecutionContext:
+    return ExecutionContext.for_scout_request(
+        organization_id=overrides.get("organization_id", request.organization_id),
+        workspace_id=overrides.get("workspace_id", request.workspace_id),
+        request_id=request.id,
+    )
+
+
+@pytest.mark.parametrize(
+    "foreign",
+    [{"organization_id": "org-other"}, {"workspace_id": "ws-other"},
+     {"organization_id": "org-other", "workspace_id": "ws-other"}],
+    ids=["other-organization", "other-workspace", "both"],
+)
+def test_record_refused_run_writes_nothing_for_a_foreign_tenant_context(factory, foreign):
+    request_id = _seeded_request_id()
+    exc = SignalVolumeAboveBoundError(scanned=101, bound=100)
+    with factory() as s:
+        request = s.get(ScoutRequest, request_id)
+        before = (request.status, dict(request.stats or {}))
+        writer = handlers._record_refused_run(request_id, _context_for(request, **foreign), exc)
+        writer(s)
+        s.flush()
+        s.expire_all()
+        request = s.get(ScoutRequest, request_id)
+        assert (request.status, dict(request.stats or {})) == before
+        s.rollback()
+
+
+def test_record_refused_run_writes_the_outcome_for_the_matching_tenant_context(factory):
+    request_id = _seeded_request_id()
+    exc = SignalVolumeAboveBoundError(scanned=101, bound=100)
+    with factory() as s:
+        request = s.get(ScoutRequest, request_id)
+        writer = handlers._record_refused_run(request_id, _context_for(request), exc)
+        writer(s)
+        s.expire_all()
+        request = s.get(ScoutRequest, request_id)
+        assert request.status == ScoutRequestStatus.FAILED.value
+        assert request.stats == pipeline.refused_run_stats(scanned=101, bound=100)
+        s.rollback()
+
+
+def test_record_refused_run_ignores_an_unknown_request(factory):
+    exc = SignalVolumeAboveBoundError(scanned=101, bound=100)
+    context = ExecutionContext.for_scout_request(organization_id="org-x", workspace_id="ws-x")
+    with factory() as s:
+        handlers._record_refused_run("no-such-request", context, exc)(s)  # no raise, no write
+        s.rollback()
 
 
 # --------------------------------------------------------------------------- #
