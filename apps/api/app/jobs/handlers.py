@@ -74,6 +74,7 @@ def _record_refused_run(
             reason=exc.reason,
             scanned=exc.scanned,
             bound=exc.bound,
+            partial_fetch=request.stats.get("partial_fetch"),
         )
 
     return write
@@ -121,8 +122,9 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
             ctx.after_rollback.append(_record_refused_run(scout_request_id, ctx.context, exc))
             raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc
 
-    # ``_run`` returns only safe aggregate counts (scanned / noise_filtered /
-    # signals_analyzed / opportunities), which is exactly the shape we persist.
+    # ``_run`` returns only safe aggregates: the four counts plus the per-source
+    # fetch-limit facts (``fetch_limits`` / ``partial_fetch`` / ``partial_fetch_reasons``),
+    # which is exactly the shape we persist.
     return dict(result)
 
 
