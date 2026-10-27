@@ -159,13 +159,14 @@ class TakedownResultOut(BaseModel):
 def _case_summaries(db: Session) -> dict[str, tuple[int, str | None]]:
     """``source_key -> (cases_count, latest case id)``; never the case contents."""
     summary: dict[str, tuple[int, str | None]] = {}
-    counts = dict(
-        db.execute(
+    counts = {
+        key: n
+        for key, n in db.execute(
             select(SourceTakedownCase.source_key, func.count()).group_by(
                 SourceTakedownCase.source_key
             )
-        ).tuples()
-    )
+        )
+    }
     for key in counts:
         latest = db.scalar(
             select(SourceTakedownCase.id)

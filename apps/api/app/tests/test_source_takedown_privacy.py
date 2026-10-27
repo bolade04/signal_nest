@@ -6,7 +6,7 @@ Two proofs, on a database of this module's own:
 * **Nested identifying metadata.** After a first takedown, a repeat, and the deletion of
   the operator's account, every JSON value in the row (``purge_summary``,
   ``repeat_purges``) is scanned recursively: no key other than ``at`` / ``purged`` / a
-  count name, no value equal to any user id, e-mail address or the request reference,
+  count name, no value equal to any user id, e-mail address, the ticket id, the reason or a case id,
   no string longer than an ISO timestamp. Before D-9d a deleted operator's user id
   survived inside ``repeat_purges`` (the FK column was SET NULL; the JSON copy was not).
 * **Suppression persistence.** ``active_takedowns()`` still names the key, the live
@@ -36,13 +36,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.audit.models import AuditLog
 from app.brands.models import Brand
 from app.connectors.live import SourceTarget, live_targets_for
-from app.connectors.models import SourceTakedown
+from app.connectors.models import SourceTakedown, SourceTakedownCase
 from app.connectors.sources import LegalStatus, SourceRecord
 from app.connectors.takedown import (
     AUDIT_ACTION,
     active_takedowns,
     takedown_source,
-    validate_reference,
+    validate_external_reference,
+    validate_reason,
     without_taken_down,
 )
 from app.core.config import Settings, get_settings
@@ -68,8 +69,12 @@ API = get_settings().api_prefix
 MARKET = "Toronto, ON"
 KEY = "privacy-proof-business"
 OTHER = "privacy-proof-food"
+#: The operator's private ticket id / reason: case record only (D-9e), so also forbidden in
+#: the suppression row and in every tenant audit row.
 REFERENCE = "TKD-PRIV-1"
 REPEAT_REFERENCE = "TKD-PRIV-1-repeat"
+REASON = "Counsel memo PRIV-1 (confidential)"
+REPEAT_REASON = "Counsel memo PRIV-1, second letter (confidential)"
 #: The only keys a repeat entry may carry, and the count names a purge may report.
 ENTRY_KEYS = {"at", "purged"}
 COUNT_NAMES = {
@@ -165,7 +170,10 @@ class World:
         r = self.env.client.post(
             f"{API}/internal/system/data-sources/{KEY}/takedown",
             headers={"Authorization": f"Bearer {bearer(self.env, user_id)}"},
-            json={"reference": reference},
+            json={
+                "reason": REPEAT_REASON if reference == REPEAT_REFERENCE else REASON,
+                "external_reference": reference,
+            },
         )
         assert r.status_code == 200, r.text
         return r.json()
@@ -194,7 +202,7 @@ def world(tmp_path) -> Iterator[World]:
 
 
 # --------------------------------------------------------------------------- #
-# The public reference: one line of visible text
+# The operator's private ticket id and reason: validated, kept in the case record only
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "bad",
@@ -210,19 +218,15 @@ def world(tmp_path) -> Iterator[World]:
         pytest.param("TKD-1\x7f", id="DEL"),
         pytest.param("TKD-1\nmemo", id="newline"),
         pytest.param("TKD-1\tmemo", id="tab"),
-        pytest.param("counsel@example.com", id="address"),
-        pytest.param("https://user:secret@tracker.example/T-1", id="URL credentials"),
         pytest.param("x" * 201, id="too long"),
-        pytest.param("   ", id="blank"),
     ],
 )
-def test_a_reference_never_carries_invisible_or_control_characters(bad: str):
-    """The reference is shown to tenants (audit log) and operators (registry): no C0/C1
-    control, format (zero-width, bidi override), private-use, surrogate or line/paragraph
-    separator character may hide in it, on top of the no-'@', one-line, 1-200 rules
-    (delta review r6, C-r6-2)."""
+def test_an_external_reference_never_carries_invisible_or_control_characters(bad: str):
+    """The ticket id is read by operators in the case listing: no C0/C1 control, format
+    (zero-width, bidi override), private-use, surrogate or line/paragraph separator
+    character may hide in it, on top of the one-line, <= 200 rule (r6 C-r6-2, kept)."""
     with pytest.raises(ValidationDomainError):
-        validate_reference(bad)
+        validate_external_reference(bad)
 
 
 @pytest.mark.parametrize(
@@ -231,10 +235,24 @@ def test_a_reference_never_carries_invisible_or_control_characters(bad: str):
         pytest.param("TKD-2026-0042", id="ticket id"),
         pytest.param("  REQ 7 / Zürich Straße — café  ", id="accented text with spaces"),
         pytest.param("Žádost č. 12 (Ñandú)", id="accented letters and punctuation"),
+        pytest.param("counsel@example.com", id="address (private now: never shown to tenants)"),
     ],
 )
-def test_ordinary_visible_text_is_an_acceptable_reference(good: str):
-    assert validate_reference(good) == good.strip()
+def test_ordinary_visible_text_is_an_acceptable_external_reference(good: str):
+    assert validate_external_reference(good) == good.strip()
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_the_external_reference_is_optional(blank):
+    assert validate_external_reference(blank) is None
+
+
+def test_a_reason_is_free_text_but_bounded_and_clean():
+    assert validate_reason("  Line one\nLine two\tcol  ") == "Line one\nLine two\tcol"
+    for bad in ("", "   ", "x" * 2001, "bell\x07", "nul\x00", "pua\ue000", "surrogate\udcff"):
+        with pytest.raises(ValidationDomainError):
+            validate_reason(bad)
+    assert validate_reason("x" * 2000)
 
 
 # --------------------------------------------------------------------------- #
@@ -290,26 +308,29 @@ def _assert_nothing_identifying(row: dict, *, forbidden: set[str], repeats: int)
 
 
 def test_the_takedown_row_never_holds_identifying_metadata_even_nested(world: World):
-    forbidden = {ALICE, BOB, *EMAIL.values(), REFERENCE, REPEAT_REFERENCE}
+    forbidden = {ALICE, BOB, *EMAIL.values(), REFERENCE, REPEAT_REFERENCE, REASON, REPEAT_REASON}
     with world.session() as s:
         forbidden |= set(s.scalars(select(User.id))) | set(s.scalars(select(User.email)))
 
     # (1) first takedown, by ALICE
     first = world.take_down(ALICE, REFERENCE)
     assert first["verified"] and first["purged"]["raw_signals"] == 4
+    forbidden.add(first["case_id"])
     _assert_nothing_identifying(world.row(), forbidden=forbidden, repeats=0)
     with world.session() as s:
         entries = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
-        # Attribution and the public reference are in the tenant audit rows, nowhere else.
+        # Attribution and the opaque case id are in the tenant audit rows; the reason and
+        # ticket id are in the case record, nowhere else.
         assert {(e.organization_id, e.workspace_id) for e in entries} == {
             (ORG_A, WS_A), (ORG_B, WS_B),
         }
-        assert all(e.actor_user_id == ALICE and e.context["reference"] == REFERENCE
+        assert all(e.actor_user_id == ALICE and e.context["case_id"] == first["case_id"]
                    for e in entries)
 
     # (2) a repeat, by ALICE again
     second = world.take_down(ALICE, REPEAT_REFERENCE)
-    assert second["already_taken_down"]
+    assert second["already_taken_down"] and second["case_id"] != first["case_id"]
+    forbidden.add(second["case_id"])
     _assert_nothing_identifying(world.row(), forbidden=forbidden, repeats=1)
     before = world.row()
 
@@ -322,7 +343,12 @@ def test_the_takedown_row_never_holds_identifying_metadata_even_nested(world: Wo
         assert s.get(User, ALICE) is None
         entries = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
         assert entries and all(e.actor_user_id is None for e in entries)
-        assert all(e.context["reference"] == REFERENCE for e in entries)  # evidence kept
+        assert all(e.context["case_id"] == first["case_id"] for e in entries)  # evidence kept
+        # The case records outlive the account; only the actor link is cleared.
+        cases = s.scalars(select(SourceTakedownCase).order_by(SourceTakedownCase.created_at)).all()
+        assert [c.id for c in cases] == [first["case_id"], second["case_id"]]
+        assert all(c.actor_user_id is None for c in cases)
+        assert [c.reason for c in cases] == [REASON, REPEAT_REASON]
     after = world.row()
     assert after == before  # nothing in the suppression record referred to the account
     _assert_nothing_identifying(after, forbidden=forbidden, repeats=1)
@@ -332,16 +358,23 @@ def test_the_service_records_a_repeat_as_time_and_counts_only(world: World):
     """Direct service calls (the migration and PostgreSQL proofs use them) write the same
     minimal entry as the route: no actor, no reference, whatever the caller passes."""
     with world.session() as s:
-        takedown_source(s, source_key=KEY, reference=REFERENCE, actor_user_id=ALICE)
+        takedown_source(
+            s, source_key=KEY, reason=REASON, external_reference=REFERENCE, actor_user_id=ALICE
+        )
         s.commit()
     with world.session() as s:
-        result = takedown_source(s, source_key=KEY, reference=REPEAT_REFERENCE, actor_user_id=BOB)
+        result = takedown_source(
+            s, source_key=KEY, reason=REPEAT_REASON, external_reference=REPEAT_REFERENCE,
+            actor_user_id=BOB,
+        )
         s.commit()
     assert result.already_taken_down
     [entry] = result.takedown.repeat_purges
     assert set(entry) == ENTRY_KEYS and entry["purged"] == result.purged
     _assert_nothing_identifying(
-        world.row(), forbidden={ALICE, BOB, REFERENCE, REPEAT_REFERENCE}, repeats=1
+        world.row(),
+        forbidden={ALICE, BOB, REFERENCE, REPEAT_REFERENCE, REASON, REPEAT_REASON},
+        repeats=1,
     )
 
 
@@ -415,6 +448,14 @@ def test_suppression_survives_erasure_anonymisation_and_expiry_of_every_metadata
         assert row.purge_summary == {} and row.repeat_purges == []
         _assert_still_suppressed(s, step="counts cleared")
 
+    # 5. The operator case records are deleted (a future retention sweep, or a manual
+    # erasure): the suppression does not depend on them either.
+    with world.session() as s:
+        s.execute(delete(SourceTakedownCase))
+        s.commit()
+    with world.session() as s:
+        _assert_still_suppressed(s, step="case records deleted")
+
     # The registry still shows the takedown (to a remaining operator), with nothing
     # identifying in it, and the key cannot be taken down "for the first time" again.
     listing = world.env.client.get(
@@ -427,6 +468,8 @@ def test_suppression_survives_erasure_anonymisation_and_expiry_of_every_metadata
         "taken_down_at": entry["takedown"]["taken_down_at"],
         "purge_summary": {},
         "repeat_purges": [],
+        "cases_count": 0,
+        "latest_case_id": None,
     }
     assert entry["activatable"] is False and entry["stored"]["raw_signals"] == 0
     again = world.take_down(BOB, "TKD-PRIV-2")

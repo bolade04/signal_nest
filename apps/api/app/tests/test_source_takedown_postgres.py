@@ -13,6 +13,7 @@ skips only on a developer machine.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -27,7 +28,7 @@ from sqlalchemy.orm import sessionmaker
 from app.audit.models import AuditLog
 from app.brands.models import Brand
 from app.connectors.feedcache import feed_cache
-from app.connectors.models import SourceTakedown
+from app.connectors.models import SourceTakedown, SourceTakedownCase
 from app.connectors.replay import ReplayServer
 from app.connectors.takedown import (
     AUDIT_ACTION,
@@ -40,7 +41,7 @@ from app.core.enums import ScoutRequestStatus
 from app.jobs.pipeline import _run
 from app.locations.models import BusinessLocation
 from app.opportunities.models import Opportunity
-from app.organizations.models import Organization, Workspace
+from app.organizations.models import Organization, User, Workspace
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal
 from app.tests._auth2_support import pg_database, require_postgres
@@ -138,7 +139,9 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
     assert only_taken and mixed
 
     with pg_factory() as s:
-        result = takedown_source(s, source_key=TAKEN, reference="TKD-PG", actor_user_id=None)
+        result = takedown_source(
+            s, source_key=TAKEN, reason="PG proof", external_reference="TKD-PG", actor_user_id=None
+        )
         s.commit()
     assert result.verified
     zero = {"raw_signals": 0, "normalized_signals": 0, "opportunities_citing": 0}
@@ -159,8 +162,8 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
         assert not (only_taken & set(remaining))
         for oid in mixed:
             assert all(e.get("source_key") != TAKEN for e in remaining[oid].observed_evidence)
-        # D-9d: the row holds key, time and counts only; the public reference is in the
-        # affected workspaces' audit entries.
+        # D-9d: the row holds key, time and counts only; the opaque case id is in the
+        # affected workspaces' audit entries and the private text in the case record.
         [row] = s.scalars(select(SourceTakedown)).all()
         assert row.purge_summary == result.purged and row.repeat_purges == []
         assert {c.name for c in SourceTakedown.__table__.columns} == {
@@ -169,10 +172,20 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
         }
         entries = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
         assert {e.organization_id for e in entries} == orgs
-        assert {e.context["reference"] for e in entries} == {"TKD-PG"}
+        [case] = s.scalars(select(SourceTakedownCase)).all()
+        assert (case.reason, case.external_reference) == ("PG proof", "TKD-PG")
+        assert {e.context["case_id"] for e in entries} == {case.id}
+        assert all("TKD-PG" not in json.dumps(e.context) for e in entries)
+        assert {c.name for c in SourceTakedownCase.__table__.columns} == {
+            "id", "takedown_id", "source_key", "reason", "external_reference",
+            "actor_user_id", "created_at",
+        }
 
     with pg_factory() as s:  # idempotent repeat
-        again = takedown_source(s, source_key=TAKEN, reference="TKD-PG-2", actor_user_id=None)
+        again = takedown_source(
+            s, source_key=TAKEN, reason="PG proof again", external_reference="TKD-PG-2",
+            actor_user_id=None,
+        )
         s.commit()
     assert again.already_taken_down and again.verified
     assert all(v == 0 for v in again.purged.values())
@@ -180,6 +193,35 @@ def test_replayed_runs_and_a_takedown_purge_on_postgresql(pg_factory, replay_set
         [row] = s.scalars(select(SourceTakedown)).all()
         assert [set(r) for r in row.repeat_purges] == [{"at", "purged"}]
         assert row.repeat_purges[0]["purged"] == again.purged
+        assert s.scalar(select(func.count()).select_from(SourceTakedownCase)) == 2
+
+
+def test_the_case_record_keeps_its_foreign_key_rules_on_postgresql(pg_factory):
+    """D-9e on the production engine: erasing the actor sets the link NULL and keeps the
+    case; the case cascades only from its suppression row; nothing else is touched."""
+    with pg_factory() as s:
+        user = User(email="op@example.test", full_name="Op", hashed_password="x", is_active=True)
+        s.add(user)
+        s.flush()
+        row = SourceTakedown(source_key="fk-proof-key")
+        s.add(row)
+        s.flush()
+        case = SourceTakedownCase(
+            takedown_id=row.id, source_key=row.source_key, reason="private", actor_user_id=user.id
+        )
+        s.add(case)
+        s.commit()
+        case_id, user_id, row_id = case.id, user.id, row.id
+    with pg_factory() as s:
+        s.execute(text("DELETE FROM users WHERE id = :i"), {"i": user_id})
+        s.commit()
+    with pg_factory() as s:
+        kept = s.get(SourceTakedownCase, case_id)
+        assert kept is not None and kept.actor_user_id is None and kept.reason == "private"
+        s.execute(text("DELETE FROM source_takedowns WHERE id = :i"), {"i": row_id})
+        s.commit()
+    with pg_factory() as s:
+        assert s.get(SourceTakedownCase, case_id) is None
 
 
 def _lock_timeout(session) -> None:

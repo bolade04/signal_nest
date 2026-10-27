@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -177,7 +177,8 @@ def test_a_round_trip_restores_source_keys_so_a_takedown_still_reaches_them(tmp_
     try:
         with sessionmaker(bind=engine)() as db:
             result = takedown_source(
-                db, source_key=KEY, reference="TKD-RT", actor_user_id=None,
+                db, source_key=KEY, reason="round trip", external_reference="TKD-RT",
+                actor_user_id=None,
             )
             db.commit()
             assert result.purged["raw_signals"] == 1
@@ -185,6 +186,11 @@ def test_a_round_trip_restores_source_keys_so_a_takedown_still_reaches_them(tmp_
             assert result.verified and source_signal_counts(db, KEY)["raw_signals"] == 0
             assert result.takedown.purge_summary == result.purged
             assert result.takedown.repeat_purges == []
+            # D-9e: the case record is writable on the migrated table and keeps the
+            # private text; nothing in the suppression row refers to it.
+            assert db.execute(
+                text("SELECT reason, external_reference FROM source_takedown_cases")
+            ).all() == [("round trip", "TKD-RT")]
     finally:
         engine.dispose()
     con = sqlite3.connect(db_path)

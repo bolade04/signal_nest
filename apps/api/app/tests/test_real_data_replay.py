@@ -13,9 +13,10 @@ through the unmodified scout pipeline. Nothing leaves the machine.
 * takedown (P6-PRIV-4): an operator takedown purges a source's signals in every tenant,
   deletes opportunities built only from it, redacts it from mixed ones, reports a
   recounted zero remainder, and the source is never fetched again. The record it leaves
-  is the suppression only (D-9d): key, time, counts — attribution and the public
-  reference are in the affected workspaces' audit entries, and the request carries no
-  free text (D-9e interim).
+  is the suppression only (D-9d): key, time, counts — attribution and an opaque case id
+  are in the affected workspaces' audit entries; the operator's free-text reason and
+  ticket id live only in the restricted operator case record (D-9e), which no tenant
+  API, export, log line or metric carries (the negative tests below).
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from app.connectors import takedown as takedown_mod
 from app.connectors.coverage import CoverageReason
 from app.connectors.feedcache import feed_cache
 from app.connectors.live import live_connector_for
-from app.connectors.models import SourceTakedown
+from app.connectors.models import SourceTakedown, SourceTakedownCase
 from app.connectors.replay import (
     UNCOVERED_MARKET,
     ReplayServer,
@@ -655,7 +656,7 @@ def test_takedown_purges_every_tenant_and_reports_a_recounted_zero(replay_world)
     r = w.client.post(
         f"{API}/internal/system/data-sources/{TAKEN}/takedown",
         headers=w.auth,
-        json={"reference": "TKD-1"},
+        json={"reason": "Publisher request TKD-1", "external_reference": "TKD-1"},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -679,20 +680,28 @@ def test_takedown_purges_every_tenant_and_reports_a_recounted_zero(replay_world)
         ) == fixture_before
         row = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == TAKEN))
         # D-9d: the row is the suppression record only (key, time, counts). Who took the
-        # source down and which request it answers are in the affected workspaces' audit
-        # entries, not here.
+        # source down and the opaque case id are in the affected workspaces' audit
+        # entries; the reason and ticket id are in the case record, not here.
         assert row.purge_summary == body["purged"] and row.repeat_purges == []
         entries = s.scalars(
             select(AuditLog).where(AuditLog.action == "data_source.taken_down")
         ).all()
         assert entries and all(
-            e.actor_user_id == seed_mod.sid("user") and e.context["reference"] == "TKD-1"
+            e.actor_user_id == seed_mod.sid("user") and e.context["case_id"] == body["case_id"]
             for e in entries
         )
+        [case] = s.scalars(select(SourceTakedownCase)).all()
+        assert case.id == body["case_id"] and case.takedown_id == row.id
+        assert (case.reason, case.external_reference) == ("Publisher request TKD-1", "TKD-1")
+        assert case.actor_user_id == seed_mod.sid("user") and case.source_key == TAKEN
 
     listing = w.get("/internal/system/data-sources")
     entry = {e["source_key"]: e for e in listing["sources"]}[TAKEN]
-    assert set(entry["takedown"]) == {"taken_down_at", "purge_summary", "repeat_purges"}
+    assert set(entry["takedown"]) == {
+        "taken_down_at", "purge_summary", "repeat_purges", "cases_count", "latest_case_id",
+    }
+    assert entry["takedown"]["cases_count"] == 1
+    assert entry["takedown"]["latest_case_id"] == body["case_id"]
     assert entry["stored"] == {"raw_signals": 0, "normalized_signals": 0, "opportunities_citing": 0}
     assert listing["replay_mode"] is True
 
@@ -702,7 +711,7 @@ def test_a_taken_down_source_is_never_fetched_again(replay_world):
     r = w.client.post(
         f"{API}/internal/system/data-sources/{TAKEN}/takedown",
         headers=w.auth,
-        json={"reference": "TKD-2"},
+        json={"reason": "Publisher request TKD-2"},
     )
     assert r.status_code == 200
     feed_cache.clear()
@@ -720,8 +729,9 @@ def test_a_taken_down_source_is_never_fetched_again(replay_world):
 def test_takedown_is_idempotent_and_permanent(replay_world):
     w = replay_world
     url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
-    first = w.client.post(url, headers=w.auth, json={"reference": "TKD-3"}).json()
-    second = w.client.post(url, headers=w.auth, json={"reference": "TKD-3-again"}).json()
+    first = w.client.post(url, headers=w.auth, json={"reason": "Publisher request TKD-3"}).json()
+    again = {"reason": "Publisher request TKD-3-again"}
+    second = w.client.post(url, headers=w.auth, json=again).json()
     assert second["already_taken_down"] is True and second["verified"] is True
     assert second["taken_down_at"] == first["taken_down_at"]
     assert all(v == 0 for v in second["purged"].values())
@@ -737,6 +747,12 @@ def test_takedown_is_idempotent_and_permanent(replay_world):
     assert entry["takedown"]["purge_summary"] == first["purged"]
     assert [set(r) for r in entry["takedown"]["repeat_purges"]] == [{"at", "purged"}]
     assert entry["takedown"]["repeat_purges"][0]["purged"] == second["purged"]
+    # A repeat is a new operator request: a new case record, newest id in the registry.
+    assert first["case_id"] != second["case_id"]
+    assert entry["takedown"]["cases_count"] == 2
+    assert entry["takedown"]["latest_case_id"] == second["case_id"]
+    cases = w.get(f"/internal/system/data-sources/{TAKEN}/cases")
+    assert [c["case_id"] for c in cases["cases"]] == [first["case_id"], second["case_id"]]
 
 
 def test_a_run_in_flight_never_reinserts_a_source_taken_down_meanwhile(replay_world, monkeypatch):
@@ -745,7 +761,7 @@ def test_a_run_in_flight_never_reinserts_a_source_taken_down_meanwhile(replay_wo
     answered verified."""
     w = replay_world
     url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
-    done = w.client.post(url, headers=w.auth, json={"reference": "TKD-4"}).json()
+    done = w.client.post(url, headers=w.auth, json={"reason": "Publisher request TKD-4"}).json()
     assert done["verified"] is True and _count(w.factory, RawSignal, TAKEN) == 0
     kept_before = _count(w.factory, RawSignal, KEPT)
     monkeypatch.setattr(pipeline_mod, "active_takedowns", lambda db: frozenset())
@@ -770,19 +786,15 @@ def test_takedown_writes_one_audit_entry_in_each_affected_workspace(replay_world
     url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
     # An operator's free-text reason may be legal or confidential and must not reach any
     # tenant's audit log (adversarial r2-MINOR-2, mutant N10: ``reason=takedown.reason``).
-    # Since D-9e (interim) the request has no free-text field at all: text sent anyway is
-    # refused, nothing is taken down, and the only operator-supplied value that reaches
-    # a tenant row is the public reference.
+    # Since D-9e the reason and the operator's own ticket id go into the restricted
+    # operator case record; a tenant row carries the fixed sentence and the case's
+    # opaque id, nothing the operator typed.
     operator_reason = "Publisher request, counsel memo 2026-10-27 (confidential)"
-    assert set(TakedownIn.model_fields) == {"reference"}
-    refused = w.client.post(
-        url, headers=w.auth, json={"reason": operator_reason, "reference": "TKD-9"}
-    )
-    assert refused.status_code == 422, refused.text
-    assert _count(w.factory, RawSignal, TAKEN) > 0
-    with w.factory() as s:
-        assert s.scalars(select(SourceTakedown)).all() == []
-    body = w.client.post(url, headers=w.auth, json={"reference": "TKD-9"}).json()
+    ticket = "COUNSEL-MATTER-7731"
+    assert set(TakedownIn.model_fields) == {"reason", "external_reference"}
+    body = w.client.post(
+        url, headers=w.auth, json={"reason": operator_reason, "external_reference": ticket}
+    ).json()
     with w.factory() as s:
         takedown = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == TAKEN))
         entries = s.scalars(
@@ -793,14 +805,16 @@ def test_takedown_writes_one_audit_entry_in_each_affected_workspace(replay_world
         for e in entries:
             assert e.entity_type == "source_takedown" and e.entity_id == takedown.id
             assert e.actor_user_id == seed_mod.sid("user")
-            assert e.context["source_key"] == TAKEN and e.context["reference"] == "TKD-9"
+            assert e.context["source_key"] == TAKEN and e.context["case_id"] == body["case_id"]
             assert e.context["repeat"] is False
             assert len(e.context["opportunities_deleted"]) == e.new_state["opportunities_deleted"]
             assert len(e.context["opportunities_redacted"]) == e.new_state["opportunities_redacted"]
             assert e.reason == takedown_mod._AUDIT_REASON
-            assert operator_reason not in json.dumps([e.reason, e.context, e.new_state])
+            rendered = json.dumps([e.reason, e.context, e.new_state])
+            assert operator_reason not in rendered and ticket not in rendered
+            # The exact tenant-visible context shape: no operator-typed string of any kind.
             assert set(e.context) == {
-                "source_key", "reference", "repeat", "opportunities_deleted",
+                "source_key", "case_id", "repeat", "opportunities_deleted",
                 "opportunities_redacted",
             }
         assert operator_reason not in json.dumps(
@@ -815,14 +829,15 @@ def test_takedown_writes_one_audit_entry_in_each_affected_workspace(replay_world
     # The customer sees it in their own audit log.
     logs = w.get(f"/workspaces/{w.ws}/audit-logs")
     assert any(r["action"] == "data_source.taken_down" for r in logs)
-    # A repeat that removes nothing writes no further tenant entry.
-    w.client.post(url, headers=w.auth, json={"reference": "TKD-9-again"})
+    # A repeat that removes nothing writes no further tenant entry (but a new case).
+    w.client.post(url, headers=w.auth, json={"reason": "Publisher request again"})
     with w.factory() as s:
         count = s.scalar(
             select(func.count()).select_from(AuditLog).where(
                 AuditLog.action == "data_source.taken_down"
             )
         )
+        assert s.scalar(select(func.count()).select_from(SourceTakedownCase)) == 2
     assert count == len(entries)
 
 
@@ -830,14 +845,19 @@ def test_takedown_requires_an_operator_and_changes_nothing_otherwise(replay_worl
     w = replay_world
     url = f"{API}/internal/system/data-sources/{TAKEN}/takedown"
     before = _count(w.factory, RawSignal, TAKEN)
-    assert w.client.post(url, json={"reference": "TKD-X"}).status_code == 401
+    assert w.client.post(url, json={"reason": "Publisher request TKD-X"}).status_code == 401
     with w.factory() as s:
         s.add(User(id="plain-user", email="plain@example.com", full_name="Plain",
                    hashed_password="x", is_active=True, is_operator=False))
         s.commit()
     plain = {"Authorization": f"Bearer {live_bearer('plain-user')}"}
-    assert w.client.post(url, headers=plain, json={"reference": "TKD-X"}).status_code == 403
+    attempt = {"reason": "Publisher request TKD-X"}
+    assert w.client.post(url, headers=plain, json=attempt).status_code == 403
     assert w.client.get(f"{API}/internal/system/data-sources", headers=plain).status_code == 403
+    assert (
+        w.client.get(f"{API}/internal/system/data-sources/{TAKEN}/cases", headers=plain)
+    ).status_code == 403
+    assert w.client.get(f"{API}/internal/system/data-sources/{TAKEN}/cases").status_code == 401
     assert _count(w.factory, RawSignal, TAKEN) == before > 0
     with w.factory() as s:
         assert s.scalars(select(SourceTakedown)).all() == []
@@ -857,17 +877,20 @@ def test_an_organization_owner_gets_the_operator_refusal_and_learns_nothing(repl
         s.commit()
     before = _count(w.factory, RawSignal, TAKEN)
     base = f"{API}/internal/system/data-sources"
+    attempt = {"reason": "Publisher request TKD-X"}
     answers = [
         w.client.get(base, headers=w.auth),
-        w.client.post(f"{base}/{TAKEN}/takedown", headers=w.auth, json={"reference": "TKD-X"}),
-        w.client.post(
-            f"{base}/no-such-source/takedown", headers=w.auth, json={"reference": "TKD-X"}
-        ),
+        w.client.post(f"{base}/{TAKEN}/takedown", headers=w.auth, json=attempt),
+        w.client.post(f"{base}/no-such-source/takedown", headers=w.auth, json=attempt),
+        # D-9e: the operator case record is operator-only; a customer OWNER gets the same
+        # non-enumerable 403 for a real key, an unknown one and a key with a case.
+        w.client.get(f"{base}/{TAKEN}/cases", headers=w.auth),
+        w.client.get(f"{base}/no-such-source/cases", headers=w.auth),
     ]
-    assert [r.status_code for r in answers] == [403, 403, 403]
+    assert [r.status_code for r in answers] == [403, 403, 403, 403, 403]
     # A real key and an unknown one look alike (only the per-request id differs).
     bodies = [{k: v for k, v in r.json()["error"].items() if k != "request_id"} for r in answers]
-    assert bodies[1] == bodies[2] == {
+    assert bodies[1] == bodies[2] == bodies[3] == bodies[4] == {
         "code": "permission_denied",
         "message": "Operator privileges are required for this resource.",
     }
@@ -879,18 +902,19 @@ def test_an_organization_owner_gets_the_operator_refusal_and_learns_nothing(repl
 @pytest.mark.parametrize(
     ("key", "body", "status"),
     [
-        ("no-such-source", {"reference": "TKD-1"}, 404),
-        ("Bad_Key", {"reference": "TKD-1"}, 422),
-        (TAKEN, {"reference": ""}, 422),
-        (TAKEN, {"reference": "   "}, 422),
+        ("no-such-source", {"reason": "Publisher request"}, 404),
+        ("Bad_Key", {"reason": "Publisher request"}, 422),
+        (TAKEN, {"reason": ""}, 422),
+        (TAKEN, {"reason": "   "}, 422),
         (TAKEN, {}, 422),
-        (TAKEN, {"reference": "x" * 201}, 422),
-        # A public ticket id only: never an address, never a URL with credentials, never
-        # more than one line, and no free-text field at all (D-9d / D-9e interim).
-        (TAKEN, {"reference": "counsel@example.com"}, 422),
-        (TAKEN, {"reference": "https://user:secret@tracker.example/T-1"}, 422),
-        (TAKEN, {"reference": "TKD-1\nsee attached memo"}, 422),
-        (TAKEN, {"reference": "TKD-1", "reason": "Publisher request"}, 422),
+        (TAKEN, {"reason": "x" * 2001}, 422),
+        (TAKEN, {"reason": "bell\x07 character"}, 422),
+        # The operator's own ticket id: optional, one line of visible text, <= 200.
+        (TAKEN, {"reason": "r", "external_reference": "x" * 201}, 422),
+        (TAKEN, {"reason": "r", "external_reference": "T-1\nsecond line"}, 422),
+        # Only the two private fields exist; a field that used to be public is refused.
+        (TAKEN, {"reason": "r", "reference": "TKD-1"}, 422),
+        (TAKEN, {"reference": "TKD-1"}, 422),
     ],
 )
 def test_takedown_input_is_validated(replay_world, key, body, status):
@@ -899,3 +923,157 @@ def test_takedown_input_is_validated(replay_world, key, body, status):
     r = w.client.post(url, headers=w.auth, json=body)
     assert r.status_code == status, r.text
     assert _count(w.factory, RawSignal, TAKEN) > 0
+
+
+# --------------------------------------------------------------------------- #
+# D-9e: the private takedown reason and ticket id live in the operator case record only
+# --------------------------------------------------------------------------- #
+PRIVATE_REASON = "Counsel memo 2026-10-27: publisher alleges licence breach (CONFIDENTIAL-ZQ41)"
+PRIVATE_TICKET = "LEGAL-MATTER-ZQ41-7731"
+PRIVATE_NEEDLES = ("CONFIDENTIAL-ZQ41", "ZQ41", "Counsel memo", "LEGAL-MATTER", "licence breach")
+
+
+def _take_down_privately(w, **extra) -> dict:
+    r = w.client.post(
+        f"{API}/internal/system/data-sources/{TAKEN}/takedown",
+        headers=w.auth,
+        json={"reason": PRIVATE_REASON, "external_reference": PRIVATE_TICKET, **extra},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _assert_no_private_text(rendered: str, where: str) -> None:
+    for needle in PRIVATE_NEEDLES:
+        assert needle not in rendered, (where, needle)
+
+
+def test_takedown_private_text_never_reaches_the_tenant_audit_api(replay_world):
+    w = replay_world
+    other_org = _second_tenant_toronto_run(w.factory)
+    body = _take_down_privately(w)
+    # The tenant's own audit-log read (the customer-visible API), unfiltered and filtered.
+    logs = w.get(f"/workspaces/{w.ws}/audit-logs")
+    taken = [r for r in logs if r["action"] == "data_source.taken_down"]
+    assert taken, logs
+    for row in taken:
+        assert row["reason"] == takedown_mod._AUDIT_REASON
+        assert row["context"]["case_id"] == body["case_id"]
+        assert set(row["context"]) == {
+            "source_key", "case_id", "repeat", "opportunities_deleted", "opportunities_redacted",
+        }
+    _assert_no_private_text(json.dumps(logs), "GET /workspaces/{id}/audit-logs")
+    # Every tenant's rows, straight from the table (the other organization has no
+    # operator session here), and no other tenant-visible surface of the first workspace.
+    with w.factory() as s:
+        assert {e.organization_id for e in s.scalars(select(AuditLog)).all()} >= {other_org}
+        for e in s.scalars(select(AuditLog)).all():
+            _assert_no_private_text(
+                json.dumps([e.reason, e.context, e.previous_state, e.new_state], default=str),
+                f"audit_logs[{e.id}]",
+            )
+    for path in ("/scout-requests", "/opportunities", "/locations"):
+        _assert_no_private_text(json.dumps(w.get(f"/workspaces/{w.ws}{path}")), path)
+
+
+def test_takedown_private_text_never_reaches_the_registry_or_the_response(replay_world):
+    w = replay_world
+    body = _take_down_privately(w)
+    assert set(body) == {
+        "source_key", "taken_down_at", "already_taken_down", "purged", "remaining", "verified",
+        "case_id",
+    }
+    _assert_no_private_text(json.dumps(body), "takedown response")
+    listing = w.get("/internal/system/data-sources")
+    _assert_no_private_text(json.dumps(listing), "GET /internal/system/data-sources")
+    entry = {e["source_key"]: e for e in listing["sources"]}[TAKEN]
+    assert entry["takedown"]["cases_count"] == 1
+    assert entry["takedown"]["latest_case_id"] == body["case_id"]
+    # The suppression row and every column of every table other than the case record.
+    with w.factory() as s:
+        row = s.scalar(select(SourceTakedown).where(SourceTakedown.source_key == TAKEN))
+        _assert_no_private_text(
+            json.dumps([row.purge_summary, row.repeat_purges, row.source_key]), "source_takedowns"
+        )
+
+
+def test_takedown_private_text_never_reaches_logs_or_metrics(replay_world, capsys):
+    from app.core.metrics import InMemoryMetrics, configure_metrics
+    from app.tests.test_auth2_leakage import _rendered, capture_all_logs
+
+    w = replay_world
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with capture_all_logs() as records:
+            body = _take_down_privately(w)
+            # A refused request that carries the text must not echo it into a log either.
+            bad = w.client.post(
+                f"{API}/internal/system/data-sources/{TAKEN}/takedown",
+                headers=w.auth,
+                json={"reason": PRIVATE_REASON + "\x07", "external_reference": PRIVATE_TICKET},
+            )
+            assert bad.status_code == 422
+            _take_down_privately(w)  # a repeat: a second case record
+            cases = w.client.get(
+                f"{API}/internal/system/data-sources/{TAKEN}/cases", headers=w.auth
+            )
+            assert cases.status_code == 200
+    finally:
+        configure_metrics(None)
+    names = [r.getMessage() for r in records]
+    # Positive controls: the capture saw the takedown's own log line and the request log,
+    # and the private text really is readable from the one operator route.
+    assert "connector.source_taken_down" in names, sorted(set(names))
+    assert any(r.name == "signalnest.request" for r in records)
+    assert PRIVATE_REASON in json.dumps(cases.json())
+    taken_down = next(r for r in records if r.getMessage() == "connector.source_taken_down")
+    assert taken_down.__dict__["extra_fields"]["case_id"] == body["case_id"]
+    for rec in records:
+        _assert_no_private_text(_rendered(rec), f"log record {rec.name}: {rec.getMessage()}")
+    out = capsys.readouterr()
+    for stream in (out.out, out.err):
+        _assert_no_private_text(stream, "stdout/stderr")
+    assert metrics._counters, "positive control: the requests were measured"
+    _assert_no_private_text(
+        repr([metrics._counters, metrics._histograms, metrics._gauges]), "metrics"
+    )
+
+
+def test_the_operator_cases_route_returns_the_private_record_and_only_to_operators(
+    replay_world,
+):
+    w = replay_world
+    first = _take_down_privately(w)
+    second = w.client.post(
+        f"{API}/internal/system/data-sources/{TAKEN}/takedown",
+        headers=w.auth,
+        json={"reason": "Second request"},
+    ).json()
+    cases = w.get(f"/internal/system/data-sources/{TAKEN}/cases")
+    assert cases["source_key"] == TAKEN
+    assert [c["case_id"] for c in cases["cases"]] == [first["case_id"], second["case_id"]]
+    assert cases["cases"][0]["reason"] == PRIVATE_REASON
+    assert cases["cases"][0]["external_reference"] == PRIVATE_TICKET
+    assert cases["cases"][1]["external_reference"] is None
+    assert all(c["actor_user_id"] == seed_mod.sid("user") for c in cases["cases"])
+    # A key nothing was ever taken down for has no case records to list.
+    missing = w.client.get(
+        f"{API}/internal/system/data-sources/{KEPT}/cases", headers=w.auth
+    )
+    assert missing.status_code == 404
+
+
+def test_erasing_the_actor_keeps_the_case_and_clears_only_the_actor_link(replay_world):
+    from sqlalchemy import delete, text
+
+    w = replay_world
+    body = _take_down_privately(w)
+    with w.factory() as s:
+        s.execute(text("PRAGMA foreign_keys=ON"))
+        s.execute(delete(User).where(User.id == seed_mod.sid("user")))
+        s.commit()
+    with w.factory() as s:
+        [case] = s.scalars(select(SourceTakedownCase)).all()
+        assert case.id == body["case_id"] and case.actor_user_id is None
+        assert case.reason == PRIVATE_REASON  # the record itself is retained (pending policy)
