@@ -52,7 +52,7 @@ Derived from the baseline source at `f71d58c`:
 - **One image, three roles.** API (`uvicorn app.main:app`), worker
   (`python -m app.jobs.worker`), and the one-shot migration actor
   (`python -m app.db.migrate`, `apps/api/app/db/migrate.py`) all run from the **same**
-  multi-stage image (`runtime` stage). Alembic single head: `47028898175f` (17 revisions).
+  multi-stage image (`runtime` stage). Alembic single head: `98289430a3ec`.
 
 ### Gaps this plan closes (for the later implementation tranche)
 
