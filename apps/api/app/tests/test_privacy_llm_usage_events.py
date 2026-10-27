@@ -151,7 +151,7 @@ def test_organization_export_holds_exactly_the_organizations_rows_with_every_col
     body = r.json()
     assert TABLE in body["tables"] and TABLE not in body["not_exported"]
     table = body["tables"][TABLE]
-    assert (table["row_count"], table["truncated"]) == (len(A_IDS), False)
+    assert (table["row_count"], table["next_cursor"]) == (len(A_IDS), None)
     assert {row["id"] for row in table["rows"]} == A_IDS
     for row in table["rows"]:
         assert set(row) == COLUMNS, sorted(set(row) ^ COLUMNS)

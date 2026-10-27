@@ -10,7 +10,8 @@
   (``test_privacy_email_scope.py``).
 * **Organization.** ALICE's export of A holds every table the inventory marks exported, every
   row scoped to A or one of its workspaces, its three members with email and name; no row of
-  B or C, no token digest, no derived vector; a per-table cap reports truncation.
+  B or C, no token digest, no derived vector; each table is paged
+  by keyset cursors (see test_privacy_export_pagination.py).
 * **Authority.** Organization export is exactly OWNER: ADMIN, VIEWER and a non-member are
   refused; anonymous is 401 for both.
 * **Read-only.** Neither export writes anything (the whole database is compared).
@@ -101,7 +102,7 @@ def test_organization_export_is_complete_and_scoped(env: PrivacyEnv):
     assert set(body["not_exported"]) == {n for n, e in TABLES.items() if not e.exported}
     workspaces = set(WORKSPACES[ORG_A])
     for name, table in body["tables"].items():
-        assert table["truncated"] is False
+        assert table["next_cursor"] is None
         assert table["row_count"] == len(table["rows"])
         for row in table["rows"]:
             if name == "organizations":
@@ -124,12 +125,18 @@ def test_organization_export_is_complete_and_scoped(env: PrivacyEnv):
     assert "hashed_password" not in text
 
 
-def test_organization_export_reports_truncation(env: PrivacyEnv, monkeypatch):
-    monkeypatch.setattr(export_module, "ORGANIZATION_EXPORT_ROW_CAP", 1)
+def test_organization_export_index_pages_instead_of_truncating(env: PrivacyEnv, monkeypatch):
+    """With a first page of 1 row the index keeps the exact row_count, says it is not complete
+    and hands out a cursor; nothing is dropped (D-9f). The pagination module reads each table
+    to its end."""
+    monkeypatch.setattr(export_module, "ORGANIZATION_EXPORT_DEFAULT_PAGE", 1)
     body = env.client.get(ORG_EXPORT, headers=env.auth(ALICE)).json()
     brands = body["tables"]["brands"]
-    assert (brands["row_count"], len(brands["rows"]), brands["truncated"]) == (1, 1, True)
-    assert body["row_cap_per_table"] == 1
+    assert brands["row_count"] > 1 and len(brands["rows"]) == 1
+    assert brands["next_cursor"] is not None
+    assert body["complete"] is False
+    assert "truncated" not in json.dumps(body["tables"]["brands"])
+    assert body["page_size_default"] == 1 and body["page_size_cap"] == 5000
 
 
 @pytest.mark.parametrize(

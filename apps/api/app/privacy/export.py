@@ -14,21 +14,29 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
 * **Organization export** — every table the inventory marks exported, restricted to the
   organization (by ``organization_id``, or by its workspaces for the tables that carry
   only ``workspace_id``), minus the columns the inventory excludes (token digests and
-  derived vectors), plus the members with their email and name. Each table is capped at
-  :data:`ORGANIZATION_EXPORT_ROW_CAP` rows and says when it was truncated.
+  derived vectors), plus the members with their email and name. It is complete (D-9f): an
+  index call returns the exact ``row_count`` of every table with its first page and a
+  ``next_cursor``; each table is read to its end with keyset pages ordered ``(created_at, id)``
+  (at most :data:`ORGANIZATION_EXPORT_PAGE_CAP` rows a page). No snapshot isolation is
+  claimed (:data:`ORGANIZATION_EXPORT_CONSISTENCY`). The account export is not paged: it holds
+  one person's own rows, bounded by what one account can create (sessions are limited and
+  the rest is that account's own invitations, feedback, overrides and audit events).
 """
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import Table, or_, select
+from sqlalchemy import Table, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.audit.models import AuditLog
 from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetToken
 from app.capabilities.models import WorkspaceCapabilityOverride
+from app.core.errors import NotFoundError, ValidationDomainError
 from app.db.clock import as_utc
 from app.db.models import Base
 from app.feedback.models import OpportunityFeedback
@@ -44,7 +52,18 @@ from app.privacy.inventory import TABLES
 from app.privacy.matching import Subject, existing_addresses, prefilter, same_address
 
 EXPORT_SCHEMA_VERSION = 1
-ORGANIZATION_EXPORT_ROW_CAP = 5000
+#: The organization export changed shape with D-9f (index + keyset pages): version 2.
+ORGANIZATION_EXPORT_SCHEMA_VERSION = 2
+#: The most rows one page may carry (``limit`` above it is refused) and the page size used
+#: when the caller names none and for the first page inside the index.
+ORGANIZATION_EXPORT_PAGE_CAP = 5000
+ORGANIZATION_EXPORT_DEFAULT_PAGE = 1000
+ORGANIZATION_EXPORT_CONSISTENCY = (
+    "No snapshot isolation: each page is read on its own. A row created after a traversal "
+    "started appears only if its (created_at, id) key sorts after the cursor in use; a row "
+    "deleted meanwhile is absent from any page read after the deletion. Compare generated_at "
+    "and row_count to see whether the data changed during the download."
+)
 
 
 def _jsonable(value: Any) -> Any:
@@ -236,33 +255,112 @@ def _organization_scope(table: Table, organization_id: str, workspace_ids: list[
     raise LookupError(f"{table.name} has no organization or workspace column")
 
 
-def export_organization(db: Session, *, organization_id: str) -> dict[str, Any]:
-    """Every exported table of the organization, capped per table, plus its members."""
-    workspace_ids = list(
+def _exported_table(name: str) -> tuple[Table, list[Any]]:
+    """The table and the columns the inventory lets out. An unknown or not-exported name is
+    the same :class:`NotFoundError` whichever it is, so the route does not enumerate tables."""
+    entry = TABLES.get(name)
+    if entry is None or not entry.exported:
+        raise NotFoundError("Table not found in this organization's export.")
+    table = Base.metadata.tables[name]
+    if table.c.get("id") is None or table.c.get("created_at") is None:
+        raise LookupError(f"{name} has no (created_at, id) key to page by")
+    columns = [c for c in table.columns if c.name not in entry.excluded_columns]
+    if not {"id", "created_at"} <= {c.name for c in columns}:
+        raise LookupError(f"{name} excludes a paging key column")
+    return table, columns
+
+
+def encode_cursor(table: str, created_at: datetime, row_id: str) -> str:
+    raw = json.dumps([table, created_at.isoformat(), row_id], separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def decode_cursor(cursor: str, table: str) -> tuple[datetime, str]:
+    """Validate an opaque cursor against the table it is used with. Anything else is refused."""
+    bad = ValidationDomainError("The cursor is not valid for this table.", code="invalid_cursor")
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        named, created, row_id = json.loads(raw)
+        if named != table or not isinstance(created, str) or not isinstance(row_id, str):
+            raise bad
+        return datetime.fromisoformat(created), row_id
+    except ValidationDomainError:
+        raise
+    except (ValueError, TypeError, UnicodeError):  # includes binascii.Error and JSON errors
+        raise bad from None
+
+
+def _page(
+    db: Session,
+    *,
+    name: str,
+    organization_id: str,
+    workspace_ids: list[str],
+    cursor: str | None,
+    limit: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One keyset page of ``name`` for the organization: the ``limit`` rows after the cursor
+    in ``(created_at, id)`` order, and the cursor of the next page (None after the last row).
+    The database does the ordering; nothing is held in memory beyond the page."""
+    table, columns = _exported_table(name)
+    stmt = select(*columns).where(_organization_scope(table, organization_id, workspace_ids))
+    workspace = table.c.get("workspace_id")
+    if table.name != "organizations" and "organization_id" in table.c and workspace is not None:
+        if not workspace.nullable:
+            # Redundant for tenancy (a workspace belongs to one organization) and kept beside
+            # the organization filter: it lets the database seek the (workspace_id, created_at)
+            # index instead of scanning every tenant's rows on each page.
+            stmt = stmt.where(workspace.in_(workspace_ids))
+    if cursor is not None:
+        after, after_id = decode_cursor(cursor, name)
+        stmt = stmt.where(
+            or_(
+                table.c.created_at > after,
+                and_(table.c.created_at == after, table.c.id > after_id),
+            )
+        )
+    stmt = stmt.order_by(table.c.created_at, table.c.id).limit(limit + 1)
+    fetched = [dict(row._mapping) for row in db.execute(stmt)]
+    page, more = fetched[:limit], len(fetched) > limit
+    next_cursor = None
+    if more:
+        last = page[-1]
+        next_cursor = encode_cursor(name, last["created_at"], last["id"])
+    return [{k: _jsonable(v) for k, v in row.items()} for row in page], next_cursor
+
+
+def _workspace_ids(db: Session, organization_id: str) -> list[str]:
+    return list(
         db.execute(
             select(Workspace.id).where(Workspace.organization_id == organization_id)
         ).scalars()
     )
+
+
+def export_organization(db: Session, *, organization_id: str) -> dict[str, Any]:
+    """The export index: members, then per exported table its exact ``row_count``, its first
+    page and the ``next_cursor`` to follow with :func:`export_organization_page`. ``complete``
+    is true when every table fits in that first page."""
+    workspace_ids = _workspace_ids(db, organization_id)
     tables: dict[str, dict[str, Any]] = {}
     for name, entry in sorted(TABLES.items()):
         if not entry.exported:
             continue
-        table = Base.metadata.tables[name]
-        columns = [c for c in table.columns if c.name not in entry.excluded_columns]
-        order = [c for c in (table.c.get("created_at"), table.c.id) if c is not None]
-        stmt = (
-            select(*columns)
-            .where(_organization_scope(table, organization_id, workspace_ids))
-            .order_by(*order)
-            .limit(ORGANIZATION_EXPORT_ROW_CAP + 1)
+        table, _ = _exported_table(name)
+        total = db.execute(
+            select(func.count()).select_from(table).where(
+                _organization_scope(table, organization_id, workspace_ids)
+            )
+        ).scalar_one()
+        rows, next_cursor = _page(
+            db,
+            name=name,
+            organization_id=organization_id,
+            workspace_ids=workspace_ids,
+            cursor=None,
+            limit=ORGANIZATION_EXPORT_DEFAULT_PAGE,
         )
-        rows = _rows(db, stmt)
-        truncated = len(rows) > ORGANIZATION_EXPORT_ROW_CAP
-        tables[name] = {
-            "rows": rows[:ORGANIZATION_EXPORT_ROW_CAP],
-            "row_count": min(len(rows), ORGANIZATION_EXPORT_ROW_CAP),
-            "truncated": truncated,
-        }
+        tables[name] = {"row_count": total, "rows": rows, "next_cursor": next_cursor}
     members = _rows(
         db,
         select(
@@ -277,19 +375,54 @@ def export_organization(db: Session, *, organization_id: str) -> dict[str, Any]:
         .order_by(OrganizationMember.created_at, OrganizationMember.user_id),
     )
     return {
-        "schema_version": EXPORT_SCHEMA_VERSION,
+        "schema_version": ORGANIZATION_EXPORT_SCHEMA_VERSION,
         "generated_at": _now(),
         "subject": {"type": "organization", "organization_id": organization_id},
-        "row_cap_per_table": ORGANIZATION_EXPORT_ROW_CAP,
+        "page_size_default": ORGANIZATION_EXPORT_DEFAULT_PAGE,
+        "page_size_cap": ORGANIZATION_EXPORT_PAGE_CAP,
+        "complete": all(t["next_cursor"] is None for t in tables.values()),
+        "consistency": ORGANIZATION_EXPORT_CONSISTENCY,
         "members": members,
         "tables": tables,
         "not_exported": sorted(n for n, e in TABLES.items() if not e.exported),
     }
 
 
+def export_organization_page(
+    db: Session,
+    *,
+    organization_id: str,
+    table: str,
+    cursor: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    """One page of one exported table of the organization, after ``cursor`` (None = first)."""
+    rows, next_cursor = _page(
+        db,
+        name=table,
+        organization_id=organization_id,
+        workspace_ids=_workspace_ids(db, organization_id),
+        cursor=cursor,
+        limit=limit,
+    )
+    return {
+        "schema_version": ORGANIZATION_EXPORT_SCHEMA_VERSION,
+        "generated_at": _now(),
+        "subject": {"type": "organization", "organization_id": organization_id},
+        "table": table,
+        "limit": limit,
+        "rows": rows,
+        "next_cursor": next_cursor,
+    }
+
+
 __all__ = [
     "EXPORT_SCHEMA_VERSION",
-    "ORGANIZATION_EXPORT_ROW_CAP",
+    "ORGANIZATION_EXPORT_CONSISTENCY",
+    "ORGANIZATION_EXPORT_DEFAULT_PAGE",
+    "ORGANIZATION_EXPORT_PAGE_CAP",
+    "ORGANIZATION_EXPORT_SCHEMA_VERSION",
     "export_account",
     "export_organization",
+    "export_organization_page",
 ]

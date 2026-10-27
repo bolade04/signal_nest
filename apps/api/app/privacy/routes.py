@@ -3,7 +3,8 @@
     GET  /account/export                         the signed-in account's data
     GET  /account/deletion-preview               what deleting the account would do
     POST /account/delete                         delete the account (password + "DELETE")
-    GET  /organizations/{id}/export              exact OWNER: the organization's data
+    GET  /organizations/{id}/export              exact OWNER: the export index (first pages)
+    GET  /organizations/{id}/export/{table}      exact OWNER: one keyset page of one table
     POST /organizations/{id}/delete              exact OWNER: delete it (password + name)
 
 Every deletion commits before it answers, then runs the independent verifier's reference
@@ -24,7 +25,7 @@ from __future__ import annotations
 
 from logging import ERROR
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import (
@@ -52,6 +53,7 @@ from app.privacy.schemas import (
     OrganizationDeletionOut,
     OrganizationDeletionRequest,
     OrganizationExportOut,
+    OrganizationExportPageOut,
 )
 from app.privacy.verification import (
     ErasureReport,
@@ -200,9 +202,34 @@ def export_organization(
     db: Session = Depends(get_db),
     ctx: OrganizationContext = Depends(ORGANIZATION_OWNER),
 ) -> OrganizationExportOut:
-    """Download every exported table of the organization (portability). Exactly OWNER."""
+    """The organization export index (portability): the exact row count of every exported
+    table, its first page and the cursor of the next. Exactly OWNER."""
     return OrganizationExportOut.model_validate(
         export.export_organization(db, organization_id=ctx.organization.id)
+    )
+
+
+@router.get(
+    "/organizations/{organization_id}/export/{table}", response_model=OrganizationExportPageOut
+)
+def export_organization_table(
+    table: str,
+    cursor: str | None = Query(default=None, max_length=512),
+    limit: int = Query(
+        default=export.ORGANIZATION_EXPORT_DEFAULT_PAGE,
+        ge=1,
+        le=export.ORGANIZATION_EXPORT_PAGE_CAP,
+    ),
+    db: Session = Depends(get_db),
+    ctx: OrganizationContext = Depends(ORGANIZATION_OWNER),
+) -> OrganizationExportPageOut:
+    """One keyset page of one exported table, in ``(created_at, id)`` order after ``cursor``.
+    Exactly OWNER. An unknown or not-exported table is 404; a cursor that is not valid for
+    the table is 422 ``invalid_cursor``; ``limit`` is 1..5000."""
+    return OrganizationExportPageOut.model_validate(
+        export.export_organization_page(
+            db, organization_id=ctx.organization.id, table=table, cursor=cursor, limit=limit
+        )
     )
 
 

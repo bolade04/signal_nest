@@ -161,18 +161,37 @@ class AccountExportOut(BaseModel):
 
 
 class ExportedTableOut(BaseModel):
-    rows: list[dict[str, Any]]
+    """One table in the export index: its exact row count, the first page and the cursor of
+    the next one (None when the first page holds every row)."""
+
     row_count: int
-    truncated: bool
+    rows: list[dict[str, Any]]
+    next_cursor: str | None
 
 
 class OrganizationExportOut(BaseModel):
-    """Every exported table of the organization (schema version 1)."""
+    """The organization export index (schema version 2): per table the exact ``row_count``,
+    the first page and ``next_cursor``; follow the cursors with the table-page route."""
 
     schema_version: int
     generated_at: str
     subject: ExportSubjectOut
-    row_cap_per_table: int
+    page_size_default: int
+    page_size_cap: int
+    complete: bool
+    consistency: str
     members: list[dict[str, Any]]
     tables: dict[str, ExportedTableOut]
     not_exported: list[str]
+
+
+class OrganizationExportPageOut(BaseModel):
+    """One keyset page of one exported table, after the cursor it was asked for."""
+
+    schema_version: int
+    generated_at: str
+    subject: ExportSubjectOut
+    table: str
+    limit: int
+    rows: list[dict[str, Any]]
+    next_cursor: str | None
