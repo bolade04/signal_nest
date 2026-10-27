@@ -83,7 +83,7 @@ exposes `8000` and declares a `HEALTHCHECK` against `GET /health` (liveness only
   `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` (and `VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN`,
   default 100, within the hard ceiling 100). What that acknowledges: in-process per-run similarity, bound N_max = 100 signals per run (engineering capacity bound, not a quota); no cross-run or history-wide similarity; pgvector refused until implemented (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists.
   A scout run that would index more than the bound is refused and recorded (`failed`,
-  `signal_volume_above_bound`) — never truncated or chunked. The bound is separate from the per-source fetch limit (100 entries per source per run, applied first); a clipped source is marked `partial_fetch` / `fetch_limit_reached` in the run's `stats` (see `docs/operations/aws-staging-runtime-contract.md` §G). The production **migration
+  `signal_volume_above_bound`) — never truncated or chunked. The bound is separate from the per-source fetch limit (100 entries per source per run, applied first); a clipped or failed source is marked `partial_fetch` (`partial_fetch_reasons`: `fetch_limit_reached` / `source_failed`) in the run's `stats` (see `docs/operations/aws-staging-runtime-contract.md` §G). The production **migration
   task** needs `APP_MODE=full`, `CACHE_BACKEND=redis`, `STORAGE_BACKEND=s3`,
   `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` and `DATABASE_URL` — and no `REDIS_URL`:
   `migration_mode` opens no Redis connection and is exempt from the

@@ -187,8 +187,9 @@ class RssNewsConnector(SourceConnector):
     def _parse(self, data: bytes, *, max_entries: int | None = None) -> list[dict]:
         """Parse ``data`` into at most ``max_entries`` item dicts (all when ``None``).
 
-        The XML itself is bounded by :data:`MAX_FEED_BYTES` before parsing; the entry
-        limit bounds the per-entry normalisation work on top of that."""
+        The XML parser still builds the whole document tree; that is bounded only by
+        :data:`MAX_FEED_BYTES`, checked before parsing. ``max_entries`` bounds the number of
+        item dicts extracted (and so the normalisation work) on top of that."""
         _assert_safe_xml(data)
         try:
             root = DET.fromstring(

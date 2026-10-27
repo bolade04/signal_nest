@@ -6,11 +6,17 @@ A connector reads at most ``FetchScope.max_items`` entries from one source per r
 the bound applies afterwards, per run, to the total over all sources.
 
 Without a record, a source that held more than its limit looks exactly like a source that
-held exactly that many. Each connector therefore looks **one entry past the limit** (never
-parsing more than ``max_items + 1`` entries, and never reading more bytes than its existing
-size cap) and reports a :class:`SourceFetchReport`. The run's stats expose those reports as
-``fetch_limits`` and, when any source was clipped, ``partial_fetch = true`` with the reason
-:data:`FETCH_LIMIT_REACHED` - a new explicit outcome, never ``covered`` by silence.
+held exactly that many. Each connector therefore looks **one entry past the limit** and reports a
+:class:`SourceFetchReport`. What is bounded, measured (review r3): the XML parser builds the
+whole document tree, bounded only by the existing 2 MiB size cap (at maximum density, about
+72,000 entries under the cap: ~0.16 s and ~13 MiB extra peak memory); entry **extraction** is
+bounded to ``max_items + 1`` and **normalisation** to ``max_items``. A source that fails (size
+cap, unsafe or malformed XML, rate limit, exhausted retries) is reported ``failed`` with a
+closed ``failure_reason``, never as an empty source. The run's stats expose the reports as
+``fetch_limits`` and ``partial_fetch = true`` when any source was clipped
+(:data:`FETCH_LIMIT_REACHED`) or failed (:data:`SOURCE_FAILED`), listing every applicable
+reason in ``partial_fetch_reasons`` - an explicit outcome, never ``covered`` by silence. The
+demo fixture library declares no per-source limit (``max_items`` null) and is never clipped.
 """
 
 from __future__ import annotations

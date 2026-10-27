@@ -9,7 +9,8 @@ Two independent limits sit on the path from a source to the dedupe stage:
 
 Before this change the fetch limit clipped silently: a 150-entry feed produced 100 signals
 and a run that looked complete. These tests pin that the clip is detected (one entry of
-look-ahead, never more than ``max_items + 1`` entries parsed), reported per source in the
+look-ahead of one entry: the whole XML document is parsed, bounded by the 2 MiB size cap,
+while at most ``max_items + 1`` entries are extracted), reported per source in the
 run's stats as ``fetch_limits``, and marked ``partial_fetch`` / ``fetch_limit_reached`` -
 and that the bound still refuses the total over several sources, showing the same facts.
 Replay feeds only: no network, no approved source.
@@ -94,7 +95,7 @@ def test_connector_reports_a_clip_exactly_when_the_source_held_more_than_the_lim
     assert report.source_key == "replay:solo"
 
 
-def test_connector_never_parses_more_than_one_entry_past_the_limit(monkeypatch):
+def test_connector_never_extracts_more_than_one_entry_past_the_limit(monkeypatch):
     seen: list[int] = []
     real = RssNewsConnector._parse
 
@@ -104,7 +105,7 @@ def test_connector_never_parses_more_than_one_entry_past_the_limit(monkeypatch):
         return out
 
     monkeypatch.setattr(RssNewsConnector, "_parse", spy)
-    _collect(500)  # a 500-entry feed: only max_items + 1 entries are ever turned into items
+    _collect(500)  # a 500-entry feed: the tree holds all 500; only max_items + 1 become items
     assert seen == [_LIMIT + 1]
     seen.clear()
     _collect(500, max_items=7)
