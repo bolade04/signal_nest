@@ -73,6 +73,9 @@ def replay_settings() -> Iterator[ReplayServer]:
     with pytest.MonkeyPatch.context() as mp, ReplayServer() as server:
         mp.setenv("CONNECTOR_RSS_REPLAY_ORIGIN", server.origin)
         mp.setenv("CONNECTOR_RSS_LIVE_ENABLED", "true")
+        # P6-CAP-1: live feeds also need the capability resolver's RSS decision, i.e. the
+        # global flag (and no workspace disable override), as the SQLite replay world sets.
+        mp.setenv("CONNECTOR_RSS_ENABLED", "true")
         get_settings.cache_clear()
         try:
             yield server
