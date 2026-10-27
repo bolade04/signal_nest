@@ -6504,26 +6504,128 @@
         "title": "StuckJobsOut",
         "type": "object"
       },
-      "TakedownIn": {
-        "additionalProperties": false,
-        "description": "A takedown request: the public id of the request record it answers, nothing else.\n\nThere is deliberately no free-text field. The reason for a takedown is kept in the\nreferenced request record, not in the product; a tenant reads its own audit log, so\nno operator text may reach it (adversarial r2-MINOR-2; D-9e interim).",
+      "TakedownCaseOut": {
+        "description": "One operator case record. Operator-only: this is the only place the reason is read.",
         "properties": {
-          "reference": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Reference",
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "external_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Reference"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "source_key": {
+            "title": "Source Key",
             "type": "string"
           }
         },
         "required": [
-          "reference"
+          "case_id",
+          "source_key",
+          "reason",
+          "external_reference",
+          "actor_user_id",
+          "created_at"
+        ],
+        "title": "TakedownCaseOut",
+        "type": "object"
+      },
+      "TakedownCasesOut": {
+        "properties": {
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/TakedownCaseOut"
+            },
+            "title": "Cases",
+            "type": "array"
+          },
+          "source_key": {
+            "title": "Source Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key",
+          "cases"
+        ],
+        "title": "TakedownCasesOut",
+        "type": "object"
+      },
+      "TakedownIn": {
+        "additionalProperties": false,
+        "description": "A takedown request. Both fields go ONLY into the restricted operator case record.\n\n``reason`` (required, 1\u20132000 characters) is the operator's free text and\n``external_reference`` (optional, at most 200 characters, one line) the operator's own\nticket id. Neither reaches a customer-visible audit entry, export, log or metric: a\ntenant reads its audit log and may only see a generic explanation and the case's\nopaque id (D-9e).",
+        "properties": {
+          "external_reference": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Reference"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
         ],
         "title": "TakedownIn",
         "type": "object"
       },
       "TakedownOut": {
-        "description": "The permanent suppression record: key, time and counts only (D-9d). Who took the\nsource down and the public reference are in each affected workspace's audit log.",
+        "description": "The permanent suppression record: key, time and counts only (D-9d), plus how many\noperator case records exist and the latest one's opaque id (never the reason).",
         "properties": {
+          "cases_count": {
+            "title": "Cases Count",
+            "type": "integer"
+          },
+          "latest_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Case Id"
+          },
           "purge_summary": {
             "additionalProperties": {
               "type": "integer"
@@ -6547,7 +6649,9 @@
         "required": [
           "taken_down_at",
           "purge_summary",
-          "repeat_purges"
+          "repeat_purges",
+          "cases_count",
+          "latest_case_id"
         ],
         "title": "TakedownOut",
         "type": "object"
@@ -6580,6 +6684,10 @@
           "already_taken_down": {
             "title": "Already Taken Down",
             "type": "boolean"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
           },
           "purged": {
             "additionalProperties": {
@@ -6615,7 +6723,8 @@
           "already_taken_down",
           "purged",
           "remaining",
-          "verified"
+          "verified",
+          "case_id"
         ],
         "title": "TakedownResultOut",
         "type": "object"
@@ -8120,9 +8229,68 @@
         ]
       }
     },
+    "/api/v1/internal/system/data-sources/{source_key}/cases": {
+      "get": {
+        "description": "The operator case records of ``source_key``'s takedown requests, oldest first.\n\nOperator-only (a customer, including an OWNER, gets the existing non-enumerable\n403). This is the one route that returns the private reason and external reference;\ntheir retention is pending the operator's separately approved policy.",
+        "operationId": "list_takedown_cases_api_v1_internal_system_data_sources__source_key__cases_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_key",
+            "required": true,
+            "schema": {
+              "title": "Source Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakedownCasesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Takedown Cases",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
     "/api/v1/internal/system/data-sources/{source_key}/takedown": {
       "post": {
-        "description": "Take a live source down permanently and purge its signals in every tenant.\n\nThe reason for a takedown is kept in the referenced request record, not in the\nproduct; the product keeps attribution and the public reference in each affected\nworkspace's audit log. The suppression record itself holds only the source key, the\ntime and counts.",
+        "description": "Take a live source down permanently and purge its signals in every tenant.\n\nThe operator's ``reason`` and ``external_reference`` are written to a restricted\noperator case record only (read through the operator-only cases route); each\naffected workspace's audit log gets a fixed generic explanation, the acting operator\nand the case's opaque ``case_id`` \u2014 never the reason. The suppression record itself\nholds only the source key, the time and counts.",
         "operationId": "take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post",
         "parameters": [
           {

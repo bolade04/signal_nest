@@ -500,6 +500,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/internal/system/data-sources/{source_key}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Takedown Cases
+         * @description The operator case records of ``source_key``'s takedown requests, oldest first.
+         *
+         *     Operator-only (a customer, including an OWNER, gets the existing non-enumerable
+         *     403). This is the one route that returns the private reason and external reference;
+         *     their retention is pending the operator's separately approved policy.
+         */
+        get: operations["list_takedown_cases_api_v1_internal_system_data_sources__source_key__cases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/system/data-sources/{source_key}/takedown": {
         parameters: {
             query?: never;
@@ -513,10 +537,11 @@ export interface paths {
          * Take Down Data Source
          * @description Take a live source down permanently and purge its signals in every tenant.
          *
-         *     The reason for a takedown is kept in the referenced request record, not in the
-         *     product; the product keeps attribution and the public reference in each affected
-         *     workspace's audit log. The suppression record itself holds only the source key, the
-         *     time and counts.
+         *     The operator's ``reason`` and ``external_reference`` are written to a restricted
+         *     operator case record only (read through the operator-only cases route); each
+         *     affected workspace's audit log gets a fixed generic explanation, the acting operator
+         *     and the case's opaque ``case_id`` — never the reason. The suppression record itself
+         *     holds only the source key, the time and counts.
          */
         post: operations["take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post"];
         delete?: never;
@@ -4278,23 +4303,59 @@ export interface components {
             stuck_count: number;
         };
         /**
+         * TakedownCaseOut
+         * @description One operator case record. Operator-only: this is the only place the reason is read.
+         */
+        TakedownCaseOut: {
+            /** Actor User Id */
+            actor_user_id: string | null;
+            /** Case Id */
+            case_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** External Reference */
+            external_reference: string | null;
+            /** Reason */
+            reason: string;
+            /** Source Key */
+            source_key: string;
+        };
+        /** TakedownCasesOut */
+        TakedownCasesOut: {
+            /** Cases */
+            cases: components["schemas"]["TakedownCaseOut"][];
+            /** Source Key */
+            source_key: string;
+        };
+        /**
          * TakedownIn
-         * @description A takedown request: the public id of the request record it answers, nothing else.
+         * @description A takedown request. Both fields go ONLY into the restricted operator case record.
          *
-         *     There is deliberately no free-text field. The reason for a takedown is kept in the
-         *     referenced request record, not in the product; a tenant reads its own audit log, so
-         *     no operator text may reach it (adversarial r2-MINOR-2; D-9e interim).
+         *     ``reason`` (required, 1–2000 characters) is the operator's free text and
+         *     ``external_reference`` (optional, at most 200 characters, one line) the operator's own
+         *     ticket id. Neither reaches a customer-visible audit entry, export, log or metric: a
+         *     tenant reads its audit log and may only see a generic explanation and the case's
+         *     opaque id (D-9e).
          */
         TakedownIn: {
-            /** Reference */
-            reference: string;
+            /** External Reference */
+            external_reference?: string | null;
+            /** Reason */
+            reason: string;
         };
         /**
          * TakedownOut
-         * @description The permanent suppression record: key, time and counts only (D-9d). Who took the
-         *     source down and the public reference are in each affected workspace's audit log.
+         * @description The permanent suppression record: key, time and counts only (D-9d), plus how many
+         *     operator case records exist and the latest one's opaque id (never the reason).
          */
         TakedownOut: {
+            /** Cases Count */
+            cases_count: number;
+            /** Latest Case Id */
+            latest_case_id: string | null;
             /** Purge Summary */
             purge_summary: {
                 [key: string]: number;
@@ -4326,6 +4387,8 @@ export interface components {
         TakedownResultOut: {
             /** Already Taken Down */
             already_taken_down: boolean;
+            /** Case Id */
+            case_id: string;
             /** Purged */
             purged: {
                 [key: string]: number;
@@ -5188,6 +5251,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataSourcesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_takedown_cases_api_v1_internal_system_data_sources__source_key__cases_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                source_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakedownCasesOut"];
                 };
             };
             /** @description Validation Error */
