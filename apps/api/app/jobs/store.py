@@ -25,7 +25,7 @@ lifecycle is deterministically testable with a fixed clock.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -691,13 +691,25 @@ class DurableJobStore:
         )
 
     def recover_expired_leases(
-        self, db: Session, *, now: datetime | None = None, limit: int = 100
+        self,
+        db: Session,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+        on_dead_lettered: Callable[[Job], None] | None = None,
     ) -> int:
         """Return abandoned (expired-lease) jobs to the queue — an audited replay.
 
         This is the mechanism behind at-least-once delivery: a worker that
         crashed mid-attempt loses its lease and the job becomes eligible again
         (or dead-letters if it has exhausted its attempts).
+
+        ``on_dead_lettered`` is called once for each row *this* call dead-lettered,
+        after its transition and audit event are staged and before anything is
+        committed — so a caller can settle the domain state the job was driving in
+        the same transaction (the worker runs the job type's terminal-failure hook
+        here, exactly as it does for a handler-path dead-letter). It is never called
+        for a row requeued to ``pending`` or for a row another loop won.
 
         **Single-winner under concurrency.** Two recovery loops (e.g. two workers'
         poll cycles) can select overlapping expired jobs, so recovery of a given
@@ -726,6 +738,11 @@ class DurableJobStore:
         for job in candidates:
             if self._recover_one(db, job, now=now):
                 recovered += 1
+                if (
+                    on_dead_lettered is not None
+                    and job.status == JobStatus.DEAD_LETTERED.value
+                ):
+                    on_dead_lettered(job)
         db.flush()
         return recovered
 

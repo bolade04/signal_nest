@@ -57,7 +57,7 @@ from app.core.logging import get_logger
 from app.core.security import hash_password
 from app.db.models import Base
 from app.db.session import SessionLocal, engine
-from app.geography.geocoder import geocode
+from app.geography.geocoder import fixture_geocode
 from app.jobs.models import Job
 from app.jobs.status import TERMINAL_STATUSES, JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -523,7 +523,7 @@ def seed(reset: bool = False, *, settings: Settings | None = None) -> dict:
         db.flush()  # ensure FKs resolvable before creating locations/requests
         requests: list[tuple[dict, ScoutRequest]] = []
         for c in CITIES:
-            geo = geocode(c["geocode"])
+            geo = fixture_geocode(c["geocode"])
             assert geo is not None, f"fixture geocoder missing {c['geocode']}"
             loc = BusinessLocation(
                 id=sid("loc", c["key"]),

@@ -294,7 +294,9 @@ export interface paths {
         put?: never;
         /**
          * Geocode Address
-         * @description Scout Reach helper — geocode an address so a radius can be applied.
+         * @description Scout Reach helper — resolve an address or place to coordinates and a
+         *     normalised city / region / country. A lookup that finds no single place answers
+         *     with an error whose message says how to continue (P6-DATA-3).
          */
         post: operations["geocode_address_api_v1_geocode_post"];
         delete?: never;
@@ -347,11 +349,11 @@ export interface paths {
          *     every capability resolves disabled via ``global_configuration`` — the surface is
          *     dark. A persisted enable on a ``workspace_enableable`` capability would show
          *     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
-         *     while ``global_flag`` stays ``False``. No GLOBAL flag is changed — but whether a live
-         *     gate consumes that decision depends on the capability: ``opportunity_feedback`` has one
-         *     (Phase 4B-A), so its customer endpoints serve for that workspace; ``scout_scheduling``
-         *     and ``connector_rss`` do not, so their enforcement still reads the raw flag. For those
-         *     two this surface can report ``effective_enabled=true`` while the endpoints still 503.
+         *     while ``global_flag`` stays ``False``. No GLOBAL flag is changed, and every capability's
+         *     live enforcement consumes this same decision: ``opportunity_feedback`` since Phase
+         *     4B-A, ``scout_scheduling`` (schedule mutations, tick seeding and the tick itself) and
+         *     ``connector_rss`` (connector selection) since P6-CAP-1. What this surface reports for
+         *     a workspace is therefore what that workspace's endpoints and worker do (P6-UI-006).
          */
         get: operations["internal_capability_effective_api_v1_internal_system_capabilities_effective_get"];
         put?: never;
@@ -679,7 +681,8 @@ export interface paths {
          *
          *     Operator-gated and read-only. Each row's ``state`` is derived from the live
          *     tick chain via :func:`derive_schedule_state`, so it reflects the real
-         *     paused / active / activation-required lifecycle rather than a persisted guess.
+         *     paused / active / activation-required / stalled lifecycle rather than a
+         *     persisted guess.
          */
         get: operations["internal_schedules_api_v1_internal_system_schedules_get"];
         put?: never;
@@ -1337,6 +1340,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate Location
+         * @description Retire a location without deleting it or any of its history (P6-UI-023).
+         *
+         *     See :mod:`app.locations.service` for why this is a deactivation and what it stops.
+         *     Deactivating an already-deactivated location changes nothing and answers 200.
+         */
+        post: operations["deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage": {
         parameters: {
             query?: never;
@@ -1349,6 +1375,26 @@ export interface paths {
         /** Upsert Geo Coverage */
         put: operations["upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reactivate Location
+         * @description Return a deactivated location to service; a no-op (200) when already active.
+         */
+        post: operations["reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1553,6 +1599,38 @@ export interface paths {
         patch: operations["update_products_api_v1_workspaces__workspace_id__products__item_id__patch"];
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/scheduling-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether scout scheduling is available for this workspace
+         * @description Customer-facing, workspace-effective scheduling availability (P6-UI-006).
+         *
+         *     The mirror of ``GET /workspaces/{workspace_id}/feedback-capability`` (P6-UI-005):
+         *     one boolean, decided by the same resolver call the schedule mutation gate uses, so
+         *     the UI offers schedule controls exactly when the server will accept them.
+         *
+         *     Member-gated rather than editor-gated, matching the schedule *read*: a view-only
+         *     member still sees a schedule, and the panel needs this answer to describe it
+         *     truthfully (an ``active`` row is reported as unavailable while the capability is
+         *     off). It discloses nothing beyond that boolean for the caller's own workspace.
+         *
+         *     Advisory only, and deliberately not capability-gated (that would make it useless):
+         *     the mutation routes re-decide independently and answer 503 when unavailable.
+         */
+        get: operations["read_scheduling_capability_api_v1_workspaces__workspace_id__scheduling_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/scout-requests": {
         parameters: {
             query?: never;
@@ -1686,9 +1764,9 @@ export interface paths {
          * Get Scout Schedule
          * @description Read the request's schedule. Any workspace member may read it.
          *
-         *     Available even while the feature is dark, so the UI can surface an existing
-         *     record and its derived ``state`` (including ``activation_required``). Returns 404
-         *     when the request has no schedule.
+         *     Available even while the capability is dark, so the UI can surface an existing
+         *     record, its derived ``state`` (including ``activation_required`` and ``stalled``)
+         *     and ``last_tick_failed_at``. Returns 404 when the request has no schedule.
          */
         get: operations["get_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_get"];
         put?: never;
@@ -1744,9 +1822,10 @@ export interface paths {
          * Resume Scout Schedule
          * @description Resume or activate the schedule, recomputing the next run from now.
          *
-         *     Also the explicit activation for a schedule left in ``activation_required``.
-         *     Re-enabling is subject to the four-active cap (409 when full); an already-running
-         *     schedule is returned unchanged.
+         *     Also the explicit activation for a schedule left in ``activation_required`` and
+         *     the restart for one left ``stalled`` by a failed tick. Re-enabling is subject to
+         *     the four-active cap (409 when full); an already-running schedule is returned
+         *     unchanged.
          */
         post: operations["resume_scout_schedule_api_v1_workspaces__workspace_id__scout_requests__request_id__schedule_resume_post"];
         delete?: never;
@@ -2379,12 +2458,13 @@ export interface components {
          *     values.
          *
          *     They answer "is this flag on?", NOT "is this capability available to my
-         *     workspace?". For ``scout_scheduling`` and ``connector_rss`` those coincide,
-         *     because enforcement reads the raw flag. For ``opportunity_feedback`` they do
-         *     not: an honored workspace override outranks the flag, so this field can read
-         *     ``false`` while the feedback endpoints serve normally. The customer-facing,
-         *     workspace-effective answer lives on its own route,
-         *     ``GET /workspaces/{workspace_id}/feedback-capability``.
+         *     workspace?". Since P6-CAP-1 those differ for every capability: enforcement is the
+         *     capability resolver's per-workspace decision, in which a workspace override (or
+         *     the safety ceiling) outranks the flag. The customer-facing, workspace-effective
+         *     answers live on their own routes —
+         *     ``GET /workspaces/{workspace_id}/feedback-capability`` and
+         *     ``GET /workspaces/{workspace_id}/scheduling-capability`` — and the customer UI
+         *     reads those, not these.
          */
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
@@ -2549,22 +2629,34 @@ export interface components {
             /** Query */
             query: string;
         };
-        /** GeocodeResponse */
+        /**
+         * GeocodeResponse
+         * @description One resolved place. A provider may not know every component (a region-level
+         *     answer has no city), so the text components are nullable.
+         */
         GeocodeResponse: {
             /** City */
-            city: string;
+            city: string | null;
             /** Confidence */
             confidence: number;
             /** Country */
-            country: string;
+            country: string | null;
+            /** Country Code */
+            country_code?: string | null;
+            /** Label */
+            label?: string | null;
             /** Latitude */
             latitude: number;
             /** Longitude */
             longitude: number;
+            /** Provider */
+            provider: string;
+            /** Region Code */
+            region_code?: string | null;
             /** State Province */
-            state_province: string;
+            state_province: string | null;
             /** Timezone */
-            timezone: string;
+            timezone: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3411,6 +3503,8 @@ export interface components {
             created_at: string;
             /** Decision */
             decision: string;
+            /** Explanation Source */
+            explanation_source: ("model" | "degraded" | "rule_based" | "withheld" | "budget_limited") | null;
             /** Id */
             id: string;
             /** Inside Scout Area */
@@ -3760,8 +3854,10 @@ export interface components {
          * @description Operator view of one scouting schedule with its derived lifecycle state.
          *
          *     ``state`` is computed live from the row plus the live tick chain
-         *     (:func:`derive_schedule_state`) so it can never drift from reality. Carries
-         *     only safe scope ids and lifecycle timestamps — never any secret.
+         *     (:func:`derive_schedule_state`) so it can never drift from reality. The
+         *     ``last_tick_*`` failure fields come from the same tick-job evidence
+         *     (:func:`last_tick_failure`, P6-PLAT-6). Carries only safe scope ids, lifecycle
+         *     timestamps and the stable job error classification — never any secret.
          */
         ScheduleOperatorOut: {
             /**
@@ -3776,6 +3872,10 @@ export interface components {
             interval: components["schemas"]["ScheduleInterval"];
             /** Last Tick At */
             last_tick_at: string | null;
+            /** Last Tick Error Code */
+            last_tick_error_code: string | null;
+            /** Last Tick Failed At */
+            last_tick_failed_at: string | null;
             /** Location Id */
             location_id: string | null;
             /** Next Run At */
@@ -3805,9 +3905,13 @@ export interface components {
          *     * ``activation_required`` — enabled but not yet started. A schedule created while
          *       the feature was dark (or before the flag was turned on) is intentionally *not*
          *       auto-seeded; it stays here until an explicit resume/activate action starts it.
+         *     * ``stalled`` — enabled, but the recurring chain stopped because its last
+         *       finished tick *failed* and could not be re-seeded (P6-PLAT-6). Kept distinct
+         *       from ``activation_required`` so a broken chain is visible as a failure; an
+         *       explicit resume/activate restarts it.
          * @enum {string}
          */
-        ScheduleState: "paused" | "active" | "activation_required";
+        ScheduleState: "paused" | "active" | "activation_required" | "stalled";
         /** SchedulesOverviewOut */
         SchedulesOverviewOut: {
             /** State Counts */
@@ -3816,6 +3920,19 @@ export interface components {
             };
             /** Total */
             total: number;
+        };
+        /**
+         * SchedulingCapabilityOut
+         * @description Customer-visible scout-scheduling availability for one workspace (P6-UI-006).
+         *
+         *     Exactly one field, decided by the same resolver call the schedule mutation gate
+         *     enforces with. The operator endpoint's ``decided_by`` / ``global_flag`` /
+         *     ``has_override`` / ``override_value`` are governance metadata and are deliberately
+         *     absent: a customer needs only whether the feature is available to them.
+         */
+        SchedulingCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** ScoreBreakdown */
         ScoreBreakdown: {
@@ -3960,6 +4077,8 @@ export interface components {
             interval: components["schemas"]["ScheduleInterval"];
             /** Last Tick At */
             last_tick_at: string | null;
+            /** Last Tick Failed At */
+            last_tick_failed_at: string | null;
             /** Location Id */
             location_id: string | null;
             /** Next Run At */
@@ -5644,7 +5763,10 @@ export interface operations {
     };
     list_audiences_api_v1_workspaces__workspace_id__audiences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5658,6 +5780,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5792,6 +5918,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -5806,6 +5933,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5827,7 +5958,10 @@ export interface operations {
     };
     list_brand_voice_api_v1_workspaces__workspace_id__brand_voice_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -5841,6 +5975,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6076,7 +6214,10 @@ export interface operations {
     };
     list_campaigns_api_v1_workspaces__workspace_id__campaigns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6090,6 +6231,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6222,7 +6367,10 @@ export interface operations {
     };
     list_channel_preferences_api_v1_workspaces__workspace_id__channel_preferences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6236,6 +6384,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6368,7 +6520,10 @@ export interface operations {
     };
     list_claims_api_v1_workspaces__workspace_id__claims_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6382,6 +6537,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6514,7 +6673,10 @@ export interface operations {
     };
     list_competitors_api_v1_workspaces__workspace_id__competitors_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -6528,6 +6690,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6940,6 +7106,40 @@ export interface operations {
             };
         };
     };
+    deactivate_location_api_v1_workspaces__workspace_id__locations__location_id__deactivate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_get: {
         parameters: {
             query?: never;
@@ -7012,9 +7212,46 @@ export interface operations {
             };
         };
     };
-    list_offers_api_v1_workspaces__workspace_id__offers_get: {
+    reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post: {
         parameters: {
             query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_offers_api_v1_workspaces__workspace_id__offers_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -7028,6 +7265,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7208,9 +7449,10 @@ export interface operations {
                 market?: string | null;
                 min_score?: number;
                 search?: string | null;
-                sort?: string;
+                sort?: "priority" | "opportunity" | "confidence" | "relevance" | "created";
                 order?: string;
                 limit?: number;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7225,6 +7467,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7425,7 +7671,10 @@ export interface operations {
     };
     list_products_api_v1_workspaces__workspace_id__products_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -7439,6 +7688,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7569,10 +7822,45 @@ export interface operations {
             };
         };
     };
+    read_scheduling_capability_api_v1_workspaces__workspace_id__scheduling_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulingCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_scout_requests_api_v1_workspaces__workspace_id__scout_requests_get: {
         parameters: {
             query?: {
                 location_id?: string | null;
+                limit?: number | null;
+                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7587,6 +7875,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -8026,7 +8318,10 @@ export interface operations {
     };
     list_source_preferences_api_v1_workspaces__workspace_id__source_preferences_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -8040,6 +8335,10 @@ export interface operations {
             /** @description Successful Response */
             200: {
                 headers: {
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Rows matching the filters, independent of the page. */
+                    "X-Total-Count"?: number;
                     [name: string]: unknown;
                 };
                 content: {

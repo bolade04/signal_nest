@@ -59,13 +59,16 @@ function StatCard({
   );
 }
 
+/** Rows the Overview reads to derive its figures; the opportunity count is the API's total. */
+const OVERVIEW_PAGE = 200;
+
 function OverviewInner({ workspaceId }: { workspaceId: string }) {
   const { locationId, activeLocation, locations } = useWorkspace();
 
-  const filters = { location_id: locationId ?? undefined, limit: 200 };
+  const filters = { location_id: locationId ?? undefined, limit: OVERVIEW_PAGE };
   const oppsQuery = useQuery({
-    queryKey: queryKeys.opportunities(workspaceId, filters),
-    queryFn: ({ signal }) => api.listOpportunities(workspaceId, filters, signal),
+    queryKey: queryKeys.opportunityPage(workspaceId, filters),
+    queryFn: ({ signal }) => api.listOpportunityPage(workspaceId, filters, null, signal),
   });
   const scoutQuery = useQuery({
     queryKey: queryKeys.scoutRequests(workspaceId),
@@ -82,7 +85,15 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
     return <ErrorState error={scoutQuery.error} onRetry={() => scoutQuery.refetch()} />;
   }
 
-  const opps: OpportunityCard[] = oppsQuery.data ?? [];
+  const page = oppsQuery.data;
+  const opps: OpportunityCard[] = page?.items ?? [];
+  // The page holds the OVERVIEW_PAGE highest-priority rows. The count is the API's
+  // X-Total-Count (P6-PLAT-12), never the page length; without a total, a further page
+  // means "more than shown". Figures derived from the rows themselves describe only the
+  // rows shown, and say so when the page is not the whole result.
+  const sampled = page ? (page.total !== null ? opps.length < page.total : page.nextCursor !== null) : false;
+  const opportunityCount: string | number =
+    page?.total ?? (page?.nextCursor ? `${opps.length}+` : opps.length);
   const scouts: ScoutRequestOut[] = (scoutQuery.data ?? []).filter(
     (s) => !locationId || s.location_id === locationId,
   );
@@ -161,10 +172,23 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Radar} label="Scout requests" value={scouts.length} hint={scoutHint} />
-        <StatCard icon={Sparkles} label="Opportunities" value={opps.length} hint={`${byMarket.length} markets`} />
+        <StatCard
+          icon={Sparkles}
+          label="Opportunities"
+          value={opportunityCount}
+          hint={sampled ? `${byMarket.length} markets in the ${opps.length} shown` : `${byMarket.length} markets`}
+        />
         <StatCard icon={Gauge} label="Avg relevance" value={avg('relevance_score')} hint={`Avg confidence ${avg('confidence_score')}`} />
         <StatCard icon={ShieldAlert} label="High-risk / claims" value={riskCount} hint={`${formatStat(noiseFiltered)} noise filtered · ${formatStat(signalsAnalyzed)} signals`} />
       </div>
+
+      {sampled ? (
+        <p className="text-xs text-muted-foreground">
+          Averages, risk, markets and classifications below are computed from the {opps.length}{' '}
+          highest-priority opportunities
+          {page?.total !== null && page?.total !== undefined ? ` of ${page.total}` : ''}.
+        </p>
+      ) : null}
 
       {opps.length === 0 && scouts.length === 0 ? (
         <EmptyState

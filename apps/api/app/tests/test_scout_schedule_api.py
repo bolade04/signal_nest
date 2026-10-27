@@ -55,6 +55,7 @@ _ALLOWED_KEYS = {
     "enabled",
     "next_run_at",
     "last_tick_at",
+    "last_tick_failed_at",
     "created_at",
     "updated_at",
 }

@@ -12,15 +12,15 @@
   "allow_model.py::EXEMPTIONS": {
    "collection_id": "allow_model.py::EXEMPTIONS",
    "ordered": false,
-   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
-   "reviewed_digest": "sha256:310b93c07d4bc8f858381c56f8355868f978e117f16e116d91e22b2f3a9f53e3",
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:3c7648c46888db415df6942b16e36046eef4120855df86f5cd6ecc4055306911",
    "source": "live"
   },
   "allow_model.py::EXTRA_REQUIRED_SOURCES": {
    "collection_id": "allow_model.py::EXTRA_REQUIRED_SOURCES",
    "ordered": false,
-   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
-   "reviewed_digest": "sha256:f454fca14f1cbd3e795eabab9a94d253d932bd2adfa72f2e1235733133e71f04",
+   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
+   "reviewed_digest": "sha256:0a08b295e471b7f68109033491ba4abf1456730367d014c2d6d66c4b7b26bd6c",
    "source": "live"
   },
   "allow_model.py::PERMITTED_WILDCARDS": {
@@ -33,8 +33,8 @@
   "allow_model.py::TARGETS": {
    "collection_id": "allow_model.py::TARGETS",
    "ordered": false,
-   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
-   "reviewed_digest": "sha256:676733b3caa1dcef9102a175fc126f1cd0870f950dd67ccb6a6345a1d97f946a",
+   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
+   "reviewed_digest": "sha256:2e3dacc1f7203458026f817debeab87fc95b7f36c885ec9e50d3c68bab0530c1",
    "source": "live"
   },
   "anchor_loader.py::REQUIRED_FIELDS": {
@@ -348,8 +348,8 @@
   "expiry_authorization.py::PURPOSES": {
    "collection_id": "expiry_authorization.py::PURPOSES",
    "ordered": true,
-   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
-   "reviewed_digest": "sha256:e96546aabe2cc25adb8deccec589ca2e88242a8a90a4817356be17c9b4637ac1",
+   "review_record_id": "REV-2026-10-21-P6-CI6-KEY-APPLY-CLOSURE",
+   "reviewed_digest": "sha256:3de185e9e4048b69daadf7f51a12f3f4e1b79eb905493d966052545755204f07",
    "source": "live"
   },
   "external_executable_trust.py::FATAL_STEERING_VARIABLES": {
@@ -488,8 +488,8 @@
   "iam_eval.py::ACTION_CONDITION_KEYS": {
    "collection_id": "iam_eval.py::ACTION_CONDITION_KEYS",
    "ordered": false,
-   "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
-   "reviewed_digest": "sha256:1ca6c1741aad76316d02cc4c9103a8abb364fd6f5c0052be04a812246de15edd",
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:22e284dbf463b9d1fa1b0c90cbe102f9151768d9464520a952a0c4874b3be1d9",
    "source": "live"
   },
   "iam_eval.py::DISPUTED_RUNTIME_CONTEXT": {
@@ -1015,6 +1015,27 @@
    "ordered": false,
    "review_record_id": "REV-2026-10-02-P6-W0-TRANSITION-PERMS",
    "reviewed_digest": "sha256:831d5b9596e8c6f02b922b872e827c8ddc46ceb16d23919db339c6c9f4aecccb",
+   "source": "live"
+  },
+  "gen_operator_policies.py::KEY_APPLY_WRITES": {
+   "collection_id": "gen_operator_policies.py::KEY_APPLY_WRITES",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:b6e0e9f86709e1b8c80fe3c1b26d95d9ec36b06788a780f6a9a3571bf24c98f3",
+   "source": "live"
+  },
+  "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": {
+   "collection_id": "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-23-P6-CI6-KEY-APPLY-BWIDE",
+   "reviewed_digest": "sha256:821cb86b3845bbf08cdfcba47eb2e92c9b58d7a146d68ed2ca0e8064d7581eaf",
+   "source": "live"
+  },
+  "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS": {
+   "collection_id": "deny_requirements.py::_REQUIREMENT_AMENDMENT_RULINGS",
+   "ordered": false,
+   "review_record_id": "REV-2026-10-23-P6-CI6-O11-AMENDMENT-R1",
+   "reviewed_digest": "sha256:9f5925c9d32525a76fe542afd9925434c75f1f5400a194c057d10dde6b4b4173",
    "source": "live"
   }
  }

@@ -27,6 +27,7 @@ AppMode = Literal["local", "full"]
 Environment = Literal["development", "staging", "production", "test"]
 LLMProvider = Literal["mock", "openai", "anthropic"]
 MailBackend = Literal["memory", "console", "ses"]
+GeocoderBackend = Literal["fixture", "aws_location"]
 
 #: Local web-app origin used when ``public_web_origin`` is not configured. It is a
 #: development convenience only: staging/production reject any loopback origin.
@@ -413,6 +414,30 @@ class Settings(BaseSettings):
     #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
     connector_rss_max_attempts: int = 3
 
+    # --- Geocoding (P6-DATA-3) -----------------------------------------------
+    #: Geocoder backend. ``fixture`` answers from seven offline cities (development
+    #: and test only); ``aws_location`` calls Amazon Location Service Places v2
+    #: through the ambient credential chain (the ECS API task role; there is no
+    #: geocoder key setting). Unset resolves per environment - see
+    #: ``effective_geocoder_backend``: staging/production have NO geocoder until a
+    #: provider is chosen (an operator decision), and a lookup then answers "not
+    #: configured" while customers type the city / region / country themselves.
+    geocoder_backend: GeocoderBackend | None = None
+    #: AWS region for ``aws_location`` (required with it).
+    geocoder_aws_region: str | None = None
+    #: Bounded SDK connect and read timeout for one provider call (seconds). (0, 30].
+    geocoder_timeout_seconds: float = 5.0
+    #: Lifetime of a cached answer (seconds); 0 disables the cache. Answers are
+    #: cached only for a provider whose terms allow storing them.
+    geocoder_cache_ttl_seconds: int = 7 * 24 * 3600
+    #: Lookups one workspace may make per minute (counted per API replica).
+    geocoder_workspace_requests_per_minute: int = 30
+    #: Process-wide provider call budget: burst capacity and steady refill rate.
+    geocoder_provider_burst: int = 10
+    geocoder_provider_requests_per_second: float = 5.0
+    #: Minimum provider match score (0..1) for an answer to be accepted.
+    geocoder_min_match_score: float = 0.7
+
     # --- Scouting schedules (Phase 3B, SB-B) ---------------------------------
     #: Master switch for recurring scouting schedules (dark by default). While
     #: off, schedule ticks are inert no-ops that self-terminate the chain: no
@@ -436,6 +461,47 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_mock_seed: str = "signalnest-dev"
     llm_allow_dev_fallback: bool = False
+
+    # --- LLM reliability (P6-LLM-1) ------------------------------------------
+    #: Upper bound on generated tokens per call (Anthropic ``max_tokens``, OpenAI
+    #: ``max_completion_tokens``). A reply that stops at the bound is treated as
+    #: truncated (malformed), never parsed as a partial answer.
+    llm_max_output_tokens: int = 1024
+    #: Longest provider ``retry-after`` the service honours before its next
+    #: attempt; a longer hint is clamped so one call's wall-clock stays bounded.
+    llm_retry_after_cap_seconds: float = 10.0
+
+    # --- LLM safety and cost (P6-LLM-2, P6-LLM-4) ----------------------------
+    #: Longest value (characters, after sanitizing) interpolated into a prompt as
+    #: one untrusted data block; longer values are cut with a "[truncated]" marker.
+    llm_max_untrusted_chars: int = 4000
+    #: Provider attempts (retries included) allowed in ONE scout run - on the worker
+    #: path, across all attempts of the run's job.
+    llm_max_calls_per_run: int = 100
+    #: Model spend allowed per workspace per calendar month (UTC), in USD. Runs are
+    #: refused once it is spent; inside a run, an attempt whose worst case would
+    #: cross it is not made. The mock provider costs nothing.
+    llm_workspace_monthly_budget_usd: float = 5.0
+    #: USD per million [input, output] tokens per model id. A model missing here is
+    #: charged the table's highest rates (an unknown model never looks free).
+    llm_prices_usd_per_mtok: dict[str, list[float]] = Field(
+        default_factory=lambda: {
+            "claude-haiku-4-5": [1.0, 5.0],
+            "claude-sonnet-4-6": [3.0, 15.0],
+            "claude-sonnet-5": [2.0, 10.0],
+            "claude-opus-4-6": [5.0, 25.0],
+            "claude-opus-4-7": [5.0, 25.0],
+            "claude-opus-4-8": [5.0, 25.0],
+            "claude-opus-5": [5.0, 25.0],
+            "claude-fable-5-1": [10.0, 50.0],
+        }
+    )
+    #: Where the default price table came from and when; not a live verification.
+    llm_price_source: str = (
+        "Anthropic first-party list prices from the claude-api reference bundled with "
+        "Claude Code (model table cached 2026-06-24), read 2026-10-20; not verified "
+        "against the live pricing page. No OpenAI prices are listed."
+    )
 
     # --- Readiness probes ----------------------------------------------------
     #: Wall-clock budget for a single readiness probe. Bounded so a hung backend
@@ -512,6 +578,19 @@ class Settings(BaseSettings):
             return "console"
         if self.environment == "test":
             return "memory"
+        return None
+
+    @property
+    def effective_geocoder_backend(self) -> GeocoderBackend | None:
+        """Resolve the geocoder backend: an explicit ``geocoder_backend`` always wins.
+
+        Unset, development and test use the offline fixture. Staging/production have
+        NO implicit backend (``None``): they never fall back to fixture answers.
+        """
+        if self.geocoder_backend is not None:
+            return self.geocoder_backend
+        if self.environment in ("development", "test"):
+            return "fixture"
         return None
 
     @model_validator(mode="after")
@@ -637,6 +716,32 @@ class Settings(BaseSettings):
 
         if self.llm_provider in ("openai", "anthropic") and not self.llm_api_key:
             errors.append(f"llm_provider={self.llm_provider} requires llm_api_key")
+
+        # LLM call bounds (P6-LLM-1): one call costs at most
+        # (llm_max_retries + 1) x llm_timeout_seconds plus clamped backoff.
+        if not 0 <= self.llm_max_retries <= 5:
+            errors.append("llm_max_retries must be between 0 and 5")
+        if not 1 <= self.llm_timeout_seconds <= 120:
+            errors.append("llm_timeout_seconds must be between 1 and 120")
+        if not 1 <= self.llm_max_output_tokens <= 16000:
+            errors.append("llm_max_output_tokens must be between 1 and 16000")
+        if not 0 <= self.llm_retry_after_cap_seconds <= 60:
+            errors.append("llm_retry_after_cap_seconds must be between 0 and 60")
+        # LLM safety and cost bounds (P6-LLM-2, P6-LLM-4).
+        if not 200 <= self.llm_max_untrusted_chars <= 50000:
+            errors.append("llm_max_untrusted_chars must be between 200 and 50000")
+        if not 1 <= self.llm_max_calls_per_run <= 10000:
+            errors.append("llm_max_calls_per_run must be between 1 and 10000")
+        if not 0 <= self.llm_workspace_monthly_budget_usd <= 100000:
+            errors.append("llm_workspace_monthly_budget_usd must be between 0 and 100000")
+        if not self.llm_prices_usd_per_mtok or any(
+            len(p) != 2 or not all(0 <= x < 10000 for x in p)
+            for p in self.llm_prices_usd_per_mtok.values()
+        ):
+            errors.append(
+                "llm_prices_usd_per_mtok must map each model to [input, output] USD per "
+                "million tokens, each >= 0"
+            )
 
         # A non-positive lifetime would mint invitations that are already expired
         # when created; reject it at construction.
@@ -882,6 +987,33 @@ class Settings(BaseSettings):
                     "(rate_limit_backend=memory counts per process)"
                 )
         # --- end P6 platform services ----------------------------------------
+
+        # --- Geocoding (P6-DATA-3) -------------------------------------------
+        # Fixture answers are invented coordinates for seven cities: never served
+        # outside development/test, whatever the mode.
+        if self.geocoder_backend == "fixture" and self.environment not in (
+            "development",
+            "test",
+        ):
+            errors.append("geocoder_backend=fixture is allowed only in development or test")
+        if self.geocoder_backend == "aws_location" and not self.geocoder_aws_region:
+            errors.append("geocoder_backend=aws_location requires geocoder_aws_region")
+        if self.geocoder_aws_region is not None and not _AWS_REGION_RE.fullmatch(
+            self.geocoder_aws_region
+        ):
+            errors.append("geocoder_aws_region must be an AWS region name (e.g. us-east-1)")
+        if not 0 < self.geocoder_timeout_seconds <= 30:
+            errors.append("geocoder_timeout_seconds must be > 0 and <= 30")
+        if self.geocoder_cache_ttl_seconds < 0:
+            errors.append("geocoder_cache_ttl_seconds must be >= 0")
+        if self.geocoder_workspace_requests_per_minute < 1:
+            errors.append("geocoder_workspace_requests_per_minute must be >= 1")
+        if self.geocoder_provider_burst < 1:
+            errors.append("geocoder_provider_burst must be >= 1")
+        if self.geocoder_provider_requests_per_second <= 0:
+            errors.append("geocoder_provider_requests_per_second must be greater than 0")
+        if not 0 <= self.geocoder_min_match_score <= 1:
+            errors.append("geocoder_min_match_score must be between 0 and 1")
 
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))

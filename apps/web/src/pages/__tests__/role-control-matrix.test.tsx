@@ -230,7 +230,7 @@ const ROWS: Row[] = [
   },
   {
     id: 'C03 Opportunity status actions (x4)',
-    site: 'OpportunityDetail.tsx:151',
+    site: 'OpportunityDetail.tsx:156',
     policy: EDITOR,
     route: '/opportunities/opp-loc-dallas-0',
     ready: (s) => s.findByRole('heading', { name: /dallas customers want faster delivery 1/i }),
@@ -462,20 +462,13 @@ const SWITCH_PAGES: SwitchPage[] = [
     controls: [/run now/i, /^pause$/i, /^cancel$/i],
   },
   {
-    // The schedule controls exist only while scheduling is live, so it is switched on here.
+    // The schedule controls exist only while scheduling is live for the workspace, so
+    // its workspace-effective lookup (P6-UI-006) is switched on here.
     page: 'Scout request detail — schedule (scheduling enabled)',
     route: '/scout-requests/scout-loc-dallas',
     handlers: [
       SCHEDULE_404,
-      http.get(P('/system/capabilities'), () =>
-        HttpResponse.json({
-          app_mode: 'local',
-          environment: 'development',
-          is_local_mode: true,
-          all_configured: true,
-          features: { opportunity_feedback_enabled: false, scout_scheduling_enabled: true, connector_rss_enabled: false },
-        }),
-      ),
+      http.get(P('/workspaces/:workspaceId/scheduling-capability'), () => HttpResponse.json({ enabled: true })),
     ],
     ready: async (s) => {
       await s.findByRole('heading', { name: 'Dallas demand scan' });
@@ -708,7 +701,7 @@ const SIDE_ROWS: SideRow[] = [
     },
   },
   {
-    site: 'W04 OpportunityDetail.tsx:94-98 mark saved',
+    site: 'W04 OpportunityDetail.tsx:95-99 mark saved',
     route: '/opportunities/opp-loc-dallas-0',
     handlers: [
       http.get(P('/workspaces/ws-1/opportunities/opp-loc-dallas-0'), async () => {
@@ -835,7 +828,7 @@ const RETRY_ROWS: RetryRow[] = [
   { site: 'Locations.tsx:67', route: '/locations', fails: '/workspaces/:ws/locations', recovered: (s) => s.findByText('Dallas') },
   { site: 'CampaignContext.tsx:445', route: '/context', fails: '/workspaces/:ws/products', recovered: (s) => s.findByText(/no products yet/i) },
   {
-    site: 'OpportunityDetail.tsx:112',
+    site: 'OpportunityDetail.tsx:113',
     route: '/opportunities/opp-loc-dallas-0',
     fails: '/workspaces/:ws/opportunities/opp-loc-dallas-0',
     recovered: (s) => s.findByRole('heading', { name: /dallas customers want faster delivery 1/i }),
@@ -874,7 +867,7 @@ const RETRY_ROWS: RetryRow[] = [
     recovered: (s) => s.findByText(/^running$/i),
   },
   {
-    site: 'SchedulePanel.tsx:92',
+    site: 'SchedulePanel.tsx:100',
     route: '/scout-requests/scout-loc-dallas',
     fails: '/workspaces/:ws/scout-requests/:id/schedule',
     handlers: [SCHEDULE_404],

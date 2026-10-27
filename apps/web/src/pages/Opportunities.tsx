@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
-import { Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { AlertTriangle, Loader2, Radar, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import type { OpportunityFilters } from '@/api/types';
+import type { OpportunityFilters, OpportunitySort } from '@/api/types';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
 import { PageHeader } from '@/components/layout/page-header';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
@@ -24,10 +24,14 @@ import {
   riskLabels,
   statusLabels,
 } from '@/lib/labels';
+import { formatDateTime } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { describeEmptyFeed } from './opportunities/emptyFeed';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
 
 const ANY = '__any__';
+/** Rows per page of the feed; "Load more" fetches the next page by cursor (P6-UI-022). */
+const PAGE_SIZE = 100;
 
 interface UiFilters {
   classification: string;
@@ -37,9 +41,22 @@ interface UiFilters {
   market: string;
   min_score: number;
   search: string;
-  sort: string;
+  sort: OpportunitySort;
   order: string;
 }
+
+// The API's sort keys. This page used to send column names (`opportunity_score`, …),
+// which the API did not recognise and silently replaced with `priority`, so every
+// sort option sorted by priority. The keys are now typed from the generated contract.
+const SORT_OPTIONS: { value: `${OpportunitySort}:${'asc' | 'desc'}`; label: string }[] = [
+  { value: 'opportunity:desc', label: 'Highest score' },
+  { value: 'opportunity:asc', label: 'Lowest score' },
+  { value: 'relevance:desc', label: 'Most relevant' },
+  { value: 'confidence:desc', label: 'Most confident' },
+  { value: 'priority:desc', label: 'Highest priority' },
+  { value: 'created:desc', label: 'Newest' },
+  { value: 'created:asc', label: 'Oldest' },
+];
 
 const defaultFilters: UiFilters = {
   classification: ANY,
@@ -49,7 +66,7 @@ const defaultFilters: UiFilters = {
   market: '',
   min_score: 0,
   search: '',
-  sort: 'opportunity_score',
+  sort: 'opportunity',
   order: 'desc',
 };
 
@@ -103,6 +120,21 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
     setSearchDraft('');
   }
 
+  // The URL's `?search=` is the source of truth whenever it changes from outside this
+  // page — the header's global search navigates here while the page is already mounted,
+  // and a same-route navigation does not remount (P6-UI-021). Adjusted during render,
+  // like the location reset above; the effect below writes our own changes back, which
+  // this then sees as already applied.
+  const urlSearch = searchParams.get('search') ?? '';
+  const [prevUrlSearch, setPrevUrlSearch] = useState(urlSearch);
+  if (urlSearch !== prevUrlSearch) {
+    setPrevUrlSearch(urlSearch);
+    if (urlSearch !== filters.search) {
+      setFilters((f) => ({ ...f, search: urlSearch }));
+      setSearchDraft(urlSearch);
+    }
+  }
+
   // Debounce the search box into the applied filters.
   useEffect(() => {
     const t = setTimeout(() => {
@@ -128,14 +160,17 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
       search: filters.search || undefined,
       sort: filters.sort,
       order: filters.order,
-      limit: 100,
+      limit: PAGE_SIZE,
     }),
     [locationId, filters],
   );
 
-  const query = useQuery({
-    queryKey: queryKeys.opportunities(workspaceId, apiFilters),
-    queryFn: ({ signal }) => api.listOpportunities(workspaceId, apiFilters, signal),
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.opportunityFeed(workspaceId, apiFilters),
+    queryFn: ({ signal, pageParam }) =>
+      api.listOpportunityPage(workspaceId, apiFilters, pageParam, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
   });
 
   const set = <K extends keyof UiFilters>(key: K, value: UiFilters[K]) =>
@@ -173,7 +208,31 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
     setSearchDraft('');
   };
 
-  const results = query.data ?? [];
+  const pages = query.data?.pages;
+  // Keyset pages do not overlap, but a row whose sort value changed between two page
+  // fetches could appear twice; it is shown once.
+  const results = useMemo(() => {
+    const seen = new Set<string>();
+    return (pages ?? []).flatMap((p) => p.items).filter((o) => !seen.has(o.id) && !!seen.add(o.id));
+  }, [pages]);
+  // The newest page's total: the whole filtered count, never the number loaded.
+  const total = pages?.length ? pages[pages.length - 1]!.total : null;
+  const noun = (n: number) => `opportunit${n === 1 ? 'y' : 'ies'}`;
+  const countText =
+    total === null
+      ? query.hasNextPage
+        ? `Showing the first ${results.length} ${noun(results.length)}`
+        : `${results.length} ${noun(results.length)}`
+      : results.length < total
+        ? `Showing ${results.length} of ${total} ${noun(total)}`
+        : `${total} ${noun(total)}`;
+
+  const emptyUnfiltered = query.isSuccess && results.length === 0 && activeChips.length === 0;
+  const scoutsQuery = useQuery({
+    queryKey: queryKeys.scoutRequests(workspaceId),
+    queryFn: ({ signal }) => api.listScoutRequests(workspaceId, signal),
+    enabled: emptyUnfiltered,
+  });
 
   return (
     <div>
@@ -202,19 +261,20 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
           <div className="flex items-center gap-2">
             <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden />
             <Select value={`${filters.sort}:${filters.order}`} onValueChange={(v) => {
-              const [sort, order] = v.split(':');
-              setFilters((f) => ({ ...f, sort: sort!, order: order! }));
+              const option = SORT_OPTIONS.find((o) => o.value === v);
+              if (!option) return;
+              const [sort, order] = option.value.split(':') as [OpportunitySort, string];
+              setFilters((f) => ({ ...f, sort, order }));
             }}>
               <SelectTrigger aria-label="Sort" className="h-9 w-[190px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="opportunity_score:desc">Highest score</SelectItem>
-                <SelectItem value="opportunity_score:asc">Lowest score</SelectItem>
-                <SelectItem value="relevance_score:desc">Most relevant</SelectItem>
-                <SelectItem value="confidence_score:desc">Most confident</SelectItem>
-                <SelectItem value="created_at:desc">Newest</SelectItem>
-                <SelectItem value="created_at:asc">Oldest</SelectItem>
+                {SORT_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -264,9 +324,7 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
       </div>
 
       <div className="mb-3 flex items-center justify-between text-sm text-muted-foreground" aria-live="polite">
-        <span>
-          {query.isLoading ? 'Loading…' : `${results.length} opportunit${results.length === 1 ? 'y' : 'ies'}`}
-        </span>
+        <span>{query.isLoading ? 'Loading…' : countText}</span>
       </div>
 
       {query.isLoading ? (
@@ -274,11 +332,30 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
       ) : query.isError ? (
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       ) : results.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {results.map((o) => (
-            <OpportunityCardView key={o.id} opportunity={o} />
-          ))}
-        </div>
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {results.map((o) => (
+              <OpportunityCardView key={o.id} opportunity={o} />
+            ))}
+          </div>
+          {query.hasNextPage || query.isFetchNextPageError ? (
+            <div className="mt-6 flex flex-col items-center gap-2">
+              {query.isFetchNextPageError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  Could not load more opportunities.
+                </p>
+              ) : null}
+              <Button
+                variant="outline"
+                onClick={() => query.fetchNextPage()}
+                disabled={query.isFetchingNextPage}
+              >
+                {query.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+                {query.isFetchNextPageError ? 'Try again' : 'Load more'}
+              </Button>
+            </div>
+          ) : null}
+        </>
       ) : activeChips.length ? (
         <EmptyState
           icon={Search}
@@ -291,14 +368,100 @@ function OpportunitiesInner({ workspaceId }: { workspaceId: string }) {
           }
         />
       ) : (
-        <EmptyState
-          icon={Sparkles}
-          title="No opportunities yet"
-          description="Run a scout request to generate scored, explainable opportunities for this workspace."
+        <EmptyFeedState
+          scouts={
+            scoutsQuery.data
+              ? scoutsQuery.data.filter((s) => !locationId || s.location_id === locationId)
+              : null
+          }
+          locationName={activeLocation?.name ?? null}
         />
       )}
     </div>
   );
+}
+
+/**
+ * The unfiltered feed is empty: say which of the cases it is (P6-UI-004), rather than
+ * telling a user who just ran a scout to run one. `scouts` is null until they load.
+ */
+function EmptyFeedState({
+  scouts,
+  locationName,
+}: {
+  scouts: Parameters<typeof describeEmptyFeed>[0] | null;
+  locationName: string | null;
+}) {
+  if (!scouts) {
+    return <EmptyState icon={Sparkles} title="No opportunities yet" />;
+  }
+  const where = locationName ? ` for ${locationName}` : '';
+  const state = describeEmptyFeed(scouts);
+  const open = (id: string, label: string) => (
+    <Button asChild variant="outline">
+      <Link to={`/scout-requests/${id}`}>{label}</Link>
+    </Button>
+  );
+  switch (state.kind) {
+    case 'no-scouts':
+      return (
+        <EmptyState
+          icon={Radar}
+          title="No scouts yet"
+          description={`Create a scout request${where} to generate scored, explainable opportunities.`}
+          action={
+            <Button asChild variant="outline">
+              <Link to="/scout-requests">Go to scout requests</Link>
+            </Button>
+          }
+        />
+      );
+    case 'never-ran':
+      return (
+        <EmptyState
+          icon={Radar}
+          title="Your scout has not run yet"
+          description={`“${state.scout.name}” has not been run. Run it to generate opportunities${where}.`}
+          action={open(state.scout.id, 'Open scout request')}
+        />
+      );
+    case 'in-flight':
+      return (
+        <EmptyState
+          icon={Loader2}
+          title="A scout is running"
+          description={`“${state.scout.name}” is ${state.scout.status}. Its opportunities appear here when it finishes.`}
+          action={open(state.scout.id, 'View progress')}
+        />
+      );
+    case 'last-run-failed':
+      return (
+        <EmptyState
+          icon={AlertTriangle}
+          title="The last scout run failed"
+          description={`“${state.scout.name}” did not finish, so it produced no opportunities. Open it to see the run history.`}
+          action={open(state.scout.id, 'Open scout request')}
+        />
+      );
+    case 'ran-found-nothing': {
+      const when = state.scout.last_run_at ? ` on ${formatDateTime(state.scout.last_run_at)}` : '';
+      const found =
+        state.reason ??
+        (state.signalsAnalyzed === 0
+          ? 'It found no signals to analyse.'
+          : state.signalsAnalyzed !== null
+            ? `It analysed ${state.signalsAnalyzed} signal${state.signalsAnalyzed === 1 ? '' : 's'}; none qualified as an opportunity.`
+            : 'It produced no opportunities.');
+      return (
+        <EmptyState
+          icon={Search}
+          title="Your scout ran but found no opportunities"
+          description={`“${state.scout.name}” last ran${when}. ${found}`}
+          action={open(state.scout.id, 'Open scout request')}
+        />
+      );
+    }
+  }
 }
 
 export function OpportunitiesPage() {

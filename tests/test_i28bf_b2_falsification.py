@@ -19,11 +19,13 @@ inert-as-scored entries, and derive the summary from the records rather than a h
 
 from __future__ import annotations
 
+import concurrent.futures
 import copy
 import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -41,6 +43,11 @@ _REAL_TREE_BEFORE = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT,
 
 ACTIVATED_REFUSED = "ACTIVATED_REFUSED"
 
+# `git write-tree` takes .git/index.lock: two concurrent calls on the REAL repository make one fail
+# (exit 128, empty stdout), which would read as "mutated the real repository". Arms that run
+# concurrently therefore take this lock around their real-repository check, and only there.
+_REAL_REPO_GIT = threading.Lock()
+
 
 # ===================================================================== isolated harness
 def _materialise(dest: Path) -> Path:
@@ -51,8 +58,12 @@ def _materialise(dest: Path) -> Path:
     (dest / "_t.tar").write_bytes(arch)
     subprocess.run(["tar", "-xf", "_t.tar"], cwd=dest, check=True)
     (dest / "_t.tar").unlink()
+    # maintenance.auto/gc.auto off: otherwise the commit starts a DETACHED `git maintenance run
+    # --auto` (git >= 2.4x) that repacks and prunes the pristine's loose objects about a second
+    # later, racing every `git clone` of the pristine (_fresh) that is still copying them.
     for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
-                ["git", "-c", "user.email=a@b.c", "-c", "user.name=x", "commit", "-qm", "b"]):
+                ["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+                 "-c", "user.email=a@b.c", "-c", "user.name=x", "commit", "-qm", "b"]):
         subprocess.run(cmd, cwd=dest, check=True, capture_output=True)
     return dest
 
@@ -252,7 +263,8 @@ def _run_source_arm(pristine, tmp_path, mutate, needle):
     mutate(root)
     proc = _graded(root)
     combined = proc.stdout + proc.stderr
-    real_after = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
+    with _REAL_REPO_GIT:
+        real_after = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
     return {"baseline_exit": baseline.returncode, "exit": proc.returncode,
             "detector_present": needle in combined, "tail": combined[-700:],
             "real_repo_unchanged": real_after == _REAL_TREE_BEFORE}
@@ -266,7 +278,8 @@ def _run_policy_arm(pristine, tmp_path, probe, needle):
     baseline = _graded(root)
     proc = _graded(root, probe)
     combined = proc.stdout + proc.stderr
-    real_after = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
+    with _REAL_REPO_GIT:
+        real_after = subprocess.run(["git", "write-tree"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
     return {"baseline_exit": baseline.returncode, "exit": proc.returncode,
             "detector_present": needle in combined, "tail": combined[-700:],
             "real_repo_unchanged": real_after == _REAL_TREE_BEFORE}
@@ -347,10 +360,84 @@ def _record(arm_id, name, control, r, needle):
             "classification": ACTIVATED_REFUSED if refused else "REVIEW", "tail": r.get("tail", "")}
 
 
+# arm 16: emptying the authored universe mid-session (probe and intended detector).
+_ARM16_PROBE = ("import json\nfrom pathlib import Path\n"
+                "def test_arm():\n"
+                "    P=Path('tests/fixtures/docker-boundary-policy.json'); d=json.loads(P.read_text())\n"
+                "    d['call_sites']=[]; P.write_text(json.dumps(d, indent=1))\n"
+                "    assert json.loads(P.read_text())['call_sites'] == []\n")
+_ARM16_NEEDLE = "declares no Docker call site"
+
+
+# ===================================================================== concurrent arm execution
+# Each graded on-disk arm is an independent unit: its own fresh clone of the module pristine tree,
+# its own clean baseline graded session, its mutation, its mutated graded session, its own
+# detectors and its own real-repository check, in that order (_run_policy_arm / _run_source_arm,
+# unchanged). The units share no writable state: each gets a distinct directory from
+# tmp_path_factory (created here, in the main thread), and every subprocess receives its env and
+# cwd explicitly; no worker changes os.environ or the working directory. Running the units in a
+# bounded thread pool changes only WHEN they run. Only the arms whose tests are in the session's
+# final (post-deselection) item list are computed, and each test asserts on its own arm's record
+# alone: an exception raised in an arm's unit is re-raised, unchanged, in that arm's test.
+_GRADED_ARM_TESTS = ("test_policy_arm", "test_source_arm", "test_arm16_force_both_universes_empty")
+# The pool size the go/no-go gate measured, and the vCPU count of the 4-vCPU CI runner: each worker
+# drives a CPU-bound nested graded session, so more workers only add contention on the host.
+_MAX_ARM_WORKERS = 4
+
+
+def _graded_arm_unit(item):
+    """(key, callable(pristine, tmp) -> result) for a selected graded-arm test item, else None."""
+    if getattr(getattr(item, "module", None), "__name__", None) != __name__:
+        return None
+    name = getattr(item, "originalname", None) or item.name
+    if name not in _GRADED_ARM_TESTS:
+        return None
+    if name == "test_arm16_force_both_universes_empty":
+        return ("arm16", 16), lambda pristine, tmp: _run_policy_arm(
+            pristine, tmp, _ARM16_PROBE, _ARM16_NEEDLE)
+    arm = item.callspec.params["arm"]
+    if name == "test_policy_arm":
+        return ("policy", arm[0]), lambda pristine, tmp: _run_policy_arm(
+            pristine, tmp, _policy_probe(arm[3]), _DAS)
+    return ("source", arm[0]), lambda pristine, tmp: _run_source_arm(pristine, tmp, arm[3], arm[4])
+
+
+@pytest.fixture(scope="module")
+def graded_arm_results(pristine, request, tmp_path_factory) -> dict:
+    units = {}
+    for item in request.session.items:
+        unit = _graded_arm_unit(item)
+        if unit is not None:
+            key, run = unit
+            # never let two tests share one arm's run (a duplicate arm id must fail, not merge)
+            assert key not in units, f"two selected graded-arm tests map to the same arm {key}"
+            units[key] = run
+    tmps = {key: tmp_path_factory.mktemp(f"b2-{key[0]}-arm{key[1]:02d}") for key in units}
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    workers = max(1, min(cpus, _MAX_ARM_WORKERS, len(units)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {key: pool.submit(run, pristine, tmps[key]) for key, run in units.items()}
+        try:
+            concurrent.futures.wait(futures.values())
+        except BaseException:                       # e.g. KeyboardInterrupt: stop, never blame an arm
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    # an exception raised in an arm's unit is re-raised in that arm's own test only
+    return {key: (False, f.exception()) if f.exception() is not None else (True, f.result())
+            for key, f in futures.items()}
+
+
+def _arm_result(results: dict, key) -> dict:
+    ok, value = results[key]
+    if not ok:
+        raise value
+    return value
+
+
 @pytest.mark.parametrize("arm", _POLICY_ARMS, ids=[f"arm{a[0]:02d}" for a in _POLICY_ARMS])
-def test_policy_arm(pristine, tmp_path, arm, record_property):
+def test_policy_arm(graded_arm_results, arm, record_property):
     arm_id, name, control, mutation = arm
-    r = _run_policy_arm(pristine, tmp_path, _policy_probe(mutation), _DAS)
+    r = _arm_result(graded_arm_results, ("policy", arm_id))
     rec = _record(arm_id, name, control, r, _DAS)
     record_property("arm", json.dumps(rec))
     assert r["baseline_exit"] == 0, f"arm {arm_id}: clean baseline must pass first:\n{r['tail']}"
@@ -360,9 +447,9 @@ def test_policy_arm(pristine, tmp_path, arm, record_property):
 
 
 @pytest.mark.parametrize("arm", _SOURCE_ARMS, ids=[f"arm{a[0]:02d}" for a in _SOURCE_ARMS])
-def test_source_arm(pristine, tmp_path, arm, record_property):
+def test_source_arm(graded_arm_results, arm, record_property):
     arm_id, name, control, mutate, needle = arm
-    r = _run_source_arm(pristine, tmp_path, mutate, needle)
+    r = _arm_result(graded_arm_results, ("source", arm_id))
     rec = _record(arm_id, name, control, r, needle)
     record_property("arm", json.dumps(rec))
     assert r["baseline_exit"] == 0, f"arm {arm_id}: clean baseline must pass first:\n{r['tail']}"
@@ -371,17 +458,12 @@ def test_source_arm(pristine, tmp_path, arm, record_property):
     assert r["real_repo_unchanged"], f"arm {arm_id} mutated the real repository"
 
 
-def test_arm16_force_both_universes_empty(pristine, tmp_path, record_property):
+def test_arm16_force_both_universes_empty(graded_arm_results, record_property):
     """Emptying the authored universe mid-session makes session-finish re-derivation refuse the
     policy as declaring no Docker call site (the empty-universe / positive-presence guard)."""
-    probe = ("import json\nfrom pathlib import Path\n"
-             "def test_arm():\n"
-             "    P=Path('tests/fixtures/docker-boundary-policy.json'); d=json.loads(P.read_text())\n"
-             "    d['call_sites']=[]; P.write_text(json.dumps(d, indent=1))\n"
-             "    assert json.loads(P.read_text())['call_sites'] == []\n")
-    r = _run_policy_arm(pristine, tmp_path, probe, "declares no Docker call site")
+    r = _arm_result(graded_arm_results, ("arm16", 16))
     rec = _record(16, "force both universes empty", "empty-universe / positive-presence refusal",
-                  r, "declares no Docker call site")
+                  r, _ARM16_NEEDLE)
     record_property("arm", json.dumps(rec))
     assert r["baseline_exit"] == 0 and r["exit"] != 0 and r["detector_present"], r["tail"]
     assert r["real_repo_unchanged"]

@@ -106,12 +106,22 @@ register_builtin_handlers()
 
 logger = get_logger("signalnest.jobs.worker")
 
+#: The failure recorded when an attempt's after-rollback writes could not be
+#: committed: non-retryable, so the job fails for good instead of repeating work
+#: whose record is lost (P6-LLM-4: spend no budget check would see).
+_UNRECORDED_WRITES = JobError(JobErrorCode.NON_RETRYABLE, "after_rollback_write_failed")
+
 SessionFactory = Callable[[], Session]
 Clock = Callable[[], datetime]
 
 #: Sentinel returned when a mutation is rejected because the lease was reclaimed
 #: by another worker. The losing worker simply stops; the new owner drives on.
 LEASE_LOST = "lease_lost"
+
+#: The classification the store records when a lease expires with no attempts
+#: left (``DurableJobStore._recover_one``); handed to the terminal-failure hook for
+#: a dead-letter that happened inside lease recovery rather than in ``_fail``.
+_LEASE_EXHAUSTED = JobError(JobErrorCode.TIMEOUT, "lease expired and attempts exhausted")
 
 #: Terminal non-success status -> the counter that records it. Bounded set.
 _FAIL_METRIC = {
@@ -265,6 +275,8 @@ class JobRunner:
             correlation_id=job.correlation_id,
         )
         started = time.perf_counter()
+        # Writes the handler needs kept even if this attempt is rolled back.
+        after_rollback: list[Callable[[Session], None]] = []
         try:
             handler = resolve_handler(job.job_type)
             # Capture one execution-boundary timestamp from the worker's clock and
@@ -281,6 +293,7 @@ class JobRunner:
                 worker_id=worker_id,
                 is_cancelled=self._cancel_checker(job_id),
                 now=now,
+                after_rollback=after_rollback,
             )
             result = handler(ctx)
             # A child span over just the terminal transition (not the handler, which
@@ -297,6 +310,9 @@ class JobRunner:
                 )
                 # Metrics only after the terminal state is durably committed.
                 db.commit()
+                # Committed: the handler's writes are durable, so nothing may write
+                # them again if a later step (span, metrics) raises.
+                after_rollback.clear()
                 span.set_attribute("outcome", "success")
             elapsed_ms = (time.perf_counter() - started) * 1000
             m = get_metrics()
@@ -307,6 +323,7 @@ class JobRunner:
             return JobStatus.SUCCEEDED.value
         except JobLeaseLostError:
             db.rollback()
+            self._write_after_rollback(db, after_rollback, job_type=job_type)
             log_event(
                 logger, "worker.lease_lost", level=WARNING,
                 component="jobs", outcome="degraded", stage="complete",
@@ -314,6 +331,7 @@ class JobRunner:
             return LEASE_LOST
         except JobExecutionError as exc:
             db.rollback()
+            recorded = self._write_after_rollback(db, after_rollback, job_type=job_type)
             if exc.error.code == JobErrorCode.CANCELLED:
                 try:
                     self._store.finish_cancel(
@@ -330,21 +348,60 @@ class JobRunner:
                     )
                     return LEASE_LOST
             return self._fail(
-                db, job, exc.error, worker_id=worker_id, lease_token=lease_token,
+                db, job, exc.error if recorded else _UNRECORDED_WRITES,
+                worker_id=worker_id, lease_token=lease_token,
                 started=started, job_type=job_type,
             )
         except Exception as exc:  # unclassified escape -> conservative retryable
             db.rollback()
+            recorded = self._write_after_rollback(db, after_rollback, job_type=job_type)
             # Record only the exception *class name*, never its message (which may
             # carry secrets or customer content).
             return self._fail(
-                db, job, JobError(JobErrorCode.TRANSIENT, type(exc).__name__),
+                db, job,
+                JobError(JobErrorCode.TRANSIENT, type(exc).__name__)
+                if recorded else _UNRECORDED_WRITES,
                 worker_id=worker_id, lease_token=lease_token,
                 started=started, job_type=job_type,
             )
         finally:
             stop_hb.set()
             hb_thread.join(timeout=1.0)
+
+    def _write_after_rollback(
+        self, db: Session, writers: list[Callable[[Session], None]], *, job_type: str
+    ) -> bool:
+        """Commit what a rolled-back attempt must not lose, in its own transaction.
+
+        Runs after the attempt's rollback and before its failure (or lease-loss)
+        bookkeeping, once per failed attempt rather than only on the final failure:
+        a retried job's earlier attempts happened too (e.g. LLM spend, P6-LLM-4).
+
+        Returns ``False`` when the writes could not be committed. The caller then
+        fails the job for good (``_UNRECORDED_WRITES``) instead of retrying it. A
+        retry would repeat work whose record is lost, e.g. spend that no budget check
+        can see. A writer that raises is logged by class name; it never hides the
+        attempt's own failure.
+        """
+        if not writers:
+            return True
+        try:
+            for write in writers:
+                write(db)
+            db.commit()
+            return True
+        except Exception as exc:  # noqa: BLE001 - never mask the attempt's own failure
+            db.rollback()
+            log_event(
+                logger,
+                "worker.after_rollback_write_failed",
+                level=WARNING,
+                component="jobs",
+                outcome="degraded",
+                job_type=job_type,
+                error_class=type(exc).__name__,
+            )
+            return False
 
     #: Terminal statuses that mean "this job will never run again and it failed".
     #: ``retry_wait`` is deliberately absent: the attempt failed, the job did not.
@@ -476,7 +533,19 @@ class JobRunner:
                     kind="internal",
                     attributes={"component": "jobs", "worker.type": worker_type},
                 ) as recover_span:
-                    recovered = self._store.recover_expired_leases(db, now=self._clock())
+                    # A lease that expired with no attempts left dead-letters inside
+                    # recovery, not in ``_fail``. It is just as final, so the job
+                    # type's terminal-failure hook runs here too (in this same
+                    # transaction), and the dead-letter is counted like any other.
+                    dead_lettered: list[str] = []
+
+                    def _settle_dead_letter(job: Job) -> None:
+                        dead_lettered.append(job.job_type)
+                        self._run_terminal_failure_hook(db, job, _LEASE_EXHAUSTED)
+
+                    recovered = self._store.recover_expired_leases(
+                        db, now=self._clock(), on_dead_lettered=_settle_dead_letter
+                    )
                     db.commit()
                     recover_span.set_attribute("recovered", bool(recovered))
                     recover_span.set_attribute(
@@ -485,6 +554,13 @@ class JobRunner:
                 if recovered:
                     m.increment(
                         WORKER_LEASE_RECOVERED_TOTAL, worker_type=worker_type, amount=recovered
+                    )
+                # Only after the recovery transaction is committed, mirroring ``_fail``.
+                for dead_type in dead_lettered:
+                    m.increment(
+                        JOBS_DEAD_LETTERED_TOTAL,
+                        job_type=dead_type,
+                        error_class=_LEASE_EXHAUSTED.code.value,
                     )
                 with start_span(
                     JOB_CLAIM,
