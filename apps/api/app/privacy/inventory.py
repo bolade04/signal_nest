@@ -147,6 +147,15 @@ TABLES: dict[str, TableEntry] = {
             retention_class=RetentionClass.JOB_HISTORY,
         ),
         TableEntry("job_events", Category.OPERATIONAL, exported=False),
+        # The LLM usage ledger (P6-LLM-4): tenant-linked usage metadata, one row per
+        # provider attempt. Operator decisions of 2026-10-27 (D-9a/D-9b/D-9c, packet
+        # D9-DECISIONS-01): OPERATIONAL; included in the organization export with every
+        # recorded usage/accounting column, scoped by ``organization_id`` (it has no user
+        # key, so it has no supported relationship to an account and never appears in the
+        # account export); no time-based retention class: kept for the life of its
+        # workspace for usage accounting and reconciliation during the unpaid pilot, deleted
+        # with its workspace/organization, to be revisited before paid launch.
+        TableEntry("llm_usage_events", Category.OPERATIONAL, exported=True),
         TableEntry("worker_registrations", Category.SYSTEM, exported=False),
     )
 }

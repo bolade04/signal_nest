@@ -6,7 +6,7 @@ It describes what the code does; it is not a legal retention policy. Retention
 [Retention durations](#retention-durations-undecided) below.
 
 **Derived from the code**, not from earlier documents: every table below is a SQLAlchemy
-model registered in `apps/api/app/db/models.py` (37 tables, all of them listed here); the
+model registered in `apps/api/app/db/models.py` (38 tables, all of them listed here); the
 column lists and foreign-key delete rules were read from `Base.metadata` on the branch
 base `origin/main` `3b0d9e36`. The machine-checked counterpart is
 `apps/api/app/privacy/inventory.py`; `apps/api/app/tests/test_privacy_inventory.py` fails
@@ -107,7 +107,17 @@ intelligence records, and feedback given on those records).
 |---|---|---|---|
 | `jobs` | tenant scope ids, `payload` (entity ids only), `result_summary` (counts), `last_error_summary` (bounded, secret-free) | delete | `job_history` (terminal jobs, by `updated_at`) |
 | `job_events` | denormalised tenant ids (no foreign key to the organization), `event_metadata` (safe, bounded) | delete (dependent of `jobs`) | dependent of `jobs` |
+| `llm_usage_events` | **tenant-linked usage metadata** (the LLM usage ledger, `P6-LLM-4`; one row per provider attempt): `organization_id`, `workspace_id`, `scout_request_id` and `job_id` (set null when the request or job row goes), `task`, `provider`, `model`, `input_tokens`, `output_tokens`, `cost_usd`, `outcome`, timestamps; no prompt text, no content, no user id | delete (cascades with its workspace in the organization deletion walk) | none — **no time-based class: kept for the life of its workspace for usage accounting and reconciliation** (unpaid pilot; operator decision `D-9c`, 2026-10-27; to be revisited before paid launch) |
 | `worker_registrations` | worker identity, a non-reversible host fingerprint; **no personal or tenant data** | — | none (not a privacy data class) |
+
+`llm_usage_events` is **included in the organization export** with every recorded
+usage/accounting column, scoped by `organization_id` through the export's existing
+authorization (exact role OWNER) and tenant filter (operator decisions `D-9a`/`D-9b`,
+2026-10-27). It is **not in the account export**: the table has no user key, so there is no
+supported relationship between an account and the organization's usage, and organization-wide
+usage is not attributed to an individual account. Its actual lifecycle is the one above: no
+retention sweep touches it; its rows exist exactly as long as their workspace and go with the
+organization deletion walk.
 
 `alembic_version` holds only the schema revision.
 
@@ -162,7 +172,7 @@ mechanism, with the procedure an operator follows.
 
 | Endpoint | Who | Contains |
 |---|---|---|
-| `GET /api/v1/account/export` | the signed-in account | profile, memberships, sessions (no tokens), invitations it accepted, and the others addressed to the account (no token digests; the others **only when its address is verified**, as `email_keyed_data` states), invitations it sent (no invitee address), feedback it submitted, audit events it performed (action, entity type, time, organization) |
-| `GET /api/v1/organizations/{id}/export` | exact role OWNER | every tenant table of the organization (members with id, email and name; invitations without token digests; all workspace content, signals and results; audit records), with credential and derived columns excluded (`token_hash`, `hashed_password`, `embedding`, `centroid`) and a per-table row cap reported as `truncated`; jobs and job events are operational and excluded |
+| `GET /api/v1/account/export` | the signed-in account | profile, memberships, sessions (no tokens), invitations it accepted, and the others addressed to the account (no token digests; the others **only when its address is verified**, as `email_keyed_data` states), invitations it sent (no invitee address), feedback it submitted, audit events it performed (action, entity type, time, organization); no `llm_usage_events` rows (no user key: no supported relationship to an account) |
+| `GET /api/v1/organizations/{id}/export` | exact role OWNER | every tenant table of the organization (members with id, email and name; invitations without token digests; all workspace content, signals and results; audit records), with credential and derived columns excluded (`token_hash`, `hashed_password`, `embedding`, `centroid`) and a per-table row cap reported as `truncated`; `llm_usage_events` (tenant-linked usage metadata, all recorded columns, scoped by `organization_id`; `D-9b`, 2026-10-27) is included; jobs and job events are operational and excluded |
 
 Exports are read-only: they write nothing, not even an audit record.
