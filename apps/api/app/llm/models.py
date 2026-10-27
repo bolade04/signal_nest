@@ -69,11 +69,12 @@ class LLMBudgetPeriod(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """One workspace's reserved and settled model spend for one UTC calendar month.
 
     ``reserved_usd`` is the budget consumed: the sum, over this month's reservations,
-    of each call's worst case (or its charge, when the provider reported more than the
-    estimate) - the number the budget check compares and the run endpoint reads.
-    ``settled_usd`` is what the finished calls were charged (actual usage, or the worst
-    case for an unknown outcome); it is at most ``reserved_usd`` except for charges
-    above the estimate. The hot row is updated by short transactions only. One row per
+    of each call's worst-case bound (:func:`app.llm.bound.worst_case_cost`) - the number
+    the budget check compares and the run endpoint reads; on the shared-ledger path it
+    is never lowered and never raised by a settlement. ``settled_usd`` is what the
+    finished calls were charged (actual usage, or the bound for an unknown outcome,
+    never more than the bound); ``bound_violations`` counts the calls that reported more
+    than their bound. The hot row is updated by short transactions only. One row per
     ``(workspace_id, period_start)`` (unique); the surrogate ``id`` is what the privacy
     export, erasure walk and verification address rows by, like every other table.
     """
@@ -148,3 +149,10 @@ class LLMBudgetReservation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: After this instant a row still ``reserved`` is treated as leaked by the sweep.
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Set by the one writer that claims this attempt's usage row (settlement, or the
+    #: late settlement after recovery): a conditional update on NULL, so exactly one
+    #: ``llm_usage_events`` row exists per attempt however often or concurrently the
+    #: attempt is settled.
+    usage_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

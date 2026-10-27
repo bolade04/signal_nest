@@ -240,3 +240,32 @@ def settle_once(url: str, *, attempt_key: str, settled_usd: str, barrier, result
         results.put({"pid": os.getpid(), "settled": done})
     finally:
         engine.dispose()
+
+
+def recover_once(url: str, *, job_id: str | None, mode: str, barrier, results) -> None:
+    """P7 body: recovery from an independent process, racing the settlements.
+
+    ``mode`` is ``job`` (the job's terminal-state release), ``sweep`` (the worker's
+    sweep, ``now`` past every expiry) or ``expiry`` (``release_expired`` alone).
+    """
+    engine = make_engine(url)
+    try:
+        factory = make_factory(engine)
+        barrier.wait(timeout=60)
+        session: Session = factory()
+        try:
+            now = datetime.now(UTC)
+            if mode == "job":
+                done: Any = ledger.release_for_job(
+                    session, job_id=job_id, now=now, outcome="terminal"
+                )
+            elif mode == "expiry":
+                done = ledger.release_expired(session, now=now)
+            else:
+                done = ledger.sweep(session, now=now)
+            session.commit()
+        finally:
+            session.close()
+        results.put({"pid": os.getpid(), "mode": mode, "released": done})
+    finally:
+        engine.dispose()

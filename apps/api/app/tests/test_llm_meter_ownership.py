@@ -33,6 +33,7 @@ from app.llm.metering import (
 from app.llm.models import LLMUsageEvent
 from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
+from app.organizations.models import Organization, Workspace
 from app.tests._llm_offline import offline_llm, offline_settings, wire_payload
 
 KEY = "fixture-key"
@@ -115,9 +116,14 @@ def _state(meter: LLMMeter) -> dict:
 
 
 def _seed(db) -> None:
-    # Job A already has two recorded attempts; workspace B has its own spend.
+    # Job A already has two recorded attempts; workspace B has its own spend. The
+    # tenants exist: the ledger never writes for a workspace that is not there.
     db.add_all(
         [
+            Organization(id="org-A", name="A", slug="org-a"),
+            Organization(id="org-B", name="B", slug="org-b"),
+            Workspace(id="ws-A", organization_id="org-A", name="A", slug="ws-a"),
+            Workspace(id="ws-B", organization_id="org-B", name="B", slug="ws-b"),
             _row(A, job_id=JOB, cost=0.25),
             _row(A, job_id=JOB, cost=0.25),
             _row(B, job_id="job-B", cost=3.0),

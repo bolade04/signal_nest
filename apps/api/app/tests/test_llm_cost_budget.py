@@ -52,6 +52,7 @@ from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
 from app.main import app
 from app.opportunities.models import Opportunity
+from app.organizations.models import Organization, Workspace
 from app.scouting_requests import routes as scout_routes
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal
@@ -171,6 +172,10 @@ def ledger_db(tmp_path):
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     with factory() as db:
+        # The tenant exists: the ledger never writes for a workspace that is not there.
+        db.add(Organization(id="org-1", name="One", slug="org-1"))
+        db.add(Workspace(id="ws-1", organization_id="org-1", name="One", slug="ws-1"))
+        db.commit()
         yield db
     engine.dispose()
 

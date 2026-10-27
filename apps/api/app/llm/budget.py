@@ -80,6 +80,7 @@ from app.jobs.models import Job
 from app.jobs.status import TERMINAL_STATUSES, JobStatus
 from app.llm.bound import Unbounded, worst_case_cost
 from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
+from app.organizations.models import Workspace
 
 __all__ = ["Unbounded", "worst_case_cost"]  # the bound lives in app.llm.bound
 
@@ -127,6 +128,23 @@ def reservation_expiry(settings: Settings, now: datetime) -> datetime:
         + RESERVATION_EXPIRY_MARGIN_SECONDS
     )
     return now + timedelta(seconds=seconds)
+
+
+def _parent_exists(db: Session, workspace_id: str, organization_id: str) -> bool:
+    """Whether the workspace (of that organization) still exists.
+
+    A late callback for a deleted tenant must never recreate that tenant's period or any
+    other row (no ``INSERT ... ON CONFLICT`` resurrection), whether or not the database
+    enforces the foreign keys: the writers that insert check this first.
+    """
+    return (
+        db.scalar(
+            select(Workspace.id).where(
+                Workspace.id == workspace_id, Workspace.organization_id == organization_id
+            )
+        )
+        is not None
+    )
 
 
 def _dialect_insert(db: Session):
@@ -190,6 +208,9 @@ def reserve(
     ``False``, with nothing changed, otherwise. The caller commits (or rolls back).
     """
     period_start = period_start_for(now)
+    if not _parent_exists(db, workspace_id, organization_id):
+        _orphaned(attempt_key, "reserve")
+        return False
     ensure_period(
         db,
         workspace_id=workspace_id,
@@ -288,11 +309,24 @@ def settle(
             state=SETTLED,
             settled_usd=charge,
             settled_at=now,
+            usage_recorded_at=now if usage is not None else None,
             updated_at=now,
         ),
         execution_options={"synchronize_session": False},
     )
     if claimed.rowcount != 1:
+        # Recovery (or another settlement) won between our read and our update: look at
+        # the row again and take the late path - never drop the call's usage.
+        db.expire(reservation)
+        current = db.scalar(
+            select(LLMBudgetReservation)
+            .where(LLMBudgetReservation.attempt_key == attempt_key)
+            .execution_options(populate_existing=True)
+        )
+        if current is None:
+            _orphaned(attempt_key, "settle")
+        elif current.state != RESERVED:
+            _late_settlement(db, current, usage, now=now)
         return False
     violated = settled_usd > worst
     period_claimed = db.execute(
@@ -346,6 +380,17 @@ def _late_settlement(
     if usage is None or reservation.state not in (RELEASED, EXPIRED):
         return
     state = reservation.state
+    claimed = db.execute(
+        update(LLMBudgetReservation)
+        .where(
+            LLMBudgetReservation.id == reservation.id,
+            LLMBudgetReservation.usage_recorded_at.is_(None),
+        )
+        .values(usage_recorded_at=now, updated_at=now),
+        execution_options={"synchronize_session": False},
+    )
+    if claimed.rowcount != 1:
+        return  # the usage row of this attempt is already written (or the row is gone)
     worst = usd(reservation.reserved_usd)
     reported = usd(usage.get("cost_usd", 0))
     violated = reported > worst
@@ -434,6 +479,9 @@ def record_settled(
     if violated:
         settled_usd = worst_usd
     period_start = period_start_for(now)
+    if not _parent_exists(db, workspace_id, organization_id):
+        _orphaned(attempt_key, "record_settled")
+        return False
     insert = _dialect_insert(db)
     inserted = db.execute(
         insert(LLMBudgetReservation)
@@ -448,6 +496,7 @@ def record_settled(
             state=SETTLED,
             expires_at=now,
             settled_at=now,
+            usage_recorded_at=now if usage is not None else None,
             created_at=now,
             updated_at=now,
         )

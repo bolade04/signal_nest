@@ -75,6 +75,7 @@ def upgrade() -> None:
     sa.Column('state', sa.String(length=16), nullable=False),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('settled_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('usage_recorded_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),

@@ -26,6 +26,13 @@ an engine of its own, barrier-synchronised):
   flight past its expiry; with the job's lease live the reservation survives and the
   call settles normally; with the lease gone the reservation expires at its worst case
   and the late settlement still writes the usage row and counts the metric;
+* P7 repeated and concurrent late settlements (after ``released`` and after
+  ``expired``): four processes plus repeats settle one key after recovery charged it
+  its worst case - exactly one usage row per attempt, no money moved, usage above the
+  reservation charged at the bound and counted once; a settlement that loses its race
+  to recovery between its read and its update still records the call; randomised
+  settle-vs-recovery interleavings across processes keep the period's accounting
+  consistent;
 * tenant isolation, month rollover, and the run endpoint's gate: eight concurrent
   callers all pass the read-only gate, and the reservations behind them admit exactly
   the one call that still fits.
@@ -725,3 +732,227 @@ def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(pg_url, f
             expires_at=T0,
             now=datetime.now(UTC),
         )
+
+
+# --------------------------------------------------------------------------- #
+# P7 - repeated and concurrent LATE settlements, after RELEASED and after EXPIRED
+# --------------------------------------------------------------------------- #
+def _usage(cost: Decimal, outcome: str = "ok") -> dict:
+    return {
+        "scout_request_id": None,
+        "task": "classify_signal",
+        "provider": "anthropic",
+        "model": child.MODEL,
+        "input_tokens": child.FIXED_USAGE[0],
+        "output_tokens": child.FIXED_USAGE[1],
+        "cost_usd": float(cost),
+        "outcome": outcome,
+    }
+
+
+def _reserve(db: Session, key: str, w: Decimal, *, job_id: str | None, expired: bool) -> None:
+    """Reserve ``key``; ``expired`` makes it already past ``expires_at`` (sweepable)."""
+    now = datetime.now(UTC)
+    assert ledger.reserve(
+        db,
+        workspace_id=WS,
+        organization_id=ORG,
+        job_id=job_id,
+        attempt_key=key,
+        worst_usd=w,
+        budget_usd=Decimal("1"),
+        expires_at=now - timedelta(minutes=5) if expired else now + timedelta(hours=1),
+        now=now,
+    )
+    db.commit()
+
+
+def _assert_period_invariants(db: Session, budget: Decimal) -> None:
+    """Accounting invariants that must hold after EVERY interleaving."""
+    period = _period(db)
+    rows = _reservations(db)
+    if period is None:
+        assert not rows
+        return
+    assert period.reserved_usd == sum((r.reserved_usd for r in rows), Decimal(0))
+    charged = sum((r.settled_usd or Decimal(0) for r in rows if r.state != "reserved"), Decimal(0))
+    assert period.settled_usd == charged  # every charge, once
+    assert period.reserved_usd <= budget  # the budget is never exceeded
+    assert all((r.settled_usd or 0) <= r.reserved_usd for r in rows)  # actual <= reserved
+    usage = db.scalar(select(func.count()).select_from(LLMUsageEvent))
+    assert usage <= len(rows)  # never more than one usage row per attempt
+
+
+@pytest.mark.parametrize("after", ["released", "expired"])
+def test_p7_racing_late_settlements_record_the_call_exactly_once(pg_url, factory, after):
+    """Four processes settle the same key at once after recovery charged it its worst
+    case, then the same process settles twice more: one usage row, no money moved."""
+    w, budget = Decimal("0.05"), Decimal("1")
+    with factory() as db:
+        job_id = _enqueue(db, f"late-{after}") if after == "released" else None
+        _reserve(db, f"late:{after}:0", w, job_id=job_id, expired=after == "expired")
+        if after == "released":
+            assert ledger.release_for_job(db, job_id=job_id, now=datetime.now(UTC), outcome="t")
+        else:
+            assert ledger.release_expired(db, now=datetime.now(UTC)) == 1
+        db.commit()
+    ctx = mp.get_context("spawn")
+    barrier = ctx.Barrier(4)
+    results = ctx.Queue()
+    procs = _spawn(
+        child.settle_once,
+        [
+            dict(
+                url=pg_url,
+                attempt_key=f"late:{after}:0",
+                settled_usd=str(child.FIXED_COST),
+                barrier=barrier,
+                results=results,
+            )
+            for _ in range(4)
+        ],
+    )
+    reports = _drain(results, 4)
+    assert _join(procs) == [0] * 4
+    assert [r["settled"] for r in reports] == [False] * 4  # no money moves late
+    with factory() as db:
+        for _ in range(2):  # and repeated settlements from one process, later
+            assert not ledger.settle(
+                db,
+                attempt_key=f"late:{after}:0",
+                settled_usd=child.FIXED_COST,
+                now=datetime.now(UTC),
+                usage=_usage(child.FIXED_COST),
+            )
+            db.commit()
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+        (row,) = _reservations(db)
+        assert (row.state, row.settled_usd) == (after, w)  # the worst case stands
+        period = _period(db)
+        assert (period.reserved_usd, period.settled_usd, period.bound_violations) == (w, w, 0)
+        _assert_period_invariants(db, budget)
+
+
+def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(pg_url, engine):
+    """Deterministic interleaving: the settlement has read the row as ``reserved`` when
+    recovery commits its release; the settlement's own update then finds the row gone
+    from ``reserved``. Its usage row must still be written, once."""
+    from sqlalchemy import event
+
+    factory = child.make_factory(engine)
+    w = Decimal("0.05")
+    with factory() as db:
+        job_id = _enqueue(db, "lost-race")
+        _reserve(db, "race:1:0", w, job_id=job_id, expired=False)
+    fired: list[int] = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def release_first(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("UPDATE llm_budget_reservations") and not fired:
+            fired.append(1)
+            other = factory()
+            try:
+                ledger.release_for_job(other, job_id=job_id, now=datetime.now(UTC), outcome="t")
+                other.commit()
+            finally:
+                other.close()
+
+    try:
+        with factory() as db:
+            assert not ledger.settle(
+                db,
+                attempt_key="race:1:0",
+                settled_usd=child.FIXED_COST,
+                now=datetime.now(UTC),
+                usage=_usage(child.FIXED_COST),
+            )
+            db.commit()
+    finally:
+        event.remove(engine, "before_cursor_execute", release_first)
+    assert fired == [1]
+    with factory() as db:
+        (row,) = _reservations(db)
+        assert (row.state, row.settled_usd) == ("released", w)
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1  # not dropped
+        _assert_period_invariants(db, Decimal("1"))
+        assert not ledger.settle(  # and a repeat adds nothing
+            db,
+            attempt_key="race:1:0",
+            settled_usd=child.FIXED_COST,
+            now=datetime.now(UTC),
+            usage=_usage(child.FIXED_COST),
+        )
+        db.commit()
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+
+
+@pytest.mark.parametrize("after", ["released", "expired"])
+def test_p7_usage_above_the_reservation_after_recovery_keeps_the_bound_as_the_charge(
+    pg_url, factory, after
+):
+    w, budget = Decimal("0.05"), Decimal("1")
+    with factory() as db:
+        job_id = _enqueue(db, f"over-{after}") if after == "released" else None
+        _reserve(db, f"over:{after}:0", w, job_id=job_id, expired=after == "expired")
+        if after == "released":
+            ledger.release_for_job(db, job_id=job_id, now=datetime.now(UTC), outcome="t")
+        else:
+            ledger.release_expired(db, now=datetime.now(UTC))
+        db.commit()
+        for _ in range(3):
+            ledger.settle(
+                db,
+                attempt_key=f"over:{after}:0",
+                settled_usd=Decimal("0.9"),
+                now=datetime.now(UTC),
+                usage=_usage(Decimal("0.9")),
+            )
+            db.commit()
+        period = _period(db)
+        assert (period.reserved_usd, period.settled_usd) == (w, w)
+        assert period.bound_violations == 1  # counted once, not once per repeat
+        usage = db.scalars(select(LLMUsageEvent)).all()
+        assert [u.cost_usd for u in usage] == [0.9]  # the report stays on record
+        _assert_period_invariants(db, budget)
+
+
+def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(pg_url, factory):
+    """Per attempt: one process settles (with a usage row) while another recovers the
+    same key and two more settle it late. Whatever the interleaving, there is exactly one
+    usage row per attempt and the period's accounting is consistent."""
+    attempts = 12
+    w, budget = Decimal("0.02"), Decimal("1")
+    keys = []
+    with factory() as db:
+        for i in range(attempts):
+            job_id = _enqueue(db, f"stress-{i}")
+            key = f"stress:{i}:0"
+            _reserve(db, key, w, job_id=job_id, expired=False)
+            keys.append((key, job_id))
+    ctx = mp.get_context("spawn")
+    for key, job_id in keys:
+        barrier = ctx.Barrier(4)
+        results = ctx.Queue()
+        procs = _spawn(
+            child.settle_once,
+            [
+                dict(
+                    url=pg_url,
+                    attempt_key=key,
+                    settled_usd=str(child.FIXED_COST),
+                    barrier=barrier,
+                    results=results,
+                )
+                for _ in range(3)
+            ],
+        ) + _spawn(
+            child.recover_once,
+            [dict(url=pg_url, job_id=job_id, mode="job", barrier=barrier, results=results)],
+        )
+        _drain(results, 4)
+        assert _join(procs) == [0] * 4
+    with factory() as db:
+        rows = _reservations(db)
+        assert len(rows) == attempts and {r.state for r in rows} <= {"settled", "released"}
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == attempts
+        _assert_period_invariants(db, budget)

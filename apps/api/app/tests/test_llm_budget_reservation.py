@@ -28,7 +28,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, delete, event, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
@@ -36,6 +36,7 @@ from app.core.metrics import (
     LLM_COST_BOUND_VIOLATIONS_TOTAL,
     LLM_RESERVATIONS_RELEASED_TOTAL,
     LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
+    LLM_SETTLEMENTS_ORPHANED_TOTAL,
     InMemoryMetrics,
     configure_metrics,
 )
@@ -251,6 +252,68 @@ def test_release_charges_a_leaked_reservation_its_worst_case(factory):
         assert not _reserve(db, "b:1:1", Decimal("0.001"), budget)
 
 
+@pytest.mark.parametrize("after", ["released", "expired"])
+def test_repeated_late_settlements_write_one_usage_row_per_attempt(factory, after):
+    """Review r2 follow-up: the late path claims the attempt's usage row, so a repeat
+    (the after-rollback writer, a retry of the settlement) adds nothing."""
+    w, budget = Decimal("0.02"), Decimal("1")
+    with factory() as db:
+        if after == "released":
+            job = _enqueue(db, "rep")
+            assert _reserve(db, f"{job}:1:0", w, budget, job_id=job)
+            assert ledger.release_for_job(db, job_id=job, now=T0, outcome="terminal") == 1
+            key = f"{job}:1:0"
+        else:
+            assert _reserve(db, "rep:1:0", w, budget)
+            assert ledger.release_expired(db, now=T0 + timedelta(hours=1)) == 1
+            key = "rep:1:0"
+        db.commit()
+        for _ in range(4):
+            assert not ledger.settle(
+                db, attempt_key=key, settled_usd=CALL_COST, now=T0, usage=_usage(CALL_COST)
+            )
+            db.commit()
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+        assert _reservation(db, key).usage_recorded_at is not None
+        period = _period(db)
+        assert (period.reserved_usd, period.settled_usd, period.bound_violations) == (w, w, 0)
+
+
+def test_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(factory):
+    """The settlement read ``reserved``; recovery commits its release before the
+    settlement's own update: that update matches nothing. The usage row is not dropped."""
+    w, budget = Decimal("0.02"), Decimal("1")
+    engine = factory.kw["bind"]
+    with factory() as db:
+        job = _enqueue(db, "lost")
+        assert _reserve(db, f"{job}:1:0", w, budget, job_id=job)
+        db.commit()
+    fired: list[int] = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def release_first(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("UPDATE llm_budget_reservations") and not fired:
+            fired.append(1)
+            with factory() as other:
+                ledger.release_for_job(other, job_id=job, now=T0, outcome="terminal")
+                other.commit()
+
+    try:
+        with factory() as db:
+            assert not ledger.settle(
+                db, attempt_key=f"{job}:1:0", settled_usd=CALL_COST, now=T0, usage=_usage(CALL_COST)
+            )
+            db.commit()
+    finally:
+        event.remove(engine, "before_cursor_execute", release_first)
+    assert fired == [1]
+    with factory() as db:
+        assert _reservation(db, f"{job}:1:0").state == "released"
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+        period = _period(db)
+        assert (period.reserved_usd, period.settled_usd) == (w, w)
+
+
 def test_a_settlement_after_release_moves_no_money_but_records_the_call(factory, caplog):
     """MINOR-1 (review r1): recovery won the race against a live call. The worst case
     stands as the charge; the call's usage row is still written, with a WARNING and a
@@ -404,6 +467,130 @@ def test_record_settled_is_idempotent_per_attempt_key(factory):
         assert _period(db).reserved_usd == CALL_COST
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
         assert _reservation(db, "r:0:0").state == "settled"
+
+
+# --------------------------------------------------------------------------- #
+# Late callbacks after the tenant was deleted (privacy: never resurrect a tenant row)
+# --------------------------------------------------------------------------- #
+@pytest.fixture(params=["fk-on", "fk-off"])
+def tenant_db(request, tmp_path):
+    """Like ``factory``, with and without foreign-key enforcement (the production SQLite
+    pragma is ON; with it OFF the guard against resurrection cannot lean on the schema)."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'del.db'}", connect_args={"check_same_thread": False}, future=True
+    )
+    if request.param == "fk-on":
+
+        @event.listens_for(engine, "connect")
+        def _fk(dbapi_connection, _record):
+            dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    Base.metadata.create_all(engine)
+    make = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    with make() as db:
+        db.add(Organization(id=ORG, name="LLMB", slug="llmb"))
+        db.add(Workspace(id=WS, organization_id=ORG, name="LLMB WS", slug="llmb-ws"))
+        db.commit()
+    yield make, request.param
+    engine.dispose()
+
+
+def _row_counts(db) -> tuple[int, int, int]:
+    return tuple(
+        db.scalar(select(func.count()).select_from(model))
+        for model in (LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent)
+    )
+
+
+@pytest.mark.parametrize("parent", ["workspace", "organization"])
+def test_late_callbacks_after_the_tenant_was_deleted_recreate_nothing(tenant_db, parent):
+    make, fk = tenant_db
+    w, budget = Decimal("0.02"), Decimal("1")
+    with make() as db:
+        job = _enqueue(db, "gone")
+        assert _reserve(db, f"{job}:1:0", w, budget, job_id=job)  # released later by the sweep
+        assert _reserve(db, "x:1:0", w, budget, now=T0)  # in flight when the tenant goes
+        assert _reserve(db, "x:1:1", w, budget, now=T0)  # settles normally before
+        assert ledger.settle(
+            db, attempt_key="x:1:1", settled_usd=CALL_COST, now=T0, usage=_usage(CALL_COST)
+        )
+        db.commit()
+        assert _row_counts(db) == (1, 3, 1)
+        # The tenant is erased (jobs go with it; a bare SQL delete mirrors the erasure walk).
+        if fk == "fk-on":
+            db.execute(delete(LLMUsageEvent))
+            db.execute(delete(Workspace if parent == "workspace" else Organization))
+        else:
+            # Without enforcement nothing cascades: remove the tenant's rows as an erasure would.
+            db.execute(delete(LLMUsageEvent))
+            db.execute(delete(LLMBudgetReservation))
+            db.execute(delete(LLMBudgetPeriod))
+            db.execute(delete(Workspace))
+            if parent == "organization":
+                db.execute(delete(Organization))
+        db.commit()
+        assert _row_counts(db) == (0, 0, 0)
+
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with make() as db:
+            # a settlement (the call finished after the tenant was erased)
+            assert not ledger.settle(
+                db, attempt_key="x:1:0", settled_usd=CALL_COST, now=T0, usage=_usage(CALL_COST)
+            )
+            assert not ledger.settle(db, attempt_key=f"{job}:1:0", settled_usd=CALL_COST, now=T0)
+            # recovery of every kind
+            assert ledger.release_for_job(db, job_id=job, now=T0, outcome="terminal") == 0
+            assert ledger.release_expired(db, now=T0 + timedelta(days=1)) == 0
+            assert ledger.release_terminal(db, now=T0) == 0
+            assert ledger.sweep(db, now=T0 + timedelta(days=1)) == {"expired": 0, "terminal": 0}
+            # the writers that insert: a reservation and a same-session record
+            assert not _reserve(db, "y:1:0", w, budget)
+            assert not ledger.record_settled(
+                db,
+                workspace_id=WS,
+                organization_id=ORG,
+                job_id=None,
+                attempt_key="z:1:0",
+                settled_usd=CALL_COST,
+                now=T0,
+                usage=_usage(CALL_COST),
+            )
+            db.commit()
+            assert _row_counts(db) == (0, 0, 0)  # no period, no reservation, no usage row
+            assert db.scalar(select(func.count()).select_from(Workspace)) == 0
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="settle") == 2
+    assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="reserve") == 1
+    assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="record_settled") == 1
+
+
+def test_a_call_that_outlives_its_tenant_finishes_without_error_or_rows(tenant_db):
+    """The meter path end to end: the reservation is made, the tenant is erased while the
+    provider call is in flight, the call returns. Settlement must neither raise into the
+    run nor write anything."""
+    make, _fk = tenant_db
+    s = _settings(llm_workspace_monthly_budget_usd=1.0)
+    meter = LLMMeter(s, session_factory=make, shared_ledger=True)
+    with make() as db:
+        meter.bind(db, organization_id=ORG, workspace_id=WS, scout_request_id=None)
+
+    def handler(request):
+        with make() as peek:  # the erasure lands while the call is in flight
+            peek.execute(delete(LLMBudgetReservation))
+            peek.execute(delete(LLMBudgetPeriod))
+            peek.execute(delete(Workspace))
+            peek.commit()
+        return _reply(CLASSIFIED)
+
+    _service(s, handler).run("classify_signal", {"content": "x"}, meter=meter)
+    with make() as db:
+        assert _row_counts(db) == (0, 0, 0)
+        meter.flush(db)  # nothing to add on the shared path
+        db.commit()
+        assert _row_counts(db) == (0, 0, 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -648,6 +835,50 @@ def test_conservative_cost_basis(factory, shared):
                     select(LLMBudgetReservation).order_by(LLMBudgetReservation.created_at.desc())
                 )
                 assert row.state == "settled" and float(row.settled_usd) == pytest.approx(charged)
+
+
+@pytest.mark.parametrize("shared", [True, False], ids=["shared-ledger", "same-session"])
+def test_a_provider_reporting_more_than_the_bound_is_charged_the_bound_and_flagged(
+    factory, shared, caplog
+):
+    """The invariant behind the guarantee: actual <= reserved. If a provider ever reports
+    usage above the bound (its premise failed) the period is NOT pushed over the budget:
+    the bound is the charge, ERROR + metric + ``bound_violations`` make it visible."""
+    probe = _bound(factory, _settings(), shared=shared)
+    w = _worst(probe)
+    s = _settings(llm_max_retries=0, llm_workspace_monthly_budget_usd=float(w * Decimal("1.5")))
+    meter = _bound(factory, s, shared=shared)
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with caplog.at_level("ERROR", logger="signalnest.llm"):
+            # 200 000 input tokens at USD 3/Mtok alone is 0.6 > w (the r1 measurement)
+            _service(s, lambda r: _reply(CLASSIFIED, tokens=(200_000, 1_000))).run(
+                "classify_signal", {"content": "x"}, meter=meter
+            )
+            with factory() as db:
+                meter.flush(db)
+                db.commit()
+    finally:
+        configure_metrics(None)
+    with factory() as db:
+        period = _period(db)
+        assert period.reserved_usd == w <= Decimal(str(s.llm_workspace_monthly_budget_usd))
+        assert (period.settled_usd, period.bound_violations) == (w, 1)
+        usage = db.scalar(select(LLMUsageEvent))
+        assert usage.cost_usd == pytest.approx(0.615)  # the provider's report, on record
+        assert usage.input_tokens == 200_000
+    assert [r.message for r in caplog.records if r.levelname == "ERROR"] == [
+        "llm.cost_bound_violated"
+    ]
+    stage = "settle" if shared else "same_session"
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome=stage) == 1
+    # the next call still sees a ledger within budget and is judged on the bound alone
+    again = _bound(factory, s, shared=shared)
+    with pytest.raises(LLMBudgetExceededError):  # w + w > 1.5 w: refused by the ledger
+        _service(s, lambda r: _reply(CLASSIFIED)).run(
+            "classify_signal", {"content": "x"}, meter=again
+        )
 
 
 def test_the_mock_provider_reserves_nothing(factory):
