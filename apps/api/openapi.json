@@ -6505,33 +6505,24 @@
         "type": "object"
       },
       "TakedownIn": {
+        "additionalProperties": false,
+        "description": "A takedown request: the public id of the request record it answers, nothing else.\n\nThere is deliberately no free-text field. The reason for a takedown is kept in the\nreferenced request record, not in the product; a tenant reads its own audit log, so\nno operator text may reach it (adversarial r2-MINOR-2; D-9e interim).",
         "properties": {
-          "reason": {
-            "maxLength": 500,
-            "minLength": 1,
-            "title": "Reason",
-            "type": "string"
-          },
           "reference": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reference"
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Reference",
+            "type": "string"
           }
         },
         "required": [
-          "reason"
+          "reference"
         ],
         "title": "TakedownIn",
         "type": "object"
       },
       "TakedownOut": {
+        "description": "The permanent suppression record: key, time and counts only (D-9d). Who took the\nsource down and the public reference are in each affected workspace's audit log.",
         "properties": {
           "purge_summary": {
             "additionalProperties": {
@@ -6539,21 +6530,6 @@
             },
             "title": "Purge Summary",
             "type": "object"
-          },
-          "reason": {
-            "title": "Reason",
-            "type": "string"
-          },
-          "reference": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reference"
           },
           "repeat_purges": {
             "items": {
@@ -6570,8 +6546,6 @@
         },
         "required": [
           "taken_down_at",
-          "reason",
-          "reference",
           "purge_summary",
           "repeat_purges"
         ],
@@ -6579,18 +6553,8 @@
         "type": "object"
       },
       "TakedownRepeatOut": {
+        "description": "One repeated takedown: when, and the counts it removed. Nothing identifying.",
         "properties": {
-          "actor_user_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Actor User Id"
-          },
           "at": {
             "format": "date-time",
             "title": "At",
@@ -6602,28 +6566,10 @@
             },
             "title": "Purged",
             "type": "object"
-          },
-          "reason": {
-            "title": "Reason",
-            "type": "string"
-          },
-          "reference": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reference"
           }
         },
         "required": [
           "at",
-          "reason",
-          "reference",
-          "actor_user_id",
           "purged"
         ],
         "title": "TakedownRepeatOut",
@@ -8176,6 +8122,7 @@
     },
     "/api/v1/internal/system/data-sources/{source_key}/takedown": {
       "post": {
+        "description": "Take a live source down permanently and purge its signals in every tenant.\n\nThe reason for a takedown is kept in the referenced request record, not in the\nproduct; the product keeps attribution and the public reference in each affected\nworkspace's audit log. The suppression record itself holds only the source key, the\ntime and counts.",
         "operationId": "take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post",
         "parameters": [
           {

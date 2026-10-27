@@ -509,7 +509,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Take Down Data Source */
+        /**
+         * Take Down Data Source
+         * @description Take a live source down permanently and purge its signals in every tenant.
+         *
+         *     The reason for a takedown is kept in the referenced request record, not in the
+         *     product; the product keeps attribution and the public reference in each affected
+         *     workspace's audit log. The suppression record itself holds only the source key, the
+         *     time and counts.
+         */
         post: operations["take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post"];
         delete?: never;
         options?: never;
@@ -4269,23 +4277,28 @@ export interface components {
             /** Stuck Count */
             stuck_count: number;
         };
-        /** TakedownIn */
+        /**
+         * TakedownIn
+         * @description A takedown request: the public id of the request record it answers, nothing else.
+         *
+         *     There is deliberately no free-text field. The reason for a takedown is kept in the
+         *     referenced request record, not in the product; a tenant reads its own audit log, so
+         *     no operator text may reach it (adversarial r2-MINOR-2; D-9e interim).
+         */
         TakedownIn: {
-            /** Reason */
-            reason: string;
             /** Reference */
-            reference?: string | null;
+            reference: string;
         };
-        /** TakedownOut */
+        /**
+         * TakedownOut
+         * @description The permanent suppression record: key, time and counts only (D-9d). Who took the
+         *     source down and the public reference are in each affected workspace's audit log.
+         */
         TakedownOut: {
             /** Purge Summary */
             purge_summary: {
                 [key: string]: number;
             };
-            /** Reason */
-            reason: string;
-            /** Reference */
-            reference: string | null;
             /** Repeat Purges */
             repeat_purges: components["schemas"]["TakedownRepeatOut"][];
             /**
@@ -4294,10 +4307,11 @@ export interface components {
              */
             taken_down_at: string;
         };
-        /** TakedownRepeatOut */
+        /**
+         * TakedownRepeatOut
+         * @description One repeated takedown: when, and the counts it removed. Nothing identifying.
+         */
         TakedownRepeatOut: {
-            /** Actor User Id */
-            actor_user_id: string | null;
             /**
              * At
              * Format: date-time
@@ -4307,10 +4321,6 @@ export interface components {
             purged: {
                 [key: string]: number;
             };
-            /** Reason */
-            reason: string;
-            /** Reference */
-            reference: string | null;
         };
         /** TakedownResultOut */
         TakedownResultOut: {

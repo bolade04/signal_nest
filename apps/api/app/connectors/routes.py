@@ -50,7 +50,7 @@ class TakedownRepeatOut(BaseModel):
 
 
 class TakedownOut(BaseModel):
-    """The permanent suppression record: key time and counts only (D-9d). Who took the
+    """The permanent suppression record: key, time and counts only (D-9d). Who took the
     source down and the public reference are in each affected workspace's audit log."""
 
     taken_down_at: datetime
