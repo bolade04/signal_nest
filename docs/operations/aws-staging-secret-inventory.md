@@ -279,6 +279,10 @@ appearing in a web artifact is a G5 failure (`G5-10`).
   secret by ARN (and, where pinned, a specific version stage), so a rotation is picked
   up on the next task start with no image rebuild. Operational rotation *procedures*
   are owned by INFRA-6; this document owns only the inventory and disposition contract.
+  `LLM_API_KEY` is one platform key per environment, read once per process (at import,
+  through cached settings), so its rotation means replacing every API and worker task
+  while the old key is still valid
+  ([operational procedures §5.4](./aws-staging-operational-procedures.md)).
 - **Failure.** A missing, empty, malformed, disabled-version, or inaccessible required
   secret must **fail closed**: the actor fails at `Settings` construction / task start
   rather than serving traffic with a degraded or default credential. No silent
