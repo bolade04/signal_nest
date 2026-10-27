@@ -1669,3 +1669,21 @@ class TestCoverageCompleteness:
         assert not any(p.startswith(f"{API}/auth/") for _m, p in served)
         assert ("GET", f"{API}/organizations") not in served
         assert ("GET", f"{API}/system/capabilities") not in served
+        # P6-PRIV-1 (scope r1 MINOR-2): the three account routes depend on get_current_user
+        # only, so they are customer-facing but not tenant-scoped and stay outside this matrix
+        # by classification. Pinned both ways: they are mounted, and none of them has grown a
+        # tenant dependency. Their roles are pinned AUTHENTICATED_ONLY in
+        # test_e7_role_policy_matrix.py; the account export's cross-tenant content exclusion
+        # is proven in test_privacy_export_api.py.
+        account = {
+            ("GET", f"{API}/account/export"),
+            ("GET", f"{API}/account/deletion-preview"),
+            ("POST", f"{API}/account/delete"),
+        }
+        mounted = {
+            (m, rc.path)
+            for rc in iter_route_contexts(app.routes)
+            for m in set(rc.methods) - {"HEAD", "OPTIONS"}
+        }
+        assert account <= mounted, sorted(account - mounted)
+        assert not any(p.startswith(f"{API}/account/") for _m, p in served)
