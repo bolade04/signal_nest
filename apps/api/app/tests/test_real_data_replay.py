@@ -441,7 +441,11 @@ def _settings(**overrides) -> Settings:
 )
 def test_source_selection_always_states_a_reason(market, overrides, reason, has_signals):
     batch = fetch_signals(
-        market=market, keywords=[], source_types=[], settings=_settings(**overrides)
+        market=market,
+        keywords=[],
+        source_types=[],
+        rss_enabled=overrides.get("connector_rss_enabled", False),
+        settings=_settings(**overrides),
     )
     assert batch.coverage.reason is reason
     assert bool(batch.signals) is has_signals
@@ -460,7 +464,9 @@ def test_live_sources_that_all_fail_report_unavailable_not_empty():
         connector_rss_replay_origin=origin,
         connector_rss_max_attempts=1,
     )
-    batch = fetch_signals(market=REPLAY_MARKET, keywords=[], source_types=[], settings=settings)
+    batch = fetch_signals(
+        market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=False, settings=settings
+    )
     assert batch.signals == []
     assert batch.coverage.reason is CoverageReason.SOURCES_UNAVAILABLE
     assert batch.coverage.status.value == "unavailable"
@@ -490,7 +496,7 @@ def test_an_undecodable_capture_fails_its_source_only_end_to_end(tmp_path):
             )
             batch = fetch_signals(
                 market=REPLAY_MARKET, keywords=list(good["keywords"]), source_types=[],
-                settings=settings,
+                rss_enabled=False, settings=settings,
             )
             requested = sorted(p for p, _s, _u in server.hits)
     assert batch.coverage.reason is CoverageReason.LIVE_SOURCES
@@ -521,7 +527,9 @@ def test_the_kill_switch_returns_a_live_market_to_not_covered():
             connector_rss_kill_switch=True,
             connector_rss_replay_origin=server.origin,
         )
-        batch = fetch_signals(market=REPLAY_MARKET, keywords=[], source_types=[], settings=settings)
+        batch = fetch_signals(
+        market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=False, settings=settings
+    )
         assert server.hits == []
     assert batch.coverage.reason is CoverageReason.NO_SOURCE_FOR_MARKET
 

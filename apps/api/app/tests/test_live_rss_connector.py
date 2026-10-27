@@ -441,6 +441,7 @@ def test_a_scout_run_drops_cached_bytes_of_a_source_taken_down_elsewhere() -> No
             market="Toronto, ON",
             keywords=[],
             source_types=[],
+            rss_enabled=False,
             takedowns=frozenset({src.source_key}),
             settings=_settings(),
         )

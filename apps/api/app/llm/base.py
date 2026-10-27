@@ -13,7 +13,13 @@ from pydantic import BaseModel, Field
 
 
 class LLMError(Exception):
-    """Base class for normalized provider errors."""
+    """Base class for normalized provider errors.
+
+    ``usage`` is set when the provider replied (and billed) but the reply was unusable
+    - truncated, refused or not JSON - so cost accounting can charge it (P6-LLM-4).
+    """
+
+    usage: LLMUsage | None = None
 
 
 class LLMTimeoutError(LLMError):
@@ -21,7 +27,11 @@ class LLMTimeoutError(LLMError):
 
 
 class LLMRateLimitError(LLMError):
-    pass
+    """HTTP 429. ``retry_after`` is the provider's ``retry-after`` in seconds, if sent."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class LLMRefusalError(LLMError):
@@ -33,7 +43,11 @@ class LLMMalformedError(LLMError):
 
 
 class LLMProviderError(LLMError):
-    pass
+    """The provider rejected the request (bad key, unknown model, invalid request)."""
+
+
+class LLMUnavailableError(LLMProviderError):
+    """Transient provider-side failure (5xx, 529 overloaded, connection error)."""
 
 
 class LLMRequest(BaseModel):
@@ -42,6 +56,10 @@ class LLMRequest(BaseModel):
     seed: str | None = None
     temperature: float = 0.0
     max_tokens: int = 800
+    #: Opaque per-tenant reference sent to the provider (never a raw id; P6-LLM-4).
+    tenant_ref: str | None = None
+    #: Cap per untrusted prompt value, in characters (P6-LLM-2).
+    max_untrusted_chars: int = 4000
 
 
 class LLMUsage(BaseModel):

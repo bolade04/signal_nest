@@ -75,7 +75,7 @@ export function UserMenu() {
             <span className="flex size-7 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
               {initials(user.full_name)}
             </span>
-            <span className="hidden text-sm font-medium sm:inline">{user.full_name}</span>
+            <span className="hidden max-w-[10rem] truncate text-sm font-medium sm:block">{user.full_name}</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">

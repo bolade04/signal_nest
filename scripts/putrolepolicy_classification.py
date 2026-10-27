@@ -181,6 +181,13 @@ def check_policies(result: dict) -> dict:
     window_api_role = gen.window_resource_arns()["api_task_role"]
     window_in = iam_eval.decide(window, ACTION, window_api_role, EXPIRY_PROBE)
     window_out = iam_eval.decide(window, ACTION, role_arn, EXPIRY_PROBE)
+    # P6-CI-6 K0-2: the key-apply principal carries the action for exactly the api and worker task roles
+    # (the P6-CI-6 inline-policy updates), boundary-conditioned and expiring; on every other role it must be
+    # EXPLICITLY denied.
+    key_apply = gen.key_apply_effective_policy(expiry, "api.synthetic.example.com")
+    key_apply_roles = gen.key_apply_resource_arns()["task_roles"]
+    key_apply_in = [iam_eval.decide(key_apply, ACTION, r, EXPIRY_PROBE) for r in key_apply_roles]
+    key_apply_out = iam_eval.decide(key_apply, ACTION, role_arn, EXPIRY_PROBE)
 
     if result["classification"] == REQUIRED_TEMPORARILY:
         if temp_decision.decision is not iam_eval.Decision.EXPLICIT_ALLOW:
@@ -199,10 +206,19 @@ def check_policies(result: dict) -> dict:
     if window_out.decision is not iam_eval.Decision.EXPLICIT_DENY:
         findings.append(f"the window-transition principal returns {window_out.decision.name} for {ACTION} "
                         f"on {role_arn} — the D5 grant must be fenced to the api-task role")
+    for role, decided in zip(key_apply_roles, key_apply_in):
+        if decided.decision is not iam_eval.Decision.EXPLICIT_ALLOW:
+            findings.append(f"the key-apply principal returns {decided.decision.name} for {ACTION} on its "
+                            f"declared task role {role} (task_role_policies grant lost)")
+    if key_apply_out.decision is not iam_eval.Decision.EXPLICIT_DENY:
+        findings.append(f"the key-apply principal returns {key_apply_out.decision.name} for {ACTION} on "
+                        f"{role_arn} — the grant must be fenced to the two task roles")
 
     return {
         "window_transition_api_task_role": window_in.decision.name,
         "window_transition_other_role": window_out.decision.name,
+        "key_apply_task_roles": [d.decision.name for d in key_apply_in],
+        "key_apply_other_role": key_apply_out.decision.name,
         "stage_a": temp_decision.decision.name,
         "stage_a_supporting_sids": list(temp_decision.matching_allow_sids),
         "permanent_w0": perm_decision.decision.name,

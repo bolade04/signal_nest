@@ -26,7 +26,7 @@ which the next upgrade reads back into ``source_key``; the takedown rows themsel
 are not restored, so a taken-down source must be taken down again after re-upgrading.
 
 Revision ID: da25533622b2
-Revises: 87198ab57b59
+Revises: 47028898175f
 Create Date: 2026-10-20 20:56:28.211066
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'da25533622b2'
-down_revision: str | None = '87198ab57b59'
+down_revision: str | None = '47028898175f'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

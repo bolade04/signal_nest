@@ -15,6 +15,9 @@ locations/markets.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -22,14 +25,17 @@ from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
 from app.connectors.takedown import active_takedowns, without_taken_down
+from app.core.config import get_settings
 from app.core.enums import (
     DecisionAction,
+    ExplanationSource,
     OpportunityStatus,
     RiskLevel,
     ScoutRequestStatus,
 )
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
+from app.geography.markets import market_from_parts
 from app.infra.vector import build_index, embed_text
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
@@ -37,6 +43,8 @@ from app.intelligence.models import AnalysisInput, OpportunityCandidate
 from app.intelligence.persistence import attach_opportunity, persist_intelligence
 from app.jobs.context import ExecutionContext, JobContextError, scope_matches
 from app.llm.base import LLMError
+from app.llm.metering import LLMBudgetExceededError, LLMMeter
+from app.llm.screening import screen_classification, screen_explanation
 from app.llm.service import llm_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.context import build_business_context
@@ -56,7 +64,7 @@ from app.scoring.opportunity import (
 from app.scoring.relevance import RELEVANCE_ACTION_FLOOR, score_relevance
 from app.scoring.types import SignalInput
 from app.scoring.validation import score_validation
-from app.scouting_requests.connectors import fetch_signals
+from app.scouting_requests.connectors import _rss_enabled_for, fetch_signals
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import (
     NormalizedSignal,
@@ -83,10 +91,18 @@ def _card_is_simulated(members) -> bool:
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
     market = request.resolved_market
     rule = None
+    home = None
     if request.location_id:
         location = db.get(BusinessLocation, request.location_id)
-        if location and not market:
-            market = f"{location.city}, {location.state_province or location.country}"
+        if location:
+            if not market:
+                market = f"{location.city}, {location.state_province or location.country}"
+            # The location's own market, from its structured fields (P6-DATA-6).
+            home = market_from_parts(
+                city=location.city,
+                region=location.state_province,
+                country=location.country,
+            )
         rule = db.scalar(
             select(GeoCoverageRule).where(GeoCoverageRule.location_id == request.location_id)
         )
@@ -101,13 +117,43 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
             included_markets=tuple(rule.included_markets or ()),
             excluded_markets=tuple(rule.excluded_markets or ()),
             online_global=rule.online_global,
+            home_market=home,
+        )
+    elif request.location_id or market:
+        cov = CoverageRule(
+            coverage_type="radius",
+            included_markets=(market,) if market else (),
+            home_market=home,
         )
     else:
-        cov = CoverageRule(coverage_type="radius", included_markets=(market,) if market else ())
+        # No location and no market: an explicitly unscoped (global/online) request,
+        # which the fixture connector serves across every market.
+        cov = CoverageRule(coverage_type="online", online_global=True)
     return cov, market
 
 
-def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = None) -> dict:
+#: The meter of the run the durable handler is executing (P6-LLM-4), supplied with
+#: :func:`metered_run`. A context variable rather than an argument keeps the handler's
+#: call ``_run(db, scout_request_id, context)`` - a seam job tests stub - unchanged.
+_run_meter: ContextVar[LLMMeter | None] = ContextVar("llm_run_meter", default=None)
+
+
+@contextmanager
+def metered_run(meter: LLMMeter) -> Iterator[LLMMeter]:
+    """Make ``meter`` the meter of the :func:`_run` called inside this block."""
+    token = _run_meter.set(meter)
+    try:
+        yield meter
+    finally:
+        _run_meter.reset(token)
+
+
+def _run(
+    db: Session,
+    scout_request_id: str,
+    context: ExecutionContext | None = None,
+    meter: LLMMeter | None = None,
+) -> dict:
     request = db.get(ScoutRequest, scout_request_id)
     if not request:
         raise ValueError(f"Scout request {scout_request_id} not found")
@@ -132,15 +178,30 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     request.status = ScoutRequestStatus.RUNNING.value
     db.flush()
 
+    # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
+    # opaque tenant reference sent to the provider.
+    meter = (meter or _run_meter.get() or LLMMeter(get_settings())).bind(
+        db,
+        organization_id=request.organization_id,
+        workspace_id=request.workspace_id,
+        scout_request_id=request.id,
+    )
+
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
     # Source selection records why the run holds what it holds (P6-DATA-2): live
     # feeds, the simulated sandbox/demo library, or an explicit "not covered".
+    # P6-CAP-1: the request's own tenant scope decides RSS through the resolver.
     batch = fetch_signals(
         market=market,
         keywords=request.keywords or ctx.keywords,
         source_types=request.source_types or [],
+        rss_enabled=_rss_enabled_for(
+            db,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+        ),
         takedowns=active_takedowns(db),
     )
     # A takedown may have committed while the sources were read: re-check under each
@@ -206,20 +267,32 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         pain_dna = None
         sentiment = None
         audience_label = None
+        # P6-LLM-5: whether this signal's classification is model output or a
+        # provider failure left it unclassified (None = no model call was made).
+        classification_source: str | None = None
         if not is_noise and not is_duplicate:
             signal_input.signal_type = None
             try:
                 classified, _ = llm_service.run(
                     "classify_signal",
                     {"content": fx.content, "audiences": ctx.audiences or None},
+                    meter=meter,
                 )
-                signal_type = classified.signal_type
-                pain_dna = classified.pain_point_dna
-                sentiment = classified.sentiment
-                audience_label = classified.audience_fit_label
+                # P6-LLM-3: labels constrained to the closed vocabularies before use.
+                labels = screen_classification(classified, ctx.industry)
+                signal_type = labels["signal_type"]
+                pain_dna = labels["pain_point_dna"]
+                sentiment = labels["sentiment"]
+                audience_label = labels["audience_fit_label"]
                 signal_input.signal_type = signal_type
-            except LLMError as exc:  # pragma: no cover - mock is deterministic
-                logger.warning("classify_failed", extra={"extra_fields": {"err": str(exc)}})
+                classification_source = ExplanationSource.MODEL.value
+            except LLMBudgetExceededError:
+                classification_source = ExplanationSource.BUDGET_LIMITED.value
+            except LLMError as exc:
+                classification_source = ExplanationSource.DEGRADED.value
+                logger.warning(
+                    "classify_failed", extra={"extra_fields": {"error_class": type(exc).__name__}}
+                )
 
         # Additive Phase 3B Batch 3 annotation: a deterministic, offline intelligence
         # read of this signal (facts vs inference, versioned score, structured
@@ -256,6 +329,7 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
             source_key=source_key,
             ingest_metadata={
                 "audience_label": audience_label,
+                "classification_source": classification_source,
                 "market": fx.market,
                 "engagement": fx.engagement,
                 "intelligence": intelligence_annotation,
@@ -294,7 +368,8 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
         normalized.append(norm)
 
     # Cluster non-noise signals by pain-point DNA (simple, explainable clustering).
-    opportunities = _build_opportunities(db, request, ctx, coverage, market, normalized)
+    opportunities = _build_opportunities(db, request, ctx, coverage, market, normalized, meter)
+    meter.flush(db)
 
     request.status = ScoutRequestStatus.COMPLETED.value
     request.last_run_at = datetime.now(UTC)
@@ -308,12 +383,14 @@ def _run(db: Session, scout_request_id: str, context: ExecutionContext | None = 
     db.flush()
     logger.info(
         "scout.completed",
-        extra={"extra_fields": {"request": request.id, **request.stats}},
+        extra={"extra_fields": {"request": request.id, **request.stats, **meter.summary()}},
     )
     return {"scout_request_id": request.id, **request.stats}
 
 
-def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list[Opportunity]:
+def _build_opportunities(
+    db, request, ctx, coverage, market, normalized, meter: LLMMeter
+) -> list[Opportunity]:
     groups: dict[str, list[NormalizedSignal]] = {}
     for n in normalized:
         key = n.pain_point_dna or n.signal_type or "general"
@@ -383,9 +460,29 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             )
         )
 
-        # Explanation (deterministic mock) — only when action is plausible.
-        explanation = _explain(
-            request, primary, geo, audience_label, safe_positioning, relevance
+        # Explanation — from the model only when action is plausible; the source
+        # marker is persisted so degraded or rule-based copy is never mistaken for
+        # model reasoning (P6-LLM-5). A member whose classification failed degrades
+        # the whole opportunity: its scores, title and grouping lack that input. A
+        # member left unclassified because a usage limit was reached (P6-LLM-4) lacks
+        # it just the same, and is marked ``budget_limited``.
+        sources = {m.ingest_metadata.get("classification_source") for m in members}
+        if ExplanationSource.DEGRADED.value in sources:
+            unclassified: ExplanationSource | None = ExplanationSource.DEGRADED
+        elif ExplanationSource.BUDGET_LIMITED.value in sources:
+            unclassified = ExplanationSource.BUDGET_LIMITED
+        else:
+            unclassified = None
+        explanation, explanation_source, explanation_warnings = _explain(
+            request,
+            primary,
+            geo,
+            audience_label,
+            safe_positioning,
+            relevance,
+            unclassified,
+            ctx.industry,
+            meter,
         )
 
         priority = int(round(opp_breakdown.total * (conf_breakdown.total / 100.0)))
@@ -419,11 +516,12 @@ def _build_opportunities(db, request, ctx, coverage, market, normalized) -> list
             ),
             suggested_angles=explanation.get("suggested_angles", []),
             risk_note="; ".join(safety.warnings) or explanation.get("risk_note", ""),
-            claims_warnings=safety.warnings,
+            claims_warnings=[*safety.warnings, *explanation_warnings],
             audience_fit=audience_label,
             urgency=_urgency(decision),
             commercial_value="high" if signal_input.has_buying_intent else "medium",
             source_summary=sorted({m.source_type for m in members}),
+            explanation_source=explanation_source.value,
             status=OpportunityStatus.NEW.value,
             is_simulated=_card_is_simulated(members),
         )
@@ -592,7 +690,92 @@ def _member_geo_evidence(db, members) -> list[tuple[str, str]]:
     return evidence
 
 
-def _explain(request, primary, geo, audience_label, safe_positioning, relevance) -> dict:
+def _placeholder(why_it_matters: str, recommended_action: str) -> dict:
+    """Copy stored instead of a model explanation: it says no AI explanation is shown
+    rather than imitating one, and ``ai_inference`` stays empty (P6-LLM-3/4/5)."""
+    return {
+        "why_it_matters": why_it_matters,
+        "ai_inference": None,
+        "recommended_action": recommended_action,
+        "risk_note": "",
+        "suggested_angles": [],
+    }
+
+
+#: Placeholder stored when the provider fails (P6-LLM-5). It states that no AI
+#: explanation exists rather than imitating one; ``ai_inference`` stays empty. It
+#: makes no claim that the scores are unaffected: an outage fails classification
+#: too, and the scores, title and grouping are computed from the classification.
+DEGRADED_WHY = (
+    "AI explanation unavailable: the language-model provider did not return a "
+    "usable response for this run."
+)
+#: The placeholder when a member signal could not be classified.
+UNCLASSIFIED_WHY = (
+    f"{DEGRADED_WHY} AI classification failed for at least one of these signals, so the "
+    "scores, title and grouping shown were computed without it."
+)
+DEGRADED_EXPLANATION = _placeholder(
+    DEGRADED_WHY,
+    "Review the observed evidence before acting; no AI recommendation was generated.",
+)
+#: The model replied but its text failed output screening (P6-LLM-3). Reached only
+#: when every member signal was classified by the model.
+WITHHELD_EXPLANATION = _placeholder(
+    "AI explanation withheld: the generated text did not pass safety screening, so it "
+    "is not shown.",
+    "Review the observed evidence before acting; no AI recommendation is shown.",
+)
+#: No call was made: run call cap or workspace monthly budget reached (P6-LLM-4).
+BUDGET_LIMITED_WHY = (
+    "AI explanation not generated: this workspace reached its AI usage limit for this "
+    "run or this month."
+)
+#: The limit was reached before every member signal was classified.
+BUDGET_UNCLASSIFIED_WHY = (
+    f"{BUDGET_LIMITED_WHY} AI classification was not run for at least one of these "
+    "signals, so the scores, title and grouping shown were computed without it."
+)
+BUDGET_LIMITED_EXPLANATION = _placeholder(
+    BUDGET_LIMITED_WHY,
+    "Review the observed evidence before acting; no AI recommendation was generated.",
+)
+
+
+def _explain(
+    request,
+    primary,
+    geo,
+    audience_label,
+    safe_positioning,
+    relevance,
+    unclassified: ExplanationSource | None,
+    industry,
+    meter,
+) -> tuple[dict, ExplanationSource, list[str]]:
+    if unclassified is ExplanationSource.DEGRADED:
+        # Never explained: the prompt would carry an empty pain point, and a
+        # below-floor verdict may only reflect the missing classification.
+        return (
+            {
+                **DEGRADED_EXPLANATION,
+                "why_it_matters": UNCLASSIFIED_WHY,
+                "who_cares": audience_label,
+            },
+            ExplanationSource.DEGRADED,
+            [],
+        )
+    if unclassified is ExplanationSource.BUDGET_LIMITED:
+        # Same reasoning; and no further call is attempted for this opportunity.
+        return (
+            {
+                **BUDGET_LIMITED_EXPLANATION,
+                "why_it_matters": BUDGET_UNCLASSIFIED_WHY,
+                "who_cares": audience_label,
+            },
+            ExplanationSource.BUDGET_LIMITED,
+            [],
+        )
     if relevance < RELEVANCE_ACTION_FLOOR:
         return {
             "why_it_matters": "Below the relevance action floor; monitoring only.",
@@ -601,7 +784,7 @@ def _explain(request, primary, geo, audience_label, safe_positioning, relevance)
             "recommended_action": "No action recommended.",
             "risk_note": "",
             "suggested_angles": [],
-        }
+        }, ExplanationSource.RULE_BASED, []
     try:
         out, _ = llm_service.run(
             "explain_opportunity",
@@ -611,17 +794,37 @@ def _explain(request, primary, geo, audience_label, safe_positioning, relevance)
                 "pain_point_dna": primary.pain_point_dna,
                 "safe_positioning": safe_positioning,
             },
+            meter=meter,
         )
-        return out.model_dump()
-    except LLMError:  # pragma: no cover
-        return {
-            "why_it_matters": "Signal is relevant to your market.",
-            "who_cares": audience_label,
-            "ai_inference": "Demand appears to be forming.",
-            "recommended_action": "Create brand-safe content addressing this topic.",
-            "risk_note": "",
-            "suggested_angles": [safe_positioning],
-        }
+    except LLMBudgetExceededError:
+        return (
+            {**BUDGET_LIMITED_EXPLANATION, "who_cares": audience_label},
+            ExplanationSource.BUDGET_LIMITED,
+            [],
+        )
+    except LLMError as exc:
+        logger.warning(
+            "explain_degraded",
+            extra={"extra_fields": {"request": request.id, "error_class": type(exc).__name__}},
+        )
+        return (
+            {**DEGRADED_EXPLANATION, "who_cares": audience_label},
+            ExplanationSource.DEGRADED,
+            [],
+        )
+    # P6-LLM-3: model text is screened before it can be persisted or shown.
+    screened = screen_explanation(out.model_dump(), industry)
+    if screened.output is None:
+        logger.warning(
+            "explain_withheld",
+            extra={"extra_fields": {"request": request.id, "reason": screened.withheld_reason}},
+        )
+        return (
+            {**WITHHELD_EXPLANATION, "who_cares": audience_label},
+            ExplanationSource.WITHHELD,
+            screened.warnings,
+        )
+    return screened.output, ExplanationSource.MODEL, screened.warnings
 
 
 def _title(primary, market) -> str:

@@ -141,6 +141,7 @@
    "tests/fixtures/synthetic-anchor.json",
    "tests/fixtures/synthetic-inventory.json",
    "tests/fixtures/synthetic-ledger.json",
+   "tests/fixtures/synthetic-requirement-amendments.json",
    "tests/fixtures/synthetic-requirements.json",
    "tests/fixtures/valid-meta-path-fixture.py"
   ],

@@ -70,11 +70,16 @@ class ScheduleState(StrEnum):
     * ``activation_required`` — enabled but not yet started. A schedule created while
       the feature was dark (or before the flag was turned on) is intentionally *not*
       auto-seeded; it stays here until an explicit resume/activate action starts it.
+    * ``stalled`` — enabled, but the recurring chain stopped because its last
+      finished tick *failed* and could not be re-seeded (P6-PLAT-6). Kept distinct
+      from ``activation_required`` so a broken chain is visible as a failure; an
+      explicit resume/activate restarts it.
     """
 
     PAUSED = "paused"
     ACTIVE = "active"
     ACTIVATION_REQUIRED = "activation_required"
+    STALLED = "stalled"
 
 
 class SourceType(StrEnum):
@@ -169,6 +174,29 @@ class OpportunityStatus(StrEnum):
     MONITORING = "monitoring"
     IGNORED = "ignored"
     ACTIONED = "actioned"
+
+
+class ExplanationSource(StrEnum):
+    """Where an opportunity's explanation text came from (P6-LLM-5).
+
+    ``model``: validated output of the configured LLM provider (in local/demo mode
+    that is the deterministic mock), screened before persistence. ``degraded``: the
+    provider failed - to explain the opportunity or to classify one of its signals -
+    and fixed placeholder copy was stored instead. ``rule_based``: below the
+    relevance action floor; deterministic copy, no explanation requested from the
+    model (which still classified the signals). ``withheld``: the model replied but
+    its explanation text failed output screening (P6-LLM-3) and fixed copy was
+    stored instead. ``budget_limited``: a model call the opportunity needed was not
+    made because the run's call cap or the workspace's monthly budget was reached
+    (P6-LLM-4). A NULL column predates the marker and means "not recorded" - it is
+    never backfilled by guessing.
+    """
+
+    MODEL = "model"
+    DEGRADED = "degraded"
+    RULE_BASED = "rule_based"
+    WITHHELD = "withheld"
+    BUDGET_LIMITED = "budget_limited"
 
 
 class ClaimRisk(StrEnum):

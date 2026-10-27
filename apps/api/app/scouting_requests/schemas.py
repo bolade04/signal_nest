@@ -180,5 +180,22 @@ class ScoutScheduleOut(BaseModel):
     enabled: bool
     next_run_at: datetime | None
     last_tick_at: datetime | None
+    #: When the schedule's most recently finished tick *failed* (P6-PLAT-6), else
+    #: ``None``. Derived from the tick jobs, never persisted: it clears on its own once
+    #: a later tick succeeds. With ``state="active"`` it means one occurrence was lost
+    #: and recurrence continued; with ``state="stalled"`` the chain stopped.
+    last_tick_failed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class SchedulingCapabilityOut(BaseModel):
+    """Customer-visible scout-scheduling availability for one workspace (P6-UI-006).
+
+    Exactly one field, decided by the same resolver call the schedule mutation gate
+    enforces with. The operator endpoint's ``decided_by`` / ``global_flag`` /
+    ``has_override`` / ``override_value`` are governance metadata and are deliberately
+    absent: a customer needs only whether the feature is available to them.
+    """
+
+    enabled: bool

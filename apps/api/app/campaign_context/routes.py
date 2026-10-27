@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,6 +54,7 @@ from app.campaign_context.schemas import (
 )
 from app.core.enums import Role
 from app.core.errors import NotFoundError, ValidationDomainError
+from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
 from app.db.session import get_db
 
 router = APIRouter(tags=["campaign-context"])
@@ -91,16 +92,34 @@ def register_context_entity(
     write of that list goes through :func:`validate_location_ids`.
     """
 
-    @router.get(f"/workspaces/{{workspace_id}}/{path}", name=f"list_{path}", tags=[tag])
+    @router.get(
+        f"/workspaces/{{workspace_id}}/{path}",
+        name=f"list_{path}",
+        tags=[tag],
+        responses=PAGINATION_RESPONSES,
+    )
     def _list(
         workspace_id: str,
+        response: Response,
+        # No limit by default, as before P6-PLAT-12; a client that pages sends one.
+        limit: int | None = Query(default=None, ge=1, le=MAX_PAGE_SIZE),
+        cursor: str | None = Query(default=None, max_length=1024),
         db: Session = Depends(get_db),
         ctx: TenantContext = Depends(get_tenant_context),
     ) -> list[dict]:
-        rows = db.execute(
-            select(model).where(model.workspace_id == workspace_id).order_by(model.created_at)
-        ).scalars()
-        return [_serialize(r) for r in rows]
+        page = paginate(
+            db,
+            select(model).where(model.workspace_id == workspace_id),
+            order=(model.created_at, model.id),
+            descending=False,
+            scope=f"context:{path}",
+            workspace_id=workspace_id,
+            filters={},
+            cursor=cursor,
+            limit=limit,
+        )
+        page.apply_headers(response)
+        return [_serialize(r) for r in page.rows]
 
     @router.post(
         f"/workspaces/{{workspace_id}}/{path}",

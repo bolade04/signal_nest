@@ -25,6 +25,10 @@ the path, the query string and the request body:
   in the path or query: ``403 permission_denied`` with the membership message. This limb is
   also proven for the whole matrix by ``test_e7_role_policy_matrix`` (an outsider on every
   route); it is repeated here only where a real B resource makes the probe concrete;
+* foreign CURSORS (P6-PLAT-12): a paging cursor that organization B was issued on its own
+  list is refused (``422 "Invalid cursor."``) when A replays it on A's list, and walking
+  A's list page by page returns only A's rows with an ``X-Total-Count`` that counts only
+  A's rows;
 * foreign RESOURCE identifiers under A's own workspace/organization path (hidden IDOR):
   B's location/request/opportunity/job/item/member/invitation id answers the handler's
   ``404 "... not found ..."``, list filters naming B's ids return A's rows only, and after
@@ -81,6 +85,8 @@ from app.core.middleware import RateLimitMiddleware
 from app.db.models import Base
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
+from app.geography.geocoder import get_geocoding_service
+from app.infra.cache import tenant_cache_key
 from app.jobs.models import Job
 from app.jobs.status import JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -834,13 +840,51 @@ class TestLocations:
         own = pov.send("GET", _ws_path(world, a, f"/locations/{a.location_id}/geo-coverage"))
         assert own.status_code == 200 and own.json()["radius_miles"] == 25
 
+    def test_deactivate_and_reactivate_with_foreign_location_id_404_unchanged(
+        self, world: World, pov: Pov
+    ):
+        a, b = pov.a, pov.b
+        before = world.row(BusinessLocation, b.location_id)
+        for verb in ("deactivate", "reactivate"):
+            r = pov.send("POST", _ws_path(world, a, f"/locations/{b.location_id}/{verb}"))
+            _assert_404(r, "Location not found in this workspace.")
+            _assert_membership_403(
+                pov.send("POST", _ws_path(world, b, f"/locations/{b.location_id}/{verb}"))
+            )
+        assert world.row(BusinessLocation, b.location_id) == before
+        # Positive: A retires and restores a location of its own (not the shared fixture one).
+        mine = pov.send("POST", _ws_path(world, a, "/locations"), {"name": f"Pop-up {a.key}"})
+        mine_id = mine.json()["id"]
+        off = pov.send("POST", _ws_path(world, a, f"/locations/{mine_id}/deactivate"))
+        assert off.status_code == 200 and off.json()["is_active"] is False
+        on = pov.send("POST", _ws_path(world, a, f"/locations/{mine_id}/reactivate"))
+        assert on.status_code == 200 and on.json()["is_active"] is True
+
     def test_geocode_workspace_id_in_query(self, world: World, pov: Pov):
         a, b = pov.a, pov.b
         own = pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": a.ws_id})
         assert own.status_code == 200, own.text
-        _assert_membership_403(
-            pov.send("POST", "/geocode", {"query": "Dallas"}, params={"workspace_id": b.ws_id})
+        assert (own.json()["provider"], own.json()["country_code"]) == ("fixture", "US")
+        # P6-DATA-3: answers are cached per tenant. A foreign workspace is refused before
+        # any lookup, so neither a resolvable nor an unresolvable query caches anything.
+        before = _geocode_cache_keys()
+        for query in ("Dallas", "Atlantis"):
+            _assert_membership_403(
+                pov.send("POST", "/geocode", {"query": query}, params={"workspace_id": b.ws_id})
+            )
+        assert _geocode_cache_keys() == before
+        unresolvable = pov.send(
+            "POST", "/geocode", {"query": "Atlantis"}, params={"workspace_id": a.ws_id}
         )
+        assert _error(unresolvable)[:2] == (422, "location_unresolvable"), unresolvable.text
+        added = _geocode_cache_keys() - before
+        mine = tenant_cache_key(a.org_id, a.ws_id, "geocode") + ":"
+        assert added and all(key.startswith(mine) for key in added), added
+
+
+def _geocode_cache_keys() -> set[str]:
+    """Keys the geocoding service has cached (its cache is the in-memory one in tests)."""
+    return {key for key in get_geocoding_service()._cache._store if ":geocode:" in key}
 
 
 # --------------------------------------------------------------------------- #
@@ -988,6 +1032,16 @@ class TestScoutSchedules:
             _assert_membership_403(pov.send(method, path, body))
         assert world.row(ScoutSchedule, sched_id) == before
         assert world.count(ScoutSchedule, workspace_id=b.ws_id) == 1
+
+    def test_scheduling_capability_own_workspace_only(
+        self, world: World, pov: Pov, scheduling_on
+    ):
+        # P6-UI-006: the workspace-effective reflection answers for the caller's own
+        # workspace and is membership-refused for a foreign one.
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/scheduling-capability"))
+        assert own.status_code == 200 and own.json() == {"enabled": True}
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/scheduling-capability")))
 
     def test_mutations_positive_on_own_request(self, world: World, pov: Pov, scheduling_on):
         a = pov.a
@@ -1151,6 +1205,112 @@ class TestAuditLogs:
 
 
 # --------------------------------------------------------------------------- #
+# 10b. Paginated lists: cursors and totals stay inside the organization (P6-PLAT-12)
+# --------------------------------------------------------------------------- #
+PAGED_LISTS = ("opportunities", "audit-logs", "scout-requests", *(c[0] for c in CONTEXT))
+
+
+def _own_row_ids(world: World, tenant: Tenant, path: str) -> set[str]:
+    """Every row the tenant's list may show, read by the witness (not through the API)."""
+    if path == "audit-logs":
+        return {
+            r["id"]
+            for r in _rows(world, AuditLog)
+            if r["organization_id"] == tenant.org_id and r["workspace_id"] in (tenant.ws_id, None)
+        }
+    model = {
+        "opportunities": Opportunity,
+        "scout-requests": ScoutRequest,
+        **{p: m for p, m, _b in CONTEXT},
+    }[path]
+    return {r["id"] for r in _rows(world, model) if r["workspace_id"] == tenant.ws_id}
+
+
+def _ensure_two_rows(world: World, tenant: Tenant, path: str) -> list[tuple[type, str]]:
+    """A cursor exists only when a second page does: give the tenant at least two rows.
+
+    Returns the rows added, which the caller removes again: other probes assume the world
+    exactly as it was built (one opportunity per tenant, for example).
+    """
+    if len(_own_row_ids(world, tenant, path)) >= 2:
+        return []
+    if path == "opportunities":
+        with sessionmaker(bind=world.witness, expire_on_commit=False, future=True)() as s:
+            row = Opportunity(
+                organization_id=tenant.org_id,
+                workspace_id=tenant.ws_id,
+                brand_id=tenant.brand_id,
+                scout_request_id=tenant.request_id,
+                location_id=tenant.location_id,
+                title=f"Second opportunity {tenant.key}",
+                classification="lead",
+                decision="pursue",
+            )
+            s.add(row)
+            s.commit()
+            return [(Opportunity, row.id)]
+    model, body = next((m, b) for p, m, b in CONTEXT if p == path)
+    r = world.send("POST", API + _ws_path(world, tenant, f"/{path}"), tenant.owner_token, body)
+    assert r.status_code == 201, r.text
+    return [(model, r.json()["id"])]
+
+
+def _remove(world: World, added: list[tuple[type, str]]) -> None:
+    with world.witness.begin() as conn:
+        for model, row_id in added:
+            conn.execute(model.__table__.delete().where(model.__table__.c.id == row_id))
+
+
+@pytest.mark.parametrize("path", PAGED_LISTS)
+class TestPaginatedLists:
+    def test_foreign_cursor_refused_and_pages_and_total_are_own_rows_only(
+        self, world: World, pov: Pov, path: str
+    ):
+        a, b = pov.a, pov.b
+        added = _ensure_two_rows(world, a, path) + _ensure_two_rows(world, b, path)
+        try:
+            self._probe(world, pov, a, b, path)
+        finally:
+            _remove(world, added)
+
+    @staticmethod
+    def _probe(world: World, pov: Pov, a: Tenant, b: Tenant, path: str) -> None:
+        # B's cursor, issued to B's owner on B's own list.
+        issued = world.send(
+            "GET", API + _ws_path(world, b, f"/{path}"), b.owner_token, params={"limit": 1}
+        )
+        assert issued.status_code == 200, issued.text
+        foreign_cursor = issued.headers["x-next-cursor"]
+        # Replayed by A on A's own list: refused, and nothing of B's is returned.
+        r = pov.send(
+            "GET", _ws_path(world, a, f"/{path}"), params={"limit": 1, "cursor": foreign_cursor}
+        )
+        assert _error(r) == (422, "validation_error", "Invalid cursor."), r.text
+        # Replayed on B's list by A: the tenancy dependency refuses first.
+        _assert_membership_403(
+            pov.send(
+                "GET",
+                _ws_path(world, b, f"/{path}"),
+                params={"limit": 1, "cursor": foreign_cursor},
+            )
+        )
+        # Positive: A walks its own list one row per page; only A's rows, total = A's count.
+        own, seen, totals, cursor = _own_row_ids(world, a, path), [], set(), None
+        for _ in range(500):
+            params = {"limit": 1, **({"cursor": cursor} if cursor else {})}
+            page = pov.send("GET", _ws_path(world, a, f"/{path}"), params=params)
+            assert page.status_code == 200, page.text
+            seen.extend(row["id"] for row in page.json())
+            totals.add(page.headers["x-total-count"])
+            cursor = page.headers.get("x-next-cursor")
+            if cursor is None:
+                break
+        assert len(seen) == len(set(seen)) and set(seen) == own
+        assert totals == {str(len(own))}
+        assert not set(seen) & _own_row_ids(world, b, path)
+
+
+# --------------------------------------------------------------------------- #
 # 11. Completeness against the served application
 # --------------------------------------------------------------------------- #
 #: Every customer-facing tenant-scoped operation -> the tests in THIS module that prove it.
@@ -1159,6 +1319,9 @@ _CTX_TESTS = (
     "TestContextEntities::test_create_in_foreign_ws_403_nothing_written_own_201",
     "TestContextEntities::test_delete_with_foreign_item_id_404_and_row_survives",
     "TestContextEntities::test_patch_with_foreign_item_id_404_and_row_unchanged",
+)
+_PAGED_TEST = (
+    "TestPaginatedLists::test_foreign_cursor_refused_and_pages_and_total_are_own_rows_only",
 )
 _LOCATION_LIST_TESTS = (
     "TestContextLocationLists::test_foreign_location_id_in_body_404_nothing_written",
@@ -1208,7 +1371,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("PUT", f"{W}/business-profile"): (
         "TestBrandsAndProfile::test_profile_update_foreign_403_unchanged_own_200",
     ),
-    **{("GET", f"{W}/{p}"): _CTX_TESTS[:1] for p, _m, _b in CONTEXT},
+    **{("GET", f"{W}/{p}"): _CTX_TESTS[:1] + _PAGED_TEST for p, _m, _b in CONTEXT},
     **{("POST", f"{W}/{p}"): _CTX_TESTS[1:2] + _location_list_tests(p) for p, _m, _b in CONTEXT},
     **{("DELETE", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[2:3] for p, _m, _b in CONTEXT},
     **{
@@ -1226,9 +1389,16 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("PUT", f"{W}/locations/{{location_id}}/geo-coverage"): (
         "TestLocations::test_geo_coverage_with_foreign_location_id_404_unchanged",
     ),
+    **{
+        ("POST", f"{W}/locations/{{location_id}}/{verb}"): (
+            "TestLocations::test_deactivate_and_reactivate_with_foreign_location_id_404_unchanged",
+        )
+        for verb in ("deactivate", "reactivate")
+    },
     ("POST", "/geocode"): ("TestLocations::test_geocode_workspace_id_in_query",),
     ("GET", f"{W}/scout-requests"): (
         "TestScoutRequests::test_list_own_only_and_foreign_location_filter_is_empty",
+        *_PAGED_TEST,
     ),
     ("POST", f"{W}/scout-requests"): (
         "TestScoutRequests::test_create_with_foreign_location_in_body_404_nothing_created",
@@ -1259,8 +1429,12 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         )
         for m, s in (("POST", ""), ("POST", "/pause"), ("POST", "/resume"), ("DELETE", ""))
     },
+    ("GET", f"{W}/scheduling-capability"): (
+        "TestScoutSchedules::test_scheduling_capability_own_workspace_only",
+    ),
     ("GET", f"{W}/opportunities"): (
         "TestOpportunities::test_list_own_only_and_foreign_query_filters_empty",
+        *_PAGED_TEST,
     ),
     ("GET", f"{W}/opportunities/{{opportunity_id}}"): (
         "TestOpportunities::test_detail_and_intelligence_with_foreign_opportunity_id_404",
@@ -1292,6 +1466,7 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("GET", f"{W}/audit-logs"): (
         "TestAuditLogs::test_own_200_own_organization_rows_only_foreign_403",
+        *_PAGED_TEST,
     ),
 }
 
@@ -1372,9 +1547,11 @@ class TestCoverageCompleteness:
         covered = {(m, f"{API}{p}") for m, p in COVERAGE}
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
-        # 71 -> 80 (P6-PLAT-9): one PATCH per context collection; the equalities above prove
-        # no other operation came or went.
-        assert len(served) == 80
+        # 71 -> 80 (P6-PLAT-9): one PATCH per context collection; 80 -> 82 (P6-UI-023):
+        # location deactivate and reactivate; 82 -> 83 (P6-UI-006): GET
+        # .../scheduling-capability; the equalities above prove no other operation came or
+        # went.
+        assert len(served) == 83
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

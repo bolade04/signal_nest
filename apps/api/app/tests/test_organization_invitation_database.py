@@ -69,10 +69,13 @@ from app.organizations.models import (
 API_DIR = Path(__file__).resolve().parents[2]
 PREV = "98289430a3ec"
 HEAD = "3dc124a7dfd7"
-#: The 6B-4A account-token revision, one additive revision later; then P6-AUTH-4 sessions
-#: and the code head one further (P6-DATA-1/PRIV-4 source takedowns).
+#: The 6B-4A account-token revision, one additive revision later; then P6-AUTH-4 sessions;
+#: then P6-LLM-5 (opportunity explanation source); then P6-LLM-4 (usage ledger); the code
+#: head one further (P6-DATA-1/PRIV-4 source takedowns).
 ACCOUNT_TOKENS = "a452ee007cc2"
-AUTH4 = "87198ab57b59"
+SESSIONS = "87198ab57b59"
+EXPLANATION = "6ad2ff77f691"
+USAGE = "47028898175f"
 CODE_HEAD = "da25533622b2"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
@@ -272,8 +275,10 @@ def test_revision_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert script.get_revision(HEAD).down_revision == PREV
     assert script.get_revision(ACCOUNT_TOKENS).down_revision == HEAD
-    assert script.get_revision(AUTH4).down_revision == ACCOUNT_TOKENS
-    assert script.get_revision(CODE_HEAD).down_revision == AUTH4
+    assert script.get_revision(SESSIONS).down_revision == ACCOUNT_TOKENS
+    assert script.get_revision(EXPLANATION).down_revision == SESSIONS
+    assert script.get_revision(USAGE).down_revision == EXPLANATION
+    assert script.get_revision(CODE_HEAD).down_revision == USAGE
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
 
 

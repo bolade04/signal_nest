@@ -14,28 +14,18 @@ const WS = 'ws-1';
 const P = (path: string) => `*${API_PREFIX}${path}`;
 const schedulePath = (req: string) => P(`/workspaces/${WS}/scout-requests/${req}/schedule`);
 
-// Four independent markets, mirroring the backend worker-integration coverage.
-const CAPABILITIES = P('/system/capabilities');
-
-// Default handlers report every capability dark. These tests are about per-market
-// isolation, not the capability gate, so they opt in to the enabled surface.
+// Default handlers report scheduling dark for every workspace. These tests are about
+// per-market isolation, not the capability gate, so they opt in to the enabled
+// surface through the panel's real gate: the workspace-effective lookup (P6-UI-006).
 function enableScheduling() {
   server.use(
-    http.get(CAPABILITIES, () =>
-      HttpResponse.json({
-        app_mode: 'local',
-        environment: 'development',
-        is_local_mode: true,
-        all_configured: true,
-        features: {
-          opportunity_feedback_enabled: false,
-          scout_scheduling_enabled: true,
-          connector_rss_enabled: false,
-        },
-      }),
+    http.get(P(`/workspaces/${WS}/scheduling-capability`), () =>
+      HttpResponse.json({ enabled: true }),
     ),
   );
 }
+
+// Four independent markets, mirroring the backend worker-integration coverage.
 
 const MARKETS = {
   dallas: 'scout-loc-dallas',
@@ -54,6 +44,7 @@ function scheduleRow(req: string, overrides: Record<string, unknown> = {}) {
     enabled: true,
     next_run_at: '2026-07-18T09:00:00Z',
     last_tick_at: '2026-07-17T09:00:00Z',
+    last_tick_failed_at: null,
     created_at: '2026-07-17T08:00:00Z',
     updated_at: '2026-07-17T09:00:00Z',
     ...overrides,

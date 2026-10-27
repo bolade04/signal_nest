@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +56,15 @@ class OpportunityDetail(OpportunityCard):
     who_cares: str | None
     observed_evidence: list[dict]
     ai_inference: str | None
+    #: Provenance of why_it_matters / who_cares / ai_inference / suggested_angles
+    #: (and recommended_action on act decisions). ``degraded`` = the AI provider
+    #: failed (to explain, or to classify a member signal); ``withheld`` = the AI text
+    #: failed safety screening; ``budget_limited`` = an AI call was not made (run cap
+    #: or workspace budget) - placeholder copy is shown in all three; null = recorded
+    #: before the marker.
+    explanation_source: (
+        Literal["model", "degraded", "rule_based", "withheld", "budget_limited"] | None
+    )
     suggested_angles: list[str]
     risk_note: str | None
     claims_warnings: list[str]

@@ -80,7 +80,10 @@ from app.tests._auth2_support import (
 API_DIR = Path(__file__).resolve().parents[2]
 PREV = "a452ee007cc2"
 HEAD = "87198ab57b59"
-#: The code head, one revision above AUTH4 (P6-DATA-1/PRIV-4 source takedowns).
+#: One additive revision later (P6-LLM-5 opportunity explanation source), then P6-LLM-4
+#: (usage ledger); the code head one further (P6-DATA-1/PRIV-4 source takedowns).
+EXPLANATION = "6ad2ff77f691"
+USAGE = "47028898175f"
 CODE_HEAD = "da25533622b2"
 UNAUTHORIZED = (401, "unauthorized", "Invalid or expired token.")
 ORGANIZATIONS = f"{API}/organizations"
@@ -637,13 +640,15 @@ def _master(db_path: Path, kind: str) -> dict[str, str]:
 
 
 class TestMigration:
-    def test_single_head_follows_the_account_token_revision(self, tmp_path):
+    def test_revision_follows_the_account_token_revision_below_the_single_head(self, tmp_path):
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
         assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-        assert script.get_revision(CODE_HEAD).down_revision == HEAD
+        assert script.get_revision(CODE_HEAD).down_revision == USAGE
+        assert script.get_revision(USAGE).down_revision == EXPLANATION
+        assert script.get_revision(EXPLANATION).down_revision == HEAD
         revision = script.get_revision(HEAD)
         assert revision.down_revision == PREV
         assert Path(revision.path).name.endswith("_add_auth_sessions.py")
