@@ -179,7 +179,15 @@ def _run(
     db.flush()
 
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
-    # opaque tenant reference sent to the provider.
+    # opaque tenant reference sent to the provider. The production caller is the durable
+    # handler (``app.jobs.handlers.execute_scout_request``), which supplies a shared-ledger
+    # meter through :func:`metered_run`; the bare ``LLMMeter(get_settings())`` fallback has
+    # no session factory, so it is the same-session path even on PostgreSQL. Outside tests
+    # it is reached only by the replay demo seed (``app.connectors.replay.seed_replay``),
+    # which refuses anything but a local development/test SQLite database before it calls
+    # this function (pinned by ``test_llm_budget_reservation`` and
+    # ``test_replay_seed_guard``). A new production caller must pass a meter built with a
+    # session factory.
     meter = (meter or _run_meter.get() or LLMMeter(get_settings())).bind(
         db,
         organization_id=request.organization_id,

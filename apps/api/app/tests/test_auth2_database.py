@@ -95,12 +95,13 @@ def _this_revision() -> str:
 
 THIS = _this_revision()
 #: The P6-AUTH-4 sessions revision, one additive revision later; then P6-LLM-5
-#: (opportunity explanation source); then P6-LLM-4 (usage ledger); the code head one
-#: further (P6-DATA-1/PRIV-4 source takedowns).
+#: (opportunity explanation source), P6-LLM-4 (usage ledger), P6-DATA-1/PRIV-4 (source
+#: takedowns); the code head one further (D-LLM-1 option B budget ledger).
 SESSIONS = "87198ab57b59"
 EXPLANATION = "6ad2ff77f691"
 USAGE = "47028898175f"
-CODE_HEAD = "da25533622b2"
+TAKEDOWNS = "da25533622b2"
+CODE_HEAD = "8005724d811a"
 
 
 # --------------------------------------------------------------------------- #
@@ -252,7 +253,8 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == USAGE
+    assert script.get_revision(CODE_HEAD).down_revision == TAKEDOWNS
+    assert script.get_revision(TAKEDOWNS).down_revision == USAGE
     assert script.get_revision(USAGE).down_revision == EXPLANATION
     assert script.get_revision(EXPLANATION).down_revision == SESSIONS
     assert script.get_revision(SESSIONS).down_revision == THIS

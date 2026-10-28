@@ -79,7 +79,7 @@ def _findings(report) -> set[tuple[str, str]]:
 def test_a_correct_deletion_verifies(carol_deleted: PrivacyEnv):
     report = _account_report(carol_deleted)
     assert report.verified, report.as_dict()
-    assert report.tables_checked == 40
+    assert report.tables_checked == 42
     assert report.email_sha256 and EMAIL[CAROL] not in str(report.as_dict())
 
 

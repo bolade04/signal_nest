@@ -17,6 +17,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy.orm import sessionmaker
+
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
@@ -28,6 +30,7 @@ from app.jobs.registry import (
     register_terminal_failure_hook,
 )
 from app.jobs.status import JobErrorCode, JobExecutionError, JobType
+from app.llm.budget import release_for_job
 from app.llm.metering import LLMMeter
 from app.scouting_requests.models import ScoutRequest
 
@@ -43,12 +46,17 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     context, so a mis-enqueued id can never blend one market's data into
     another's.
 
-    Model calls are paid for when they are made (P6-LLM-4). The run's usage rows
-    are written in the worker's transaction, so a successful attempt commits them
-    with its results. A failed attempt is rolled back and may be retried, so the
-    same rows are also handed to the worker as an after-rollback write. Every
-    attempt's spend then counts against the workspace's monthly budget, the next
-    attempt's included.
+    Model calls are paid for when they are made (P6-LLM-4). On PostgreSQL the meter
+    reserves each call's worst case against the workspace's month before the call and
+    settles it after, each in a short transaction of its own on a session built from
+    this attempt's bind (``app.llm.metering``, the shared-ledger path); the usage row
+    is written at settlement. On SQLite the run's usage rows are written in the
+    worker's transaction, so a successful attempt commits them with its results; a
+    failed attempt is rolled back and may be retried, so the same rows are also
+    handed to the worker as an after-rollback write. Every attempt's spend then
+    counts against the workspace's monthly budget, the next attempt's included.
+    When the attempt ends, any reservation of this job still in flight (a settlement
+    that could not be written) is released at its worst case.
     """
     scout_request_id = ctx.payload.get("scout_request_id")
     if not isinstance(scout_request_id, str) or not scout_request_id:
@@ -63,10 +71,23 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
         raise JobExecutionError(JobErrorCode.CANCELLED, "cancelled before execution")
 
     # The run is this job: the call cap counts its earlier attempts' recorded rows.
-    meter = LLMMeter(get_settings(), job_id=ctx.job_id)
+    # The session factory is the seam for the shared ledger's own short transactions;
+    # it is built from this attempt's bind, never from the process-wide engine, so a
+    # test's or a worker's engine is the one the ledger writes to.
+    meter = LLMMeter(
+        get_settings(),
+        job_id=ctx.job_id,
+        attempt=ctx.attempt,
+        session_factory=sessionmaker(
+            bind=ctx.db.get_bind(), autoflush=False, expire_on_commit=False, future=True
+        ),
+    )
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
         result = _run(ctx.db, scout_request_id, ctx.context)
+    # Attempt end: whatever this job still holds reserved could not be settled by the
+    # process that reserved it; charge it its worst case in the run's transaction.
+    release_for_job(ctx.db, job_id=ctx.job_id, now=ctx.now, outcome="attempt_end")
 
     # ``_run`` returns only safe aggregate counts (scanned / noise_filtered /
     # signals_analyzed / opportunities), which is exactly the shape we persist.
@@ -210,7 +231,12 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
     the scout runnable again.
 
     The worker owns the transaction: this writes and flushes, never commits.
+
+    The job's LLM reservations still in flight are released first (charged their
+    worst case, ``app.llm.budget``): no attempt of this job will settle them now.
     """
+    release_for_job(ctx.db, job_id=ctx.job_id, now=ctx.now, outcome="terminal")
+
     scout_request_id = ctx.payload.get("scout_request_id")
     if not isinstance(scout_request_id, str) or not scout_request_id:
         return
