@@ -172,6 +172,10 @@ TABLES: dict[str, TableEntry] = {
         # (GET /internal/system/data-sources/{key}/cases); never exported; never in a
         # tenant API, log or metric. Retention duration pending operator decision (D-9e
         # access/retention policy): no retention class and no duration is set here.
+        # Operator free text (reason, external_reference) is not reached by account
+        # erasure: if it names a person who is later erased, the text remains and the E10
+        # content verifier reports findings on this table; this is pending the operator's
+        # access/retention/redaction decision (D-9e).
         TableEntry("source_takedown_cases", Category.COMPLIANCE, exported=False),
     )
 }
