@@ -741,7 +741,7 @@ scope of the environment that contains them.)*
 **Population floors, re-derived from measured inventories** (local measurements on macOS builds of
 the same locks, which carry no environment markers; the pull request's exact-head CI run is the
 measurement of record). The floors are set somewhat below the measured counts, as the closure
-tranche's were (60 of 67, 15 of 17, 40 of 48: 83 to 90 %; here 52 of 58 and 7 of 8), so that a routine
+tranche's were (60 of 67, 15 of 17, 40 of 48: 83 to 90 %; here 52 of 58 and 7 of 8 *(2026-10-27, P6-CI-8: 52 of 60 for `api-venv`, see the table below)*), so that a routine
 dependency removal does not trip them while an empty or truncated inventory does. For the two
 hash-locked environments the binding check is the exact reconciliation against their locks; the floor
 only guards the inventory before that check. ~~Every floor has a control that truncates the population
@@ -797,7 +797,7 @@ one below it and must fail.~~ *(Corrected 2026-10-21; the account below replaces
 
 | Gate | Floor | Before | After | Truncation control |
 |---|---|---|---|---|
-| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, ~~pip 26.2.1~~ pip 26.2.2 since CERT-2 — 58 measured locally from the bootstrap and dev locks on 2026-10-21 — setuptools 84.0.0, the project) | `<job>-api-venv-truncated-inventory` |
+| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, ~~pip 26.2.1~~ pip 26.2.2 since CERT-2 — 58 measured locally from the bootstrap and dev locks on 2026-10-21 — setuptools 84.0.0, the project) *(2026-10-27, P6-CI-8 report-only coverage: 60 — 57 dev pins (`coverage`, `pytest-cov` entered the dev lock), pip 26.2.2, setuptools 84.0.0, the project; 58 → 60 measured locally from the bootstrap and dev locks on 2026-10-27, floor unchanged at 52. The Trivy/vuln scan of the `api-venv` population now covers `coverage` and `pytest-cov` as installed, two more distributions than before; the pull request's exact-head CI run is the measurement of record.)* | `<job>-api-venv-truncated-inventory` |
 | `locktools`, `locktools-final` | 7 (new) | no gate; 8 installed, transitive versions floating | 8, all from the lock | `backend-locktools-truncated-inventory` |
 | `security-tooling-venv` | 60 (unchanged) | 67 | 67 | `security-tooling-truncated-inventory` |
 | `reader-tooling-venv` | 15 (unchanged) | 17 | 17 | `reader-tooling-truncated-inventory` |

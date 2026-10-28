@@ -18,6 +18,7 @@ from app.jobs.routes import router as jobs_router
 from app.locations.routes import router as locations_router
 from app.opportunities.routes import router as opportunities_router
 from app.organizations.routes import router as organizations_router
+from app.privacy.routes import router as privacy_router
 from app.scouting_requests.routes import router as scout_requests_router
 from app.system.internal_capabilities_routes import (
     router as internal_capabilities_router,
@@ -46,5 +47,6 @@ for _r in (
     feedback_router,
     jobs_router,
     audit_router,
+    privacy_router,
 ):
     api_router.include_router(_r)

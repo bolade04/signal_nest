@@ -112,6 +112,12 @@ export const PASSWORD_RESET_NOTICE = 'password-reset';
  */
 export const PASSWORD_CHANGED_NOTICE = 'password-changed';
 
+/**
+ * The `/sign-in` router state (`{ notice }`) a completed account deletion in Settings
+ * hands over (P6-PRIV-1): the account no longer exists. Router state only: never the URL.
+ */
+export const ACCOUNT_DELETED_NOTICE = 'account-deleted';
+
 // --- Error copy ----------------------------------------------------------------
 
 /** Every error code the 6B-4A reset and verification routes can return. */

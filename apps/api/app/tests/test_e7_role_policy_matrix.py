@@ -92,6 +92,7 @@ assert set(ALL_ROLES) == {r.value for r in Role}, "the role vocabulary changed"
 
 EDITORS = (OWNER, ADMIN, MARKETER)  # require_role(OWNER, ADMIN, MARKETER): a rank floor
 ORG_ADMINS = (OWNER, ADMIN)  # require_exact_organization_roles(OWNER, ADMIN)
+ORG_OWNER = (OWNER,)  # require_exact_organization_roles(OWNER) -- P6-PRIV-1
 AUDIT_READERS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- P6-AUTH-3
 
 # Categories.
@@ -179,10 +180,11 @@ _CONTEXT = (
 _W = "/workspaces/{workspace_id}"
 _O = "/organizations/{organization_id}"
 
-#: The explicit policy table. 55 role-gated rows (39 that existed before 6B-3A + 5 new
+#: The explicit policy table. 57 role-gated rows (39 that existed before 6B-3A + 5 new
 #: OWNER/ADMIN routes + 9 context-collection PATCH routes from P6-PLAT-9 + the location
 #: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
-#: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route), and
+#: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route; P6-PRIV-1 adds
+#: 2 OWNER-only organization routes, counted in ORG_EXACT), and
 #: the 2 GET routes whose membership check is inside the handler.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
@@ -327,6 +329,11 @@ E7_POLICY: tuple[Policy, ...] = (
         ORG_EXACT,
         Probe(None, 404, MEMBER_NOT_FOUND[0], MEMBER_NOT_FOUND[1]),
     ),
+    # P6-PRIV-1: organization export (read-only) and deletion are exactly OWNER.
+    _row("GET", f"{_O}/export", "organization", ORG_OWNER, ORG_EXACT, OK_200),
+    # D-9f: one keyset page of one exported table, the same authority as the index.
+    _row("GET", f"{_O}/export/{{table}}", "organization", ORG_OWNER, ORG_EXACT, OK_200),
+    _row("POST", f"{_O}/delete", "organization", ORG_OWNER, ORG_EXACT, _body_422()),
     # --- membership only, workspace scope (get_tenant_context, no role checker) ------------
     *(_row("GET", f"{_W}/{c}", "workspace", ALL_ROLES, MEMBER_WS, OK_200) for c in _CONTEXT),
     *(
@@ -408,6 +415,12 @@ AUTHENTICATED_ONLY = {
     # the caller's own account only and takes no organization or workspace, so no role or
     # membership applies -- never PUBLIC: the current password alone must not be enough.
     ("POST", f"{API}/auth/password/change"),
+    # P6-PRIV-1: the signed-in account's own export, deletion preview and deletion
+    # (get_current_user). Each acts on the caller's own account only; deletion also needs
+    # the current password, so it is never PUBLIC.
+    ("GET", f"{API}/account/export"),
+    ("GET", f"{API}/account/deletion-preview"),
+    ("POST", f"{API}/account/delete"),
 }
 #: Routes with no authentication dependency at all.
 PUBLIC = {
@@ -544,7 +557,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 55,
+            "role_gated": 58,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -557,7 +570,7 @@ class TestPolicyTableCompleteness:
         assert by_category == {
             RANK_FLOOR: 48,
             WS_EXACT: 1,
-            ORG_EXACT: 6,
+            ORG_EXACT: 9,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
@@ -575,17 +588,21 @@ class TestPolicyTableCompleteness:
         assert served == published
         # 105 -> 106 (P6-UI-017): the one new operation is POST /auth/password/change, an
         # AUTHENTICATED_ONLY route; the equality above proves no other route came or went.
+        # 118 -> 123 (P6-PRIV-1): the two OWNER-only organization routes (export, delete)
+        # and the three AUTHENTICATED_ONLY account routes (export, deletion preview, delete).
         # 106 -> 115 (P6-PLAT-9): one PATCH per campaign-context collection, each a RANK_FLOOR
         # row above.
         # 115 -> 117 (P6-UI-023): POST .../locations/{location_id}/deactivate and
         # .../reactivate, each a RANK_FLOOR row above.
         # 117 -> 118 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability, a
         # membership-only workspace route.
-        # 118 -> 120 (P6-PRIV-4): GET /internal/system/data-sources and POST
-        # /internal/system/data-sources/{source_key}/takedown, both operator-only.
-        # 120 -> 121 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
+        # 123 -> 124 (D-9f): GET /organizations/{organization_id}/export/{table}, an ORG_EXACT
+        # OWNER row above.
+        # 124 -> 126 (P6-PRIV-4, merged after #246): GET /internal/system/data-sources and
+        # POST /internal/system/data-sources/{source_key}/takedown, both operator-only.
+        # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        assert len(served) == 121
+        assert len(served) == 127
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -593,7 +610,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 83
+        assert len(rows) == 86
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -845,6 +862,7 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
     for name, value in (
         ("{workspace_id}", world.workspace_id),
         ("{organization_id}", world.organization_id),
+        ("{table}", "brands"),  # an exported table: the OWNER probe reads a real page
     ):
         path = path.replace(name, value)
     for name in (

@@ -242,6 +242,20 @@ conditional on failure only.
 | **Migrations and API contract** | SQLite: empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`; **PostgreSQL 16** (disposable service): empty-DB `alembic upgrade head`, `alembic check`, `downgrade base` under the confirmation guard, `upgrade head`, with the revision read back after each phase (no seed — `app.db.seed` refuses PostgreSQL by design); then `npm run gen:types` + `git diff --exit-code` (contract drift) |
 | **Integration smoke** | after the three gates pass: migrate + seed, start the API, wait on `/health`, run the HTTP isolation smoke, always stop the server |
 
+**Code coverage (P6-CI-8, report only).** Both test jobs measure code coverage and
+report it; neither gates on it, and no coverage threshold exists anywhere in the
+repository (`--cov-fail-under` and vitest `thresholds` are deliberately absent; adding one
+is a separate decision). **Backend quality** runs the API suite through `pytest-cov`
+(`--cov=app --cov-branch`, configured by `[tool.coverage]` in `apps/api/pyproject.toml`),
+writes the `TOTAL` line to the job step summary and uploads the Cobertura XML as the
+`coverage-api` artifact (30 days). **Frontend quality** runs `npm run test` unchanged:
+`apps/web/vite.config.ts` switches `@vitest/coverage-v8` on when `CI=true`
+(`text-summary`, `json-summary`, `lcov` into `ci-logs/coverage-web/`), the summary lines go
+to the step summary and the directory is uploaded as the `coverage-web` artifact (30 days).
+Numbers are published after the first `main` run; none is stated here until then. Locally:
+`cd apps/api && .venv/bin/python -m pytest --cov=app --cov-branch --cov-report=term`, and
+`cd apps/web && CI=true npx vitest run --coverage --maxWorkers=2`.
+
 **Environment.** CI runs entirely in the default zero-dependency **local** mode:
 SQLite (`DATABASE_URL=sqlite:///./signalnest.db`), in-process queue
 (`QUEUE_BACKEND=inprocess`), in-memory cache (`CACHE_BACKEND=memory`), brute-force

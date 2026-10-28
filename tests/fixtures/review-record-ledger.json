@@ -12,6 +12,12 @@
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-10-27-P6-CI8-COVERAGE-REPORT": {
+        "approver": "P6-CI8-COVERAGE-REPORT-01 draft tranche (operator ruling 2026-10-27T14:47:19Z: P6-CI-8 initially reports coverage without a newly invented threshold; lane W8-CI8-IMPL, evidence set P6-W8-CI8-IMPL-01; the coordinator opens the draft PR; this record is not itself an approval artifact)",
+        "established": "2026-10-27",
+        "scope": "P6-CI-8 report-only code coverage, REPOSITORY PART ONLY (no AWS call, no deployment, no permission change, no coverage threshold): the NARROW amendment of .github/workflows/ci.yml in two ungraded steps \u2014 job frontend-quality step \"Test\" keeps the argv `npm run test` (coverage is switched on by CI=true in apps/web/vite.config.ts, so the npm-authority site ci.yml#frontend-quality#test is unchanged) and appends the text-summary lines of ci-logs/frontend-test.log to the step summary; job backend-quality step \"Backend tests\" passes `--cov=app --cov-branch --cov-report=term --cov-report=xml:../../ci-logs/coverage-api.xml` to scripts/run-tests-api.sh (no --cov-fail-under) and appends the TOTAL line of ci-logs/backend-pytest.log to the step summary \u2014 plus two new ungraded actions/upload-artifact@v7 steps (coverage-web, coverage-api; if: always(); 30 days); together with the single re-pin of tests/fixtures/executed-state-contract.json site_taxonomy.WORKFLOW to the emitter's value for the amended workflow (67f71ef710060aa9d12334ffd3aed477 -> f0af1b7cc9ed4e4e187626c00232a5b5). The dev extra (pytest-cov) and its regenerated hash lock, the @vitest/coverage-v8 devDependency and its lockfile entries, the [tool.coverage] tables, the vite.config.ts coverage block and docs/testing.md are the same tranche but are not CI-contract material. Coverage is measured and reported, not gated: no coverage threshold exists anywhere in the repository.",
+        "status": "ACTIVE"
+    },
     "REV-2026-10-23-P6-CI6-O11-AMENDMENT-R1": {
         "approver": "P6-CI6-KEY-APPLY-K02-O11-AMENDMENT-R1-DRAFT-TRANCHE",
         "established": "2026-10-23",

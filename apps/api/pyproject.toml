@@ -29,6 +29,7 @@ full = [
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
     "ruff>=0.4",
     # fakeredis backs the Redis cache + queue-coordination tests without a real
     # Redis server, keeping the local suite zero-infrastructure.
@@ -55,6 +56,14 @@ include = ["app*"]
 pythonpath = ["."]
 testpaths = ["app/tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/tests/*"]
+
+[tool.coverage.report]
+show_missing = false
+skip_empty = true
 
 [tool.ruff]
 line-length = 100

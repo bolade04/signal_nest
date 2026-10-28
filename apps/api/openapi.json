@@ -1,6 +1,211 @@
 {
   "components": {
     "schemas": {
+      "AccountDeletionOut": {
+        "description": "The deletion receipt. The account no longer exists when this is returned.",
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/ErasureCountsOut"
+          },
+          "deleted_organizations": {
+            "items": {
+              "$ref": "#/components/schemas/DeletedOrganizationOut"
+            },
+            "title": "Deleted Organizations",
+            "type": "array"
+          },
+          "email_keyed_data": {
+            "$ref": "#/components/schemas/EmailKeyedDataOut"
+          },
+          "organizations": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipImpactOut"
+            },
+            "title": "Organizations",
+            "type": "array"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/ErasureVerificationOut"
+          }
+        },
+        "required": [
+          "user_id",
+          "organizations",
+          "deleted_organizations",
+          "counts",
+          "verification",
+          "email_keyed_data"
+        ],
+        "title": "AccountDeletionOut",
+        "type": "object"
+      },
+      "AccountDeletionPreviewOut": {
+        "description": "Read-only: whether the account can be deleted now, and what that would do.",
+        "properties": {
+          "can_delete": {
+            "title": "Can Delete",
+            "type": "boolean"
+          },
+          "email_keyed_data": {
+            "$ref": "#/components/schemas/EmailKeyedDataOut"
+          },
+          "organizations": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipImpactOut"
+            },
+            "title": "Organizations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "can_delete",
+          "organizations",
+          "email_keyed_data"
+        ],
+        "title": "AccountDeletionPreviewOut",
+        "type": "object"
+      },
+      "AccountDeletionRequest": {
+        "additionalProperties": false,
+        "description": "Delete the signed-in account. Re-authenticated: the current password is required.\n\nThe account is the caller's own and is never taken from the body. Unknown fields are\nrejected.",
+        "properties": {
+          "confirmation": {
+            "const": "DELETE",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "current_password": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Current Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "confirmation"
+        ],
+        "title": "AccountDeletionRequest",
+        "type": "object"
+      },
+      "AccountExportOut": {
+        "description": "Everything stored about the signed-in account (schema version 1).",
+        "properties": {
+          "audit_events_performed": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Audit Events Performed",
+            "type": "array"
+          },
+          "capability_overrides_set": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Capability Overrides Set",
+            "type": "array"
+          },
+          "email_keyed_data": {
+            "$ref": "#/components/schemas/EmailKeyedDataOut"
+          },
+          "email_verification_requests": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Email Verification Requests",
+            "type": "array"
+          },
+          "feedback_submitted": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Feedback Submitted",
+            "type": "array"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "invitations_received": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Invitations Received",
+            "type": "array"
+          },
+          "invitations_sent": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Invitations Sent",
+            "type": "array"
+          },
+          "memberships": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Memberships",
+            "type": "array"
+          },
+          "password_reset_requests": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Password Reset Requests",
+            "type": "array"
+          },
+          "profile": {
+            "additionalProperties": true,
+            "title": "Profile",
+            "type": "object"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sessions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/ExportSubjectOut"
+          }
+        },
+        "required": [
+          "schema_version",
+          "generated_at",
+          "subject",
+          "email_keyed_data",
+          "profile",
+          "memberships",
+          "sessions",
+          "password_reset_requests",
+          "email_verification_requests",
+          "invitations_received",
+          "invitations_sent",
+          "feedback_submitted",
+          "capability_overrides_set",
+          "audit_events_performed"
+        ],
+        "title": "AccountExportOut",
+        "type": "object"
+      },
       "AudienceIn": {
         "properties": {
           "demographics": {
@@ -1744,6 +1949,54 @@
         "title": "DecisionSource",
         "type": "string"
       },
+      "DeletedOrganizationOut": {
+        "properties": {
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/ErasureVerificationOut"
+          },
+          "workspace_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Workspace Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "organization_id",
+          "workspace_ids",
+          "verification"
+        ],
+        "title": "DeletedOrganizationOut",
+        "type": "object"
+      },
+      "EmailKeyedDataOut": {
+        "description": "Whether data found only by the account's email address counts as the account's.\n\n``included``: the address is verified, so invitations addressed to it (and, for a\ndeletion, audit values naming it) are exported or erased with the account.\n``excluded_unverified``: the address was never verified, so nothing proves it is the\naccount's; that data is neither exported nor erased, because it may be another\nperson's. The invitations the account accepted are bound to it by id and are exported\nand erased in both cases. ``note`` says the same in words.",
+        "properties": {
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "included",
+              "excluded_unverified"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "note"
+        ],
+        "title": "EmailKeyedDataOut",
+        "type": "object"
+      },
       "EmailVerificationConfirmRequest": {
         "additionalProperties": false,
         "description": "A verification token, carried in the body and never in a URL.\n\nOnly the token: the account is the signed-in caller's, and the token must be that\naccount's. Unknown fields are rejected.",
@@ -1766,6 +2019,203 @@
         "description": "Ask for a verification email for the signed-in account's stored address.\n\nDeliberately empty: the address is the account's own and is never taken from the\ncaller. Unknown fields are rejected.",
         "properties": {},
         "title": "EmailVerificationRequest",
+        "type": "object"
+      },
+      "ErasureCountsOut": {
+        "properties": {
+          "anonymised": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Anonymised",
+            "type": "object"
+          },
+          "deleted": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Deleted",
+            "type": "object"
+          },
+          "nulled": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Nulled",
+            "type": "object"
+          }
+        },
+        "required": [
+          "deleted",
+          "nulled",
+          "anonymised"
+        ],
+        "title": "ErasureCountsOut",
+        "type": "object"
+      },
+      "ErasureFindingOut": {
+        "properties": {
+          "column": {
+            "title": "Column",
+            "type": "string"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "column",
+          "rows"
+        ],
+        "title": "ErasureFindingOut",
+        "type": "object"
+      },
+      "ErasureVerificationOut": {
+        "description": "The check a deletion request runs on the committed state (``app.privacy.verification``).\n\nIt is the verifier's **reference check**, computed from the live schema (not from audit\nrecords and not from the deletion's own bookkeeping): every column that can point at\nthe deleted subject is counted for the subject's own ids. ``references_cleared`` is true\nwhen none does and, for an organization, every retained audit record is anonymised.\nFindings name only rows that point at the subject itself.\n\nThe scan of every text and JSON column for the subject's identifiers is not run in the\nrequest: it reads every text column of every table. An operator runs it with\n``python -m app.privacy.cli verify-account`` / ``verify-organization`` (the E10 path).",
+        "properties": {
+          "content_scan": {
+            "const": "operator",
+            "title": "Content Scan",
+            "type": "string"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "reference_columns_checked": {
+            "title": "Reference Columns Checked",
+            "type": "integer"
+          },
+          "reference_findings": {
+            "items": {
+              "$ref": "#/components/schemas/ErasureFindingOut"
+            },
+            "title": "Reference Findings",
+            "type": "array"
+          },
+          "references_cleared": {
+            "title": "References Cleared",
+            "type": "boolean"
+          },
+          "retained_anonymised": {
+            "items": {
+              "$ref": "#/components/schemas/ErasureFindingOut"
+            },
+            "title": "Retained Anonymised",
+            "type": "array"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "subject_type": {
+            "title": "Subject Type",
+            "type": "string"
+          },
+          "tables_checked": {
+            "title": "Tables Checked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "references_cleared",
+          "subject_type",
+          "subject_id",
+          "tables_checked",
+          "reference_columns_checked",
+          "reference_findings",
+          "retained_anonymised",
+          "content_scan",
+          "generated_at"
+        ],
+        "title": "ErasureVerificationOut",
+        "type": "object"
+      },
+      "ExportSubjectOut": {
+        "properties": {
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "type": {
+            "enum": [
+              "account",
+              "organization"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ExportSubjectOut",
+        "type": "object"
+      },
+      "ExportedTableOut": {
+        "description": "One table in the export index: its exact row count, the first page and the cursor of\nthe next one (None when the first page holds every row).",
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "row_count",
+          "rows",
+          "next_cursor"
+        ],
+        "title": "ExportedTableOut",
         "type": "object"
       },
       "FeatureFlagsOut": {
@@ -3546,7 +3996,8 @@
         "description": "The constrained set of job types the platform can execute.\n\nEnqueueing or executing any other type is rejected (a stable, non-retryable\nerror), so an unknown/renamed type can never silently no-op.",
         "enum": [
           "scout_request.execute",
-          "scout_schedule.tick"
+          "scout_schedule.tick",
+          "retention.purge"
         ],
         "title": "JobType",
         "type": "string"
@@ -4000,6 +4451,45 @@
           "role"
         ],
         "title": "MemberRoleUpdate",
+        "type": "object"
+      },
+      "MembershipImpactOut": {
+        "description": "What deleting the account does to one of its organizations.",
+        "properties": {
+          "member_count": {
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "organization_name": {
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "membership_removed",
+              "organization_deleted",
+              "blocked_sole_owner"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "organization_name",
+          "role",
+          "member_count",
+          "outcome"
+        ],
+        "title": "MembershipImpactOut",
         "type": "object"
       },
       "MembershipOut": {
@@ -4971,6 +5461,182 @@
           "status"
         ],
         "title": "OpportunityStatusUpdate",
+        "type": "object"
+      },
+      "OrganizationDeletionOut": {
+        "description": "The deletion receipt. Keep ``workspace_ids``: verification after the fact needs them.",
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/ErasureCountsOut"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/ErasureVerificationOut"
+          },
+          "workspace_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Workspace Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "organization_id",
+          "workspace_ids",
+          "counts",
+          "verification"
+        ],
+        "title": "OrganizationDeletionOut",
+        "type": "object"
+      },
+      "OrganizationDeletionRequest": {
+        "additionalProperties": false,
+        "description": "Delete an organization. Re-authenticated, and its name typed exactly to confirm.",
+        "properties": {
+          "confirm_organization_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Confirm Organization Name",
+            "type": "string"
+          },
+          "current_password": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Current Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "confirm_organization_name"
+        ],
+        "title": "OrganizationDeletionRequest",
+        "type": "object"
+      },
+      "OrganizationExportOut": {
+        "description": "The organization export index (schema version 2): per table the exact ``row_count``,\nthe first page and ``next_cursor``; follow the cursors with the table-page route.",
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "consistency": {
+            "title": "Consistency",
+            "type": "string"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "not_exported": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Exported",
+            "type": "array"
+          },
+          "page_size_cap": {
+            "title": "Page Size Cap",
+            "type": "integer"
+          },
+          "page_size_default": {
+            "title": "Page Size Default",
+            "type": "integer"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/ExportSubjectOut"
+          },
+          "tables": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExportedTableOut"
+            },
+            "title": "Tables",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "generated_at",
+          "subject",
+          "page_size_default",
+          "page_size_cap",
+          "complete",
+          "consistency",
+          "members",
+          "tables",
+          "not_exported"
+        ],
+        "title": "OrganizationExportOut",
+        "type": "object"
+      },
+      "OrganizationExportPageOut": {
+        "description": "One keyset page of one exported table, after the cursor it was asked for.",
+        "properties": {
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/ExportSubjectOut"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "generated_at",
+          "subject",
+          "table",
+          "limit",
+          "rows",
+          "next_cursor"
+        ],
+        "title": "OrganizationExportPageOut",
         "type": "object"
       },
       "OrganizationMemberOut": {
@@ -7110,6 +7776,166 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/account/delete": {
+      "post": {
+        "description": "Delete the signed-in account and everything that is only its own.\n\nA wrong current password is 422 ``current_password_incorrect`` and changes nothing.\nThe only OWNER of an organization that has other members is refused with 409\n``account_deletion_sole_owner``. Organizations in which the account is the only\nmember are deleted with it. On success every token of the account stops working,\nbecause the account no longer exists. The invitations the account accepted are erased\nwith it; other invitations addressed to its email and other audit values naming it are\nerased only when the address is verified (``email_keyed_data``).",
+        "operationId": "delete_my_account_api_v1_account_delete_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete My Account",
+        "tags": [
+          "privacy"
+        ]
+      }
+    },
+    "/api/v1/account/deletion-preview": {
+      "get": {
+        "description": "What deleting the signed-in account would do to each of its organizations.",
+        "operationId": "preview_account_deletion_api_v1_account_deletion_preview_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Account Deletion",
+        "tags": [
+          "privacy"
+        ]
+      }
+    },
+    "/api/v1/account/export": {
+      "get": {
+        "description": "Download everything stored about the signed-in account (portability).",
+        "operationId": "export_my_account_api_v1_account_export_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export My Account",
+        "tags": [
+          "privacy"
+        ]
+      }
+    },
     "/api/v1/auth/email-verification/confirm": {
       "post": {
         "description": "Mark the signed-in account's stored address verified with a verification token.\n\nThe token must be this account's (403 otherwise, and nothing is spent); an unknown,\nexpired, used or superseded token, or one for an address the account no longer has,\nis a 404.",
@@ -9218,6 +10044,231 @@
         "summary": "List Organizations",
         "tags": [
           "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/delete": {
+      "post": {
+        "description": "Delete the organization, every workspace and everything in them. Exactly OWNER.\n\nThe current password and the organization's exact name are required. Every member\nloses access; members' accounts are not deleted. Refused with 409\n``organization_jobs_active`` while one of its jobs is claimed or running.",
+        "operationId": "delete_organization_api_v1_organizations__organization_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationDeletionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Organization",
+        "tags": [
+          "privacy"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/export": {
+      "get": {
+        "description": "The organization export index (portability): the exact row count of every exported\ntable, its first page and the cursor of the next. Exactly OWNER.",
+        "operationId": "export_organization_api_v1_organizations__organization_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Organization",
+        "tags": [
+          "privacy"
+        ]
+      }
+    },
+    "/api/v1/organizations/{organization_id}/export/{table}": {
+      "get": {
+        "description": "One keyset page of one exported table, in ``(created_at, id)`` order after ``cursor``.\nExactly OWNER. An unknown or not-exported table is 404; a cursor that is not valid for\nthe table is 422 ``invalid_cursor``; ``limit`` is 1..5000.",
+        "operationId": "export_organization_table_api_v1_organizations__organization_id__export__table__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationExportPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Organization Table",
+        "tags": [
+          "privacy"
         ]
       }
     },
@@ -12360,7 +13411,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/cancel": {
       "post": {
-        "description": "Request cancellation.\n\nA not-yet-running job is cancelled immediately; a running job is marked for\ncooperative cancellation and stopped by the worker at its next safe point.",
+        "description": "Request cancellation.\n\nA not-yet-running job is cancelled immediately; a running job is marked for\ncooperative cancellation and stopped by the worker at its next safe point. A job\nthat applies the operator's retention policy (``retention.purge``) is refused with\n409 ``job_not_cancellable`` for every role.",
         "operationId": "cancel_job_api_v1_workspaces__workspace_id__jobs__job_id__cancel_post",
         "parameters": [
           {

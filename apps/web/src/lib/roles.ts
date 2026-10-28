@@ -141,6 +141,16 @@ export function canInviteMembers(role: RoleInput): boolean {
 }
 
 /**
+ * Organization export and deletion — exactly owner. Mirrors
+ * `require_exact_organization_roles(OWNER)` on `GET /organizations/{id}/export` and
+ * `POST /organizations/{id}/delete` (`apps/api/app/privacy/routes.py`). An admin
+ * administers the organization but may neither take all of its data nor delete it.
+ */
+export function canManageOrganizationData(role: RoleInput): boolean {
+  return isOwnerRole(role);
+}
+
+/**
  * `GET /workspaces/{workspace_id}/audit-logs` — exactly owner, admin or
  * compliance_reviewer (`require_exact_roles`). A duty boundary, not a rank: a
  * marketer outranks a compliance reviewer and is still refused, and reading the

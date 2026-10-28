@@ -97,6 +97,7 @@ from app.organizations.models import (
     OrganizationMember,
     Workspace,
 )
+from app.privacy.verification import verify_organization_erased
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 
 API = get_settings().api_prefix
@@ -1310,8 +1311,156 @@ class TestPaginatedLists:
         assert not set(seen) & _own_row_ids(world, b, path)
 
 
+
 # --------------------------------------------------------------------------- #
-# 11. Completeness against the served application
+# 11. Organization export and deletion (P6-PRIV-1; exactly OWNER)
+# --------------------------------------------------------------------------- #
+class TestOrganizationPrivacy:
+    """The full deletion and export contracts live in ``test_privacy_*``; here only isolation.
+
+    Deleting an organization of this module's shared world would destroy it, so the
+    deletion's positive control has two halves: the acting owner, on its OWN organization,
+    reaches the handler (its ``organization_name_mismatch`` refusal is decided after the
+    tenancy gate, and nothing is deleted); and a throwaway organization registered here is
+    deleted for real by its own owner, with a receipt whose reference check is clear.
+    """
+
+    def test_export_own_200_scoped_foreign_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/export")
+        assert own.status_code == 200, own.text
+        body = own.json()
+        assert body["subject"]["organization_id"] == a.org_id
+        text = own.text
+        for foreign in (b.org_id, b.ws_id, b.owner_id, b.marketer_id, b.request_id):
+            assert foreign not in text
+        assert a.ws_id in text and a.request_id in text
+        _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/export"))
+
+    def test_export_page_own_scoped_foreign_403_and_non_owner_refused(
+        self, world: World, pov: Pov
+    ):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", f"/organizations/{a.org_id}/export/scout_requests")
+        assert own.status_code == 200, own.text
+        body = own.json()
+        assert body["table"] == "scout_requests" and a.request_id in own.text
+        assert {row["organization_id"] for row in body["rows"]} == {a.org_id}
+        for foreign in (b.org_id, b.ws_id, b.owner_id, b.request_id):
+            assert foreign not in own.text
+        # the other organization's OWNER (this pov) cannot page A's tables, whatever the table
+        _assert_membership_403(pov.send("GET", f"/organizations/{b.org_id}/export/scout_requests"))
+        # the tenancy gate precedes table and cursor validation: nothing about B is revealed
+        _assert_membership_403(
+            pov.send("GET", f"/organizations/{b.org_id}/export/no_such_table?cursor=x")
+        )
+        # a member who is not an OWNER is refused on their own organization's tables, and
+        # on the other organization's as a non-member
+        own_path = f"{API}/organizations/{a.org_id}/export/scout_requests"
+        refused = pov.world.send("GET", own_path, a.marketer_token)
+        assert _error(refused) == (
+            403, "permission_denied", "Role 'marketer' is not permitted for this action."
+        )
+        assert a.request_id not in refused.text
+        foreign = pov.world.send(
+            "GET", f"{API}/organizations/{b.org_id}/export/scout_requests", a.marketer_token
+        )
+        _assert_membership_403(foreign)
+
+    def test_export_cursor_pages_hold_only_the_requesters_rows(self, world: World, pov: Pov):
+        """Follow ``next_cursor`` with ``limit=1`` (every page after the first is a cursor
+        page): tables isolated by the organization filter alone (members, workspaces, audit
+        logs) and by it plus the workspace list (scout requests). A tenant filter lost on
+        cursor pages only would put the other organization's rows on a later page."""
+        a, b = pov.a, pov.b
+        foreign = (b.org_id, b.ws_id, b.owner_id, b.marketer_id, b.request_id)
+        for table in ("organization_members", "workspaces", "audit_logs", "scout_requests"):
+            base = f"/organizations/{a.org_id}/export/{table}"
+            pages, rows, cursor = 0, [], None
+            while True:
+                params = {"limit": 1} | ({"cursor": cursor} if cursor else {})
+                r = pov.send("GET", base, params=params)
+                assert r.status_code == 200, (table, r.text)
+                for value in foreign:
+                    assert value not in r.text, (table, pages, value)
+                body = r.json()
+                assert len(body["rows"]) <= 1
+                rows += body["rows"]
+                pages += 1
+                cursor = body["next_cursor"]
+                if cursor is None:
+                    break
+                assert pages < 500, table
+            assert rows, table
+            ids = [row["id"] for row in rows]
+            assert len(ids) == len(set(ids)), table
+            assert {row["organization_id"] for row in rows} == {a.org_id}, table
+            if table == "organization_members":
+                assert pages >= 2  # at least one real cursor page was followed
+
+    def test_delete_foreign_org_403_and_nothing_deleted(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        before = {
+            model.__tablename__: world.count(model, organization_id=b.org_id)
+            for model in (Workspace, OrganizationMember, OrganizationInvitation, Opportunity,
+                          Job, ScoutRequest, AuditLog)
+        }
+        body = {
+            "current_password": PASSWORD,
+            "confirm_organization_name": f"CI3 organization {b.key}",
+        }
+        r = pov.send("POST", f"/organizations/{b.org_id}/delete", body)
+        _assert_membership_403(r)
+        after = {
+            model.__tablename__: world.count(model, organization_id=b.org_id)
+            for model in (Workspace, OrganizationMember, OrganizationInvitation, Opportunity,
+                          Job, ScoutRequest, AuditLog)
+        }
+        assert after == before and all(before.values())
+        # Positive control, own organization: the handler is reached and refuses the
+        # mismatched name; nothing of A is deleted.
+        own_workspaces = world.count(Workspace, organization_id=a.org_id)
+        own = pov.send(
+            "POST", f"/organizations/{a.org_id}/delete",
+            {"current_password": PASSWORD, "confirm_organization_name": "not the name"},
+        )
+        assert _error(own)[:2] == (422, "organization_name_mismatch"), own.text
+        assert world.count(Workspace, organization_id=a.org_id) == own_workspaces >= 1
+
+    def test_delete_positive_on_a_throwaway_organization(self, world: World, pov: Pov):
+        workspaces = {t.org_id: world.count(Workspace, organization_id=t.org_id)
+                      for t in (world.a, world.b)}
+        _rate_limiter()._hits.clear()
+        reg = world.client.post(
+            f"{API}/auth/register",
+            json={
+                "email": f"ci3-throwaway-{pov.a.key}@example.com",
+                "full_name": "Throwaway owner",
+                "password": PASSWORD,
+                "organization_name": f"CI3 throwaway {pov.a.key}",
+            },
+        )
+        assert reg.status_code == 201, reg.text
+        org_id = reg.json()["memberships"][0]["organization_id"]
+        token = reg.json()["access_token"]
+        name = f"CI3 throwaway {pov.a.key}"
+        r = world.send(
+            "POST", f"{API}/organizations/{org_id}/delete", token,
+            {"current_password": PASSWORD, "confirm_organization_name": name},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["verification"]["references_cleared"] is True
+        with sessionmaker(bind=world.witness)() as s:  # the full verification agrees
+            assert verify_organization_erased(
+                s, organization_id=org_id, workspace_ids=r.json()["workspace_ids"]
+            ).verified
+        # The throwaway owner was never a member of A or B: both are intact.
+        for t in (world.a, world.b):
+            assert world.count(Workspace, organization_id=t.org_id) == workspaces[t.org_id]
+
+
+# --------------------------------------------------------------------------- #
+# 12. Completeness against the served application
 # --------------------------------------------------------------------------- #
 #: Every customer-facing tenant-scoped operation -> the tests in THIS module that prove it.
 _CTX_TESTS = (
@@ -1468,6 +1617,15 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         "TestAuditLogs::test_own_200_own_organization_rows_only_foreign_403",
         *_PAGED_TEST,
     ),
+    ("GET", f"{ORG}/export"): ("TestOrganizationPrivacy::test_export_own_200_scoped_foreign_403",),
+    ("GET", f"{ORG}/export/{{table}}"): (
+        "TestOrganizationPrivacy::test_export_page_own_scoped_foreign_403_and_non_owner_refused",
+        "TestOrganizationPrivacy::test_export_cursor_pages_hold_only_the_requesters_rows",
+    ),
+    ("POST", f"{ORG}/delete"): (
+        "TestOrganizationPrivacy::test_delete_foreign_org_403_and_nothing_deleted",
+        "TestOrganizationPrivacy::test_delete_positive_on_a_throwaway_organization",
+    ),
 }
 
 #: Limbs proven in another module whose fixtures own the needed rows (each market there is
@@ -1547,11 +1705,10 @@ class TestCoverageCompleteness:
         covered = {(m, f"{API}{p}") for m, p in COVERAGE}
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
-        # 71 -> 80 (P6-PLAT-9): one PATCH per context collection; 80 -> 82 (P6-UI-023):
-        # location deactivate and reactivate; 82 -> 83 (P6-UI-006): GET
-        # .../scheduling-capability; the equalities above prove no other operation came or
-        # went.
-        assert len(served) == 83
+        # 71 -> 85: P6-PLAT-9 +9, P6-UI-023 +2, P6-UI-006 +1 (83), P6-PRIV-1 +2 (organization
+        # export and deletion); 85 -> 86: D-9f +1 (organization export table page); the
+        # equalities above prove no other operation came or went.
+        assert len(served) == 86
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
@@ -1578,3 +1735,21 @@ class TestCoverageCompleteness:
         assert not any(p.startswith(f"{API}/auth/") for _m, p in served)
         assert ("GET", f"{API}/organizations") not in served
         assert ("GET", f"{API}/system/capabilities") not in served
+        # P6-PRIV-1 (scope r1 MINOR-2): the three account routes depend on get_current_user
+        # only, so they are customer-facing but not tenant-scoped and stay outside this matrix
+        # by classification. Pinned both ways: they are mounted, and none of them has grown a
+        # tenant dependency. Their roles are pinned AUTHENTICATED_ONLY in
+        # test_e7_role_policy_matrix.py; the account export's cross-tenant content exclusion
+        # is proven in test_privacy_export_api.py.
+        account = {
+            ("GET", f"{API}/account/export"),
+            ("GET", f"{API}/account/deletion-preview"),
+            ("POST", f"{API}/account/delete"),
+        }
+        mounted = {
+            (m, rc.path)
+            for rc in iter_route_contexts(app.routes)
+            for m in set(rc.methods) - {"HEAD", "OPTIONS"}
+        }
+        assert account <= mounted, sorted(account - mounted)
+        assert not any(p.startswith(f"{API}/account/") for _m, p in served)

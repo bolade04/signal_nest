@@ -1,6 +1,10 @@
 import { apiRequest, apiRequestPage } from './client';
 import type {
   FeedbackCapability,
+  AccountDeletionOut,
+  AccountDeletionPreviewOut,
+  AccountDeletionRequest,
+  AccountExportOut,
   AudienceIn,
   BrandOut,
   BrandVoiceIn,
@@ -48,6 +52,10 @@ import type {
   OpportunityDetail,
   OpportunityFilters,
   OpportunityIntelligenceResponse,
+  OrganizationDeletionOut,
+  OrganizationDeletionRequest,
+  OrganizationExportOut,
+  OrganizationExportPageOut,
   OrganizationMemberOut,
   OrganizationOut,
   PasswordResetConfirmRequest,
@@ -188,6 +196,40 @@ export const confirmEmailVerification = (body: EmailVerificationConfirmRequest, 
 // sent this request included — and returns no session: the caller signs in again.
 export const changePassword = (body: ChangePasswordRequest, signal?: AbortSignal) =>
   apiRequest<void>('/auth/password/change', { method: 'POST', body, signal });
+
+// ---- Data export and deletion (P6-PRIV-1) ----
+// Exports are read-only. Both deletions are re-authenticated: the current password travels
+// only in the JSON body. After a 200 from deleteAccount the account no longer exists, so
+// every token of it is refused: the caller forgets its session locally.
+export const exportAccount = (signal?: AbortSignal) =>
+  apiRequest<AccountExportOut>('/account/export', { signal });
+
+export const getAccountDeletionPreview = (signal?: AbortSignal) =>
+  apiRequest<AccountDeletionPreviewOut>('/account/deletion-preview', { signal });
+
+export const deleteAccount = (body: AccountDeletionRequest, signal?: AbortSignal) =>
+  apiRequest<AccountDeletionOut>('/account/delete', { method: 'POST', body, signal });
+
+// The organization export is complete but paged (D-9f): this index call, then one keyset
+// page per cursor (`next_cursor` null = the table is done). lib/organization-export.ts walks
+// them; it is the only caller.
+export const exportOrganization = (orgId: string, signal?: AbortSignal) =>
+  apiRequest<OrganizationExportOut>(`/organizations/${orgId}/export`, { signal });
+
+export const exportOrganizationTablePage = (
+  orgId: string,
+  table: string,
+  cursor: string,
+  limit: number,
+  signal?: AbortSignal,
+) =>
+  apiRequest<OrganizationExportPageOut>(
+    `/organizations/${orgId}/export/${encodeURIComponent(table)}`,
+    { query: { cursor, limit }, signal },
+  );
+
+export const deleteOrganization = (orgId: string, body: OrganizationDeletionRequest, signal?: AbortSignal) =>
+  apiRequest<OrganizationDeletionOut>(`/organizations/${orgId}/delete`, { method: 'POST', body, signal });
 
 // ---- Organizations / workspaces ----
 export const listOrganizations = (signal?: AbortSignal) =>
