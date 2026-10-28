@@ -1077,3 +1077,33 @@ def test_erasing_the_actor_keeps_the_case_and_clears_only_the_actor_link(replay_
         [case] = s.scalars(select(SourceTakedownCase)).all()
         assert case.id == body["case_id"] and case.actor_user_id is None
         assert case.reason == PRIVATE_REASON  # the record itself is retained (pending policy)
+
+
+def test_the_case_id_is_an_opaque_random_uuid4(replay_world, monkeypatch):
+    """C-r8-1: the only reference a tenant audit entry carries is not derived from the
+    request. It is a version-4 UUID (RFC 4122 variant) and, causally, exactly a value the
+    id source (``uuid.uuid4`` as ``app.db.base.new_uuid`` calls it) produced: patching
+    that source changes the id, so no hash of the key, reason or time can pass."""
+    import uuid as uuid_mod
+
+    w = replay_world
+    first = _take_down_privately(w)
+    parsed = uuid_mod.UUID(hex=first["case_id"])
+    assert parsed.version == 4 and parsed.variant == uuid_mod.RFC_4122
+    assert first["case_id"] == parsed.hex  # lowercase 32-hex, no separators
+
+    produced: list[str] = []
+    counter = iter(range(1, 10**6))
+
+    def fake_uuid4() -> uuid_mod.UUID:
+        value = uuid_mod.UUID(int=0x7E57000000004000A000000000000000 + next(counter))
+        produced.append(value.hex)
+        return value
+
+    monkeypatch.setattr("app.db.base.uuid.uuid4", fake_uuid4)
+    second = _take_down_privately(w)
+    assert second["case_id"] in produced
+    assert second["case_id"].startswith("7e57")  # the patched source, not a derivation
+    with w.factory() as s:
+        [a, b] = s.scalars(select(SourceTakedownCase).order_by(SourceTakedownCase.created_at)).all()
+        assert (a.id, b.id) == (first["case_id"], second["case_id"])
