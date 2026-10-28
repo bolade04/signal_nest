@@ -142,7 +142,7 @@ def _error_detail(resp: httpx.Response) -> str:
     request_id = resp.headers.get("request-id")
     try:
         data = resp.json()
-    except ValueError:
+    except Exception:  # noqa: BLE001 - any decode failure (RecursionError included): no detail
         data = None
     if isinstance(data, dict):
         err = data.get("error")
@@ -198,7 +198,9 @@ def _raise_for_status(resp: httpx.Response, provider: str) -> None:
 def _json_body(resp: httpx.Response, provider: str) -> dict[str, Any]:
     try:
         data = resp.json()
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001 - default-deny: whatever the decode path raises
+        # ValueError / UnicodeDecodeError, but also RecursionError for deeply nested JSON:
+        # an undecodable reply is charged the bound, never an escape from the classifier.
         raise LLMMalformedError(f"{provider} returned a non-JSON body") from exc
     if not isinstance(data, dict):
         raise LLMMalformedError(f"{provider} returned an unexpected body shape")
@@ -217,7 +219,7 @@ def _json_object(text: str, provider: str) -> dict[str, Any]:
         candidate = fenced.group(1).strip()
     try:
         value = json.loads(candidate)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except Exception as exc:  # noqa: BLE001 - JSONDecodeError, RecursionError, anything else
         raise LLMMalformedError(f"{provider} returned non-JSON text") from exc
     if not isinstance(value, dict):
         raise LLMMalformedError(f"{provider} returned JSON that is not an object")

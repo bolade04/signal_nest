@@ -628,3 +628,79 @@ def test_the_meter_refuses_a_long_context_body_with_the_distinct_reason():
         meter.before_attempt("anthropic", MODEL, huge.encode())
     assert (exc.value.reason, exc.value.detail) == ("cost_unbounded", "long_context_tier_unpriced")
     assert spy.sent == [] and provider is not None
+
+
+# --------------------------------------------------------------------------- #
+# r4-MINOR-1: whatever the decode path raises is an undecodable reply -> the bound
+# --------------------------------------------------------------------------- #
+_NESTING = 200_000  # deep enough to raise RecursionError in the json decoder
+
+
+def _deep(open_: str = "[", close: str = "]") -> str:
+    return open_ * _NESTING + close * _NESTING
+
+
+def _anthropic_text_reply(text: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    )
+
+
+def _openai_text_reply(text: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        },
+    )
+
+
+DECODE_CASES = {
+    # the whole 200 body is a deeply nested document: resp.json() raises RecursionError
+    "nested_body": lambda reply: httpx.Response(200, content=_deep().encode()),
+    # the envelope is fine, the model's text is deeply nested: json.loads raises it
+    "nested_text": lambda reply: reply(_deep()),
+    "nested_text_in_object": lambda reply: reply(_deep('{"a":', "}")),
+    "invalid_utf8_body": lambda reply: httpx.Response(200, content=b"\xff\xfe\x00 not utf-8"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(DECODE_CASES))
+@pytest.mark.parametrize("which", ["anthropic", "openai"])
+def test_an_undecodable_reply_is_malformed_and_charged_the_bound(which, case):
+    from app.llm.base import LLMMalformedError
+
+    model = MODEL if which == "anthropic" else "gpt-4o-mini"
+    prices = {**PRICES, "gpt-4o-mini": [0.15, 0.6]}
+    settings = offline_settings(
+        llm_provider=which,
+        llm_api_key="k",
+        llm_model=model,
+        llm_max_retries=0,
+        llm_prices_usd_per_mtok=prices,
+    )
+    reply = _anthropic_text_reply if which == "anthropic" else _openai_text_reply
+    response = DECODE_CASES[case](reply)
+    cls = AnthropicProvider if which == "anthropic" else OpenAIProvider
+    provider = cls(
+        "k", model, 5, client=httpx.Client(transport=httpx.MockTransport(lambda r: response))
+    )
+    meter = _meter(settings)
+    with pytest.raises(LLMMalformedError):  # never a RecursionError / ValueError escape
+        LLMService(provider, settings=settings).run(
+            "classify_signal", {"content": "x"}, meter=meter
+        )
+    prepared = provider.prepare(_request("x")).content
+    worst = float(meter.worst_case(which, model, prepared))
+    if case.endswith("_body"):  # no usable envelope, no usage block: the bound
+        assert meter.spent == pytest.approx(worst) and worst > 0
+    else:  # the envelope carried a usage block (10 in, 5 out): charged what it reported
+        assert 0 < meter.spent < worst
+        assert meter._records[0]["input_tokens"] == 10
+    assert [r["outcome"] for r in meter._records] == ["LLMMalformedError"]
