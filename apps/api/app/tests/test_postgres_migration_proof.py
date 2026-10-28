@@ -15,7 +15,7 @@ dropped by :func:`pg_database`), never against a shared one:
 * an **interrupted / failed migration**, in two forms that prove different things:
 
   1. *a tracked revision failing partway* — the real sessions revision
-     (``87198ab57b59``, ``auth_sessions``, three below head) is run against a database
+     (``87198ab57b59``, ``auth_sessions``, four below head) is run against a database
      that already holds a relation with its index's name, so ``CREATE TABLE`` succeeds
      and ``CREATE INDEX`` fails inside the same revision. This proves that PostgreSQL's
      transactional DDL (the revision's statements run inside one transaction, which
@@ -344,7 +344,7 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
 # M2(a) — a TRACKED revision failing partway: no partial object, version unmoved
 # --------------------------------------------------------------------------- #
 def test_tracked_revision_that_fails_midway_leaves_no_partial_schema_and_retries(pg_url):
-    """The sessions revision (three below head) creates ``auth_sessions`` and then its
+    """The sessions revision (four below head) creates ``auth_sessions`` and then its
     index; the index's name is occupied in advance, so the revision fails AFTER its first
     DDL statement and the upgrade to head stops there."""
     _alembic(pg_url, "upgrade", PREV)
