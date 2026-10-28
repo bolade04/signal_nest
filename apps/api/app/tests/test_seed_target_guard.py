@@ -42,7 +42,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import Settings
 from app.db import seed as seed_mod
 from app.privacy.inventory import RetentionClass
-from app.tests._platform_support import pgvector_build
+from app.tests._platform_support import production_vector_kwargs
 
 # A DSN whose every component is an unmistakable sentinel. If any of these
 # substrings reaches an error message, a log or stderr, the refusal is leaking
@@ -79,7 +79,9 @@ def _settings(environment: str, database_url: str, **extra: Any) -> Settings:
             "app_mode": "full",
             "queue_backend": "redis",
             "cache_backend": "redis",
-            "vector_backend": "pgvector",
+            # P6-PLAT-1 (strategy B): the acknowledged bounded in-process backend, as
+            # production really validates it - no patched build fact.
+            **production_vector_kwargs(),
             "rate_limit_backend": "redis",
             "storage_backend": "s3",
             "redis_url": "redis://unused.invalid:6379/0",
@@ -88,11 +90,7 @@ def _settings(environment: str, database_url: str, **extra: Any) -> Settings:
             **{c.setting_name: 30 for c in RetentionClass},
             **extra,
         }
-    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
-    with pgvector_build():
-        return Settings(
-            _env_file=None, environment=environment, database_url=database_url, **extra
-        )
+    return Settings(_env_file=None, environment=environment, database_url=database_url, **extra)
 
 
 def _sqlite_factory(tmp_path) -> sessionmaker:

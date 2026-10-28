@@ -41,7 +41,11 @@ services:
     QUEUE_BACKEND: redis
     CACHE_BACKEND: redis
     STORAGE_BACKEND: s3
-    # P6-PLAT-1: pgvector is not implemented in this build and is refused at startup.
+    # P6-PLAT-1 (2026-10-27, strategy B): in-process per-run similarity, bound
+    # N_max = 100 signals per run (engineering capacity bound, not a quota); no
+    # cross-run or history-wide similarity; pgvector refused until implemented
+    # (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists. The
+    # acknowledgement is only required by ENVIRONMENT=production.
     VECTOR_BACKEND: bruteforce
     JOB_QUEUE_BACKEND: local
     REDIS_URL: redis://redis:6379/0

@@ -569,8 +569,8 @@ jobs:
           if-no-files-found: warn
 
       - name: PostgreSQL proofs (P6-CI-4 migration chain, P6-CI-5 job-store concurrency)
-        # The PostgreSQL proof modules (migration chain, job-store concurrency, LLM budget accounting)
-        # run again on their own, as a REQUIRED result
+        # The PostgreSQL proof modules (migration chain, job-store concurrency, LLM budget accounting,
+        # production boot) run again on their own, as a REQUIRED result
         # of this check: against the disposable service above, each test in a database
         # of its own (created and dropped per test; never the shared one). With
         # TEST_POSTGRES_URL unset they FAIL here (CI=true), never skip; an unreachable
@@ -588,6 +588,7 @@ jobs:
             app.tests.test_postgres_migration_proof \
             app.tests.test_postgres_job_store_concurrency \
             app.tests.test_postgres_llm_accounting \
+            app.tests.test_postgres_production_boot \
             -q -rsxX -p no:cacheprovider 2>&1 | tee ../../ci-logs/backend-postgres-proofs.log
           echo "== no PostgreSQL proof may be skipped or xfailed =="
           if grep -Eiq "skipped|xfail|xpass" ../../ci-logs/backend-postgres-proofs.log; then
@@ -595,6 +596,11 @@ jobs:
             exit 1
           fi
           grep -E "^[0-9]+ passed" ../../ci-logs/backend-postgres-proofs.log
+          # The production-boot proof (P6-PLAT-1) is labelled by its Redis mode. This job has no
+          # Redis service, so TEST_REDIS_URL is unset and the proof (which asserts the mode it ran
+          # in) booted against fakeredis; say so in the summary instead of implying a real Redis.
+          if [ -n "${TEST_REDIS_URL:-}" ]; then redis_mode='real Redis (TEST_REDIS_URL)'; else redis_mode='doubled by fakeredis (no Redis service in this job)'; fi
+          { echo '### PostgreSQL proofs'; echo "- production-boot proof, Redis mode: ${redis_mode}"; } >> "$GITHUB_STEP_SUMMARY"
 
       # Real-scanner negative control for the installed-environment (rootfs) scans (this job runs its own Trivy and DB): an inert
       # dist-info (metadata only, no code) of a known-vulnerable PyYAML, with its inventory, must be found by Trivy rootfs and fail

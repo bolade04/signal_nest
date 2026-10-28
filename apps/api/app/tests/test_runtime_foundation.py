@@ -12,12 +12,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from app.core import config as _config
 from app.core.config import Settings
 from app.core.runtime import build_runtime_report
 from app.jobs.context import ExecutionContext, scope_matches
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope, unwrap, wrap
 from app.privacy.inventory import RetentionClass
-from app.tests._platform_support import pgvector_build
+from app.tests._platform_support import pgvector_build, production_vector_kwargs
 
 
 # --- Configuration: explicit rejection, no silent production fallback -----------
@@ -85,9 +86,9 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
         rate_limit_backend="redis",
         storage_backend="s3",
         s3_bucket="prod-bucket",
-        # Accepted only by a build that implements pgvector (P6-PLAT-1): tests that need
-        # an accepted production config construct it under ``pgvector_build()``.
-        vector_backend="pgvector",
+        # P6-PLAT-1 (strategy B): the acknowledged bounded in-process backend, as
+        # production really validates it - no patched build fact.
+        **production_vector_kwargs(),
         llm_provider="openai",
         llm_api_key="sk-test",
         # Account mail must really be delivered in production (6B-4A): inert test values.
@@ -104,21 +105,72 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
 
 
 def test_production_full_config_is_accepted() -> None:
-    with pgvector_build():
-        settings = Settings(**_prod_kwargs())
+    # P6-PLAT-1 Tier 1 proof: the production full profile validates with NO patched
+    # build fact (``config.PGVECTOR_IMPLEMENTED`` stays False).
+    assert _config.PGVECTOR_IMPLEMENTED is False
+    settings = Settings(**_prod_kwargs())
     assert settings.is_production is True
     assert settings.app_mode == "full"
+    assert settings.vector_backend == "bruteforce"
+    assert settings.vector_inprocess_production_approved is True
+    assert settings.vector_inprocess_max_signals_per_run == 100
 
 
-def test_this_build_accepts_no_production_vector_backend() -> None:
-    # P6-PLAT-1: bruteforce is refused in production and pgvector is not implemented,
-    # so production cannot start on this build until the operator decision lands.
+_PLAT1_REFUSAL = (
+    "environment=production requires a persistent vector backend "
+    "(vector_backend=bruteforce is local-only); set "
+    "VECTOR_INPROCESS_PRODUCTION_APPROVED=true to run the explicitly acknowledged "
+    "bounded in-process backend (N_max <= 100)"
+)
+
+
+def test_this_build_accepts_only_the_acknowledged_bounded_inprocess_backend() -> None:
+    # P6-PLAT-1 (strategy B): pgvector is not implemented; bruteforce is refused in
+    # production without the operator's explicit acknowledgement.
     with pytest.raises(ValidationError) as exc:
         Settings(**_prod_kwargs(vector_backend="pgvector"))
     assert "vector_backend=pgvector is not implemented in this build" in str(exc.value)
     with pytest.raises(ValidationError) as exc:
-        Settings(**_prod_kwargs(vector_backend="bruteforce"))
-    assert "persistent vector backend" in str(exc.value)
+        Settings(**_prod_kwargs(vector_inprocess_production_approved=False))
+    assert _PLAT1_REFUSAL in str(exc.value)
+
+
+def test_hard_ceiling_is_a_build_fact_of_100() -> None:
+    assert _config.VECTOR_INPROCESS_HARD_CEILING == 100
+
+
+@pytest.mark.parametrize("bound", [0, -1, 101, 500])
+def test_bound_outside_the_ceiling_is_refused_in_every_environment(bound: int) -> None:
+    needle = "vector_inprocess_max_signals_per_run must be between 1 and 100"
+    for environment in ("development", "test", "staging"):
+        with pytest.raises(ValidationError) as exc:
+            Settings(
+                _env_file=None,
+                environment=environment,
+                vector_inprocess_max_signals_per_run=bound,
+                **({"secret_key": "x" * 40} if environment == "staging" else {}),
+            )
+        assert needle in str(exc.value), environment
+    # Production: the acknowledgement alone does not help above the ceiling.
+    with pytest.raises(ValidationError) as exc:
+        Settings(**_prod_kwargs(vector_inprocess_max_signals_per_run=bound))
+    assert needle in str(exc.value)
+    assert _PLAT1_REFUSAL in str(exc.value)
+
+
+@pytest.mark.parametrize("bound", [1, 25, 100])
+def test_bound_within_the_ceiling_is_accepted(bound: int) -> None:
+    assert (
+        Settings(**_prod_kwargs(vector_inprocess_max_signals_per_run=bound))
+        .vector_inprocess_max_signals_per_run
+        == bound
+    )
+
+
+def test_acknowledgement_without_production_changes_nothing() -> None:
+    # The flag is a production statement; development/test are unaffected by it.
+    s = Settings(_env_file=None, vector_inprocess_production_approved=True)
+    assert s.vector_backend == "bruteforce" and s.is_production is False
 
 
 def test_production_rejects_local_app_mode() -> None:
@@ -137,8 +189,7 @@ def test_production_accepts_either_wake_up_transport() -> None:
     # P6-PLAT-2: queue_backend selects only the optional job wake-up; the durable
     # queue is the database job store, so production no longer forces Redis here.
     for queue_backend in ("inprocess", "redis"):
-        with pgvector_build():
-            settings = Settings(**_prod_kwargs(queue_backend=queue_backend))
+        settings = Settings(**_prod_kwargs(queue_backend=queue_backend))
         assert settings.queue_backend == queue_backend
 
 
@@ -154,10 +205,11 @@ def test_production_rejects_local_storage() -> None:
     assert "durable object storage" in str(exc.value)
 
 
-def test_production_rejects_bruteforce_vector() -> None:
+def test_production_rejects_unacknowledged_bruteforce_vector() -> None:
     with pytest.raises(ValidationError) as exc:
-        Settings(**_prod_kwargs(vector_backend="bruteforce"))
+        Settings(**_prod_kwargs(vector_inprocess_production_approved=False))
     assert "persistent vector backend" in str(exc.value)
+    assert "VECTOR_INPROCESS_PRODUCTION_APPROVED=true" in str(exc.value)
 
 
 def test_production_default_local_stack_is_rejected_wholesale() -> None:

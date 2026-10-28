@@ -18,6 +18,12 @@ fixed order and always says why it holds what it holds (P6-DATA-2):
    ``connector_fixture_fallback_enabled`` is off → ``covered/fixture_library``;
 4. otherwise ``not_covered/no_source_for_market`` with no signals — an explicit,
    user-visible outcome instead of a silent empty result.
+
+Every source the run consulted also reports what it delivered against its per-source
+fetch limit (#268, :mod:`app.connectors.fetch_limits`): ``SignalBatch.reports`` holds one
+:class:`~app.connectors.fetch_limits.SourceFetchReport` per live source, one for the
+sandbox feed, or one for the demo library (which declares no limit); none when no source
+covers the market. A failed source is reported as failed, never as an empty one.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from typing import Protocol
 
 from app.connectors.base import FetchScope
 from app.connectors.coverage import Coverage, CoverageReason
+from app.connectors.fetch_limits import FetchOutcome, SourceFetchReport
 from app.core.config import Settings, get_settings
 from app.scouting_requests.fixtures import FixtureSignal, fixtures_for_market
 
@@ -63,6 +70,52 @@ class FixtureConnector:
                         continue
             results.append(signal)
         return results
+
+    def fetch_reported(
+        self, *, market: str | None, keywords: list[str], source_types: list[str]
+    ) -> FetchOutcome:
+        results = self.fetch(market=market, keywords=keywords, source_types=source_types)
+        # The demo library declares no fetch limit: nothing it holds is ever clipped.
+        report = SourceFetchReport(
+            source_key=self.name,
+            max_items=None,
+            fetched=len(results),
+            eligible_seen=len(results),
+            clipped_by_fetch_limit=False,
+        )
+        return FetchOutcome(signals=results, reports=[report])
+
+
+def fetch_with_reports(
+    connector,
+    *,
+    market: str | None,
+    keywords: list[str],
+    source_types: list[str],
+) -> FetchOutcome:
+    """The connector's signals plus its per-source fetch-limit reports (#268).
+
+    A connector without ``fetch_reported`` (a test double, a future adapter) is reported
+    as one source with no declared fetch limit, so the run's stats still say so rather
+    than staying silent.
+    """
+    reported = getattr(connector, "fetch_reported", None)
+    if callable(reported):
+        return reported(market=market, keywords=keywords, source_types=source_types)
+    signals = connector.fetch(market=market, keywords=keywords, source_types=source_types)
+    return FetchOutcome(signals=signals, reports=[_undeclared_limit_report(connector, signals)])
+
+
+def _undeclared_limit_report(connector, signals: list) -> SourceFetchReport:
+    """One source with no declared fetch limit: what a connector that does not report
+    (a test double, a future adapter) is recorded as, rather than leaving stats silent."""
+    return SourceFetchReport(
+        source_key=getattr(connector, "name", "unknown"),
+        max_items=None,
+        fetched=len(signals),
+        eligible_seen=len(signals),
+        clipped_by_fetch_limit=False,
+    )
 
 
 def _rss_enabled_for(db, *, organization_id: str, workspace_id: str) -> bool:
@@ -127,12 +180,14 @@ def get_connector(
 
 @dataclass
 class SignalBatch:
-    """The signals for one scout run and the coverage outcome that explains them."""
+    """The signals for one scout run, the coverage outcome that explains them and each
+    consulted source's fetch report (#268: fetch limit, clip, failure)."""
 
     signals: list = field(default_factory=list)
     coverage: Coverage = field(
         default_factory=lambda: Coverage(CoverageReason.NO_SOURCE_FOR_MARKET, is_simulated=False)
     )
+    reports: list[SourceFetchReport] = field(default_factory=list)
 
 
 def fetch_signals(
@@ -176,23 +231,28 @@ def fetch_signals(
                 sources=total,
                 sources_failed=failed,
             ),
+            reports=list(result.reports),
         )
 
     sandbox = resolve_connector(
         source_types=types, market=market, rss_enabled=rss_enabled, settings=settings
     )
     if sandbox is not None and sample_feed_covers(market):
+        result = sandbox.collect(scope)
         return SignalBatch(
-            signals=sandbox.collect(scope).signals,
+            signals=result.signals,
             coverage=Coverage(CoverageReason.SANDBOX_FEED, is_simulated=True),
+            reports=list(result.reports) or [_undeclared_limit_report(sandbox, result.signals)],
         )
 
     if settings.connector_fixture_fallback_enabled and fixtures_for_market(market):
+        outcome = FixtureConnector().fetch_reported(
+            market=market, keywords=list(keywords or ()), source_types=list(types)
+        )
         return SignalBatch(
-            signals=FixtureConnector().fetch(
-                market=market, keywords=list(keywords or ()), source_types=list(types)
-            ),
+            signals=outcome.signals,
             coverage=Coverage(CoverageReason.FIXTURE_LIBRARY, is_simulated=True),
+            reports=outcome.reports,
         )
 
     return SignalBatch()

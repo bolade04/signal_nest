@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
+from app.connectors.fetch_limits import fetch_stats, partial_fetch_facts
 from app.connectors.takedown import active_takedowns, without_taken_down
 from app.core.config import get_settings
 from app.core.enums import (
@@ -36,7 +37,13 @@ from app.core.enums import (
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
 from app.geography.markets import market_from_parts
-from app.infra.vector import build_index, embed_text
+from app.infra.vector import (
+    SIGNAL_VOLUME_ABOVE_BOUND,
+    SignalVolumeAboveBoundError,
+    build_index,
+    check_inprocess_bound,
+    embed_text,
+)
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
 from app.intelligence.models import AnalysisInput, OpportunityCandidate
@@ -86,6 +93,33 @@ def _signal_is_simulated(signal) -> bool:
 def _card_is_simulated(members) -> bool:
     """An opportunity is simulated if any member is: one fixture signal makes it so."""
     return any(m.is_simulated for m in members)
+
+
+def refused_run_stats(*, scanned: int, bound: int, fetch_limits: list[dict] | None = None) -> dict:
+    """The ``ScoutRequest.stats`` of a run refused at the in-process bound (P6-PLAT-1 B).
+
+    The four ordinary counts are present (nothing was analysed, so they are honest
+    zeros apart from ``scanned``), plus the stable reason code and the bound the run
+    exceeded. When the per-source fetch-limit facts are known (``fetch_limits``), they are
+    carried too, with the ``partial_fetch`` marker: the fetch limit applies first (per
+    source), the bound second (per run, over the total after the takedown re-check). Every
+    consulted source appears in ``fetch_limits``, clipped, failed or whole. There is no
+    ``coverage`` object: it describes a completed run (P6-DATA-2), and a refused run did
+    not complete. Safe aggregates only - never content.
+    """
+    stats = {
+        "scanned": scanned,
+        "noise_filtered": 0,
+        "signals_analyzed": 0,
+        "opportunities": 0,
+        "refused": True,
+        "refusal_reason": SIGNAL_VOLUME_ABOVE_BOUND,
+        "bound": bound,
+    }
+    if fetch_limits is not None:
+        stats["fetch_limits"] = fetch_limits
+        stats.update(partial_fetch_facts(fetch_limits))
+    return stats
 
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
@@ -178,6 +212,7 @@ def _run(
     request.status = ScoutRequestStatus.RUNNING.value
     db.flush()
 
+    settings = get_settings()
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
     # opaque tenant reference sent to the provider. The production caller is the durable
     # handler (``app.jobs.handlers.execute_scout_request``), which supplies a shared-ledger
@@ -201,6 +236,9 @@ def _run(
     # Source selection records why the run holds what it holds (P6-DATA-2): live
     # feeds, the simulated sandbox/demo library, or an explicit "not covered".
     # P6-CAP-1: the request's own tenant scope decides RSS through the resolver.
+    # #268: the fetch limit applies first, per source - each source reads at most
+    # ``max_items`` entries (looking one past it) and reports what it delivered, clipped
+    # or failed, in ``batch.reports``.
     batch = fetch_signals(
         market=market,
         keywords=request.keywords or ctx.keywords,
@@ -215,8 +253,34 @@ def _run(
     # A takedown may have committed while the sources were read: re-check under each
     # source's lock before anything is written (P6-PRIV-4; see app.connectors.takedown).
     fixtures = without_taken_down(db, batch.signals)
+    fetch = fetch_stats(batch.reports)
 
     scanned = len(fixtures)
+    # P6-PLAT-1 (strategy B): the per-run in-process index is bounded. A run that
+    # would index more signals than the bound is refused here, before any signal is
+    # stored, embedded, compared or sent to a model - no partial dedupe, no chunking, no
+    # truncation. The bound counts what would actually be indexed: the total over every
+    # source, after the fetch limits and after the takedown re-check above.
+    # The handler records the refusal as the run's outcome (status failed, stats
+    # carrying the reason code); it is per run, per workspace, so it never affects
+    # another workspace's run.
+    try:
+        check_inprocess_bound(scanned, settings)
+    except SignalVolumeAboveBoundError as exc:
+        logger.warning(
+            "scout.refused",
+            extra={
+                "extra_fields": {
+                    "request": request.id,
+                    "reason": exc.reason,
+                    "scanned": exc.scanned,
+                    "bound": exc.bound,
+                    "partial_fetch": fetch["partial_fetch"],
+                }
+            },
+        )
+        exc.fetch_limits = fetch["fetch_limits"]
+        raise
     normalized: list[NormalizedSignal] = []
     # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
     # index is the configured vector backend (P6-PLAT-1); there is no fallback.
@@ -387,6 +451,7 @@ def _run(
         "signals_analyzed": len(normalized),
         "opportunities": len(opportunities),
         "coverage": batch.coverage.as_stats(),
+        **fetch,
     }
     db.flush()
     logger.info(

@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from itertools import islice
 
 from defusedxml import (
     DTDForbidden,
@@ -39,10 +40,23 @@ from app.connectors.base import (
     ConnectorResult,
     ConnectorSignal,
     FailureKind,
+    FetchFailure,
     FetchScope,
     SourceConnector,
 )
 from app.connectors.content import safe_entry_url, sanitize_text
+from app.connectors.fetch_limits import (
+    EGRESS_BLOCKED,
+    FEED_TOO_LARGE,
+    FETCH_ERROR,
+    RATE_LIMITED,
+    RESPONSE_REFUSED,
+    RETRIES_EXHAUSTED,
+    XML_MALFORMED,
+    XML_UNSAFE,
+    SourceFetchReport,
+    lookahead_entries,
+)
 from app.connectors.ratelimit import TokenBucket
 from app.connectors.retry import ConnectorFetchError, RetryPolicy, run_with_retry
 from app.connectors.sample_feeds import sample_feed_for_market
@@ -74,20 +88,50 @@ class FeedItem:
 
 @dataclass(frozen=True)
 class ParsedFeed:
+    """A parsed feed. ``items`` holds every entry, or - when :func:`parse_feed` was given
+    ``max_entries`` (the #268 look-ahead) - at most that many, in document order."""
+
     format: str  # "rss" | "rdf" | "atom"
     title: str
     items: list[FeedItem]
 
 
+_TOO_LARGE_DETAIL = "feed exceeds size limit"
+#: The egress guard's static detail for a body above ``max_response_bytes`` (live path).
+_RESPONSE_TOO_LARGE_DETAIL = "response exceeds size limit"
+_DOCTYPE_DETAIL = "feed declares a DOCTYPE/entity"
+
+
+def failure_reason(failure: FetchFailure) -> str:
+    """The closed ``failure_reason`` code of a classified failure (no free text).
+
+    ``failure.detail`` is the static detail the parser or the egress guard raised (never
+    the source key prefix the live connector adds to ``ConnectorResult.failures``)."""
+    kind = failure.kind
+    if kind is FailureKind.UNSAFE_CONTENT:
+        if failure.detail in (_TOO_LARGE_DETAIL, _RESPONSE_TOO_LARGE_DETAIL):
+            return FEED_TOO_LARGE
+        if failure.detail == _DOCTYPE_DETAIL:
+            return XML_UNSAFE
+        return RESPONSE_REFUSED  # an encoded body or a media type that is not a feed
+    if kind is FailureKind.PARSE_ERROR:
+        return XML_MALFORMED
+    if kind is FailureKind.RATE_LIMITED:
+        return RATE_LIMITED
+    if kind is FailureKind.EGRESS_BLOCKED:
+        return EGRESS_BLOCKED
+    if kind.retryable:  # timeout / network / upstream error that outlasted the retries
+        return RETRIES_EXHAUSTED
+    return FETCH_ERROR
+
+
 def _assert_safe_xml(data: bytes) -> None:
     """Reject XML that declares a DOCTYPE or entity, or exceeds the size cap."""
     if len(data) > MAX_FEED_BYTES:
-        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, "feed exceeds size limit")
+        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _TOO_LARGE_DETAIL)
     head = data[:4096].lstrip().lower()
     if b"<!doctype" in head or b"<!entity" in head or b"<!doctype" in data.lower():
-        raise ConnectorFetchError(
-            FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
-        )
+        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _DOCTYPE_DETAIL)
 
 
 def _date(value: str | None) -> datetime | None:
@@ -143,8 +187,16 @@ def _atom_item(entry) -> FeedItem:
     )
 
 
-def parse_feed(data: bytes) -> ParsedFeed:
-    """Parse untrusted feed bytes. Raises :class:`ConnectorFetchError` on any defect."""
+def parse_feed(data: bytes, *, max_entries: int | None = None) -> ParsedFeed:
+    """Parse untrusted feed bytes. Raises :class:`ConnectorFetchError` on any defect.
+
+    ``max_entries`` bounds how many entries are **extracted** (sanitised, link-screened,
+    dated) - the per-source look-ahead of #268: a connector asks for ``max_items + 1``
+    (:func:`~app.connectors.fetch_limits.lookahead_entries`) so that one extra entry tells a
+    clipped source from one that held exactly ``max_items``. ``None`` extracts every entry.
+    The XML parser still builds the whole document tree, bounded only by
+    :data:`MAX_FEED_BYTES` (checked before parsing), so a document that is malformed
+    anywhere - even past the look-ahead - is rejected as a whole."""
     _assert_safe_xml(data)
     try:
         root = DET.fromstring(
@@ -153,9 +205,7 @@ def parse_feed(data: bytes) -> ParsedFeed:
     except (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden) as exc:
         # The byte screen above misses declarations the parser still sees (another
         # encoding, a declaration past the screened head); defusedxml refuses them.
-        raise ConnectorFetchError(
-            FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
-        ) from exc
+        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _DOCTYPE_DETAIL) from exc
     except DET.ParseError as exc:
         raise ConnectorFetchError(FailureKind.PARSE_ERROR, "malformed feed XML") from exc
     except (ValueError, LookupError) as exc:
@@ -173,7 +223,7 @@ def parse_feed(data: bytes) -> ParsedFeed:
         return ParsedFeed(
             format="rss",
             title=sanitize_text(_text(channel, "title"), max_chars=MAX_TITLE_CHARS),
-            items=[_rss_item(el) for el in channel.findall("item")],
+            items=[_rss_item(el) for el in islice(channel.iterfind("item"), max_entries)],
         )
     if root.tag == f"{_RDF}RDF":
         channel = root.find(f"{_RSS1}channel")
@@ -181,13 +231,18 @@ def parse_feed(data: bytes) -> ParsedFeed:
         return ParsedFeed(
             format="rdf",
             title=sanitize_text(title, max_chars=MAX_TITLE_CHARS),
-            items=[_rss_item(el, _RSS1) for el in root.findall(f"{_RSS1}item")],
+            items=[
+                _rss_item(el, _RSS1)
+                for el in islice(root.iterfind(f"{_RSS1}item"), max_entries)
+            ],
         )
     if root.tag == f"{_ATOM}feed":
         return ParsedFeed(
             format="atom",
             title=sanitize_text(_text(root, f"{_ATOM}title"), max_chars=MAX_TITLE_CHARS),
-            items=[_atom_item(el) for el in root.findall(f"{_ATOM}entry")],
+            items=[
+                _atom_item(el) for el in islice(root.iterfind(f"{_ATOM}entry"), max_entries)
+            ],
         )
     raise ConnectorFetchError(FailureKind.PARSE_ERROR, "unsupported feed format")
 
@@ -241,6 +296,38 @@ def keyword_match(signal: ConnectorSignal, keywords: tuple[str, ...]) -> bool:
     return any(k.lower() in haystack for k in keywords)
 
 
+def source_report(
+    source_key: str, scope: FetchScope, *, fetched: int, eligible: int, clipped: bool
+) -> SourceFetchReport:
+    """What one source delivered against its fetch limit (#268)."""
+    return SourceFetchReport(
+        source_key=source_key,
+        max_items=scope.max_items,
+        fetched=fetched,
+        eligible_seen=eligible,
+        clipped_by_fetch_limit=clipped,
+    )
+
+
+def failed_source_report(
+    source_key: str, scope: FetchScope, failure: FetchFailure
+) -> SourceFetchReport:
+    """A source that contributed nothing because it failed (review r3 MINOR-1).
+
+    ``fetched`` 0 is not "the source was empty": ``failed`` and ``failure_reason`` say it
+    failed (a document rejected as a whole, e.g. malformed XML after the limit, is a
+    failed source, never 100 good entries)."""
+    return SourceFetchReport(
+        source_key=source_key,
+        max_items=scope.max_items,
+        fetched=0,
+        eligible_seen=0,
+        clipped_by_fetch_limit=False,
+        failed=True,
+        failure_reason=failure_reason(failure),
+    )
+
+
 class RssNewsConnector(SourceConnector):
     """Sandbox RSS connector: bundled deterministic feeds, never the network."""
 
@@ -255,7 +342,10 @@ class RssNewsConnector(SourceConnector):
         rate_limiter: TokenBucket | None = None,
         retry_policy: RetryPolicy | None = None,
         now: Callable[[], datetime] | None = None,
+        source_key: str | None = None,
     ) -> None:
+        #: Stable, non-secret key this source is reported under in ``fetch_limits``.
+        self.source_key = source_key or self.name
         self._provider = feed_provider or sample_feed_for_market
         self._limiter = rate_limiter
         self._retry = retry_policy or RetryPolicy()
@@ -269,12 +359,17 @@ class RssNewsConnector(SourceConnector):
         )
         try:
             data = self._fetch_bytes(scope.market)
-            feed = parse_feed(data)
+            # Look one entry past the fetch limit (never more): that single extra entry is
+            # what tells a clipped source from one that held exactly ``max_items``.
+            feed = parse_feed(data, max_entries=lookahead_entries(scope.max_items))
         except ConnectorFetchError as exc:
             result.failures.append(exc.failure)
+            result.reports.append(failed_source_report(self.source_key, scope, exc.failure))
             return result
 
-        for item in feed.items[: scope.max_items]:
+        clipped = len(feed.items) > scope.max_items
+        window = feed.items[: scope.max_items]
+        for item in window:
             signal = item_signal(
                 item,
                 market=scope.market,
@@ -289,6 +384,15 @@ class RssNewsConnector(SourceConnector):
             )
             if keyword_match(signal, scope.keywords):
                 result.signals.append(signal)
+        result.reports.append(
+            source_report(
+                self.source_key,
+                scope,
+                fetched=len(window),
+                eligible=len(result.signals),
+                clipped=clipped,
+            )
+        )
         return result
 
     def _fetch_bytes(self, market: str | None) -> bytes:

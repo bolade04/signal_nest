@@ -14,15 +14,18 @@ Importing this module registers every handler on the
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
-from app.jobs.pipeline import _run, metered_run
+from app.infra.vector import SignalVolumeAboveBoundError
+from app.jobs.context import ExecutionContext
+from app.jobs.pipeline import _run, metered_run, refused_run_stats
 from app.jobs.registry import (
     HandlerContext,
     TerminalFailureContext,
@@ -35,6 +38,47 @@ from app.llm.metering import LLMMeter
 from app.scouting_requests.models import ScoutRequest
 
 logger = get_logger("signalnest.jobs.handlers")
+
+
+def _record_refused_run(
+    scout_request_id: str, context: ExecutionContext, exc: SignalVolumeAboveBoundError
+) -> Callable[[Session], None]:
+    """An after-rollback writer that settles a run refused at the in-process bound.
+
+    The attempt is rolled back (the refusal happens before any signal is written),
+    so the outcome is recorded in the worker's after-rollback transaction: the
+    request becomes ``failed`` with ``stats`` carrying the stable reason code and
+    counts (P6-PLAT-1 B). Tenant guard as in :func:`settle_failed_scout_request`:
+    the context is the job row's, so a mis-enqueued id never settles another
+    tenant's request.
+    """
+
+    def write(db: Session) -> None:
+        request = db.get(ScoutRequest, scout_request_id)
+        if request is None:
+            return
+        if (
+            request.organization_id != context.organization_id
+            or request.workspace_id != context.workspace_id
+        ):
+            return
+        request.status = ScoutRequestStatus.FAILED.value
+        request.stats = refused_run_stats(
+            scanned=exc.scanned, bound=exc.bound, fetch_limits=exc.fetch_limits
+        )
+        db.flush()
+        log_event(
+            logger,
+            "scout_request.refused_at_bound",
+            component="jobs",
+            outcome="refused",
+            reason=exc.reason,
+            scanned=exc.scanned,
+            bound=exc.bound,
+            partial_fetch=request.stats.get("partial_fetch"),
+        )
+
+    return write
 
 
 @register_handler(JobType.SCOUT_REQUEST_EXECUTE)
@@ -84,13 +128,25 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     )
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
-        result = _run(ctx.db, scout_request_id, ctx.context)
+        try:
+            result = _run(ctx.db, scout_request_id, ctx.context)
+        except SignalVolumeAboveBoundError as exc:
+            # P6-PLAT-1 (strategy B): the run would index more signals than the
+            # per-run in-process bound. Non-retryable - the condition is a property
+            # of the request's source volume, not of this attempt - and recorded as
+            # the run's visible outcome after the rollback (nothing was written).
+            # The refusal precedes every model call of the run, so it reserved and
+            # spent nothing (P6-LLM-4); the terminal-failure hook below still
+            # releases anything this job holds, as for every final failure.
+            ctx.after_rollback.append(_record_refused_run(scout_request_id, ctx.context, exc))
+            raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc
     # Attempt end: whatever this job still holds reserved could not be settled by the
     # process that reserved it; charge it its worst case in the run's transaction.
     release_for_job(ctx.db, job_id=ctx.job_id, now=ctx.now, outcome="attempt_end")
 
-    # ``_run`` returns only safe aggregate counts (scanned / noise_filtered /
-    # signals_analyzed / opportunities), which is exactly the shape we persist.
+    # ``_run`` returns only safe aggregates: the four counts, the coverage outcome
+    # (P6-DATA-2) and the per-source fetch facts (``fetch_limits`` / ``partial_fetch`` /
+    # ``partial_fetch_reasons``, #268), which is exactly the shape we persist.
     return dict(result)
 
 

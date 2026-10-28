@@ -33,7 +33,7 @@ import shell_command_model as scm  # noqa: E402
 import site_taxonomy as st  # noqa: E402
 
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-COMMENT_LINE = 1895          # the sole textual mention of smoke_http.py in the workflow (P6-CI-8: +23 lines above it); P6-CI6-PROOFS-ACCT: +2 lines above it
+COMMENT_LINE = 1901          # the sole textual mention of smoke_http.py in the workflow (P6-CI-8: +23 lines above it); P6-CI6-PROOFS-ACCT: +2 lines above it; P6-CI6-PROOFS-BOOT: +6 lines above it
 
 
 # ------------------------------------------------------------------ helpers
