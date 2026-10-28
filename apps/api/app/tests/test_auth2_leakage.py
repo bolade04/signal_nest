@@ -749,7 +749,11 @@ class TestOpenApiContract:
         # 106 -> 115 (P6-PLAT-9): PATCH on each of the nine campaign-context collections.
         # 115 -> 117 (P6-UI-023): POST .../locations/{location_id}/deactivate and /reactivate.
         # 117 -> 118 (P6-UI-006): GET /workspaces/{workspace_id}/scheduling-capability.
-        assert count == 118
+        # 118 -> 123 (P6-PRIV-1): account export, deletion preview and deletion; organization
+        # export and deletion. None is a token-bearing account-mail operation of this module.
+        # 123 -> 124 (D-9f): GET /organizations/{organization_id}/export/{table}, customer
+        # (exact OWNER) and not an account-mail operation of this module.
+        assert count == 124
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.core.enums import Role
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.db.session import get_db
 from app.jobs.schemas import JobEventOut, JobListOut, JobOut
+from app.jobs.status import CUSTOMER_UNCANCELLABLE_JOB_TYPES
 from app.jobs.store import job_store
 
 router = APIRouter(tags=["jobs"])
@@ -92,11 +93,18 @@ def cancel_job(
     """Request cancellation.
 
     A not-yet-running job is cancelled immediately; a running job is marked for
-    cooperative cancellation and stopped by the worker at its next safe point.
+    cooperative cancellation and stopped by the worker at its next safe point. A job
+    that applies the operator's retention policy (``retention.purge``) is refused with
+    409 ``job_not_cancellable`` for every role.
     """
     job = job_store.get_job(db, workspace_id=workspace_id, job_id=job_id)
     if job is None:
         raise NotFoundError("Job not found in this workspace.")
+    if job.job_type in CUSTOMER_UNCANCELLABLE_JOB_TYPES:
+        raise ConflictError(
+            "This job applies the data-retention policy and cannot be cancelled.",
+            code="job_not_cancellable",
+        )
     job_store.request_cancel(db, job)
     db.commit()
     return JobOut.model_validate(job)
