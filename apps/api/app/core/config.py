@@ -510,6 +510,26 @@ class Settings(BaseSettings):
     #: Total wall-clock budget for the whole readiness sweep across all probes.
     readiness_total_timeout_seconds: float = 5.0
 
+    # --- Privacy: retention durations (P6-PRIV-1) — BEGIN privacy block -------
+    #: Retention duration per data class, in days. How long each class is kept is an
+    #: operator/legal decision (O-5 / P6-D05) that has NOT been made, so none of these
+    #: has a default: unset means undecided, and the retention purge refuses that
+    #: class (it deletes nothing and reports ``policy_unset``). environment=production
+    #: refuses to start until every one is set; development, test and staging may
+    #: leave them unset. Each, when set, must be 1..36500. Classes and what they purge:
+    #: ``app/privacy/inventory.py`` and ``docs/operations/data-inventory.md``.
+    retention_auth_sessions_days: int | None = None
+    retention_account_tokens_days: int | None = None
+    retention_invitations_days: int | None = None
+    retention_signal_evidence_days: int | None = None
+    retention_opportunities_days: int | None = None
+    retention_job_history_days: int | None = None
+    retention_audit_logs_days: int | None = None
+    #: Root rows one purge batch deletes (with their dependents). 1..10000.
+    retention_purge_batch_size: int = 500
+    #: Batches per class per sweep, and links per workspace job chain. >= 1.
+    retention_purge_max_batches: int = 100
+    # --- END privacy block ----------------------------------------------------
     # --- P6 platform services: request rate limiting (P6-PLAT-3) -------------
     #: Where request counts live. ``memory`` counts in this process only (bounded;
     #: development and test - production refuses it); ``redis`` counts in the shared
@@ -1015,6 +1035,38 @@ class Settings(BaseSettings):
         if not 0 <= self.geocoder_min_match_score <= 1:
             errors.append("geocoder_min_match_score must be between 0 and 1")
 
+        if errors:
+            raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
+        return self
+
+    # --- Privacy: retention validation (P6-PRIV-1) — privacy block ------------
+    @model_validator(mode="after")
+    def _validate_retention(self) -> Settings:
+        """Retention durations: bounded when set; all required in production.
+
+        Production has no silently assumed duration: an unset class would otherwise be
+        kept indefinitely, which is itself a retention decision nobody made. The
+        one-shot migration actor (``migration_mode``) never purges, so it is exempt,
+        as it is from the other runtime-only requirements.
+        """
+        from app.privacy.inventory import RetentionClass
+
+        errors: list[str] = []
+        for data_class in RetentionClass:
+            name = data_class.setting_name
+            value = getattr(self, name)
+            if value is None:
+                if self.is_production and not self.migration_mode:
+                    errors.append(
+                        f"{name} must be set explicitly in production (retention durations "
+                        "are an operator/legal decision, O-5 / P6-D05; there is no default)"
+                    )
+            elif not 1 <= value <= 36500:
+                errors.append(f"{name} must be between 1 and 36500 days")
+        if not 1 <= self.retention_purge_batch_size <= 10000:
+            errors.append("retention_purge_batch_size must be between 1 and 10000")
+        if self.retention_purge_max_batches < 1:
+            errors.append("retention_purge_max_batches must be >= 1")
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
         return self

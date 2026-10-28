@@ -41,6 +41,19 @@ export type EmailVerificationConfirmRequest = S['EmailVerificationConfirmRequest
 // field is the client's own and is never sent.
 export type ChangePasswordRequest = S['ChangePasswordRequest'];
 
+// P6-PRIV-1 data export and deletion. A deletion answers with a receipt that carries the
+// independent verification report; the account deletion's receipt is the last answer the
+// account ever gets (every token of it is refused afterwards).
+export type AccountExportOut = S['AccountExportOut'];
+export type OrganizationExportOut = S['OrganizationExportOut'];
+export type OrganizationExportPageOut = S['OrganizationExportPageOut'];
+export type AccountDeletionPreviewOut = S['AccountDeletionPreviewOut'];
+export type MembershipImpactOut = S['MembershipImpactOut'];
+export type AccountDeletionRequest = S['AccountDeletionRequest'];
+export type AccountDeletionOut = S['AccountDeletionOut'];
+export type OrganizationDeletionRequest = S['OrganizationDeletionRequest'];
+export type OrganizationDeletionOut = S['OrganizationDeletionOut'];
+
 export type BusinessProfileBase = S['BusinessProfileBase'];
 export type BusinessProfileOut = S['BusinessProfileOut'];
 

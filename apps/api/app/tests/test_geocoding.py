@@ -45,6 +45,7 @@ from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.main import app
 from app.opportunities.models import Opportunity
 from app.organizations.models import User
+from app.privacy.inventory import RetentionClass
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, SignalLocationEvidence
 from app.tests._auth2_support import live_bearer
@@ -81,6 +82,9 @@ _PRODUCTION_STACK = {
     "s3_bucket": "unused",
     "vector_backend": "pgvector",
     "rate_limit_backend": "redis",
+    # Retention durations have no default and production requires every one (P6-PRIV-1):
+    # inert test values, not a policy.
+    **{c.setting_name: 30 for c in RetentionClass},
 }
 
 

@@ -49,6 +49,7 @@ from app.infra.mail import (
     SesMailSender,
     send_mail,
 )
+from app.privacy.inventory import RetentionClass
 from app.tests._platform_support import pgvector_build
 
 REGION = "us-east-1"
@@ -417,6 +418,9 @@ _PRODUCTION_STACK = {
     "storage_backend": "s3",
     "s3_bucket": "unused",
     "vector_backend": "pgvector",
+    # Retention durations have no default and production requires every one (P6-PRIV-1):
+    # inert test values, not a policy.
+    **{c.setting_name: 30 for c in RetentionClass},
     "rate_limit_backend": "redis",
 }
 _VALID_LIVE_MAIL = {
