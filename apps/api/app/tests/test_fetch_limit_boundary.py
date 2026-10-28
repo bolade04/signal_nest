@@ -25,11 +25,13 @@ from sqlalchemy.orm import sessionmaker
 from app.connectors import registry as registry_mod
 from app.connectors import rss as rss_mod
 from app.connectors.base import FailureKind, FetchScope
+from app.connectors.coverage import CoverageReason
 from app.connectors.fetch_limits import (
     FETCH_LIMIT_REACHED,
     SOURCE_FAILED,
     SourceFetchReport,
     fetch_stats,
+    lookahead_entries,
     partial_fetch_facts,
 )
 from app.connectors.multi import MultiSourceConnector
@@ -47,7 +49,7 @@ from app.jobs.context import ExecutionContext
 
 # Importing the app registers every ORM model + job handler on the shared Base/registry.
 from app.main import app  # noqa: F401
-from app.scouting_requests.connectors import FixtureConnector, fetch_with_reports
+from app.scouting_requests.connectors import FixtureConnector, fetch_signals, fetch_with_reports
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import RawSignal
 from app.tests._seed_support import clear_seeded_runs
@@ -116,6 +118,40 @@ def test_connector_never_extracts_more_than_one_entry_past_the_limit(monkeypatch
     assert seen == [8]
 
 
+def _atom_feed(count: int) -> bytes:
+    entries = "".join(
+        f'<entry><title>t{i}</title><id>urn:{i}</id><link href="https://replay.invalid/{i}"/></entry>'
+        for i in range(count)
+    )
+    return f'<feed xmlns="http://www.w3.org/2005/Atom"><title>c</title>{entries}</feed>'.encode()
+
+
+def _rdf_feed(count: int) -> bytes:
+    items = "".join(
+        f'<item rdf:about="https://replay.invalid/{i}"><title>t{i}</title>'
+        f"<link>https://replay.invalid/{i}</link></item>"
+        for i in range(count)
+    )
+    return (
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        'xmlns="http://purl.org/rss/1.0/"><channel rdf:about="https://replay.invalid/">'
+        f"<title>c</title></channel>{items}</rdf:RDF>"
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda n: _feed(n, "rss"), _atom_feed, _rdf_feed],
+    ids=["rss", "atom", "rdf"],
+)
+def test_the_look_ahead_bounds_extraction_in_every_feed_format(build):
+    # Review r5 MINOR-1 (A6/A7): the live replay corpus carries an Atom capture, so the
+    # look-ahead must hold in every branch of the shared parser, not only RSS 2.0.
+    parsed = rss_mod.parse_feed(build(150), max_entries=lookahead_entries(_LIMIT))
+    assert len(parsed.items) == _LIMIT + 1
+    assert len(rss_mod.parse_feed(build(150)).items) == 150  # None extracts every entry
+
+
 def test_the_byte_cap_still_applies_before_any_parsing():
     oversize = b"<rss>" + b"x" * (rss_mod.MAX_FEED_BYTES + 1)
     result = RssNewsConnector(feed_provider=lambda _m: oversize).collect(
@@ -144,6 +180,21 @@ def test_a_source_without_a_declared_limit_reports_none_and_is_never_clipped():
         False,
     )
     assert report.fetched == len(outcome.signals)
+
+
+def test_a_fixture_library_run_reports_its_source_through_fetch_signals():
+    # Review r5 MINOR-1 (M4): the demo-library branch of the run's source selection carries
+    # its report, so ``fetch_limits`` names every consulted source.
+    batch = fetch_signals(market="Dallas, TX", keywords=[], source_types=[], rss_enabled=False)
+    assert batch.coverage.reason is CoverageReason.FIXTURE_LIBRARY
+    [report] = batch.reports
+    assert (report.source_key, report.max_items, report.clipped_by_fetch_limit, report.failed) == (
+        "fixture",
+        None,
+        False,
+        False,
+    )
+    assert report.fetched == report.eligible_seen == len(batch.signals) > 0
 
 
 def test_a_connector_double_without_reports_is_reported_not_left_silent():
