@@ -27,7 +27,7 @@ from app.privacy.inventory import (
     RetentionClass,
 )
 from app.privacy.retention import _ROOTS
-from app.tests._platform_support import pgvector_build
+from app.tests._platform_support import production_vector_kwargs
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DOC = REPO_ROOT / "docs" / "operations" / "data-inventory.md"
@@ -98,9 +98,9 @@ ALL_SET = {c.setting_name: 30 for c in RetentionClass}
 
 
 def _build(kwargs: dict) -> Settings:
-    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
-    with pgvector_build():
-        return Settings(**kwargs)
+    # P6-PLAT-1 (strategy B): production accepts the acknowledged bounded in-process
+    # backend, so the production stack validates with no patched build fact.
+    return Settings(**kwargs)
 
 
 def _production(**overrides) -> dict:
@@ -114,7 +114,7 @@ def _production(**overrides) -> dict:
         redis_url="redis://cache.internal:6379/0",
         storage_backend="s3",
         s3_bucket="example-bucket",
-        vector_backend="pgvector",
+        **production_vector_kwargs(),
         rate_limit_backend="redis",
         secret_key="a-real-production-secret-value-0123456789",
         llm_provider="anthropic",
