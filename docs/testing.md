@@ -252,7 +252,7 @@ writes the `TOTAL` line to the job step summary and uploads the Cobertura XML as
 `apps/web/vite.config.ts` switches `@vitest/coverage-v8` on when `CI=true`
 (`text-summary`, `json-summary`, `lcov` into `ci-logs/coverage-web/`), the summary lines go
 to the step summary and the directory is uploaded as the `coverage-web` artifact (30 days).
-Numbers are published after the first `main` run; none is stated here until then. Locally:
+First `main` baseline (2026-10-28, merge commit `b0b53951` of #270, CI run `40637670580`; report only, not a gate): API — coverage.py `TOTAL` 94% (combined statement and branch coverage, 14,567 of 15,487), line rate 95.37% (12,165 of 12,755 statements), branch rate 87.92% (2,402 of 2,732 branches); web — statements 91.86% (2,880 of 3,135), branches 82.33% (1,985 of 2,411), functions 87.84% (1,005 of 1,144), lines 94.54% (2,566 of 2,714). Later runs publish their own figures in the job summaries and artifacts; this line records the baseline only. Locally:
 `cd apps/api && .venv/bin/python -m pytest --cov=app --cov-branch --cov-report=term`, and
 `cd apps/web && CI=true npx vitest run --coverage --maxWorkers=2`.
 
