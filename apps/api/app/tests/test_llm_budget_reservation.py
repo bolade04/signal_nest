@@ -1268,24 +1268,71 @@ def test_the_durable_handler_is_the_only_production_caller_of_the_pipeline_run()
     is the durable handler, which supplies a shared-ledger meter through ``metered_run``.
     The one other caller is the replay demo seed (``app.connectors.replay``, #255), which
     refuses anything but a local development/test SQLite database before it runs a
-    request, so the meter it gets is the SQLite same-session path."""
-    import re
+    request, so the meter it gets is the SQLite same-session path.
+
+    The scan is syntactic (``ast``), so an aliased, parenthesised or module-attribute
+    reference counts as a caller; ``test_replay_seed_guard`` proves the seed's refusal
+    behaviourally (review r7 MINOR-1)."""
+    import ast
     from pathlib import Path
+
+    def pipeline_run_refs(tree: ast.AST) -> list[ast.AST]:
+        """Every import of ``app.jobs.pipeline._run`` and every ``<pipeline>._run`` or
+        ``getattr(<pipeline>, "_run")`` in a module, whatever the alias."""
+
+        def is_pipeline(node: ast.ImportFrom) -> bool:
+            if node.level:  # relative: ``from .pipeline`` / ``from ..jobs.pipeline``
+                return (node.module or "").split(".")[-1] == "pipeline"
+            return node.module == "app.jobs.pipeline"
+
+        modules = {"app.jobs.pipeline"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules |= {a.asname for a in node.names if a.name == "app.jobs.pipeline"}
+            elif isinstance(node, ast.ImportFrom) and (node.module == "app.jobs" or node.level):
+                modules |= {a.asname or a.name for a in node.names if a.name == "pipeline"}
+        modules.discard(None)
+        refs: list[ast.AST] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and is_pipeline(node):
+                refs += [node for a in node.names if a.name in {"_run", "*"}]
+            elif isinstance(node, ast.Attribute) and node.attr == "_run":
+                if ast.unparse(node.value) in modules:
+                    refs.append(node)
+            elif isinstance(node, ast.Call) and ast.unparse(node.func) == "getattr":
+                if node.args and ast.unparse(node.args[0]) in modules:
+                    refs.append(node)
+        return refs
 
     app_dir = Path(__file__).resolve().parents[1]
     callers = set()
     for path in app_dir.rglob("*.py"):
         if "tests" in path.relative_to(app_dir).parts or path.name == "pipeline.py":
             continue
-        text = path.read_text(encoding="utf-8")
-        if re.search(r"from app\.jobs\.pipeline import[^\n]*\b_run\b|pipeline\._run\b", text):
+        if pipeline_run_refs(ast.parse(path.read_text(encoding="utf-8"))):
             callers.add(path.relative_to(app_dir).as_posix())
     assert callers == {"jobs/handlers.py", "connectors/replay.py"}
     handler = (app_dir / "jobs" / "handlers.py").read_text(encoding="utf-8")
     assert "session_factory=sessionmaker(" in handler and "with metered_run(meter):" in handler
-    replay = (app_dir / "connectors" / "replay.py").read_text(encoding="utf-8")
-    seed = replay[replay.index("def seed_replay(") :]
-    assert seed.count("_run(") == 1 and replay.count("_run(") == 1
-    assert seed.index("_require_safe_seed_target(session_factory=factory)") < seed.index(
-        "_run(db, request.id)"
-    )
+
+    # The replay seed: its only reference is one unaliased import inside seed_replay, the
+    # only use of that name is one call inside seed_replay, and the seed guard is an
+    # unconditional statement of seed_replay's own body that runs before it.
+    tree = ast.parse((app_dir / "connectors" / "replay.py").read_text(encoding="utf-8"))
+    (seed,) = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "seed_replay"]
+    (ref,) = pipeline_run_refs(tree)
+    assert isinstance(ref, ast.ImportFrom) and [(a.name, a.asname) for a in ref.names] == [
+        ("_run", None)
+    ]
+    assert ref in list(ast.walk(seed))
+    uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "_run"]
+    (call,) = [n for n in ast.walk(seed) if isinstance(n, ast.Call) and n.func in uses]
+    assert len(uses) == 1
+    (guard,) = [
+        stmt
+        for stmt in seed.body
+        if isinstance(stmt, ast.Expr)
+        and isinstance(stmt.value, ast.Call)
+        and ast.unparse(stmt.value) == "_require_safe_seed_target(session_factory=factory)"
+    ]
+    assert guard.end_lineno < call.lineno
