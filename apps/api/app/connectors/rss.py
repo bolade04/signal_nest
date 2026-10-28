@@ -46,9 +46,11 @@ from app.connectors.base import (
 )
 from app.connectors.content import safe_entry_url, sanitize_text
 from app.connectors.fetch_limits import (
+    EGRESS_BLOCKED,
     FEED_TOO_LARGE,
     FETCH_ERROR,
     RATE_LIMITED,
+    RESPONSE_REFUSED,
     RETRIES_EXHAUSTED,
     XML_MALFORMED,
     XML_UNSAFE,
@@ -95,17 +97,29 @@ class ParsedFeed:
 
 
 _TOO_LARGE_DETAIL = "feed exceeds size limit"
+#: The egress guard's static detail for a body above ``max_response_bytes`` (live path).
+_RESPONSE_TOO_LARGE_DETAIL = "response exceeds size limit"
+_DOCTYPE_DETAIL = "feed declares a DOCTYPE/entity"
 
 
 def failure_reason(failure: FetchFailure) -> str:
-    """The closed ``failure_reason`` code of a classified failure (no free text)."""
+    """The closed ``failure_reason`` code of a classified failure (no free text).
+
+    ``failure.detail`` is the static detail the parser or the egress guard raised (never
+    the source key prefix the live connector adds to ``ConnectorResult.failures``)."""
     kind = failure.kind
     if kind is FailureKind.UNSAFE_CONTENT:
-        return FEED_TOO_LARGE if failure.detail == _TOO_LARGE_DETAIL else XML_UNSAFE
+        if failure.detail in (_TOO_LARGE_DETAIL, _RESPONSE_TOO_LARGE_DETAIL):
+            return FEED_TOO_LARGE
+        if failure.detail == _DOCTYPE_DETAIL:
+            return XML_UNSAFE
+        return RESPONSE_REFUSED  # an encoded body or a media type that is not a feed
     if kind is FailureKind.PARSE_ERROR:
         return XML_MALFORMED
     if kind is FailureKind.RATE_LIMITED:
         return RATE_LIMITED
+    if kind is FailureKind.EGRESS_BLOCKED:
+        return EGRESS_BLOCKED
     if kind.retryable:  # timeout / network / upstream error that outlasted the retries
         return RETRIES_EXHAUSTED
     return FETCH_ERROR
@@ -117,9 +131,7 @@ def _assert_safe_xml(data: bytes) -> None:
         raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _TOO_LARGE_DETAIL)
     head = data[:4096].lstrip().lower()
     if b"<!doctype" in head or b"<!entity" in head or b"<!doctype" in data.lower():
-        raise ConnectorFetchError(
-            FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
-        )
+        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _DOCTYPE_DETAIL)
 
 
 def _date(value: str | None) -> datetime | None:
@@ -193,9 +205,7 @@ def parse_feed(data: bytes, *, max_entries: int | None = None) -> ParsedFeed:
     except (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden) as exc:
         # The byte screen above misses declarations the parser still sees (another
         # encoding, a declaration past the screened head); defusedxml refuses them.
-        raise ConnectorFetchError(
-            FailureKind.UNSAFE_CONTENT, "feed declares a DOCTYPE/entity"
-        ) from exc
+        raise ConnectorFetchError(FailureKind.UNSAFE_CONTENT, _DOCTYPE_DETAIL) from exc
     except DET.ParseError as exc:
         raise ConnectorFetchError(FailureKind.PARSE_ERROR, "malformed feed XML") from exc
     except (ValueError, LookupError) as exc:

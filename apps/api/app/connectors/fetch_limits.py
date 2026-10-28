@@ -34,11 +34,25 @@ FETCH_LIMIT_REACHED = "fetch_limit_reached"
 SOURCE_FAILED = "source_failed"
 
 #: Per-source failure reasons (``failure_reason``); closed, static, secret-free.
+#: A byte cap refused the feed (the parser's ``MAX_FEED_BYTES`` or, on the live path, the
+#: egress guard's ``max_response_bytes``).
 FEED_TOO_LARGE = "feed_too_large"
+#: The document declares a DOCTYPE/entity (byte screen or ``defusedxml``).
 XML_UNSAFE = "xml_unsafe"
+#: The document is not a readable feed (malformed XML, no channel, unknown format or
+#: encoding) - including a malformation past the fetch limit: the document is rejected whole.
 XML_MALFORMED = "xml_malformed"
+#: The source is rate limited (a 429, a cool-down it asked for, or no token left).
 RATE_LIMITED = "rate_limited"
+#: A transient failure (timeout, network, upstream 5xx) outlasted the run's attempts.
 RETRIES_EXHAUSTED = "retries_exhausted"
+#: Live path (FU-268-2): the egress guard refused the response itself (an encoded body or
+#: a media type that is not a feed).
+RESPONSE_REFUSED = "response_refused"
+#: Live path (FU-268-2): the egress guard refused the target (scheme, host allow-list, a
+#: non-public address, a disallowed redirect).
+EGRESS_BLOCKED = "egress_blocked"
+#: Any other permanent fetch failure (a 4xx other than 429, a source not configured).
 FETCH_ERROR = "fetch_error"
 
 

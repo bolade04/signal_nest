@@ -24,6 +24,17 @@ interval, conditional requests and cool-downs held by
 others; each failure is recorded per source. Every signal carries its provenance:
 connector, delivery mode, source key, publisher, feed URL, terms URL, approval
 reference, the feed bytes' SHA-256, the item link/guid and the retrieval time.
+
+Per-source fetch limit (#268, FU-268-2): each source contributes at most
+``FetchScope.max_items`` entries. The parser extracts at most one entry past that limit
+(:func:`~app.connectors.fetch_limits.lookahead_entries`), so a source that held more is
+reported ``clipped`` instead of passing silently for complete; the byte caps (the egress
+guard's ``max_response_bytes`` and the parser's ``MAX_FEED_BYTES``) bound everything read.
+Every source - read, clipped or failed - yields one
+:class:`~app.connectors.fetch_limits.SourceFetchReport` in ``ConnectorResult.reports``; a
+failed source is reported ``failed`` with a closed ``failure_reason``, never as an empty
+one. The per-run in-process bound applies afterwards, in the pipeline, to the total over
+all sources.
 """
 
 from __future__ import annotations
@@ -47,8 +58,16 @@ from app.connectors.egress import (
     parse_replay_origin,
 )
 from app.connectors.feedcache import CachedFeed, FeedCache, feed_cache
+from app.connectors.fetch_limits import lookahead_entries
 from app.connectors.retry import ConnectorFetchError
-from app.connectors.rss import ParsedFeed, item_signal, keyword_match, parse_feed
+from app.connectors.rss import (
+    ParsedFeed,
+    failed_source_report,
+    item_signal,
+    keyword_match,
+    parse_feed,
+    source_report,
+)
 from app.connectors.sources import APPROVED_SOURCES, SourceRecord
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
@@ -166,27 +185,35 @@ class LiveRssConnector(SourceConnector):
             connector=self.name, source_type=self.source_type, retrieved_at=self._now()
         )
         self.failed_sources = []
+        # Look one entry past the per-source fetch limit (never more): that single extra
+        # entry is what tells a clipped source from one that held exactly ``max_items``.
+        max_entries = lookahead_entries(scope.max_items)
         for target in self.targets:
             key = target.source.source_key
             started = time.monotonic()
             try:
-                feed, parsed = self._feed(target)
-                signals, items = self._signals(target, feed, parsed, scope)
+                feed, parsed = self._feed(target, max_entries)
+                signals, fetched, clipped = self._signals(target, feed, parsed, scope)
             except ConnectorFetchError as exc:
-                self._record_failure(result, key, exc.failure.kind, exc.failure.detail)
+                self._record_failure(result, scope, key, exc.failure.kind, exc.failure.detail)
                 continue
             except Exception as exc:  # noqa: BLE001 - one source's defect never sinks the run
                 detail = f"unreadable source ({type(exc).__name__})"
-                self._record_failure(result, key, FailureKind.PARSE_ERROR, detail)
+                self._record_failure(result, scope, key, FailureKind.PARSE_ERROR, detail)
                 continue
             result.signals.extend(signals)
+            result.reports.append(
+                source_report(key, scope, fetched=fetched, eligible=len(signals), clipped=clipped)
+            )
             logger.info(
                 "connector.source_read",
                 extra={
                     "extra_fields": {
                         "source_key": key,
                         "delivery": target.delivery,
-                        "items": items,
+                        "items": len(parsed.items),
+                        "fetched": fetched,
+                        "clipped": clipped,
                         "kept": len(signals),
                         "duration_ms": round((time.monotonic() - started) * 1000, 1),
                     }
@@ -195,10 +222,21 @@ class LiveRssConnector(SourceConnector):
         return result
 
     def _record_failure(
-        self, result: ConnectorResult, key: str, kind: FailureKind, detail: str
+        self,
+        result: ConnectorResult,
+        scope: FetchScope,
+        key: str,
+        kind: FailureKind,
+        detail: str,
     ) -> None:
         self.failed_sources.append(key)
-        result.failures.append(FetchFailure(kind=kind, detail=f"{key}: {detail}"))
+        failure = FetchFailure(kind=kind, detail=f"{key}: {detail}")
+        result.failures.append(failure)
+        # A failed source contributed nothing; it is reported failed, never as an empty
+        # one (the closed reason is derived from the kind and the static detail).
+        result.reports.append(
+            failed_source_report(key, scope, FetchFailure(kind=kind, detail=detail))
+        )
         logger.warning(
             "connector.source_failed",
             extra={"extra_fields": {"source_key": key, "kind": kind.value}},
@@ -206,8 +244,9 @@ class LiveRssConnector(SourceConnector):
 
     def _signals(
         self, target: SourceTarget, feed: CachedFeed, parsed: ParsedFeed, scope: FetchScope
-    ) -> tuple[list, int]:
-        """This source's keyword-matched signals, and how many items its feed held."""
+    ) -> tuple[list, int, bool]:
+        """This source's keyword-matched signals from the entries within its fetch limit,
+        how many entries were read within it, and whether the source held more (clipped)."""
         attribution = {
             "connector": "rss_news",
             "delivery": target.delivery,
@@ -223,7 +262,8 @@ class LiveRssConnector(SourceConnector):
             **dict(target.provenance),
         }
         signals = []
-        for item in parsed.items[: scope.max_items]:
+        window = parsed.items[: scope.max_items]
+        for item in window:
             signal = item_signal(
                 item,
                 market=scope.market,
@@ -234,20 +274,21 @@ class LiveRssConnector(SourceConnector):
             )
             if keyword_match(signal, scope.keywords):
                 signals.append(signal)
-        return signals, len(parsed.items)
+        return signals, len(window), len(parsed.items) > scope.max_items
 
-    def _feed(self, target: SourceTarget) -> tuple[CachedFeed, ParsedFeed]:
-        """The source's feed and its parse. A body is cached only after it parsed, so a
-        feed this connector cannot read is never served again from the cache."""
+    def _feed(self, target: SourceTarget, max_entries: int) -> tuple[CachedFeed, ParsedFeed]:
+        """The source's feed and its parse (at most ``max_entries`` entries extracted). A
+        body is cached only after it parsed, so a feed this connector cannot read is never
+        served again from the cache."""
         key = target.source.source_key
         interval = max(self._interval, target.source.min_fetch_interval_seconds or 0.0)
         fresh = self._cache.fresh(key, interval)
         if fresh is not None:
-            return fresh, parse_feed(fresh.body)
+            return fresh, parse_feed(fresh.body, max_entries=max_entries)
         if self._cache.cooling(key):
             held = self._cache.cached(key)
             if held is not None:
-                return held, parse_feed(held.body)
+                return held, parse_feed(held.body, max_entries=max_entries)
             raise ConnectorFetchError(*self._cache.cooling_reason(key))
         validators = self._cache.validators(key)
         last: ConnectorFetchError | None = None
@@ -269,9 +310,9 @@ class LiveRssConnector(SourceConnector):
                 held = self._cache.revalidated(key, response)
                 if held is None:  # validators are only sent while a body is held
                     raise ConnectorFetchError(FailureKind.UPSTREAM_ERROR, "304 without a body")
-                return held, parse_feed(held.body)
+                return held, parse_feed(held.body, max_entries=max_entries)
             try:
-                parsed = parse_feed(response.body)
+                parsed = parse_feed(response.body, max_entries=max_entries)
             except ConnectorFetchError as exc:
                 # Not cached, and not asked for again before the politeness interval
                 # passes: an unreadable feed costs its publisher one request per
