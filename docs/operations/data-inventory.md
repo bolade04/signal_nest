@@ -6,7 +6,7 @@ It describes what the code does; it is not a legal retention policy. Retention
 [Retention durations](#retention-durations-undecided) below.
 
 **Derived from the code**, not from earlier documents: every table below is a SQLAlchemy
-model registered in `apps/api/app/db/models.py` (40 tables, all of them listed here); the
+model registered in `apps/api/app/db/models.py` (42 tables, all of them listed here); the
 column lists and foreign-key delete rules were read from `Base.metadata` on the branch
 base `origin/main` `3b0d9e36`. The machine-checked counterpart is
 `apps/api/app/privacy/inventory.py`; `apps/api/app/tests/test_privacy_inventory.py` fails
