@@ -78,7 +78,9 @@ def _run(argv: list[str]) -> int:
         connect_args["connect_timeout"] = _PG_CONNECT_TIMEOUT_SECONDS
 
     try:
-        engine = create_engine(url, poolclass=NullPool, connect_args=connect_args)
+        engine = create_engine(
+            url, poolclass=NullPool, connect_args=connect_args, hide_parameters=True
+        )
     except Exception:
         return _fail("configuration-failure", EXIT_CONFIG_FAILURE)
 

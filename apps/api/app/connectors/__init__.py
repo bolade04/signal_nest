@@ -8,11 +8,13 @@ bounded retry/backoff, failure classification, source attribution, per-request
 isolation and mock/sandbox support) — plus the first concrete connector
 (RSS / news feeds) running in a deterministic **sandbox** by default.
 
-Nothing here performs live network egress. The RSS connector reads a bundled,
-deterministic sample feed so the whole path (fetch → parse → normalize →
-attribute) is exercised offline. Wiring a live feed provider is a follow-up
-batch gated on explicit product-owner approval and connector legal feasibility
-sign-off (see ``docs/phase-3-plan.md`` Phase 3 entry criteria).
+Live egress (P6-DATA-1 / P6-DATA-4) is **dark by default**: ``live`` reads only feeds
+named in the reviewed allow-list ``sources.APPROVED_SOURCES`` (which ships empty),
+only while ``connector_rss_live_enabled`` is on and the kill switch is off, and only
+through the SSRF-guarded fetcher in ``egress``. Turning it on is the operator's
+first-source decision plus legal / terms-of-service sign-off (``P6-D03``, X1). The
+sandbox RSS connector still reads a bundled, deterministic sample feed, and
+``replay`` serves recorded feed captures from a loopback server for tests and CI.
 """
 
 from __future__ import annotations

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.geography.markets import parse_market, text_within
+
 
 @dataclass
 class FixtureSignal:
@@ -160,8 +162,9 @@ def fixtures_for_market(market: str | None) -> list[FixtureSignal]:
         for signals in _MARKET_FIXTURES.values():
             out.extend(signals)
         return out
+    # Structured, fail-closed identity (P6-DATA-6), not a bidirectional substring test.
     for key, signals in _MARKET_FIXTURES.items():
-        if key.lower() in market.lower() or market.lower() in key.lower():
+        if text_within(market, parse_market(key)):
             return signals
     return []
 

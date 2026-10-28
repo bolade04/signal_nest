@@ -12,6 +12,7 @@ from app.audit.routes import router as audit_router
 from app.auth.routes import router as auth_router
 from app.brands.routes import router as brands_router
 from app.campaign_context.routes import router as campaign_context_router
+from app.connectors.routes import router as data_sources_router
 from app.feedback.routes import router as feedback_router
 from app.jobs.routes import router as jobs_router
 from app.locations.routes import router as locations_router
@@ -35,6 +36,7 @@ for _r in (
     internal_system_router,
     internal_observability_router,
     internal_capabilities_router,
+    data_sources_router,
     auth_router,
     organizations_router,
     brands_router,
