@@ -1264,8 +1264,11 @@ def test_the_handler_builds_a_per_attempt_meter_with_the_ledger_seam(factory, mo
 def test_the_durable_handler_is_the_only_production_caller_of_the_pipeline_run():
     """INFO-4 (review r1): ``pipeline._run``'s bare ``LLMMeter(get_settings())`` fallback
     has no session factory (the same-session path even on PostgreSQL). It must stay
-    reachable only from tests: every production import or call of ``_run`` is the durable
-    handler, which supplies a shared-ledger meter through ``metered_run``."""
+    unreachable on PostgreSQL outside tests: every production import or call of ``_run``
+    is the durable handler, which supplies a shared-ledger meter through ``metered_run``.
+    The one other caller is the replay demo seed (``app.connectors.replay``, #255), which
+    refuses anything but a local development/test SQLite database before it runs a
+    request, so the meter it gets is the SQLite same-session path."""
     import re
     from pathlib import Path
 
@@ -1277,6 +1280,12 @@ def test_the_durable_handler_is_the_only_production_caller_of_the_pipeline_run()
         text = path.read_text(encoding="utf-8")
         if re.search(r"from app\.jobs\.pipeline import[^\n]*\b_run\b|pipeline\._run\b", text):
             callers.add(path.relative_to(app_dir).as_posix())
-    assert callers == {"jobs/handlers.py"}
+    assert callers == {"jobs/handlers.py", "connectors/replay.py"}
     handler = (app_dir / "jobs" / "handlers.py").read_text(encoding="utf-8")
     assert "session_factory=sessionmaker(" in handler and "with metered_run(meter):" in handler
+    replay = (app_dir / "connectors" / "replay.py").read_text(encoding="utf-8")
+    seed = replay[replay.index("def seed_replay(") :]
+    assert seed.count("_run(") == 1 and replay.count("_run(") == 1
+    assert seed.index("_require_safe_seed_target(session_factory=factory)") < seed.index(
+        "_run(db, request.id)"
+    )
