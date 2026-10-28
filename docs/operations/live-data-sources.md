@@ -37,6 +37,16 @@ Every run records the outcome in `stats.coverage` (and the scout-request API's t
 `sources` / `sources_failed` count the live sources consulted. A run that predates this
 field has `coverage: null`.
 
+Next to `coverage`, the run's `stats` carry each consulted source's fetch facts (#268,
+P6-PLAT-1): `fetch_limits` - per source `max_items` (100), `fetched`, `eligible_seen`,
+`clipped` (the source held more than 100 entries; one entry of look-ahead) and, for a
+source that failed, `failed: true` with a closed `failure_reason` (a failed source is
+never shown as an empty one) - and `partial_fetch` / `partial_fetch_reasons`
+(`fetch_limit_reached`, `source_failed`). After the takedown re-check, a run whose
+sources together would index more than N_max = 100 signals is refused
+(`signal_volume_above_bound`) before any model call, with every source's facts and no
+`coverage` object. The full statement is in `aws-staging-runtime-contract.md` §G.
+
 ## 2. Egress guard (`apps/api/app/connectors/egress.py`)
 
 * `https` only, port 443, no credentials, no raw IP, no internal-looking names, host must
