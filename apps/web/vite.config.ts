@@ -108,6 +108,15 @@ export default defineConfig({
     globals: true,
     css: false,
     restoreMocks: true,
+    // P6-CI-8: report-only coverage, switched on by CI=true; deliberately no `thresholds`.
+    coverage: {
+      enabled: process.env.CI === 'true',
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.*', 'src/test/**', 'src/api/schema.d.ts'],
+      reporter: ['text-summary', 'json-summary', 'lcov'],
+      reportsDirectory: '../../ci-logs/coverage-web',
+    },
     projects: [
       {
         extends: true,

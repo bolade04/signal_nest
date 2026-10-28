@@ -36,7 +36,7 @@ removed, so pip must stay on 25.x)~~ *(CERT-2, operator order 2026-10-21: `pip==
 `pip-tools==7.6.2` — pip 26.2.2 is the first pip whose vendored certifi is 2026.10.19
 (GHSA-6q48-6c7w-9gw2); pip-tools 7.5.2 cannot run under pip 26 (`ImportError: stdlib_pkgs`),
 7.6.2 can; the runtime and dev locks verify unchanged under 7.6.2 — 46 pins / 973 hashes and
-55 pins / 1007 hashes, every hash recomputed from the index)*, package source: the default index, PyPI
+~~55 pins / 1007 hashes~~ *(2026-10-27, P6-CI-8: the dev lock is 57 pins / 1213 hashes since `coverage` and `pytest-cov` entered it; `tools/verify_locks.py` under pip 26.2.2 / pip-tools 7.6.2 reported both locks verified on that date)*, every hash recomputed from the index)*, package source: the default index, PyPI
 (`https://pypi.org/simple`). Run in place, these commands keep every existing pin that
 still satisfies `pyproject.toml` (pip-tools' default when the output file exists and
 `--upgrade` is not given):

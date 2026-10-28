@@ -53,7 +53,7 @@ ALLOWED_INSTALLER_LINES = {
         "npm ci 2>&1 | tee ci-logs/npm-ci.log",
         "run: npm run lint 2>&1 | tee ci-logs/frontend-lint.log",
         "run: npm run type-check 2>&1 | tee ci-logs/frontend-typecheck.log",
-        "run: npm run test 2>&1 | tee ci-logs/frontend-test.log",
+        "npm run test 2>&1 | tee ci-logs/frontend-test.log",
         "run: npm run build 2>&1 | tee ci-logs/frontend-build.log",
         "python -m venv --clear apps/api/.venv",
         "apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt",
