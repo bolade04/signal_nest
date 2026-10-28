@@ -33,7 +33,8 @@ from app.llm.metering import (
 from app.llm.models import LLMUsageEvent
 from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
-from app.tests._llm_offline import offline_llm, offline_settings
+from app.organizations.models import Organization, Workspace
+from app.tests._llm_offline import offline_llm, offline_settings, wire_payload
 
 KEY = "fixture-key"
 MODEL = "claude-sonnet-4-6"
@@ -115,9 +116,14 @@ def _state(meter: LLMMeter) -> dict:
 
 
 def _seed(db) -> None:
-    # Job A already has two recorded attempts; workspace B has its own spend.
+    # Job A already has two recorded attempts; workspace B has its own spend. The
+    # tenants exist: the ledger never writes for a workspace that is not there.
     db.add_all(
         [
+            Organization(id="org-A", name="A", slug="org-a"),
+            Organization(id="org-B", name="B", slug="org-b"),
+            Workspace(id="ws-A", organization_id="org-A", name="A", slug="ws-a"),
+            Workspace(id="ws-B", organization_id="org-B", name="B", slug="ws-b"),
             _row(A, job_id=JOB, cost=0.25),
             _row(A, job_id=JOB, cost=0.25),
             _row(B, job_id="job-B", cost=3.0),
@@ -181,9 +187,9 @@ def test_a_meter_holding_records_cannot_be_bound(db):
     """Usage recorded before any bind is never attributed by a later bind."""
     s = _settings()
     meter = LLMMeter(s, job_id=JOB)
-    meter.before_attempt("anthropic", MODEL, 10, 100)
+    meter.before_attempt("anthropic", MODEL, wire_payload(max_tokens=100))
     meter.after_attempt(
-        task="classify_signal", provider="anthropic", model=MODEL, prompt_chars=10, max_tokens=100
+        task="classify_signal", provider="anthropic", model=MODEL
     )
     before = _state(meter)
 
@@ -198,7 +204,8 @@ def test_a_meter_holding_records_cannot_be_bound(db):
 
 def _attempt_only() -> LLMMeter:
     meter = LLMMeter(_settings(), job_id=JOB)
-    meter.before_attempt("anthropic", MODEL, 10, 100)  # counted, nothing recorded yet
+    # counted, nothing recorded yet
+    meter.before_attempt("anthropic", MODEL, wire_payload(max_tokens=100))
     assert meter.attempts == 1
     return meter
 
@@ -212,7 +219,7 @@ def _spend_only() -> LLMMeter:
 def _refusal_only() -> LLMMeter:
     meter = LLMMeter(_settings(llm_workspace_monthly_budget_usd=0.0), job_id=JOB)
     with pytest.raises(LLMBudgetExceededError):
-        meter.before_attempt("anthropic", MODEL, 10, 100)  # budget 0: refused
+        meter.before_attempt("anthropic", MODEL, wire_payload(max_tokens=100))  # budget 0: refused
     assert meter.attempts == 0 and meter.refusals == {"workspace_budget": 1}
     return meter
 
@@ -252,8 +259,9 @@ def test_a_fresh_meter_per_attempt_still_binds_and_counts_prior_attempts(db):
     s = _settings()
     _seed(db)
     first = LLMMeter(s, job_id=JOB).bind(db, **A)
+    first.before_attempt("anthropic", MODEL, wire_payload(max_tokens=100))
     first.after_attempt(
-        task="classify_signal", provider="anthropic", model=MODEL, prompt_chars=10, max_tokens=100
+        task="classify_signal", provider="anthropic", model=MODEL
     )
     first.flush(db)
     db.commit()

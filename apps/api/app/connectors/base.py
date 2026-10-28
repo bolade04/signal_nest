@@ -21,6 +21,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from app.connectors.fetch_limits import (
+    DEFAULT_MAX_ITEMS_PER_SOURCE,
+    FetchOutcome,
+    SourceFetchReport,
+)
+
 
 class FailureKind(StrEnum):
     """Coarse, secret-free classification of a single fetch failure.
@@ -36,6 +42,11 @@ class FailureKind(StrEnum):
     PARSE_ERROR = "parse_error"
     UNSAFE_CONTENT = "unsafe_content"
     NOT_CONFIGURED = "not_configured"
+    #: The egress guard refused the target (scheme, host allow-list, a non-public
+    #: address, a disallowed redirect). Permanent: retrying cannot make it safe.
+    EGRESS_BLOCKED = "egress_blocked"
+    #: The source answered with a permanent 4xx (other than 429).
+    HTTP_CLIENT_ERROR = "http_client_error"
 
     @property
     def retryable(self) -> bool:
@@ -72,7 +83,7 @@ class FetchScope:
     market: str | None
     keywords: tuple[str, ...] = ()
     source_types: tuple[str, ...] = ()
-    max_items: int = 100
+    max_items: int = DEFAULT_MAX_ITEMS_PER_SOURCE
 
 
 @dataclass
@@ -116,6 +127,8 @@ class ConnectorResult:
     source_type: str
     signals: list[ConnectorSignal] = field(default_factory=list)
     failures: list[FetchFailure] = field(default_factory=list)
+    #: One per source consulted: what it delivered against its fetch limit.
+    reports: list[SourceFetchReport] = field(default_factory=list)
     retrieved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -148,9 +161,18 @@ class SourceConnector(abc.ABC):
         self, *, market: str | None, keywords: list[str], source_types: list[str]
     ) -> list[ConnectorSignal]:
         """Drop-in seam: return only the normalized signals for a request."""
+        return self.fetch_reported(
+            market=market, keywords=keywords, source_types=source_types
+        ).signals
+
+    def fetch_reported(
+        self, *, market: str | None, keywords: list[str], source_types: list[str]
+    ) -> FetchOutcome:
+        """Like :meth:`fetch`, plus the per-source fetch-limit reports (#268)."""
         scope = FetchScope(
             market=market,
             keywords=tuple(keywords or ()),
             source_types=tuple(source_types or ()),
         )
-        return self.collect(scope).signals
+        result = self.collect(scope)
+        return FetchOutcome(signals=result.signals, reports=result.reports)

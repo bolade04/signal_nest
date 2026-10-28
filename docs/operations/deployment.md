@@ -78,7 +78,18 @@ exposes `8000` and declares a `HEALTHCHECK` against `GET /health` (liveness only
   production currently refuses to start with every `VECTOR_BACKEND` value. `bruteforce`
   is refused as local-only, and `pgvector` is refused because no pgvector path is
   implemented. This holds until the P6-PLAT-1 operator decision is implemented; staging
-  is unaffected.)*
+  is unaffected.)* *(2026-10-27, decided — D-PLAT-1 strategy B: production starts with
+  `VECTOR_BACKEND=bruteforce` **only** when the task environment also sets
+  `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` (and `VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN`,
+  default 100, within the hard ceiling 100). What that acknowledges: in-process per-run similarity, bound N_max = 100 signals per run (engineering capacity bound, not a quota); no cross-run or history-wide similarity; pgvector refused until implemented (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists.
+  A scout run that would index more than the bound is refused and recorded (`failed`,
+  `signal_volume_above_bound`) — never truncated or chunked. The bound is separate from the per-source fetch limit (100 entries per source per run, applied first, on the live multi-source path as on the sandbox feed); it counts what would be indexed after the takedown re-check, and a refused run makes no model call; a clipped or failed source is marked `partial_fetch` (`partial_fetch_reasons`: `fetch_limit_reached` / `source_failed`) in the run's `stats` (see `docs/operations/aws-staging-runtime-contract.md` §G). The production **migration
+  task** needs `APP_MODE=full`, `CACHE_BACKEND=redis`, `STORAGE_BACKEND=s3`,
+  `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` and `DATABASE_URL` — and no `REDIS_URL`:
+  `migration_mode` opens no Redis connection and is exempt from the
+  `*_backend=redis requires redis_url` rules. CI proves the boot in
+  `test_postgres_production_boot` (migration actor without Redis, then the full profile
+  booted through the lifespan with readiness `ready`; Redis doubled by fakeredis).)*
 - **Signals reach the process directly.** Both images use exec-form commands so the
   application is PID 1 and receives `SIGTERM` directly, driving the graceful
   lifecycle below.

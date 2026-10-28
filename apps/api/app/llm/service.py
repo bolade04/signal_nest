@@ -41,7 +41,7 @@ from app.llm.base import (
 )
 from app.llm.metering import cost_usd
 from app.llm.mock import MockLLMProvider
-from app.llm.prompts import SYSTEM_PROMPT, get_prompt, render_prompt
+from app.llm.prompts import get_prompt
 from app.llm.schemas import TASK_SCHEMAS
 
 if TYPE_CHECKING:
@@ -121,10 +121,6 @@ class LLMService:
         )
         provider_name = self._provider.name
         model = getattr(self._provider, "model", "") or ""
-        prompt_chars = 0
-        if meter is not None:
-            rendered = render_prompt(task, inputs, settings.llm_max_untrusted_chars)
-            prompt_chars = len(SYSTEM_PROMPT) + len(rendered)
 
         def charge(response: LLMResponse | None = None, error: Exception | None = None):
             if meter is not None:
@@ -132,8 +128,6 @@ class LLMService:
                     task=task,
                     provider=provider_name,
                     model=model,
-                    prompt_chars=prompt_chars,
-                    max_tokens=request.max_tokens,
                     response=response,
                     error=error,
                 )
@@ -142,7 +136,7 @@ class LLMService:
         last_error: Exception | None = None
         for attempt in range(attempts):
             if meter is not None:
-                meter.before_attempt(provider_name, model, prompt_chars, request.max_tokens)
+                meter.before_attempt(provider_name, model, self._wire_bytes(request))
             try:
                 response = self._provider.generate(request, prompt.name, prompt.version)
             except _TRANSIENT as exc:
@@ -206,6 +200,17 @@ class LLMService:
             return self._validate(task, response), response
 
         raise last_error or LLMError("LLM call failed")
+
+    def _wire_bytes(self, request: LLMRequest) -> bytes | None:
+        """The request body exactly as the provider's transport will send it, for the
+        budget bound; ``None`` when the provider cannot show it (unbounded, so refused)."""
+        prepare = getattr(self._provider, "prepare", None)
+        if prepare is None:
+            return None
+        try:
+            return prepare(request).content
+        except (TypeError, ValueError):
+            return None  # not encodable as the body the transport would send
 
     def _validate(self, task: str, response: LLMResponse) -> BaseModel:
         schema = TASK_SCHEMAS.get(task)

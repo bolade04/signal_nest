@@ -33,11 +33,14 @@ password) echo no password and no hash either.
 forbids unknown fields, and the password change takes both passwords the same way; no
 operation anywhere has a token in its path, query or headers; the two public operations
 have no parameters at all (no bearer dependency), the two verification operations and the
-password change only the ``authorization`` header; each answers 204 with no body. 118
+password change only the ``authorization`` header; each answers 204 with no body. 127
 operations (105 before P6-UI-017 added the password change; 106 before P6-PLAT-9 added a
 PATCH to each of the nine campaign-context collections; 115 before P6-UI-023 added
 location deactivate and reactivate; 117 before P6-UI-006 added the scheduling-capability
-reflection).
+reflection; 118 before P6-PRIV-4 added the two operator-only
+``/internal/system/data-sources`` routes and P6-PRIV-1 / D-9f the six account and
+organization export and deletion routes (124 with #246 alone); 126 before D-9e added the
+operator-only ``GET /internal/system/data-sources/{source_key}/cases``).
 """
 
 from __future__ import annotations
@@ -753,7 +756,11 @@ class TestOpenApiContract:
         # export and deletion. None is a token-bearing account-mail operation of this module.
         # 123 -> 124 (D-9f): GET /organizations/{organization_id}/export/{table}, customer
         # (exact OWNER) and not an account-mail operation of this module.
-        assert count == 124
+        # 124 -> 126 (P6-PRIV-4, merged after #246): the two operator-only
+        # /internal/system/data-sources routes.
+        # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
+        # operator-only read of the restricted takedown case record.
+        assert count == 127
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

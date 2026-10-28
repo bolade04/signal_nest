@@ -50,7 +50,7 @@ from app.infra.mail import (
     send_mail,
 )
 from app.privacy.inventory import RetentionClass
-from app.tests._platform_support import pgvector_build
+from app.tests._platform_support import production_vector_kwargs
 
 REGION = "us-east-1"
 ENDPOINT = f"https://email.{REGION}.amazonaws.com"
@@ -417,7 +417,9 @@ _PRODUCTION_STACK = {
     "redis_url": "redis://unused.invalid:6379/0",
     "storage_backend": "s3",
     "s3_bucket": "unused",
-    "vector_backend": "pgvector",
+    # P6-PLAT-1 (strategy B): the acknowledged bounded in-process backend, as production
+    # really validates it - no patched build fact.
+    **production_vector_kwargs(),
     # Retention durations have no default and production requires every one (P6-PRIV-1):
     # inert test values, not a policy.
     **{c.setting_name: 30 for c in RetentionClass},
@@ -440,9 +442,7 @@ def _settings(environment: str, **overrides) -> Settings:
     if environment == "production":
         kwargs |= _PRODUCTION_STACK
     kwargs.update(overrides)
-    # A production stack is only accepted by a pgvector-implementing build (P6-PLAT-1).
-    with pgvector_build():
-        return Settings(**kwargs)
+    return Settings(**kwargs)
 
 
 def _rejected(environment: str, needle: str, **overrides) -> None:

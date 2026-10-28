@@ -6,7 +6,7 @@ It describes what the code does; it is not a legal retention policy. Retention
 [Retention durations](#retention-durations-undecided) below.
 
 **Derived from the code**, not from earlier documents: every table below is a SQLAlchemy
-model registered in `apps/api/app/db/models.py` (38 tables, all of them listed here); the
+model registered in `apps/api/app/db/models.py` (42 tables, all of them listed here); the
 column lists and foreign-key delete rules were read from `Base.metadata` on the branch
 base `origin/main` `3b0d9e36`. The machine-checked counterpart is
 `apps/api/app/privacy/inventory.py`; `apps/api/app/tests/test_privacy_inventory.py` fails
@@ -62,6 +62,7 @@ applies to the table's rows (durations undecided; see below).
 | Table | Personal / identifying columns | On account deletion | On organization deletion | Retention class |
 |---|---|---|---|---|
 | `audit_logs` | `actor_user_id`; `entity_id` (a user id for member and registration audits); `reason` (free text); `previous_state` / `new_state` (invitation audits carry the invitee `email`, `accepted_by_user_id`); `context` | anonymise every row that names the account: `actor_user_id`/`entity_id` equal to its id → NULL; `reason` containing its id or email → NULL; any JSON string value equal to its id or containing its email → `"[erased]"` | anonymise and **retain** (`actor_user_id`, `entity_id`, `reason`, `previous_state`, `new_state` → NULL, `context` → `{}`; `organization_id`, `workspace_id`, `action`, `entity_type` and timestamps kept) — follows the Phase-5 resolution `O-6` (`REC_compliance_records_survive_FKless_scope_columns`, rider: survival is subject to `O-5` and must not mean indefinite retention by default) | `audit_logs` (by `created_at`) |
+| `source_takedown_cases` | **restricted operator case record** of each live-source takedown request (`P6-PRIV-4`, operator decision `D-9e`, 2026-10-27): the operator's free-text `reason` and own `external_reference` (private; either may name a person or legal matter), the acting operator `actor_user_id`, `source_key`, the opaque case id (the only reference customer-visible audit entries carry) and `created_at` | `actor_user_id`: set null (the case is kept) | not tenant-keyed (platform-wide); not touched | **none — retention duration pending operator decision (D-9e access/retention policy)**; no time-based class and no job deletes these rows. Operator free text (reason, external_reference) is not reached by account erasure: if it names a person who is later erased, the text remains and the E10 content verifier reports findings on this table; this is pending the operator's access/retention/redaction decision (D-9e). Not exported (`exported=False`); read only through the operator-only `GET /api/v1/internal/system/data-sources/{source_key}/cases`; never in a tenant API, export, log or metric |
 | `opportunity_feedback` | `submitted_by_user_id` | set null | delete | follows `opportunities` / `signal_evidence` (dependent rows) |
 | `workspace_capability_overrides` | `set_by_user_id`, `reason` (operator note) | set null (`set_by_user_id`) | delete | none |
 
@@ -108,7 +109,10 @@ intelligence records, and feedback given on those records).
 | `jobs` | tenant scope ids, `payload` (entity ids only), `result_summary` (counts), `last_error_summary` (bounded, secret-free) | delete | `job_history` (terminal jobs, by `updated_at`) |
 | `job_events` | denormalised tenant ids (no foreign key to the organization), `event_metadata` (safe, bounded) | delete (dependent of `jobs`) | dependent of `jobs` |
 | `llm_usage_events` | **tenant-linked usage metadata** (the LLM usage ledger, `P6-LLM-4`; one row per provider attempt): `organization_id`, `workspace_id`, `scout_request_id` and `job_id` (set null when the request or job row goes), `task`, `provider`, `model`, `input_tokens`, `output_tokens`, `cost_usd`, `outcome`, timestamps; no prompt text, no content, no user id | delete (cascades with its workspace in the organization deletion walk) | none — **no time-based class: kept for the life of its workspace for usage accounting and reconciliation** (unpaid pilot; operator decision `D-9c`, 2026-10-27; to be revisited before paid launch) |
+| `llm_budget_periods` | **tenant-linked usage metadata** (the LLM budget ledger, `D-LLM-1` option B; one row per workspace and UTC calendar month): `workspace_id`, `period_start`, `organization_id`, `reserved_usd` (budget consumed: the sum of the calls' worst-case bounds), `settled_usd` (what finished calls were charged), `bound_violations` (a count of calls whose reported usage exceeded their bound), timestamps; money and counts only, no prompt text, no content, no user id | delete (cascades with its workspace and organization) | none: kept for the life of its workspace for usage accounting and reconciliation (`D-9c` pattern, ruled for these two tables 2026-10-27) |
+| `llm_budget_reservations` | **tenant-linked usage metadata** (one row per reserved provider call): `organization_id`, `workspace_id`, `period_start`, `job_id` (set null when the job row goes), `attempt_key` (job id, worker attempt, call ordinal), `reserved_usd` (the call's worst-case bound), `settled_usd`, `state` (reserved, settled, released or expired), `expires_at`, `settled_at`, `usage_recorded_at` (when the attempt's usage row was written), timestamps; money, keys, states and instants only | delete (cascades with its workspace and organization) | none: as `llm_budget_periods` (`D-9c` pattern, ruled for these two tables 2026-10-27) |
 | `worker_registrations` | worker identity, a non-reversible host fingerprint; **no personal or tenant data** | — | none (not a privacy data class) |
+| `source_takedowns` | **permanent suppression record** of a live source an operator took down (`P6-PRIV-4`): `source_key`, `taken_down_at`, `purge_summary` (counts), `repeat_purges` (`[{at, purged counts}]`); **no user id, free text or reference** (operator decision `D-9d`, 2026-10-27) — attribution (the acting operator), a fixed generic explanation and the opaque case id are in each affected workspace's `audit_logs` row (`data_source.taken_down`) under that table's retention; the private reason is in `source_takedown_cases` | — (platform-wide; no tenant key) | none — **permanent**: the row is the suppression itself (the source is never fetched again while it exists); anonymising or expiring the audit rows or the case records cannot re-enable the source |
 
 `llm_usage_events` is **included in the organization export** with every recorded
 usage/accounting column, scoped by `organization_id` through the export's existing
@@ -119,6 +123,16 @@ usage is not attributed to an individual account. Its actual lifecycle is the on
 retention sweep touches it; its rows exist exactly as long as their workspace and go with the
 organization deletion walk. Its rows are exported completely, page by page, like every other
 exported table (see *Portability* below).
+
+`llm_budget_periods` and `llm_budget_reservations` (the budget ledger behind the hard
+ceiling on PostgreSQL, `app.llm.budget`) follow the `llm_usage_events` pattern: **included
+in the organization export** with every column listed above, scoped by `organization_id`
+through the same authorization and tenant filter (`D-9b` pattern); **not in the account
+export** (no user key, no supported relationship to an account); no retention sweep touches
+them, their rows exist exactly as long as their workspace and go with the organization
+deletion walk (`D-9c` pattern, ruled for these two tables on 2026-10-27). A settlement,
+release or sweep that arrives after the workspace or organization was deleted finds no row
+and creates none (it only logs and counts `llm_settlements_orphaned_total`).
 
 `alembic_version` holds only the schema revision.
 

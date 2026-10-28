@@ -32,6 +32,7 @@ from enum import StrEnum
 
 from sqlalchemy import inspect, text
 
+from app.connectors.fetch_limits import DEFAULT_MAX_ITEMS_PER_SOURCE
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal, engine
@@ -271,7 +272,19 @@ def _check_vector(settings: Settings) -> tuple[ProbeStatus, str, str | None, boo
             "in-process index lost an added vector",
             False,
         )
-    return (ProbeStatus.HEALTHY, "in-process brute-force similarity available", None, False)
+    # P6-PLAT-1 (strategy B): report the bound that runs, from settings, and what the
+    # path does not do. The bound is an engineering capacity bound, not a quota.
+    bound = settings.vector_inprocess_max_signals_per_run
+    return (
+        ProbeStatus.HEALTHY,
+        f"in-process brute-force per-run similarity available (bound N_max={bound} "
+        "signals per run)",
+        f"in-process per-run similarity; bound N_max={bound} signals per run "
+        "(engineering capacity bound); per-source fetch limit "
+        f"{DEFAULT_MAX_ITEMS_PER_SOURCE} items (independent of the run bound); no "
+        "cross-run, cross-workspace or history-wide similarity",
+        False,
+    )
 
 
 def _check_llm(settings: Settings) -> tuple[ProbeStatus, str, str | None, bool]:

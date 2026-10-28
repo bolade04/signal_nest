@@ -20,6 +20,10 @@ class LLMError(Exception):
     """
 
     usage: LLMUsage | None = None
+    #: True when the request may have reached the provider but no reply was seen (a
+    #: connection failure after dispatch): the outcome is unknown, so cost accounting
+    #: charges the worst case rather than treating it as known-free.
+    outcome_unknown: bool = False
 
 
 class LLMTimeoutError(LLMError):

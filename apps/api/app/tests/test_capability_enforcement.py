@@ -458,11 +458,13 @@ def test_pipeline_selects_the_connector_for_the_requests_own_tenant(h, monkeypat
 
     seen: dict = {}
 
-    def _spy(**kwargs):
-        seen.update(kwargs)
+    def _spy(db, **kwargs):
+        seen.update(kwargs, db=db)
         raise _Stop
 
-    monkeypatch.setattr(pipeline_mod, "get_connector", _spy)
+    # P6-DATA-1 integration: the pipeline resolves RSS for the request's own tenant scope
+    # (the resolver, P6-CAP-1) and hands the decision to fetch_signals.
+    monkeypatch.setattr(pipeline_mod, "_rss_enabled_for", _spy)
     with h.make() as s, pytest.raises(_Stop):
         pipeline_mod._run(s, "sr-b")
     assert seen["db"] is not None
