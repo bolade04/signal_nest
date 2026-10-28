@@ -65,11 +65,12 @@ conservative basis pending D-LLM-3, not an accepted rule).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import event, or_, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
@@ -155,6 +156,38 @@ def _parent_exists(db: Session, workspace_id: str, organization_id: str) -> bool
         )
         is not None
     )
+
+
+_PENDING_KEY = "llm_ledger_after_commit"
+
+
+def _after_commit(db: Session, emit: Callable[[], None]) -> None:
+    """Run ``emit`` (a metric increment and its log line) once the session's transaction
+    has committed - never inside it.
+
+    The meter retries a ledger transaction that loses a deadlock; a side effect emitted
+    from inside the attempt would be emitted again by the retry, and one emitted for a
+    transaction that is then rolled back would report something that did not happen. So
+    the effects of a transaction are queued on its session and emitted by the session's
+    ``after_commit`` hook, or dropped by ``after_rollback``.
+    """
+    pending = db.info.get(_PENDING_KEY)
+    if pending is None:
+        pending = db.info[_PENDING_KEY] = []
+
+        def flush(session: Session) -> None:
+            if session.get_nested_transaction() is not None:
+                return  # a SAVEPOINT was released; the outer transaction has not committed
+            queued, pending[:] = list(pending), []
+            for effect in queued:
+                effect()
+
+        def drop(_session: Session) -> None:
+            pending.clear()
+
+        event.listen(db, "after_commit", flush)
+        event.listen(db, "after_rollback", drop)
+    pending.append(emit)
 
 
 def _lock_period(db: Session, workspace_id: str, period_start: date) -> None:
@@ -252,7 +285,7 @@ def reserve(
     """
     period_start = period_start_for(now)
     if not _parent_exists(db, workspace_id, organization_id):
-        _orphaned(attempt_key, "reserve")
+        _orphaned(db, attempt_key, "reserve")
         return False
     ensure_period(
         db,
@@ -335,12 +368,12 @@ def settle(
         select(LLMBudgetReservation).where(LLMBudgetReservation.attempt_key == attempt_key)
     )
     if reservation is None:
-        _orphaned(attempt_key, "settle")
+        _orphaned(db, attempt_key, "settle")
         return False
     if not _parent_exists(db, reservation.workspace_id, reservation.organization_id):
         # The tenant is gone (a database without foreign-key enforcement keeps the
         # orphaned ledger rows): no usage row, no period change - log and count only.
-        _orphaned(attempt_key, "settle")
+        _orphaned(db, attempt_key, "settle")
         return False
     # Period lock first (the ledger's one lock order), then decide on the row as it is now.
     _lock_period(db, reservation.workspace_id, reservation.period_start)
@@ -350,7 +383,7 @@ def settle(
         .execution_options(populate_existing=True)
     )
     if reservation is None:
-        _orphaned(attempt_key, "settle")
+        _orphaned(db, attempt_key, "settle")
         return False
     if reservation.state != RESERVED:
         _late_settlement(db, reservation, usage, now=now)
@@ -382,7 +415,7 @@ def settle(
             .execution_options(populate_existing=True)
         )
         if current is None:
-            _orphaned(attempt_key, "settle")
+            _orphaned(db, attempt_key, "settle")
         elif current.state != RESERVED:
             _late_settlement(db, current, usage, now=now)
         return False
@@ -401,11 +434,11 @@ def settle(
         execution_options={"synchronize_session": False},
     )
     if violated:
-        _report_violation(reservation, reported=settled_usd, bound=worst, stage="settle")
+        _report_violation(db, reservation, reported=settled_usd, bound=worst, stage="settle")
     if usage is not None:
         _add_usage(db, reservation, usage, attempt_key)
     elif period_claimed.rowcount != 1:
-        _orphaned(attempt_key, "settle")
+        _orphaned(db, attempt_key, "settle")
     db.flush()
     return True
 
@@ -419,7 +452,7 @@ def _add_usage(
             db.add(_usage_row(reservation, usage))
             db.flush()
     except IntegrityError:
-        _orphaned(attempt_key, "usage_row")
+        _orphaned(db, attempt_key, "usage_row")
 
 
 def _late_settlement(
@@ -465,50 +498,88 @@ def _late_settlement(
             ),
             execution_options={"synchronize_session": False},
         )
-        _report_violation(reservation, reported=reported, bound=worst, stage="late_settle")
+        _report_violation(db, reservation, reported=reported, bound=worst, stage="late_settle")
     _add_usage(db, reservation, usage, reservation.attempt_key)
-    get_metrics().increment(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome=state)
-    log_event(
-        logger,
-        "llm.settlement_after_release",
-        level=logging.WARNING,
-        component="llm",
-        outcome=state,
-        job_id=reservation.job_id,
-        attempt_key=reservation.attempt_key,
-        reservation_state=state,
-        call_outcome=usage.get("outcome"),
-    )
+    job_id, attempt_key = reservation.job_id, reservation.attempt_key
+    call_outcome = usage.get("outcome")
+
+    def emit() -> None:
+        get_metrics().increment(LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL, outcome=state)
+        log_event(
+            logger,
+            "llm.settlement_after_release",
+            level=logging.WARNING,
+            component="llm",
+            outcome=state,
+            job_id=job_id,
+            attempt_key=attempt_key,
+            reservation_state=state,
+            call_outcome=call_outcome,
+        )
+
+    _after_commit(db, emit)
 
 
 def _report_violation(
-    reservation: LLMBudgetReservation, *, reported: Decimal, bound: Decimal, stage: str
+    db: Session,
+    reservation: LLMBudgetReservation,
+    *,
+    reported: Decimal,
+    bound: Decimal,
+    stage: str,
 ) -> None:
-    get_metrics().increment(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome=stage)
-    log_event(
-        logger,
-        "llm.cost_bound_violated",
-        level=logging.ERROR,
-        component="llm",
-        outcome="bound_violated",
+    """Count and log a bound violation - after the transaction that won the claim commits."""
+    _violation_effect(
+        db,
+        stage=stage,
         job_id=reservation.job_id,
         attempt_key=reservation.attempt_key,
-        reported_usd=str(reported),
-        bound_usd=str(bound),
+        reported=reported,
+        bound=bound,
     )
 
 
-def _orphaned(attempt_key: str, stage: str) -> None:
+def _violation_effect(
+    db: Session,
+    *,
+    stage: str,
+    job_id: str | None,
+    attempt_key: str,
+    reported: Decimal,
+    bound: Decimal,
+) -> None:
+    def emit() -> None:
+        get_metrics().increment(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome=stage)
+        log_event(
+            logger,
+            "llm.cost_bound_violated",
+            level=logging.ERROR,
+            component="llm",
+            outcome="bound_violated",
+            job_id=job_id,
+            attempt_key=attempt_key,
+            reported_usd=str(reported),
+            bound_usd=str(bound),
+        )
+
+    _after_commit(db, emit)
+
+
+def _orphaned(db: Session, attempt_key: str, stage: str) -> None:
     """A late callback for a reservation whose tenant was deleted: log and count only."""
-    get_metrics().increment(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome=stage)
-    log_event(
-        logger,
-        "llm.settlement_orphaned",
-        level=logging.WARNING,
-        component="llm",
-        outcome=stage,
-        attempt_key=attempt_key,
-    )
+
+    def emit() -> None:
+        get_metrics().increment(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome=stage)
+        log_event(
+            logger,
+            "llm.settlement_orphaned",
+            level=logging.WARNING,
+            component="llm",
+            outcome=stage,
+            attempt_key=attempt_key,
+        )
+
+    _after_commit(db, emit)
 
 
 def record_settled(
@@ -538,7 +609,7 @@ def record_settled(
         settled_usd = worst_usd
     period_start = period_start_for(now)
     if not _parent_exists(db, workspace_id, organization_id):
-        _orphaned(attempt_key, "record_settled")
+        _orphaned(db, attempt_key, "record_settled")
         return False
     insert = _dialect_insert(db)
     inserted = db.execute(
@@ -584,17 +655,13 @@ def record_settled(
         execution_options={"synchronize_session": False},
     )
     if violated:
-        get_metrics().increment(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="same_session")
-        log_event(
-            logger,
-            "llm.cost_bound_violated",
-            level=logging.ERROR,
-            component="llm",
-            outcome="bound_violated",
+        _violation_effect(
+            db,
+            stage="same_session",
             job_id=job_id,
             attempt_key=attempt_key,
-            reported_usd=str(reported),
-            bound_usd=str(worst_usd),
+            reported=reported,
+            bound=worst_usd,
         )
     if usage is not None:
         db.add(
@@ -665,7 +732,7 @@ def release_for_job(db: Session, *, job_id: str, now: datetime, outcome: str) ->
         )
     ).all()
     released = _release_rows(db, list(rows), now=now, state=RELEASED)
-    _report(released, outcome=outcome)
+    _report(db, released, outcome=outcome)
     return released
 
 
@@ -692,7 +759,7 @@ def release_expired(db: Session, *, now: datetime) -> int:
         )
     ).all()
     released = _release_rows(db, list(rows), now=now, state=EXPIRED)
-    _report(released, outcome="expired")
+    _report(db, released, outcome="expired")
     return released
 
 
@@ -707,7 +774,7 @@ def release_terminal(db: Session, *, now: datetime) -> int:
         )
     ).all()
     released = _release_rows(db, list(rows), now=now, state=RELEASED)
-    _report(released, outcome="terminal")
+    _report(db, released, outcome="terminal")
     return released
 
 
@@ -719,15 +786,19 @@ def sweep(db: Session, *, now: datetime) -> dict[str, int]:
     }
 
 
-def _report(released: int, *, outcome: str) -> None:
+def _report(db: Session, released: int, *, outcome: str) -> None:
     if not released:
         return
-    get_metrics().increment(LLM_RESERVATIONS_RELEASED_TOTAL, outcome=outcome, amount=released)
-    log_event(
-        logger,
-        "llm.reservations_released",
-        level=logging.WARNING,
-        component="llm",
-        outcome=outcome,
-        released=released,
-    )
+
+    def emit() -> None:
+        get_metrics().increment(LLM_RESERVATIONS_RELEASED_TOTAL, outcome=outcome, amount=released)
+        log_event(
+            logger,
+            "llm.reservations_released",
+            level=logging.WARNING,
+            component="llm",
+            outcome=outcome,
+            released=released,
+        )
+
+    _after_commit(db, emit)

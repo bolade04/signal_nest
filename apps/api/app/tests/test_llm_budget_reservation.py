@@ -644,6 +644,47 @@ def test_a_deadlock_or_serialization_failure_is_retried_and_records_the_call_onc
         assert _reservation(db, meter.attempt_key(0)).state == "settled"
 
 
+def test_a_retried_violating_settlement_emits_its_metric_and_error_exactly_once(
+    factory, monkeypatch, caplog
+):
+    """r4-MINOR-2: the bound-violation metric and its ERROR line belong to the transaction
+    that wins the usage claim and commits. A first attempt that did the work and then lost
+    a conflict (40001) is rolled back; its effects must not be emitted, and the retry's
+    must be, once."""
+    probe = _bound(factory, _settings(), shared=True)
+    w = _worst(probe)
+    s = _settings(llm_max_retries=0, llm_workspace_monthly_budget_usd=float(w * 2))
+    meter = _bound(factory, s, shared=True)
+    real, calls = ledger.settle, []
+
+    def flaky(db, **kwargs):
+        calls.append(1)
+        result = real(db, **kwargs)  # claims the usage row, counts the violation (queued)
+        if len(calls) == 1:
+            raise _conflict("40001")  # commit-time conflict: this attempt is rolled back
+        return result
+
+    monkeypatch.setattr(ledger, "settle", flaky)
+    monkeypatch.setattr("app.llm.metering.time.sleep", lambda _s: None)
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with caplog.at_level("ERROR", logger="signalnest.llm"):
+            _service(s, lambda r: _reply(CLASSIFIED, tokens=(200_000, 1_000))).run(
+                "classify_signal", {"content": "x"}, meter=meter
+            )
+    finally:
+        configure_metrics(None)
+    assert len(calls) == 2  # one retry
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="settle") == 1
+    assert [r.message for r in caplog.records if r.levelname == "ERROR"] == [
+        "llm.cost_bound_violated"
+    ]
+    with factory() as db:
+        assert _period(db).bound_violations == 1
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+
+
 def test_a_conflict_is_retried_a_bounded_number_of_times_and_other_errors_not_at_all(
     factory, monkeypatch
 ):
