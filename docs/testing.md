@@ -103,7 +103,7 @@ Pure-engine unit tests need no FastAPI or database and run in milliseconds.
 
 ### PostgreSQL proofs
 
-Production runs on PostgreSQL; the suite above runs on SQLite. Two modules prove the
+Production runs on PostgreSQL; the suite above runs on SQLite. These modules prove the
 PostgreSQL-only paths on a **real** PostgreSQL, each test in a database of its own
 (created and dropped by `app.tests._auth2_support.pg_database`), on schemas produced
 by the real Alembic chain (never `metadata.create_all`):
@@ -112,6 +112,7 @@ by the real Alembic chain (never `metadata.create_all`):
 | --- | --- |
 | `test_postgres_migration_proof.py` | the full chain empty → head (every revision), `alembic check`, a guarded step down and the downgrade to **base** under the target-bound confirmation (the token that authorised one step is refused for the next; the round trip re-arms the original token — the guard's documented residual, shown by recomputation only), the re-upgrade, the migration actor (`python -m app.db.migrate`, `check`), an **interrupted migration** in two forms — a tracked revision failing partway (an induced catalog conflict: no partial object, `alembic_version` unmoved, recovery by removing the cause and re-running) and a controlled failure fixture in a disposable copy of the script tree (a crash inside a revision body is atomic; the repaired retry applies once) — and the seed guard's refusal of PostgreSQL (seed idempotency is SQLite-only by design) |
 | `test_postgres_job_store_concurrency.py` | the production `DurableJobStore` methods through independent connections and genuinely overlapping transactions: claim exclusivity under barrier-synchronised claimers (every job claimed exactly once) and progress past a row another transaction holds locked (`FOR UPDATE SKIP LOCKED`); concurrent lease recovery with one effect and one `lease_recovered` event per job, and a loop skipping a locked expired row; retryable recovery → `pending` versus exhausted attempts → `dead_lettered`; stale-owner fencing after recovery/reclaim on independent connections — including a reclaim by the **same** `worker_id`, which only the rotated lease token can fence — and a race of stale heartbeats against the owner's; unexpired, future-scheduled and terminal jobs untouched. Every connection carries `statement_timeout`/`lock_timeout`, every thread join is bounded, so a regression that blocks on a lock fails fast instead of hanging |
+| `test_postgres_llm_accounting.py` | the per-workspace LLM budget as a hard ceiling on PostgreSQL (D-LLM-1 option B): eight separate OS processes reserving against one workspace never exceed the budget together; a crashed process or attempt leaves a reservation that recovery charges at its worst case; a retried attempt reserves anew and releases the lost one; the same attempt settled twice, by racing processes, or late after `released`/`expired` recovery yields exactly one usage row (usage above the reservation is charged at the bound and counted once); recovery defers to a live lease; workspaces are independent, the month rolls over, and the run endpoint's read-only gate admits only what a reservation still fits. Offline (fixed-cost fake provider); every connection carries `statement_timeout`/`lock_timeout` and every join is bounded |
 
 Gate: `TEST_POSTGRES_URL`. Unset, these tests **fail** in CI (`CI=true`) and skip only on a
 developer machine; the CI step also fails if the summary reports any skipped test, so
@@ -126,7 +127,7 @@ cd apps/api && TEST_POSTGRES_URL=postgresql+psycopg://signalnest@127.0.0.1:54329
 ```
 
 The older `TEST_POSTGRES_URL`-gated tests elsewhere in the suite (`skipif` when unset)
-are unchanged and still run in CI, where the variable is set; the two modules above are
+are unchanged and still run in CI, where the variable is set; the modules above are
 the ones executed as a required, non-skippable step. Neither module touches the shared
 `signalnest_test` database.
 
@@ -238,9 +239,23 @@ conditional on failure only.
 | Check name | What it runs |
 | --- | --- |
 | **Frontend quality** | `npm ci`, `npm run lint` (zero warnings), `npm run type-check`, `npm run test`, `npm run build`, then the browser customer flow against that build: API venv install, `npm run e2e:install --workspace apps/web` (Chromium), `scripts/e2e-browser.sh` (P6-CI-2) |
-| **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest`; then the **PostgreSQL proofs** (`test_postgres_migration_proof.py`, `test_postgres_job_store_concurrency.py`) run again on their own against the job's disposable PostgreSQL 16 service as a required result — they fail if the database is unavailable and the step fails if any of them is skipped |
+| **Backend quality** | fresh venv + `pip install -e apps/api[dev]`, `ruff check`, `demo-setup.sh` (migrate + seed), `pytest`; then the **PostgreSQL proofs** (`test_postgres_migration_proof.py`, `test_postgres_job_store_concurrency.py`, `test_postgres_llm_accounting.py`) run again on their own against the job's disposable PostgreSQL 16 service as a required result — they fail if the database is unavailable and the step fails if any of them is skipped |
 | **Migrations and API contract** | SQLite: empty-DB `alembic upgrade head`, `alembic check` (drift), seed, seed again (idempotency), `downgrade base`, `upgrade head`, `seed --reset`; **PostgreSQL 16** (disposable service): empty-DB `alembic upgrade head`, `alembic check`, `downgrade base` under the confirmation guard, `upgrade head`, with the revision read back after each phase (no seed — `app.db.seed` refuses PostgreSQL by design); then `npm run gen:types` + `git diff --exit-code` (contract drift) |
 | **Integration smoke** | after the three gates pass: migrate + seed, start the API, wait on `/health`, run the HTTP isolation smoke, always stop the server |
+
+**Code coverage (P6-CI-8, report only).** Both test jobs measure code coverage and
+report it; neither gates on it, and no coverage threshold exists anywhere in the
+repository (`--cov-fail-under` and vitest `thresholds` are deliberately absent; adding one
+is a separate decision). **Backend quality** runs the API suite through `pytest-cov`
+(`--cov=app --cov-branch`, configured by `[tool.coverage]` in `apps/api/pyproject.toml`),
+writes the `TOTAL` line to the job step summary and uploads the Cobertura XML as the
+`coverage-api` artifact (30 days). **Frontend quality** runs `npm run test` unchanged:
+`apps/web/vite.config.ts` switches `@vitest/coverage-v8` on when `CI=true`
+(`text-summary`, `json-summary`, `lcov` into `ci-logs/coverage-web/`), the summary lines go
+to the step summary and the directory is uploaded as the `coverage-web` artifact (30 days).
+Numbers are published after the first `main` run; none is stated here until then. Locally:
+`cd apps/api && .venv/bin/python -m pytest --cov=app --cov-branch --cov-report=term`, and
+`cd apps/web && CI=true npx vitest run --coverage --maxWorkers=2`.
 
 **Environment.** CI runs entirely in the default zero-dependency **local** mode:
 SQLite (`DATABASE_URL=sqlite:///./signalnest.db`), in-process queue

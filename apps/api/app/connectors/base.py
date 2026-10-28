@@ -42,6 +42,11 @@ class FailureKind(StrEnum):
     PARSE_ERROR = "parse_error"
     UNSAFE_CONTENT = "unsafe_content"
     NOT_CONFIGURED = "not_configured"
+    #: The egress guard refused the target (scheme, host allow-list, a non-public
+    #: address, a disallowed redirect). Permanent: retrying cannot make it safe.
+    EGRESS_BLOCKED = "egress_blocked"
+    #: The source answered with a permanent 4xx (other than 429).
+    HTTP_CLIENT_ERROR = "http_client_error"
 
     @property
     def retryable(self) -> bool:

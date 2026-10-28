@@ -37,6 +37,7 @@ from app.core.middleware import (
 )
 from app.core.runtime import build_runtime_report
 from app.infra.vector import BruteForceIndex, VectorBackendUnavailableError, build_index
+from app.privacy.inventory import RetentionClass
 from app.system.probes import (
     ProbeStatus,
     _build_probes,
@@ -366,6 +367,9 @@ def _prod(**overrides: object) -> dict[str, object]:
         public_web_origin="https://app.example.com",
         mail_from_address="no-reply@example.com",
         mail_ses_region="us-east-1",
+        # Retention durations have no default and production requires every one
+        # (P6-PRIV-1): inert test values, not a policy.
+        **{c.setting_name: 30 for c in RetentionClass},
     )
     base.update(overrides)
     return base

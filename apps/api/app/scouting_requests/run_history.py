@@ -35,6 +35,7 @@ from app.scouting_requests.schemas import (
     RunItem,
     RunStats,
     TriggerType,
+    coverage_from_stats,
 )
 
 logger = get_logger("signalnest.scouting.run_history")
@@ -99,6 +100,7 @@ def _map_stats(job: Job) -> RunStats | None:
             noise_filtered=max(0, int(summary["noise_filtered"])),
             signals_analyzed=max(0, int(summary["signals_analyzed"])),
             opportunities=max(0, int(summary["opportunities"])),
+            coverage=coverage_from_stats(summary),
         )
     except (TypeError, ValueError):
         return None

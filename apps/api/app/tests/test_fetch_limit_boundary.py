@@ -22,6 +22,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.connectors import registry as registry_mod
 from app.connectors import rss as rss_mod
 from app.connectors.base import FailureKind, FetchScope
 from app.connectors.fetch_limits import (
@@ -97,15 +98,17 @@ def test_connector_reports_a_clip_exactly_when_the_source_held_more_than_the_lim
 
 
 def test_connector_never_extracts_more_than_one_entry_past_the_limit(monkeypatch):
+    # The look-ahead runs through the shared parser (``parse_feed(max_entries=...)``), the
+    # same one the live connector uses (FU-268-2, after #255).
     seen: list[int] = []
-    real = RssNewsConnector._parse
+    real = rss_mod.parse_feed
 
-    def spy(self, data, **kw):
-        out = real(self, data, **kw)
-        seen.append(len(out))
+    def spy(data, **kw):
+        out = real(data, **kw)
+        seen.append(len(out.items))
         return out
 
-    monkeypatch.setattr(RssNewsConnector, "_parse", spy)
+    monkeypatch.setattr(rss_mod, "parse_feed", spy)
     _collect(500)  # a 500-entry feed: the tree holds all 500; only max_items + 1 become items
     assert seen == [_LIMIT + 1]
     seen.clear()
@@ -253,7 +256,10 @@ def bound(monkeypatch):
 
 
 def _use(monkeypatch, connector) -> None:
-    monkeypatch.setattr(pipeline, "get_connector", lambda **_kw: connector)
+    """Hand the pipeline ``connector`` as the run's sandbox source (a test seam: the
+    registry's resolver, which ``fetch_signals`` consults for the sandbox feed after #255;
+    live egress stays off, so no live source is selected)."""
+    monkeypatch.setattr(registry_mod, "resolve_connector", lambda **_kw: connector)
 
 
 def _request_id() -> str:

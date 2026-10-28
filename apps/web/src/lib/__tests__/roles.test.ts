@@ -7,6 +7,7 @@ import {
   canGrantRole,
   canInviteMembers,
   canManageMember,
+  canManageOrganizationData,
   canReadAuditLogs,
   invitableRoles,
   isOwnerRole,
@@ -22,6 +23,7 @@ import { orgModel } from '@/test/handlers';
 //   EDITORS  = require_role(OWNER, ADMIN, MARKETER), a rank floor   dependencies.py:210-219
 //   ORGANIZATION_ADMINS = exact OWNER, ADMIN                        dependencies.py:176-207
 //   audit    = require_exact_roles(OWNER, ADMIN, COMPLIANCE_REVIEWER)  audit/routes.py:20-22
+//   organization export / deletion = exact OWNER                   privacy/routes.py (P6-PRIV-1)
 //   invitations: never OWNER, never above the inviter              organizations/invitations.py:380-406
 //   member role change / removal rules                             organizations/members.py:205-290
 
@@ -63,6 +65,7 @@ describe('policy predicates × six roles (§25, §36, §37)', () => {
     canCreateWorkspace: [canCreateWorkspace, ['owner', 'admin']],
     canInviteMembers: [canInviteMembers, ['owner', 'admin']],
     canReadAuditLogs: [canReadAuditLogs, ['owner', 'admin', 'compliance_reviewer']],
+    canManageOrganizationData: [canManageOrganizationData, ['owner']],
   };
 
   it.each(Object.entries(table))('%s admits exactly the backend set', (_name, [predicate, admitted]) => {

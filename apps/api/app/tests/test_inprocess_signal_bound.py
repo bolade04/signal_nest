@@ -27,6 +27,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.brands.models import Brand
 from app.connectors.base import ConnectorSignal
+from app.connectors.coverage import Coverage, CoverageReason
 from app.core.config import Settings, get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.runtime import build_runtime_report
@@ -48,6 +49,8 @@ from app.jobs.worker import JobRunner
 # Importing the app registers every ORM model + job handler on the shared Base/registry.
 from app.main import app  # noqa: F401
 from app.organizations.models import Workspace
+from app.privacy.inventory import RetentionClass
+from app.scouting_requests.connectors import SignalBatch, fetch_with_reports
 from app.scouting_requests.models import ScoutRequest
 from app.scouting_requests.run_history import get_run_history
 from app.signals.models import RawSignal
@@ -160,15 +163,40 @@ def bound(monkeypatch):
 
 @pytest.fixture
 def connector_counts(monkeypatch):
-    """Route the pipeline's connector resolution to the stub, per workspace."""
+    """Route the pipeline's source selection to the stub, per workspace (a test double).
+
+    ``_run`` asks the capability resolver about the request's own workspace immediately
+    before it selects the run's sources (P6-CAP-1, ``fetch_signals`` after #255). The double
+    records that workspace and has ``fetch_signals`` return the stub's signals for it,
+    reported through ``fetch_with_reports`` like any connector that does not report itself
+    (one source, no declared fetch limit)."""
     counts: dict[str, int] = {}
+    current: dict[str, str] = {}
+    real_rss_enabled_for = pipeline._rss_enabled_for
 
-    def _get_connector(
-        *, source_types=None, market=None, db=None, organization_id=None, workspace_id=None
+    def _rss_enabled_for(db, *, organization_id, workspace_id):
+        current["workspace_id"] = workspace_id
+        return real_rss_enabled_for(
+            db, organization_id=organization_id, workspace_id=workspace_id
+        )
+
+    def _fetch_signals(
+        *, market, keywords, source_types, rss_enabled, takedowns=frozenset(), settings=None
     ):
-        return _StubConnector(counts, workspace_id)
+        outcome = fetch_with_reports(
+            _StubConnector(counts, current["workspace_id"]),
+            market=market,
+            keywords=list(keywords or ()),
+            source_types=list(source_types or ()),
+        )
+        return SignalBatch(
+            signals=outcome.signals,
+            coverage=Coverage(CoverageReason.FIXTURE_LIBRARY, is_simulated=True),
+            reports=outcome.reports,
+        )
 
-    monkeypatch.setattr(pipeline, "get_connector", _get_connector)
+    monkeypatch.setattr(pipeline, "_rss_enabled_for", _rss_enabled_for)
+    monkeypatch.setattr(pipeline, "fetch_signals", _fetch_signals)
     return counts
 
 
@@ -461,6 +489,9 @@ def _production_profile(**overrides: object) -> Settings:
         mail_from_address="no-reply@example.com",
         mail_ses_region="us-east-1",
         **production_vector_kwargs(),
+        # Retention durations have no default and production requires every one (P6-PRIV-1,
+        # after #246): inert test values, not a policy.
+        **{c.setting_name: 30 for c in RetentionClass},
     )
     base.update(overrides)
     return Settings(**base)

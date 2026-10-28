@@ -155,6 +155,17 @@ class JobType(StrEnum):
     #: scout-request execution and always enqueues its own successor tick while the
     #: schedule stays enabled. Never runs the scouting pipeline itself.
     SCOUT_SCHEDULE_TICK = "scout_schedule.tick"
+    #: Retention purge (P6-PRIV-1): one bounded batch of one workspace retention class
+    #: inside the job's own workspace; a full batch enqueues its successor. Refuses a
+    #: class whose duration is not configured (``app.privacy.retention``).
+    RETENTION_PURGE = "retention.purge"
+
+
+#: Job types no customer role may cancel. A retention purge applies the operator's retention
+#: policy (``O-5`` / ``P6-D05``, reserved to the operator and legal), not the workspace's own
+#: work, so no workspace role decides whether it runs. The operator stops one by changing
+#: that policy, which the job re-checks when it runs.
+CUSTOMER_UNCANCELLABLE_JOB_TYPES: frozenset[JobType] = frozenset({JobType.RETENTION_PURGE})
 
 
 class JobErrorCode(StrEnum):

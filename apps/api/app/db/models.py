@@ -25,12 +25,17 @@ from app.campaign_context.models import (  # noqa: F401
     SourcePreference,
 )
 from app.capabilities.models import WorkspaceCapabilityOverride  # noqa: F401
+from app.connectors.models import SourceTakedown, SourceTakedownCase  # noqa: F401
 from app.db.base import Base  # noqa: F401
 from app.feedback.models import OpportunityFeedback  # noqa: F401
 from app.intelligence.records import SignalIntelligenceRecord  # noqa: F401
 from app.jobs.models import Job, JobEvent  # noqa: F401
 from app.jobs.worker_models import WorkerRegistration  # noqa: F401
-from app.llm.models import LLMUsageEvent  # noqa: F401
+from app.llm.models import (  # noqa: F401
+    LLMBudgetPeriod,
+    LLMBudgetReservation,
+    LLMUsageEvent,
+)
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: F401
 from app.opportunities.models import (  # noqa: F401
     Opportunity,

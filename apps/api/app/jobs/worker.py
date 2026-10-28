@@ -91,6 +91,7 @@ from app.jobs.status import (
 from app.jobs.store import DurableJobStore, JobLeaseLostError, job_store, utcnow
 from app.jobs.worker_registry import WorkerRegistry, worker_registry
 from app.jobs.worker_status import WorkerStatus
+from app.llm import budget as llm_budget
 
 # Register the built-in handlers at *module scope*, so registration completes
 # while ``app.jobs.worker`` is still being imported — before a Worker can be
@@ -508,6 +509,24 @@ class JobRunner:
             )
             return LEASE_LOST
 
+    def _sweep_llm_reservations(self, db: Session) -> dict[str, int]:
+        """Release leaked LLM budget reservations (recovery for the shared ledger)."""
+        try:
+            released = llm_budget.sweep(db, now=self._clock())
+            db.commit()
+            return released
+        except Exception as exc:  # noqa: BLE001 - recovery must never break polling
+            db.rollback()
+            log_event(
+                logger,
+                "worker.llm_reservation_sweep_failed",
+                level=WARNING,
+                component="jobs",
+                outcome="degraded",
+                error_class=type(exc).__name__,
+            )
+            return {}
+
     # -- claim + run one ----------------------------------------------------
     def poll_once(self, *, worker_id: str) -> bool:
         """Recover leases, claim one due job and run it. Returns True if it ran."""
@@ -555,6 +574,11 @@ class JobRunner:
                     m.increment(
                         WORKER_LEASE_RECOVERED_TOTAL, worker_type=worker_type, amount=recovered
                     )
+                # LLM budget reservations whose process died (past their expiry) or
+                # whose job has ended are charged their worst case here, in the same
+                # recovery slot every poll, in a short transaction of their own
+                # (``app.llm.budget.sweep``). Never fatal to the poll.
+                self._sweep_llm_reservations(db)
                 # Only after the recovery transaction is committed, mirroring ``_fail``.
                 for dead_type in dead_lettered:
                     m.increment(

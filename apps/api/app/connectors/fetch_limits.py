@@ -42,6 +42,13 @@ RETRIES_EXHAUSTED = "retries_exhausted"
 FETCH_ERROR = "fetch_error"
 
 
+def lookahead_entries(max_items: int) -> int:
+    """How many entries a connector extracts from one source: one past its fetch limit,
+    never more. The extra entry is what tells a clipped source (it held more than
+    ``max_items``) from one that held exactly ``max_items``."""
+    return max(0, max_items) + 1
+
+
 @dataclass(frozen=True)
 class SourceFetchReport:
     """What one source delivered against its fetch limit in one run.

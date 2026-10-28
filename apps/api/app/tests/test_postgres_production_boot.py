@@ -38,6 +38,7 @@ from pathlib import Path
 
 import pytest
 
+from app.privacy.inventory import RetentionClass
 from app.tests._auth2_support import pg_database, require_postgres
 from app.tests.test_postgres_migration_proof import HEAD, _version
 
@@ -73,6 +74,7 @@ _SCRUB_PREFIXES = (
     "FORWARDED_",
     "REQUIRE_WORKER_FLEET",
     "SN_BOOT_PROOF_REDIS",
+    "RETENTION_",
 )
 
 #: Non-secret production backend selections. The ECS migration task today carries only
@@ -100,6 +102,10 @@ _PRODUCTION_FULL_PROFILE = {
     "MAIL_FROM_ADDRESS": "no-reply@example.com",
     "MAIL_SES_REGION": "us-east-1",
     "PUBLIC_WEB_ORIGIN": "https://app.example.com",
+    # Retention durations have no default and the production full profile requires every
+    # one (P6-PRIV-1, after #246; the migration actor is exempt): inert test values, not a
+    # policy.
+    **{c.setting_name.upper(): "30" for c in RetentionClass},
 }
 
 

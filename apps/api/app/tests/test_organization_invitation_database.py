@@ -70,12 +70,14 @@ API_DIR = Path(__file__).resolve().parents[2]
 PREV = "98289430a3ec"
 HEAD = "3dc124a7dfd7"
 #: The 6B-4A account-token revision, one additive revision later; then P6-AUTH-4 sessions;
-#: then P6-LLM-5 (opportunity explanation source); the code head one further (P6-LLM-4
-#: usage ledger).
+#: then P6-LLM-5 (opportunity explanation source), P6-LLM-4 (usage ledger), P6-DATA-1/PRIV-4
+#: (source takedowns); the code head one further (D-LLM-1 option B budget ledger).
 ACCOUNT_TOKENS = "a452ee007cc2"
 SESSIONS = "87198ab57b59"
 EXPLANATION = "6ad2ff77f691"
-CODE_HEAD = "47028898175f"
+USAGE = "47028898175f"
+TAKEDOWNS = "da25533622b2"
+CODE_HEAD = "8005724d811a"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -276,7 +278,9 @@ def test_revision_chain() -> None:
     assert script.get_revision(ACCOUNT_TOKENS).down_revision == HEAD
     assert script.get_revision(SESSIONS).down_revision == ACCOUNT_TOKENS
     assert script.get_revision(EXPLANATION).down_revision == SESSIONS
-    assert script.get_revision(CODE_HEAD).down_revision == EXPLANATION
+    assert script.get_revision(USAGE).down_revision == EXPLANATION
+    assert script.get_revision(TAKEDOWNS).down_revision == USAGE
+    assert script.get_revision(CODE_HEAD).down_revision == TAKEDOWNS
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
 
 

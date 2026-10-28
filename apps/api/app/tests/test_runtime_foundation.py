@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.core.runtime import build_runtime_report
 from app.jobs.context import ExecutionContext, scope_matches
 from app.jobs.contracts import CURRENT_CONTRACT_VERSION, JobEnvelope, unwrap, wrap
+from app.privacy.inventory import RetentionClass
 from app.tests._platform_support import pgvector_build, production_vector_kwargs
 
 
@@ -95,6 +96,9 @@ def _prod_kwargs(**overrides: object) -> dict[str, object]:
         public_web_origin="https://app.example.com",
         mail_from_address="no-reply@example.com",
         mail_ses_region="us-east-1",
+        # Retention durations have no default and production requires every one (P6-PRIV-1,
+        # O-5 / P6-D05 undecided): inert test values, not a policy.
+        **{c.setting_name: 30 for c in RetentionClass},
     )
     base.update(overrides)
     return base

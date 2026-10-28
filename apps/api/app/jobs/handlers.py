@@ -18,7 +18,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
@@ -33,6 +33,7 @@ from app.jobs.registry import (
     register_terminal_failure_hook,
 )
 from app.jobs.status import JobErrorCode, JobExecutionError, JobType
+from app.llm.budget import release_for_job
 from app.llm.metering import LLMMeter
 from app.scouting_requests.models import ScoutRequest
 
@@ -89,12 +90,17 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
     context, so a mis-enqueued id can never blend one market's data into
     another's.
 
-    Model calls are paid for when they are made (P6-LLM-4). The run's usage rows
-    are written in the worker's transaction, so a successful attempt commits them
-    with its results. A failed attempt is rolled back and may be retried, so the
-    same rows are also handed to the worker as an after-rollback write. Every
-    attempt's spend then counts against the workspace's monthly budget, the next
-    attempt's included.
+    Model calls are paid for when they are made (P6-LLM-4). On PostgreSQL the meter
+    reserves each call's worst case against the workspace's month before the call and
+    settles it after, each in a short transaction of its own on a session built from
+    this attempt's bind (``app.llm.metering``, the shared-ledger path); the usage row
+    is written at settlement. On SQLite the run's usage rows are written in the
+    worker's transaction, so a successful attempt commits them with its results; a
+    failed attempt is rolled back and may be retried, so the same rows are also
+    handed to the worker as an after-rollback write. Every attempt's spend then
+    counts against the workspace's monthly budget, the next attempt's included.
+    When the attempt ends, any reservation of this job still in flight (a settlement
+    that could not be written) is released at its worst case.
     """
     scout_request_id = ctx.payload.get("scout_request_id")
     if not isinstance(scout_request_id, str) or not scout_request_id:
@@ -109,7 +115,17 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
         raise JobExecutionError(JobErrorCode.CANCELLED, "cancelled before execution")
 
     # The run is this job: the call cap counts its earlier attempts' recorded rows.
-    meter = LLMMeter(get_settings(), job_id=ctx.job_id)
+    # The session factory is the seam for the shared ledger's own short transactions;
+    # it is built from this attempt's bind, never from the process-wide engine, so a
+    # test's or a worker's engine is the one the ledger writes to.
+    meter = LLMMeter(
+        get_settings(),
+        job_id=ctx.job_id,
+        attempt=ctx.attempt,
+        session_factory=sessionmaker(
+            bind=ctx.db.get_bind(), autoflush=False, expire_on_commit=False, future=True
+        ),
+    )
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
         try:
@@ -119,12 +135,18 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
             # per-run in-process bound. Non-retryable - the condition is a property
             # of the request's source volume, not of this attempt - and recorded as
             # the run's visible outcome after the rollback (nothing was written).
+            # The refusal precedes every model call of the run, so it reserved and
+            # spent nothing (P6-LLM-4); the terminal-failure hook below still
+            # releases anything this job holds, as for every final failure.
             ctx.after_rollback.append(_record_refused_run(scout_request_id, ctx.context, exc))
             raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc
+    # Attempt end: whatever this job still holds reserved could not be settled by the
+    # process that reserved it; charge it its worst case in the run's transaction.
+    release_for_job(ctx.db, job_id=ctx.job_id, now=ctx.now, outcome="attempt_end")
 
-    # ``_run`` returns only safe aggregates: the four counts plus the per-source
-    # fetch-limit facts (``fetch_limits`` / ``partial_fetch`` / ``partial_fetch_reasons``),
-    # which is exactly the shape we persist.
+    # ``_run`` returns only safe aggregates: the four counts, the coverage outcome
+    # (P6-DATA-2) and the per-source fetch facts (``fetch_limits`` / ``partial_fetch`` /
+    # ``partial_fetch_reasons``, #268), which is exactly the shape we persist.
     return dict(result)
 
 
@@ -167,6 +189,27 @@ def execute_schedule_tick(ctx: HandlerContext) -> dict[str, Any]:
         ctx.db,
         schedule_id=schedule_id,
         occurrence_at=occurrence_at,
+        now=ctx.now,
+        is_cancelled=ctx.is_cancelled,
+    )
+
+
+@register_handler(JobType.RETENTION_PURGE)
+def execute_retention_purge(ctx: HandlerContext) -> dict[str, Any]:
+    """Purge one bounded batch of one workspace retention class (P6-PRIV-1).
+
+    All validation, the policy re-check and the successor link live in
+    :func:`app.privacy.retention.run_purge_job`; the deletion is confined to the
+    workspace of the context rebuilt from the durable job row. Returns counts only.
+    """
+    # Deferred import: the privacy package imports the enqueue service, which imports
+    # this module to register handlers.
+    from app.privacy.retention import run_purge_job
+
+    return run_purge_job(
+        ctx.db,
+        context=ctx.context,
+        payload=ctx.payload,
         now=ctx.now,
         is_cancelled=ctx.is_cancelled,
     )
@@ -244,7 +287,12 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
     the scout runnable again.
 
     The worker owns the transaction: this writes and flushes, never commits.
+
+    The job's LLM reservations still in flight are released first (charged their
+    worst case, ``app.llm.budget``): no attempt of this job will settle them now.
     """
+    release_for_job(ctx.db, job_id=ctx.job_id, now=ctx.now, outcome="terminal")
+
     scout_request_id = ctx.payload.get("scout_request_id")
     if not isinstance(scout_request_id, str) or not scout_request_id:
         return
@@ -276,6 +324,7 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
 
 
 __all__ = [
+    "execute_retention_purge",
     "execute_schedule_tick",
     "execute_scout_request",
     "recover_failed_schedule_tick",

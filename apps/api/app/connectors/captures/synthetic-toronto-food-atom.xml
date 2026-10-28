@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="text">Toronto Food &amp; Retail Notes (SYNTHETIC TEST FEED)</title>
+  <id>urn:uuid:5f0e2b8c-0000-4000-8000-000000000001</id>
+  <updated>2026-10-19T11:00:00Z</updated>
+  <link rel="self" href="https://food.example.net/toronto/atom.xml"/>
+  <link rel="alternate" href="https://food.example.net/toronto"/>
+  <author><name>Synthetic Notes Team</name></author>
+  <entry>
+    <title>Loyalty apps frustrate Toronto coffee drinkers</title>
+    <id>urn:uuid:5f0e2b8c-0000-4000-8000-000000000011</id>
+    <link rel="alternate" type="text/html" href="https://food.example.net/toronto/loyalty-apps"/>
+    <published>2026-10-18T10:00:00Z</published>
+    <updated>2026-10-18T10:30:00Z</updated>
+    <author><name>Synthetic Notes Team</name></author>
+    <summary type="html">&lt;p&gt;Customers of several Toronto coffee shops say loyalty apps keep logging them out, and some are switching to cafés with simple punch cards.&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title>Cold brew subscriptions grow among Toronto offices</title>
+    <id>urn:uuid:5f0e2b8c-0000-4000-8000-000000000012</id>
+    <link href="https://food.example.net/toronto/cold-brew-offices"/>
+    <updated>2026-10-17T09:00:00Z</updated>
+    <summary>Office managers in Toronto are signing cold brew coffee subscriptions as staff return to downtown towers.</summary>
+  </entry>
+</feed>
