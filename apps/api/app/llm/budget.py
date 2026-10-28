@@ -182,7 +182,9 @@ def _after_commit(db: Session, emit: Callable[[], None]) -> None:
             for effect in queued:
                 effect()
 
-        def drop(_session: Session) -> None:
+        def drop(session: Session) -> None:
+            if session.in_nested_transaction():
+                return  # a SAVEPOINT rolled back; the outer transaction may still commit
             pending.clear()
 
         event.listen(db, "after_commit", flush)

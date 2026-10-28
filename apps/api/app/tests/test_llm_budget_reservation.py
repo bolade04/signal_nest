@@ -685,6 +685,99 @@ def test_a_retried_violating_settlement_emits_its_metric_and_error_exactly_once(
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
 
 
+@pytest.fixture
+def fk_factory(tmp_path):
+    """A SQLite database that enforces its foreign keys (the application's engines do)."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'fk.db'}", connect_args={"check_same_thread": False}, future=True
+    )
+
+    @event.listens_for(engine, "connect")
+    def _fk(dbapi_connection, _record):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    Base.metadata.create_all(engine)
+    make = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    with make() as db:
+        db.add(Organization(id=ORG, name="LLMB", slug="llmb"))
+        db.add(Workspace(id=WS, organization_id=ORG, name="LLMB WS", slug="llmb-ws"))
+        db.commit()
+    yield make
+    engine.dispose()
+
+
+def _violating_settle(db, key: str, *, usage=None):
+    """Reserve ``key`` (bound 0.01) and settle it reporting 0.03: a bound violation."""
+    assert _reserve(db, key, Decimal("0.01"), Decimal("1"))
+    return ledger.settle(
+        db,
+        attempt_key=key,
+        settled_usd=Decimal("0.03"),
+        now=T0,
+        usage=usage if usage is not None else _usage(Decimal("0.03")),
+    )
+
+
+def test_effects_survive_a_savepoint_rollback_inside_a_transaction_that_commits(fk_factory, caplog):
+    """r5-MINOR-1: the usage insert fails inside its SAVEPOINT (a foreign key that does not
+    exist) and is absorbed; the outer transaction commits with ``bound_violations`` 1, so
+    the violation's metric and ERROR line must be emitted - once - and not dropped with
+    the SAVEPOINT. The absorbed insert is itself counted (orphan, ``usage_row``)."""
+    bad_usage = {**_usage(Decimal("0.03")), "scout_request_id": "no-such-scout-request"}
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with fk_factory() as db, caplog.at_level("WARNING", logger="signalnest.llm"):
+            assert _violating_settle(db, "sp:1:0", usage=bad_usage)
+            db.commit()
+            assert _period(db).bound_violations == 1
+            assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 0
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="settle") == 1
+    assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="usage_row") == 1
+    assert [r.message for r in caplog.records if r.levelname == "ERROR"] == [
+        "llm.cost_bound_violated"
+    ]
+
+
+def test_an_outer_rollback_drops_every_queued_effect_for_good(factory, caplog):
+    """Effects of a transaction that rolls back are dropped, and stay dropped: a later,
+    unrelated commit on the same session emits none of them."""
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with factory() as db, caplog.at_level("WARNING", logger="signalnest.llm"):
+            assert _violating_settle(db, "rb:1:0")
+            db.rollback()
+            assert _period(db) is None  # nothing happened
+            assert _reserve(db, "rb:2:0", Decimal("0.01"), Decimal("1"))
+            db.commit()  # a later commit on the same session
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="settle") == 0
+    assert [r.message for r in caplog.records if r.levelname == "ERROR"] == []
+
+
+def test_each_commit_emits_its_own_effects_once_and_never_replays_them(factory, caplog):
+    """The queue is cleared when it is flushed: two commits on one session, each with one
+    violation, give two increments in all (one per commit), not 1 + 2."""
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with factory() as db, caplog.at_level("WARNING", logger="signalnest.llm"):
+            assert _violating_settle(db, "q:1:0")
+            db.commit()
+            assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="settle") == 1
+            assert _violating_settle(db, "q:2:0")
+            db.commit()
+            db.commit()  # an empty commit replays nothing
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="settle") == 2
+    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 2
+
+
 def test_a_conflict_is_retried_a_bounded_number_of_times_and_other_errors_not_at_all(
     factory, monkeypatch
 ):
