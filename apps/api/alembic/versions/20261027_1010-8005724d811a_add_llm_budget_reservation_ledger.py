@@ -29,7 +29,7 @@ Rollback: ``downgrade`` drops the indexes and both tables, and with them the
 reserved amounts of calls in flight; the budget then falls back to the usage rows.
 
 Revision ID: 8005724d811a
-Revises: 47028898175f
+Revises: da25533622b2
 Create Date: 2026-10-27 10:10:11.472389
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '8005724d811a'
-down_revision: str | None = '47028898175f'
+down_revision: str | None = 'da25533622b2'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -37,6 +37,9 @@ def build_engine(settings: Settings) -> Engine:
         engine = create_engine(
             settings.database_url,
             future=True,
+            # Bound parameters never appear in SQLAlchemy's own log lines or error text:
+            # a row may hold an operator's private free text (D-9e, review r8 C-r8-3).
+            hide_parameters=True,
             pool_pre_ping=True,
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
@@ -55,6 +58,7 @@ def build_engine(settings: Settings) -> Engine:
     engine = create_engine(
         settings.database_url,
         future=True,
+        hide_parameters=True,
         connect_args=connect_args,
     )
     if settings.is_sqlite:

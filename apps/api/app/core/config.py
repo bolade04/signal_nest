@@ -414,6 +414,32 @@ class Settings(BaseSettings):
     #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
     connector_rss_max_attempts: int = 3
 
+    # --- Live RSS egress (P6-DATA-1 / P6-DATA-4) — dark by default -----------
+    #: Master switch for live network egress to approved feeds
+    #: (``app.connectors.sources.APPROVED_SOURCES``, which ships empty). Turning it
+    #: on needs the operator's first-source decision and terms sign-off (P6-D03, X1).
+    connector_rss_live_enabled: bool = False
+    #: Emergency stop: overrides every other live-egress setting.
+    connector_rss_kill_switch: bool = False
+    #: Public https page identifying the fetcher to publishers; carried in the
+    #: User-Agent. Required whenever live egress is enabled.
+    connector_egress_contact_url: str | None = None
+    connector_egress_connect_timeout_seconds: float = 5.0
+    connector_egress_read_timeout_seconds: float = 10.0
+    #: Overall bound on one feed fetch, redirects included.
+    connector_egress_total_timeout_seconds: float = 20.0
+    connector_egress_max_response_bytes: int = 2 * 1024 * 1024
+    connector_egress_max_redirects: int = 3
+    #: Politeness floor: a source is fetched at most once per interval per process
+    #: (a source record may only raise it).
+    connector_rss_min_fetch_interval_seconds: float = 900.0
+    #: Development/test only: a ``http://127.0.0.1:PORT`` origin serving recorded
+    #: feed captures (``app.connectors.replay``). Refused in staging/production.
+    connector_rss_replay_origin: str | None = None
+    #: Serve the simulated demo fixture library for the four demo markets when no
+    #: live source covers a market. Off ⇒ such a market reports ``not_covered``.
+    connector_fixture_fallback_enabled: bool = True
+
     # --- Geocoding (P6-DATA-3) -----------------------------------------------
     #: Geocoder backend. ``fixture`` answers from seven offline cities (development
     #: and test only); ``aws_location`` calls Amazon Location Service Places v2
@@ -510,6 +536,26 @@ class Settings(BaseSettings):
     #: Total wall-clock budget for the whole readiness sweep across all probes.
     readiness_total_timeout_seconds: float = 5.0
 
+    # --- Privacy: retention durations (P6-PRIV-1) — BEGIN privacy block -------
+    #: Retention duration per data class, in days. How long each class is kept is an
+    #: operator/legal decision (O-5 / P6-D05) that has NOT been made, so none of these
+    #: has a default: unset means undecided, and the retention purge refuses that
+    #: class (it deletes nothing and reports ``policy_unset``). environment=production
+    #: refuses to start until every one is set; development, test and staging may
+    #: leave them unset. Each, when set, must be 1..36500. Classes and what they purge:
+    #: ``app/privacy/inventory.py`` and ``docs/operations/data-inventory.md``.
+    retention_auth_sessions_days: int | None = None
+    retention_account_tokens_days: int | None = None
+    retention_invitations_days: int | None = None
+    retention_signal_evidence_days: int | None = None
+    retention_opportunities_days: int | None = None
+    retention_job_history_days: int | None = None
+    retention_audit_logs_days: int | None = None
+    #: Root rows one purge batch deletes (with their dependents). 1..10000.
+    retention_purge_batch_size: int = 500
+    #: Batches per class per sweep, and links per workspace job chain. >= 1.
+    retention_purge_max_batches: int = 100
+    # --- END privacy block ----------------------------------------------------
     # --- P6 platform services: request rate limiting (P6-PLAT-3) -------------
     #: Where request counts live. ``memory`` counts in this process only (bounded;
     #: development and test - production refuses it); ``redis`` counts in the shared
@@ -988,6 +1034,41 @@ class Settings(BaseSettings):
                 )
         # --- end P6 platform services ----------------------------------------
 
+        # Live RSS egress bounds (P6-DATA-1 / P6-DATA-4).
+        for name in (
+            "connector_egress_connect_timeout_seconds",
+            "connector_egress_read_timeout_seconds",
+            "connector_egress_total_timeout_seconds",
+        ):
+            if getattr(self, name) <= 0:
+                errors.append(f"{name} must be greater than 0")
+        # The feed parser refuses anything above 2 MiB, so a larger fetch cap is moot.
+        if not 1 <= self.connector_egress_max_response_bytes <= 2 * 1024 * 1024:
+            errors.append("connector_egress_max_response_bytes must be between 1 and 2 MiB")
+        if not 0 <= self.connector_egress_max_redirects <= 5:
+            errors.append("connector_egress_max_redirects must be between 0 and 5")
+        if self.connector_rss_min_fetch_interval_seconds < 60:
+            errors.append("connector_rss_min_fetch_interval_seconds must be >= 60")
+        if self.connector_rss_replay_origin is not None:
+            from app.connectors.egress import parse_replay_origin
+
+            if self.environment not in ("development", "test"):
+                errors.append(
+                    "connector_rss_replay_origin is allowed only in development or test"
+                )
+            if parse_replay_origin(self.connector_rss_replay_origin) is None:
+                errors.append(
+                    "connector_rss_replay_origin must be http://127.0.0.1:PORT or "
+                    "http://[::1]:PORT"
+                )
+        elif self.connector_rss_live_enabled:
+            contact = urlsplit(self.connector_egress_contact_url or "")
+            if contact.scheme != "https" or not contact.hostname:
+                errors.append(
+                    "connector_rss_live_enabled requires connector_egress_contact_url "
+                    "(an https URL)"
+                )
+
         # --- Geocoding (P6-DATA-3) -------------------------------------------
         # Fixture answers are invented coordinates for seven cities: never served
         # outside development/test, whatever the mode.
@@ -1015,6 +1096,38 @@ class Settings(BaseSettings):
         if not 0 <= self.geocoder_min_match_score <= 1:
             errors.append("geocoder_min_match_score must be between 0 and 1")
 
+        if errors:
+            raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
+        return self
+
+    # --- Privacy: retention validation (P6-PRIV-1) — privacy block ------------
+    @model_validator(mode="after")
+    def _validate_retention(self) -> Settings:
+        """Retention durations: bounded when set; all required in production.
+
+        Production has no silently assumed duration: an unset class would otherwise be
+        kept indefinitely, which is itself a retention decision nobody made. The
+        one-shot migration actor (``migration_mode``) never purges, so it is exempt,
+        as it is from the other runtime-only requirements.
+        """
+        from app.privacy.inventory import RetentionClass
+
+        errors: list[str] = []
+        for data_class in RetentionClass:
+            name = data_class.setting_name
+            value = getattr(self, name)
+            if value is None:
+                if self.is_production and not self.migration_mode:
+                    errors.append(
+                        f"{name} must be set explicitly in production (retention durations "
+                        "are an operator/legal decision, O-5 / P6-D05; there is no default)"
+                    )
+            elif not 1 <= value <= 36500:
+                errors.append(f"{name} must be between 1 and 36500 days")
+        if not 1 <= self.retention_purge_batch_size <= 10000:
+            errors.append("retention_purge_batch_size must be between 1 and 10000")
+        if self.retention_purge_max_batches < 1:
+            errors.append("retention_purge_max_batches must be >= 1")
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
         return self

@@ -81,9 +81,11 @@ API_DIR = Path(__file__).resolve().parents[2]
 PREV = "a452ee007cc2"
 HEAD = "87198ab57b59"
 #: One additive revision later (P6-LLM-5 opportunity explanation source), then P6-LLM-4
-#: (usage ledger); the code head one further (D-LLM-1 option B budget ledger).
+#: (usage ledger), P6-DATA-1/PRIV-4 (source takedowns); the code head one further
+#: (D-LLM-1 option B budget ledger).
 EXPLANATION = "6ad2ff77f691"
 USAGE = "47028898175f"
+TAKEDOWNS = "da25533622b2"
 CODE_HEAD = "8005724d811a"
 UNAUTHORIZED = (401, "unauthorized", "Invalid or expired token.")
 ORGANIZATIONS = f"{API}/organizations"
@@ -646,7 +648,8 @@ class TestMigration:
 
         script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
         assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-        assert script.get_revision(CODE_HEAD).down_revision == USAGE
+        assert script.get_revision(CODE_HEAD).down_revision == TAKEDOWNS
+        assert script.get_revision(TAKEDOWNS).down_revision == USAGE
         assert script.get_revision(USAGE).down_revision == EXPLANATION
         assert script.get_revision(EXPLANATION).down_revision == HEAD
         revision = script.get_revision(HEAD)

@@ -87,7 +87,19 @@ jobs:
         run: npm run type-check 2>&1 | tee ci-logs/frontend-typecheck.log
 
       - name: Test
-        run: npm run test 2>&1 | tee ci-logs/frontend-test.log
+        # P6-CI-8: coverage is enabled by the CI env var in apps/web/vite.config.ts (report only, no threshold).
+        run: |
+          npm run test 2>&1 | tee ci-logs/frontend-test.log
+          { echo '### Web coverage (report only, no threshold)'; grep -E '^(Statements|Branches|Functions|Lines) +:' ci-logs/frontend-test.log || echo 'coverage total not found'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload web coverage report (P6-CI-8, report only)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-web
+          path: ci-logs/coverage-web/
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: Production build
         run: npm run build 2>&1 | tee ci-logs/frontend-build.log
@@ -543,7 +555,18 @@ jobs:
           TEST_POSTGRES_URL: postgresql+psycopg://signalnest:signalnest@localhost:5432/signalnest_test
         run: |
           bash scripts/demo-setup.sh 2>&1 | tee ci-logs/backend-demo-setup.log
-          bash scripts/run-tests-api.sh 2>&1 | tee ci-logs/backend-pytest.log
+          # P6-CI-8: measure and REPORT coverage; this is not a gate (no --cov-fail-under).
+          bash scripts/run-tests-api.sh --cov=app --cov-branch --cov-report=term --cov-report=xml:../../ci-logs/coverage-api.xml 2>&1 | tee ci-logs/backend-pytest.log
+          { echo '### API coverage (report only, no threshold)'; grep -E '^TOTAL' ci-logs/backend-pytest.log || echo 'coverage total not found'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload API coverage report (P6-CI-8, report only)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-api
+          path: ci-logs/coverage-api.xml
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: PostgreSQL proofs (P6-CI-4 migration chain, P6-CI-5 job-store concurrency)
         # The two PostgreSQL proof modules run again on their own, as a REQUIRED result

@@ -1,0 +1,54 @@
+{
+  "about": "Replay corpus for the live RSS connector (P6-CI-11). Each entry is a feed body served by app.connectors.replay from a loopback HTTP server through the live egress path. 'synthetic': true marks bytes written for tests on IANA-reserved example domains (no real publisher, not real news); signals replayed from them are marked simulated. A recorded capture of an approved source ('synthetic': false) may replace them only under that source's terms; see docs/operations/live-data-sources.md.",
+  "captures": [
+    {
+      "capture_id": "synthetic-toronto-business-rss",
+      "source_key": "replay-toronto-business",
+      "display_name": "Toronto Business Desk (synthetic)",
+      "publisher": "Synthetic test publisher (not a real publisher)",
+      "feed_url": "https://feeds.example.org/toronto/business.rss",
+      "markets": [
+        "Toronto, ON"
+      ],
+      "tos_url": "https://feeds.example.org/terms",
+      "file": "synthetic-toronto-business-rss.xml",
+      "content_type": "application/rss+xml; charset=utf-8",
+      "etag": "\"synthetic-rss-1\"",
+      "last_modified": "Mon, 19 Oct 2026 12:00:00 GMT",
+      "sha256": "2661bb157595e0c51d207468952210364839faac41620990c74e435adbb7fbb5",
+      "synthetic": true,
+      "captured_at": null,
+      "keywords": [
+        "coffee",
+        "café",
+        "cafe",
+        "espresso",
+        "oat milk",
+        "roaster"
+      ]
+    },
+    {
+      "capture_id": "synthetic-toronto-food-atom",
+      "source_key": "replay-toronto-food",
+      "display_name": "Toronto Food & Retail Notes (synthetic)",
+      "publisher": "Synthetic test publisher (not a real publisher)",
+      "feed_url": "https://food.example.net/toronto/atom.xml",
+      "markets": [
+        "Toronto, ON"
+      ],
+      "tos_url": "https://food.example.net/terms",
+      "file": "synthetic-toronto-food-atom.xml",
+      "content_type": "application/atom+xml",
+      "etag": null,
+      "last_modified": "Mon, 19 Oct 2026 11:00:00 GMT",
+      "sha256": "47219edd5cad56830ebb304220c60c584fc00142db0ee22fe5e94ec688fc47d2",
+      "synthetic": true,
+      "captured_at": null,
+      "keywords": [
+        "coffee",
+        "cold brew",
+        "loyalty"
+      ]
+    }
+  ]
+}

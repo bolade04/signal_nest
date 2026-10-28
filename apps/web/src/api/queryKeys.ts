@@ -5,6 +5,9 @@ import type { OpportunityFilters } from './types';
 // naturally produces distinct cache entries and prevents cross-tenant leakage.
 export const queryKeys = {
   session: ['session'] as const,
+  // P6-PRIV-1: what deleting the signed-in account would do. Account-scoped, never cached
+  // across sessions (the query client is cleared on sign-out).
+  accountDeletionPreview: ['account', 'deletion-preview'] as const,
   runtimeSummary: ['system', 'capabilities'] as const,
   runtimeDetail: ['internal', 'system', 'capabilities'] as const,
 
