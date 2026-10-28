@@ -6,8 +6,10 @@ can decide what is retryable:
 
 * transport timeout -> ``LLMTimeoutError`` (retryable)
 * 429 -> ``LLMRateLimitError`` carrying the provider's ``retry-after`` (retryable)
-* 408, 409, 5xx (incl. Anthropic 529 overloaded), connection failure ->
-  ``LLMUnavailableError`` (retryable)
+* 408, 409, 5xx (incl. Anthropic 529 overloaded), any other ``httpx`` error ->
+  ``LLMUnavailableError`` (retryable). Cost classification is default-deny (see the
+  outcome classifier below): only ``ConnectError`` and a 4xx/429 reply are known-free;
+  everything else carries ``outcome_unknown`` and is charged the call's bound
 * any other non-2xx -> ``LLMProviderError`` (permanent: bad key, model or request)
 * a 2xx whose body is not the documented envelope, whose text is not one JSON
   object, or that stopped early -> ``LLMMalformedError``; a refusal ->
@@ -98,11 +100,22 @@ class PreparedCall:
     content: bytes
 
 
-#: httpx errors raised before any request byte can have left: connecting (TCP/TLS) and
-#: acquiring a pooled connection. Every other transport error (a write or read error, a
-#: protocol error, a dropped connection) may have happened after the provider received
-#: the request, so its outcome is unknown and is charged the worst case.
-_NOT_DISPATCHED = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+#: **Outcome classifier (default-deny).** An attempt costs nothing only when the adapter can
+#: positively say the provider did not process the request:
+#:
+#: * ``httpx.ConnectError`` - raised while the connection is being established (TCP or TLS),
+#:   before any request byte is written: the one exception class known to precede dispatch;
+#: * an HTTP 4xx or 429 reply - the provider stated that the request was not processed
+#:   (rejected, or rate limited); a 4xx other than 408/409 is permanent.
+#:
+#: Everything else may have reached the provider and is charged the call's bound
+#: (``LLMError.outcome_unknown`` or the timeout rule): a timeout of any phase (including
+#: ``ConnectTimeout`` and ``PoolTimeout``, which are not proven byte-free), any other
+#: ``httpx`` error after the request (read, write or protocol errors, a dropped connection,
+#: ``DecodingError``, ``TooManyRedirects``, a proxy error), and an HTTP 5xx reply (a
+#: gateway's 502/503/504 says nothing about whether the origin processed it) or any
+#: non-2xx reply that is not a 4xx.
+_PRE_DISPATCH_ERRORS = (httpx.ConnectError,)
 
 
 def _render(request: LLMRequest) -> str:
@@ -167,9 +180,19 @@ def _raise_for_status(resp: httpx.Response, provider: str) -> None:
         raise LLMRateLimitError(
             f"{provider} rate limited (HTTP 429{detail})", retry_after=_retry_after(resp)
         )
-    if status in _RETRYABLE_STATUS or status >= 500:
+    if status >= 500:
+        # Not proof of non-processing (a gateway 502/503/504 may front a processed call).
+        unavailable = LLMUnavailableError(f"{provider} unavailable (HTTP {status}{detail})")
+        unavailable.outcome_unknown = True
+        raise unavailable
+    if status in _RETRYABLE_STATUS:
+        # 408 / 409: a 4xx - the provider stated the request was not processed.
         raise LLMUnavailableError(f"{provider} unavailable (HTTP {status}{detail})")
-    raise LLMProviderError(f"{provider} rejected the request (HTTP {status}{detail})")
+    error = LLMProviderError(f"{provider} rejected the request (HTTP {status}{detail})")
+    # A 4xx is the provider's statement that the request was not processed; any other
+    # non-2xx (1xx, 3xx) is not, so it is charged the bound.
+    error.outcome_unknown = not 400 <= status < 500
+    raise error
 
 
 def _json_body(resp: httpx.Response, provider: str) -> dict[str, Any]:
@@ -257,12 +280,13 @@ class _HTTPProvider:
             )
         except httpx.TimeoutException as exc:
             raise LLMTimeoutError(f"{self.name} request timed out") from exc
-        except httpx.TransportError as exc:
+        except httpx.HTTPError as exc:
             unavailable = LLMUnavailableError(
                 f"{self.name} connection failed ({type(exc).__name__})"
             )
-            # Request body possibly sent, no response: unknown, not known-free usage.
-            unavailable.outcome_unknown = not isinstance(exc, _NOT_DISPATCHED)
+            # Request body possibly sent, no response: unknown, not known-free usage -
+            # unless the error is positively one that precedes dispatch (default-deny).
+            unavailable.outcome_unknown = not isinstance(exc, _PRE_DISPATCH_ERRORS)
             raise unavailable from exc
         _raise_for_status(resp, self.name)
         return resp

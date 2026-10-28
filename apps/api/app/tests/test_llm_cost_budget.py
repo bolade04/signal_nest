@@ -188,8 +188,9 @@ def _meter(db, settings: Settings) -> LLMMeter:
 
 class TestMeteredAttempts:
     def test_each_attempt_is_charged_by_what_the_provider_did(self, ledger_db):
-        s = _settings(llm_max_retries=2)
+        s = _settings(llm_max_retries=3)
         steps = iter([
+            httpx.Response(429, json={"type": "error", "error": {"type": "rate_limit_error"}}),
             httpx.Response(529, json={"type": "error", "error": {"type": "overloaded_error"}}),
             httpx.ReadTimeout("slow"),
             _reply(CLASSIFIED, stop_reason="max_tokens", tokens=(800, 1024)),
@@ -213,13 +214,21 @@ class TestMeteredAttempts:
         ledger_db.commit()
         rows = ledger_db.scalars(select(LLMUsageEvent).order_by(LLMUsageEvent.created_at)).all()
         by_outcome = {r.outcome: r for r in rows}
-        assert set(by_outcome) == {"LLMUnavailableError", "LLMTimeoutError", "LLMMalformedError"}
-        assert by_outcome["LLMUnavailableError"].cost_usd == 0.0
+        assert set(by_outcome) == {
+            "LLMRateLimitError",
+            "LLMUnavailableError",
+            "LLMTimeoutError",
+            "LLMMalformedError",
+        }
+        # a 429 is the provider's statement that the request was not processed: free ...
+        assert by_outcome["LLMRateLimitError"].cost_usd == 0.0
+        # ... a 5xx is not (a gateway may front a processed call): the call's bound
+        assert by_outcome["LLMUnavailableError"].cost_usd > 0
         assert by_outcome["LLMTimeoutError"].cost_usd > 0  # worst case: it may have run
         truncated = by_outcome["LLMMalformedError"]
         assert (truncated.input_tokens, truncated.output_tokens) == (800, 1024)
         assert truncated.cost_usd == pytest.approx(cost_usd(s, "anthropic", MODEL, 800, 1024))
-        assert meter.attempts == 3 and meter.spent == pytest.approx(sum(r.cost_usd for r in rows))
+        assert meter.attempts == 4 and meter.spent == pytest.approx(sum(r.cost_usd for r in rows))
 
     def test_schema_invalid_reply_is_still_charged(self, ledger_db):
         s = _settings()

@@ -74,17 +74,22 @@ reserved.** If a provider ever reports usage above ``w`` (the bound's premise fa
 the charge stays ``w`` - an after-the-fact refusal cannot repair an exceeded budget, so
 ``reserved_usd`` must never be what exceeds it - and the event is logged at ERROR,
 counted (``llm_cost_bound_violations_total``) and recorded on the period
-(``bound_violations``); the usage row keeps the reported figures. A timeout settles at
-``w`` (the provider may have processed it); so does a **connection failure after the
-request was sent** (read, write or protocol error: the outcome is unknown, not
-known-free; only connect-phase errors, before any byte can have left, cost nothing),
-an undecodable reply, and a reply carrying no usage block (the last two are a
-conservative basis pending D-LLM-3, not an accepted rule). A reply the provider
-rejected or could not serve (4xx, 429, 5xx) is charged nothing at settlement but has
-consumed its ``w`` of the month at reservation, and the service's retries multiply that:
-a 429 or 5xx storm consumes (``llm_max_retries`` + 1) x ``w`` per logical call with no
-spend. The ledger bounds what the application *starts* under its own price schedule; the
-provider's invoice remains the only statement of what was billed.
+(``bound_violations``); the usage row keeps the reported figures. The outcome
+classifier is **default-deny**: an attempt is free only if the provider is known not to
+have processed the request - an ``httpx.ConnectError`` (raised while connecting, before any
+request byte is written; the only exception class known to precede dispatch) and an HTTP 4xx
+or 429 reply (the provider stated the request was not processed). Every other outcome may
+have reached the provider and settles at ``w`` and still writes its usage row: a timeout of
+any phase (``ConnectTimeout`` and ``PoolTimeout`` are not proven byte-free), a read, write
+or protocol error, ``DecodingError``, ``TooManyRedirects``, any other ``httpx`` error, an
+HTTP 5xx reply (a gateway's 502/503/504 does not say the origin did not process it), an
+undecodable reply and a reply carrying no usage block (the last two are a conservative basis
+pending D-LLM-3, not an accepted rule). A rejected or rate-limited reply (4xx, 429) is charged
+nothing at settlement but has consumed its ``w`` of the month at reservation, and the
+service's retries multiply that: a 429 storm consumes (``llm_max_retries`` + 1) x ``w`` per
+logical call with no spend (a 5xx storm consumes that and is charged it). The ledger bounds what the
+application *starts* under its own price schedule; the provider's invoice remains the only
+statement of what was billed.
 
 **Unknown outcomes.** If the process dies between reserving and settling, the
 reservation stays at ``w`` and is the record of that call. Recovery (the worker's

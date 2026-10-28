@@ -27,7 +27,7 @@ import httpx
 import pytest
 
 from app.core.config import Settings
-from app.llm.base import LLMUnavailableError
+from app.llm.base import LLMError
 from app.llm.bound import (
     MESSAGE_OVERHEAD_TOKENS,
     MICRO,
@@ -502,27 +502,83 @@ def test_the_unbounded_refusal_never_reserves_zero_on_the_shared_ledger(tmp_path
     engine.dispose()
 
 
-def test_outcome_unknown_marks_only_errors_that_may_have_reached_the_provider():
-    cases = {
-        httpx.ConnectError: False,
-        httpx.ReadError: True,
-        httpx.WriteError: True,
-        httpx.RemoteProtocolError: True,
-        httpx.CloseError: True,
-    }
-    for exc_class, unknown in cases.items():
+#: Outcome classifier (default-deny): only an error positively known to precede dispatch
+#: (ConnectError) and a 4xx / 429 reply (the provider stated the request was not processed)
+#: are free; every other outcome is charged the call's bound and still has its usage row.
+FREE = "free"
+BOUND = "bound"
 
-        def raise_it(request, exc_class=exc_class):
-            raise exc_class("boom")
 
-        provider = AnthropicProvider(
-            "k", MODEL, 5, client=httpx.Client(transport=httpx.MockTransport(raise_it))
+def _gzip_garbage(request):
+    return httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"not gzip at all")
+
+
+CLASSIFIER_CASES = {
+    "ConnectError": (httpx.ConnectError("refused"), FREE),
+    "HTTP 400": (httpx.Response(400, json={"type": "error", "error": {}}), FREE),
+    "HTTP 401": (httpx.Response(401, json={"type": "error", "error": {}}), FREE),
+    "HTTP 404": (httpx.Response(404, json={"type": "error", "error": {}}), FREE),
+    "HTTP 408": (httpx.Response(408, json={"type": "error", "error": {}}), FREE),
+    "HTTP 409": (httpx.Response(409, json={"type": "error", "error": {}}), FREE),
+    "HTTP 413": (httpx.Response(413, json={"type": "error", "error": {}}), FREE),
+    "HTTP 429": (httpx.Response(429, json={"type": "error", "error": {}}), FREE),
+    "HTTP 500": (httpx.Response(500, json={"type": "error", "error": {}}), BOUND),
+    "HTTP 502": (httpx.Response(502, text="bad gateway"), BOUND),
+    "HTTP 503": (httpx.Response(503, text="unavailable"), BOUND),
+    "HTTP 504": (httpx.Response(504, text="gateway timeout"), BOUND),
+    "HTTP 529": (httpx.Response(529, json={"type": "error", "error": {}}), BOUND),
+    "HTTP 302": (httpx.Response(302, headers={"location": "https://x.invalid/"}), BOUND),
+    "ConnectTimeout": (httpx.ConnectTimeout("t"), BOUND),
+    "PoolTimeout": (httpx.PoolTimeout("t"), BOUND),
+    "ReadTimeout": (httpx.ReadTimeout("t"), BOUND),
+    "WriteTimeout": (httpx.WriteTimeout("t"), BOUND),
+    "ReadError": (httpx.ReadError("r"), BOUND),
+    "WriteError": (httpx.WriteError("w"), BOUND),
+    "CloseError": (httpx.CloseError("c"), BOUND),
+    "RemoteProtocolError": (httpx.RemoteProtocolError("p"), BOUND),
+    "LocalProtocolError": (httpx.LocalProtocolError("p"), BOUND),
+    "ProxyError": (httpx.ProxyError("p"), BOUND),
+    "UnsupportedProtocol": (httpx.UnsupportedProtocol("u"), BOUND),
+    "NetworkError": (httpx.NetworkError("n"), BOUND),
+    "DecodingError": (_gzip_garbage, BOUND),
+    "TooManyRedirects": (httpx.TooManyRedirects("m"), BOUND),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CLASSIFIER_CASES))
+def test_the_outcome_classifier_is_default_deny(name):
+    step, expected = CLASSIFIER_CASES[name]
+    settings = offline_settings(
+        llm_provider="anthropic", llm_api_key="k", llm_model=MODEL, llm_max_retries=0
+    )
+
+    def handler(request):
+        if callable(step):
+            return step(request)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    provider = AnthropicProvider(
+        "k", MODEL, 5, client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    meter = _meter(settings)
+    with pytest.raises(LLMError):
+        LLMService(provider, settings=settings).run(
+            "classify_signal", {"content": "x"}, meter=meter
         )
-        request = provider.prepare(
-            __import__("app.llm.base", fromlist=["LLMRequest"]).LLMRequest(
-                task="classify_signal", inputs={"content": "x"}
-            )
-        )
-        with pytest.raises(LLMUnavailableError) as exc:
-            provider._post(request)
-        assert exc.value.outcome_unknown is unknown, exc_class.__name__
+    worst = float(meter.worst_case("anthropic", MODEL, provider.prepare(_request("x")).content))
+    assert meter.spent == (0.0 if expected == FREE else pytest.approx(worst)), name
+    assert len(meter._records) == 1  # the attempt has its usage record either way
+    assert meter._records[0]["cost_usd"] == meter.spent
+
+
+def _request(content: str):
+    from app.llm.base import LLMRequest
+
+    return LLMRequest(
+        task="classify_signal",
+        inputs={"content": content},
+        max_tokens=offline_settings().llm_max_output_tokens,
+        tenant_ref="t",
+    )

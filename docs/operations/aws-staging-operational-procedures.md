@@ -352,16 +352,21 @@ Any non-zero `bound_violations` means the premise or the price schedule must be
 re-examined before the ledger is trusted for that model; the invoice may then
 exceed the ledger by the excess.
 
-**Uncertain outcomes are charged the worst case.** A timeout, a connection
-failure *after the request was sent* (read, write or protocol error: the
-provider may have processed it; only connect-phase errors, before any byte can
-have left, are known-free), an undecodable reply and a reply with no usage block
-settle at the call's bound (the undecodable-reply charge is a conservative basis
-pending D-LLM-3). A call whose process died between reservation and settlement
-keeps its worst case as the month's spend ("an unknown outcome is charged its
-worst case"); the reservation row is its record. A rejected, rate-limited or
-unavailable (4xx, 429, 5xx) attempt is charged 0 at settlement but has consumed
-its bound at reservation, and the service's retries multiply that
+**Uncertain outcomes are charged the worst case (default-deny).** An attempt is
+free only when the provider is known not to have processed the request: an
+`httpx.ConnectError` (raised while connecting, before any request byte is written —
+the only exception class known to precede dispatch) and an HTTP 4xx or 429 reply
+(the provider stated the request was not processed). Everything else may have
+reached the provider and settles at the call's bound, with its usage row: a timeout
+of any phase (a connect or pool timeout is not proven byte-free), a read, write or
+protocol error, a decoding error, too many redirects, any other transport error,
+an HTTP 5xx reply (a gateway's 502/503/504 does not say the origin did not process
+it), an undecodable reply and a reply with no usage block (the last two are a
+conservative basis pending D-LLM-3). A call whose process died between reservation
+and settlement keeps its worst case as the month's spend ("an unknown outcome is
+charged its worst case"); the reservation row is its record. A rejected or
+rate-limited (4xx, 429) attempt is charged 0 at settlement but has consumed its
+bound at reservation, and the service's retries multiply that
 ((`llm_max_retries` + 1) × bound per logical call with no spend).
 
 **Settlement after recovery.** If recovery releases a reservation before its own
@@ -395,8 +400,10 @@ where it lives in the code, `app.llm.metering`, `app.llm.bound` and
 5. a reply whose usage exceeds its bound (premise failure) is charged the bound,
    not the usage: the ledger stays within the budget and `bound_violations`
    says the invoice may exceed it;
-6. a transport failure *before* the request was sent (connect phase) is charged
-   0; every failure after dispatch is charged the worst case;
+6. only a `ConnectError` and a 4xx/429 reply are charged 0 ("the provider stated
+   the request was not processed" / raised before any byte was written); every
+   other outcome that may have reached the provider, including every 5xx reply, is
+   charged the worst case;
 7. if the reservation cannot be written (database unavailable) the attempt
    raises before any call: the job fails as transient and the worker retries
    it; the run's outputs are not marked `budget_limited`;

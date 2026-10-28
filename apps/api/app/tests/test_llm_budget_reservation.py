@@ -48,7 +48,12 @@ from app.jobs.status import JobErrorCode, JobStatus
 from app.jobs.store import DurableJobStore
 from app.jobs.worker import JobRunner
 from app.llm import budget as ledger
-from app.llm.base import LLMMalformedError, LLMTimeoutError, LLMUnavailableError
+from app.llm.base import (
+    LLMMalformedError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+    LLMUnavailableError,
+)
 from app.llm.metering import (
     LLMBudgetExceededError,
     LLMBudgetExhaustedError,
@@ -898,9 +903,14 @@ def test_conservative_cost_basis(factory, shared):
         # connect timeout is a timeout, and a timeout keeps its worst-case rule.
         "connect_error": (httpx.ConnectError("refused"), LLMUnavailableError, 0.0),
         "pool_timeout": (httpx.PoolTimeout("no connection"), LLMTimeoutError, "worst"),
-        "unavailable": (
+        "overloaded_529": (
             httpx.Response(529, json={"type": "error", "error": {}}),
             LLMUnavailableError,
+            "worst",
+        ),
+        "rate_limited_429": (
+            httpx.Response(429, json={"type": "error", "error": {}}),
+            LLMRateLimitError,
             0.0,
         ),
         "reported": (_reply(CLASSIFIED), None, 0.0105),
