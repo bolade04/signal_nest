@@ -44,10 +44,12 @@ request's output limit, in exact decimal arithmetic rounded up at 1e-6), and a c
 whose cost cannot be bounded is not made. This is the application's defined budget
 guarantee; it is not a statement about the provider's invoice. Not covered: provider-
 side billing differences from the price schedule, including the tokenizer premise and
-overhead constants the bound rests on (stated in `app.llm.bound`); calls made outside
-the metered service (E6 probe); budget changes mid-month lowering below already-
-reserved amounts; SQLite, where the guarantee degrades to per-session (documented,
-tests pin the degraded behaviour).
+overhead constants the bound rests on (stated in `app.llm.bound`); tiered or long-
+context input pricing (a request whose input bound exceeds the single-tier threshold
+is not made unless the schedule names the tier price); calls made outside the metered
+service (E6 probe); budget changes mid-month lowering below already-reserved amounts;
+SQLite, where the guarantee degrades to per-session (documented, tests pin the
+degraded behaviour).
 
 **How.** With a session factory (the durable worker gives the meter one) on a
 PostgreSQL bind, the meter runs the *shared-ledger* path: before every provider

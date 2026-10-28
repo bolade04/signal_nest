@@ -34,11 +34,25 @@ provider, and the bound is only as true as they are):
   thinking tokens cannot be billed by a request this function accepts. Output is bounded
   by ``max_tokens`` (Anthropic) / ``max_completion_tokens`` (OpenAI), which also cap
   reasoning tokens where a model has them.
+* **F4 - one input price tier.** The schedule's ``[input, output]`` is one tier. Some
+  providers charge a higher rate for the whole request once its input exceeds a
+  long-context threshold (Anthropic's long-context pricing starts above 200 000 input
+  tokens for the models that offer it; the figure is
+  :data:`SINGLE_TIER_INPUT_TOKEN_THRESHOLD`, **stated from the provider's published
+  pricing notes and not re-checked against the live page**). The function never prices
+  such a request at the single tier: a body whose input-token bound exceeds the
+  threshold is **unbounded** (``long_context_tier_unpriced``) unless the schedule entry
+  also names the tier, as ``[input, output, long_context_input, long_context_output]``
+  (the shipped configuration validates two-element entries, so today every such request
+  is refused). Shipped limits keep bodies far below the threshold (about 65 KB at the
+  default ``llm_max_untrusted_chars``); the configuration maximum admits larger ones.
 
 Price components covered: **input tokens** and **output tokens** from the schedule's
 ``[input, output]`` USD per million tokens. Excluded by F3, with the request shape
 proving it: cache writes, cache reads, tool and server-tool charges, batch/priority
-tier differences, thinking tokens beyond ``max_tokens``.
+tier differences, thinking tokens beyond ``max_tokens``. Not priced here either, and
+so refused above the threshold unless the schedule names it (F4): long-context input
+pricing.
 """
 
 from __future__ import annotations
@@ -58,6 +72,9 @@ SUPPORTED_MODEL_FAMILIES = ("claude-", "gpt-")
 REQUEST_OVERHEAD_TOKENS = 128
 #: Stated conservative constant per message, the ``system`` string counted as one (F2).
 MESSAGE_OVERHEAD_TOKENS = 16
+#: Input-token bound above which a provider's long-context (second input tier) pricing may
+#: apply (F4). Not re-checked against the live provider page.
+SINGLE_TIER_INPUT_TOKEN_THRESHOLD = 200_000
 #: A request asking for more output tokens than this is not bounded by this module.
 MAX_OUTPUT_TOKENS = 1_000_000
 
@@ -181,7 +198,9 @@ def worst_case_cost(
     tokenizer premise F1 is not accepted; a body that is not one JSON object; any key,
     message shape or content type outside what the adapters send (F3: tools, cache
     controls, content blocks, unknown parameters); a ``model`` field that differs from
-    the priced ``model``; a missing or non-positive output limit.
+    the priced ``model``; a missing or non-positive output limit; an input bound above
+    :data:`SINGLE_TIER_INPUT_TOKEN_THRESHOLD` unless the schedule entry names the
+    long-context tier prices (F4).
 
     Conservative basis: F1 for Claude models is a coordinator engineering premise (lane brief
     2026-10-27), not a provider document and not an operator ruling (open for the
@@ -193,11 +212,12 @@ def worst_case_cost(
     prices = price_schedule.get(model) if isinstance(model, str) else None
     if prices is None:
         return Unbounded("model_not_priced", "model")
-    if not isinstance(prices, Sequence) or len(prices) != 2:
+    if not isinstance(prices, Sequence) or len(prices) not in (2, 4):
         return Unbounded("price_invalid")
-    price_in, price_out = _decimal_price(prices[0]), _decimal_price(prices[1])
-    if price_in is None or price_out is None:
+    decimals = [_decimal_price(p) for p in prices]
+    if any(p is None for p in decimals):
         return Unbounded("price_invalid")
+    price_in, price_out = decimals[0], decimals[1]
     if not model.startswith(SUPPORTED_MODEL_FAMILIES):
         return Unbounded("model_family_unsupported", "model family")
 
@@ -236,6 +256,10 @@ def worst_case_cost(
         return messages
 
     tokens_in = len(raw) + REQUEST_OVERHEAD_TOKENS + MESSAGE_OVERHEAD_TOKENS * messages
+    if tokens_in > SINGLE_TIER_INPUT_TOKEN_THRESHOLD:
+        if len(decimals) != 4:
+            return Unbounded("long_context_tier_unpriced", "input bound above the single tier")
+        price_in, price_out = decimals[2], decimals[3]
     # scaleb is an exact shift (a division could round to the context precision).
     exact = (Decimal(tokens_in) * price_in + Decimal(limit) * price_out).scaleb(-6)
     return max(exact.quantize(MICRO, rounding=ROUND_CEILING), MICRO)

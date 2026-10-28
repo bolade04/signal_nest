@@ -582,3 +582,49 @@ def _request(content: str):
         max_tokens=offline_settings().llm_max_output_tokens,
         tenant_ref="t",
     )
+
+
+# --------------------------------------------------------------------------- #
+# F4: one input price tier - long-context requests fail closed unless the tier is named
+# --------------------------------------------------------------------------- #
+def test_a_request_above_the_single_tier_threshold_is_unbounded_unless_the_tier_is_named():
+    from app.llm.bound import SINGLE_TIER_INPUT_TOKEN_THRESHOLD
+
+    big = "x" * (SINGLE_TIER_INPUT_TOKEN_THRESHOLD + 10)
+    body = _anthropic_body(messages=[{"role": "user", "content": big}])
+    assert worst_case_cost(MODEL, body, PRICES) == Unbounded(
+        "long_context_tier_unpriced", "input bound above the single tier"
+    )
+    # just below the threshold is priced at the single tier
+    edge = "x" * (SINGLE_TIER_INPUT_TOKEN_THRESHOLD - 2000)
+    ok = _anthropic_body(messages=[{"role": "user", "content": edge}])
+    assert isinstance(worst_case_cost(MODEL, ok, PRICES), Decimal)
+    # a schedule that names the tier prices the whole request at it
+    tiered = {MODEL: [3.0, 15.0, 6.0, 22.5]}
+    cost = worst_case_cost(MODEL, body, tiered)
+    raw = encode_body(body)
+    tokens_in = len(raw) + REQUEST_OVERHEAD_TOKENS + MESSAGE_OVERHEAD_TOKENS * 2
+    assert Fraction(cost) >= _exact(tokens_in, 1024, "6.0", "22.5")
+    assert Fraction(cost) - _exact(tokens_in, 1024, "6.0", "22.5") < Fraction(1, 1_000_000)
+    # below the threshold a tiered schedule still prices at the first tier
+    assert worst_case_cost(MODEL, ok, tiered) == worst_case_cost(MODEL, ok, PRICES)
+    # a malformed tier (three elements, a negative tier price) is invalid
+    assert isinstance(worst_case_cost(MODEL, ok, {MODEL: [3.0, 15.0, 6.0]}), Unbounded)
+    assert isinstance(worst_case_cost(MODEL, body, {MODEL: [3.0, 15.0, -1.0, 2.0]}), Unbounded)
+
+
+def test_the_meter_refuses_a_long_context_body_with_the_distinct_reason():
+    settings = offline_settings(
+        llm_provider="anthropic", llm_api_key="k", llm_model=MODEL, llm_max_untrusted_chars=50000
+    )
+    spy = _Spy(_anthropic_reply())
+    provider = AnthropicProvider(
+        "k", MODEL, 5, client=httpx.Client(transport=httpx.MockTransport(spy))
+    )
+    meter = _meter(settings)
+    # a prompt this large cannot be built from the capped inputs; bound the bytes directly
+    huge = json.dumps(_anthropic_body(messages=[{"role": "user", "content": "y" * 300_000}]))
+    with pytest.raises(LLMBudgetExceededError) as exc:
+        meter.before_attempt("anthropic", MODEL, huge.encode())
+    assert (exc.value.reason, exc.value.detail) == ("cost_unbounded", "long_context_tier_unpriced")
+    assert spy.sent == [] and provider is not None

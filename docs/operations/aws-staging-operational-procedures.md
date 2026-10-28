@@ -305,7 +305,9 @@ rounded up at 1e-6), and a call whose cost cannot be bounded is not made. This
 is the application's defined budget guarantee; it is not a statement about the
 provider's invoice. Not covered: provider-side billing differences from the
 price schedule, including the tokenizer premise and overhead constants the
-bound rests on (stated in `app.llm.bound`); calls made outside the metered
+bound rests on (stated in `app.llm.bound`); tiered or long-context input
+pricing (a request whose input bound exceeds the single-tier threshold is not
+made unless the schedule names the tier price); calls made outside the metered
 service (E6 probe); budget changes mid-month lowering below already-reserved
 amounts; SQLite, where the guarantee degrades to per-session (documented,
 tests pin the degraded behaviour).*
@@ -325,7 +327,15 @@ Components covered: **input tokens and output tokens** at the schedule's
 server-tool charges and thinking tokens are excluded **because the request
 cannot carry them**: the function accepts only the keys and text-only message
 content the adapters send, and any other key, content block or `cache_control`
-makes the request *unbounded*. The bytes-per-token premise is a documented fact
+makes the request *unbounded*. **Long-context (second-tier) input pricing is not in
+the schedule**: the schedule is one `[input, output]` tier, so a request whose
+input-token bound exceeds 200 000 (the provider's published long-context
+threshold, not re-checked against the live page) is refused with the reason
+`long_context_tier_unpriced` unless the schedule entry names the tier prices
+(`[input, output, long_context_input, long_context_output]`; the shipped
+configuration validates two-element entries). The default limits keep bodies near
+65 KB; the configuration maximum for `llm_max_untrusted_chars` admits larger
+ones. The bytes-per-token premise is a documented fact
 for the public OpenAI tokenizers and a **coordinator engineering premise (lane brief 2026-10-27), not a provider document and not an operator ruling; open for the operator to accept or to replace with a provider-sourced figure** for Claude models, whose tokenizer is not public; the two overhead
 constants are not provider figures. **Fail closed:** a model missing from the
 price schedule, a model family whose premise is not accepted, a body that is not
