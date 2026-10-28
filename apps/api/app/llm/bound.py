@@ -24,7 +24,8 @@ provider, and the bound is only as true as they are):
   ("How to count tokens with tiktoken") gives 3 tokens per message and 3 to prime the
   reply. :data:`REQUEST_OVERHEAD_TOKENS` and :data:`MESSAGE_OVERHEAD_TOKENS` are
   **stated conservative constants** (about 40x and 5x the OpenAI figures), labelled as
-  such; they are not provider figures.
+  such; they are not provider figures but a coordinator engineering premise, open
+  operator decision (DECISION-MEMO M9).
 * **F3 - what the request can bill.** The providers' adapters (``providers_real``)
   send only the keys in :data:`ANTHROPIC_KEYS` / :data:`OPENAI_KEYS`, with text-only
   message content, no tool definitions, no ``cache_control``, no extended thinking, no
@@ -66,11 +67,15 @@ from typing import Any
 
 MICRO = Decimal("0.000001")
 
-#: Model-id prefixes whose tokenizer premise F1 is accepted (see the module docstring).
+#: Model-id prefixes whose tokenizer premise F1 is applied. For ``claude-*`` that premise is
+#: a coordinator engineering premise, open operator decision (DECISION-MEMO M9); for
+#: ``gpt-*`` the tokenizers are public (see the module docstring).
 SUPPORTED_MODEL_FAMILIES = ("claude-", "gpt-")
-#: Stated conservative constant per request (F2): not a provider figure.
+#: Stated conservative constant per request (F2): not a provider figure; a
+#: coordinator engineering premise, open operator decision (DECISION-MEMO M9).
 REQUEST_OVERHEAD_TOKENS = 128
-#: Stated conservative constant per message, the ``system`` string counted as one (F2).
+#: Stated conservative constant per message, the ``system`` string counted as one (F2); a
+#: coordinator engineering premise, open operator decision (DECISION-MEMO M9).
 MESSAGE_OVERHEAD_TOKENS = 16
 #: Input-token bound above which a provider's long-context (second input tier) pricing may
 #: apply (F4). Not re-checked against the live provider page.
@@ -194,8 +199,8 @@ def worst_case_cost(
     lower the result. The ceiling-rounded value is always at or above the exact cost.
 
     Fails closed (returns :class:`Unbounded`, so the caller makes no attempt) for: a
-    model missing from ``price_schedule`` or with an invalid price; a model family whose
-    tokenizer premise F1 is not accepted; a body that is not one JSON object; any key,
+    model missing from ``price_schedule`` or with an invalid price; a model family
+    that is not supported (F1 is not applied to it); a body that is not one JSON object; any key,
     message shape or content type outside what the adapters send (F3: tools, cache
     controls, content blocks, unknown parameters); a ``model`` field that differs from
     the priced ``model``; a missing or non-positive output limit; an input bound above

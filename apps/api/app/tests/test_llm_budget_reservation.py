@@ -667,6 +667,30 @@ def test_a_conflict_is_retried_a_bounded_number_of_times_and_other_errors_not_at
         assert len(calls) == expected_calls
 
 
+def test_without_foreign_keys_a_settlement_for_a_deleted_workspace_still_writes_nothing(
+    factory,
+):
+    """Review r3 MINOR-5: the default fixture does not enforce foreign keys, and deleting
+    only the workspace row leaves its ledger rows behind. Settlement and the late path must
+    still add no usage row for the deleted workspace."""
+    w, budget = Decimal("0.02"), Decimal("1")
+    with factory() as db:
+        job = _enqueue(db, "fkoff")
+        assert _reserve(db, f"{job}:1:0", w, budget, job_id=job)  # released: the late path
+        assert _reserve(db, "o:1:0", w, budget)  # still reserved: the normal path
+        assert ledger.release_for_job(db, job_id=job, now=T0, outcome="terminal") == 1
+        db.commit()
+        db.execute(delete(Workspace).where(Workspace.id == WS))
+        db.commit()
+        for key in (f"{job}:1:0", "o:1:0"):
+            assert not ledger.settle(
+                db, attempt_key=key, settled_usd=CALL_COST, now=T0, usage=_usage(CALL_COST)
+            )
+        db.commit()
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 0
+        assert _reservation(db, "o:1:0").state == "reserved"  # untouched
+
+
 def test_a_call_that_outlives_its_tenant_finishes_without_error_or_rows(tenant_db):
     """The meter path end to end: the reservation is made, the tenant is erased while the
     provider call is in flight, the call returns. Settlement must neither raise into the

@@ -7,11 +7,13 @@ PostgreSQL (D-LLM-1 option B, ``app.llm.budget``):
   ``workspace_id, period_start``; surrogate ``id`` like every other table, for the
   privacy export, erasure walk and verification): ``reserved_usd`` (the budget
   consumed: the sum of each call's worst-case bound) and ``settled_usd`` and
-  ``bound_violations`` (settled calls whose reported usage exceeded their bound). The budget check is one conditional ``UPDATE`` of this row.
+  ``bound_violations`` (settled calls whose reported usage exceeded their bound). The
+  budget check is one conditional ``UPDATE`` of this row.
 * ``llm_budget_reservations`` - one row per reserved provider call, keyed by attempt
   (``attempt_key`` unique: job id, worker attempt, call ordinal) so settlement is
   idempotent and a reservation whose process died can be recovered; ``state``
-  (reserved | settled | released | expired), ``expires_at`` for the sweep,
+  (reserved | settled | released | expired), ``expires_at`` for the sweep, and
+  ``usage_recorded_at`` (the claim that makes the attempt's usage row exactly-once).
 
 Purely **additive and safe on a live database**:
 

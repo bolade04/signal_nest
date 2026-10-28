@@ -139,9 +139,13 @@ def reservation_expiry(settings: Settings, now: datetime) -> datetime:
 def _parent_exists(db: Session, workspace_id: str, organization_id: str) -> bool:
     """Whether the workspace (of that organization) still exists.
 
-    A late callback for a deleted tenant must never recreate that tenant's period or any
-    other row (no ``INSERT ... ON CONFLICT`` resurrection), whether or not the database
-    enforces the foreign keys: the writers that insert check this first.
+    A late callback for a deleted tenant must never create a row for that tenant: no
+    ``INSERT ... ON CONFLICT`` resurrection of a period, no reservation, no usage row.
+    Every writer that inserts (reserve, record_settled, settle and the late settlement's
+    usage insert) checks this first, so that holds whether or not the database enforces the
+    foreign keys. With enforcement the tenant's ledger rows are deleted with it and the
+    release / sweep paths find nothing; without it they may still update ledger rows that
+    were orphaned, but they create none.
     """
     return (
         db.scalar(
@@ -331,6 +335,11 @@ def settle(
         select(LLMBudgetReservation).where(LLMBudgetReservation.attempt_key == attempt_key)
     )
     if reservation is None:
+        _orphaned(attempt_key, "settle")
+        return False
+    if not _parent_exists(db, reservation.workspace_id, reservation.organization_id):
+        # The tenant is gone (a database without foreign-key enforcement keeps the
+        # orphaned ledger rows): no usage row, no period change - log and count only.
         _orphaned(attempt_key, "settle")
         return False
     # Period lock first (the ledger's one lock order), then decide on the row as it is now.

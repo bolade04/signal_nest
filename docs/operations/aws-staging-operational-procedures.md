@@ -337,8 +337,9 @@ configuration validates two-element entries). The default limits keep bodies nea
 65 KB; the configuration maximum for `llm_max_untrusted_chars` admits larger
 ones. The bytes-per-token premise is a documented fact
 for the public OpenAI tokenizers and a **coordinator engineering premise (lane brief 2026-10-27), not a provider document and not an operator ruling; open for the operator to accept or to replace with a provider-sourced figure** for Claude models, whose tokenizer is not public; the two overhead
-constants are not provider figures. **Fail closed:** a model missing from the
-price schedule, a model family whose premise is not accepted, a body that is not
+constants (128 per request, 16 per message) are likewise a coordinator engineering premise, open operator decision (DECISION-MEMO M9), not provider
+figures. **Fail closed:** a model missing from the
+price schedule, a model family that is not supported, a body that is not
 one JSON object, an unknown parameter or content block, a missing output limit,
 or a provider that cannot show its request bytes is refused before any call with
 the distinct reason `cost_unbounded` (never a zero reservation); the pipeline
@@ -398,8 +399,8 @@ Residual limitations of the ledger — the complete list (each is also stated
 where it lives in the code, `app.llm.metering`, `app.llm.bound` and
 `app.llm.budget`):
 1. provider-side billing may differ from the price schedule; the bound's
-   tokenizer premise (a coordinator engineering premise for Claude, not an operator ruling) and overhead constants are
-   not provider figures; the ledger is a ceiling on reserved bounds, not an
+   tokenizer premise for Claude and the overhead constants are a coordinator engineering premise, open operator decision (DECISION-MEMO M9), not
+   provider figures; the ledger is a ceiling on reserved bounds, not an
    invoice (reconcile monthly);
 2. calls outside the metered service (the E6 probe, anything not through
    `app.llm.service`) are not in the ledger;

@@ -2,9 +2,10 @@
 
 * **Price table** - ``Settings.llm_prices_usd_per_mtok`` maps a model id to
   ``[input, output]`` USD per million tokens, with its source and date in
-  ``Settings.llm_price_source``. A model missing from the table is charged at the
-  table's most expensive rates (fail-closed: an unknown model can never look free).
-  The mock provider costs nothing.
+  ``Settings.llm_price_source``. A model missing from the table is never called: the
+  attempt is refused before any request (``cost_unbounded``, :mod:`app.llm.bound`);
+  :func:`prices` (the table's highest rates for an unknown model) only prices usage that
+  a provider reported. The mock provider costs nothing.
 * **Per-run cap** - at most ``llm_max_calls_per_run`` provider *attempts*
   (provider retries included) per scout run. On the durable worker path a run is one
   ``scout_request.execute`` job, and the cap spans all of that job's worker attempts.
@@ -421,9 +422,7 @@ class LLMMeter:
     def tenant_ref(self) -> str | None:
         return self._tenant_ref
 
-    def worst_case(
-        self, provider: str, model: str, payload: bytes | None
-    ) -> Decimal | Unbounded:
+    def worst_case(self, provider: str, model: str, payload: bytes | None) -> Decimal | Unbounded:
         """The attempt's worst-case cost bound (:func:`app.llm.bound.worst_case_cost`).
 
         ``payload`` is the request body exactly as the transport sends it; ``None``
