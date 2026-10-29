@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { ApiError } from '@/api/client';
 import { isOwnerRole } from '@/lib/roles';
+import { parseApiDate } from '@/lib/utils';
 import {
   apiErrorCode,
   INVITATION_ERROR_COPY,
@@ -143,9 +144,8 @@ export function soleOwnerId(members: readonly { user_id: string; role: string }[
 
 /** A calendar date ("Sep 24, 2026"), used for a membership's join time. */
 export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '—';
+  const date = parseApiDate(iso);
+  if (!date) return '—';
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
 }
 
