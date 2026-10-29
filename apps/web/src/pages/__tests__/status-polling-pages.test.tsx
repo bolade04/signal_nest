@@ -9,7 +9,7 @@ import { renderApp } from '@/test/utils';
  * W11 A2 (review F-02 on #277): scout-request status polling is bounded and backed off on
  * the list and the detail page (lib/status-polling.ts): 2 s for 30 s, then 4/8/16 s, then
  * 30 s; automatic reads stop 10 minutes after the last restart point, a role="status" note
- * and "Refresh status" appear; nothing is read while the tab is hidden, and one read is
+ * appears (the button itself is offered throughout); nothing is read while the tab is hidden, and one read is
  * made when it becomes visible again. At 4c142280 both pages re-read every 2 s forever.
  *
  * The request is held `queued` by the test (the stranded case the review rendered: its
@@ -19,7 +19,7 @@ import { renderApp } from '@/test/utils';
 
 const S = 1000;
 const WAIT = { timeout: 900 } as const;
-const NOTE = 'Automatic status updates paused. Refresh status to check again.';
+const NOTE = 'Automatic status updates stopped. Refresh status to check again.';
 
 let readKind: 'detail' | 'list' = 'detail';
 const readTimes = () => (readKind === 'detail' ? runBackend.detailTimes : runBackend.listTimes);

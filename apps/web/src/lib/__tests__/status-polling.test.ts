@@ -83,8 +83,8 @@ describe('StatusPollSchedule: restart points shared by a page (W11 A2)', () => {
   it('stops at the bound, says so once, and a manual restart resumes at 2 s', () => {
     const s = new StatusPollSchedule();
     const listener = vi.fn();
-    s.subscribe(listener);
     s.observe('request', 'r1:queued', 0);
+    s.subscribe(listener);
     expect(s.isStopped()).toBe(false);
     expect(s.next('request', 600 * S)).toBe(false);
     expect(s.isStopped()).toBe(true);
@@ -96,7 +96,24 @@ describe('StatusPollSchedule: restart points shared by a page (W11 A2)', () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
-  it('leaving in-flight clears the schedule and the paused state', () => {
+  it('publishes one stable { active, stopped } snapshot for React (offer the button / show the note)', () => {
+    const s = new StatusPollSchedule();
+    const idle = s.getSnapshot();
+    expect(idle).toEqual({ active: false, stopped: false });
+    s.observe('request', null, 0);
+    expect(s.getSnapshot()).toBe(idle); // unchanged: the same object
+    s.observe('request', 'r1:queued', 1_000);
+    const polling = s.getSnapshot();
+    expect(polling).toEqual({ active: true, stopped: false });
+    s.next('request', 2_000);
+    expect(s.getSnapshot()).toBe(polling);
+    s.next('request', 700_000);
+    expect(s.getSnapshot()).toEqual({ active: true, stopped: true });
+    s.observe('request', null, 701_000);
+    expect(s.getSnapshot()).toEqual({ active: false, stopped: false });
+  });
+
+  it('leaving in-flight clears the schedule and the stopped state', () => {
     const s = new StatusPollSchedule();
     s.observe('request', 'r1:queued', 0);
     s.next('request', 700 * S);

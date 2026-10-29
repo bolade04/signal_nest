@@ -7,7 +7,7 @@ import { queryKeys } from '@/api/queryKeys';
 import type { OpportunityFilters, ScoutRequestOut } from '@/api/types';
 import { ScoutStatusBadge } from '@/components/common/badges';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
-import { StatusUpdatesPaused } from '@/components/common/status-updates-paused';
+import { StatusRefresh } from '@/components/common/status-refresh';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,7 @@ import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
 import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
+import { moveFocusTo } from '@/lib/focus';
 import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -43,7 +44,19 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const actions = useScoutActions(workspaceId);
   const queryClient = useQueryClient();
-  const { schedule, stopped: statusUpdatesPaused } = useStatusPolling();
+  const { schedule, active: statusInFlight, stopped: statusUpdatesStopped } = useStatusPolling();
+  // R2-01: if "Refresh status" is removed (nothing in flight any more) while it has keyboard
+  // focus, return focus to this request's Run now, else to the page heading. Never otherwise.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const refocusAfterSettle = useRef(false);
+  useEffect(() => {
+    if (statusInFlight || !refocusAfterSettle.current) return;
+    refocusAfterSettle.current = false;
+    moveFocusTo(
+      headerRef.current?.querySelector<HTMLElement>('[data-run-now]'),
+      headerRef.current?.querySelector<HTMLElement>('h1'),
+    );
+  }, [statusInFlight]);
 
   const query = useQuery({
     queryKey: queryKeys.scoutRequest(workspaceId, requestId),
@@ -101,7 +114,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
 
   return (
     <div className="space-y-6">
-      <div>
+      <div ref={headerRef}>
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-3 -ml-2">
           <ArrowLeft className="size-4" /> Back
         </Button>
@@ -136,7 +149,15 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
         </div>
       </div>
 
-      {statusUpdatesPaused ? <StatusUpdatesPaused onRefresh={refreshStatus} /> : null}
+      {statusInFlight ? (
+        <StatusRefresh
+          stopped={statusUpdatesStopped}
+          onRefresh={refreshStatus}
+          onRemovedWhileFocused={() => {
+            refocusAfterSettle.current = true;
+          }}
+        />
+      ) : null}
 
       <div className="rounded-md border border-warning/40 bg-warning/10 px-4 py-2.5 text-sm">
         <span className="inline-flex items-center gap-1.5 font-medium text-warning">

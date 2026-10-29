@@ -24,12 +24,17 @@ import { useState, useSyncExternalStore } from 'react';
  *   while something is in flight, the page reads once (`refetchOnWindowFocus: 'always'`,
  *   driven by `visibilitychange`), then continues the schedule from the wall-clock elapsed
  *   time — or restarts it if that read shows a status change. A hidden tab therefore never
- *   polls, and returning to it after the bound gives one fresh read and the paused note.
- * - **When it stops:** the page shows a role="status" note that automatic updates are paused
- *   and a "Refresh status" button. Nothing interprets the state (no "stuck", "failed" or
- *   "cancelled", no pause/resume/cancel advice, no run-outcome wording).
- * - **Manual refresh** reads at once and restarts the schedule. It is offered only once
- *   automatic updates have stopped.
+ *   polls, and returning to it after the bound gives one fresh read and the stopped note.
+ * - **When it stops:** a role="status" note reads "Automatic status updates stopped. Refresh
+ *   status to check again." ("stopped", not "paused", so it is not read as the scout's own
+ *   Pause). Nothing interprets the state (no "stuck", "failed" or "cancelled", no
+ *   pause/resume/cancel advice, no run-outcome wording).
+ * - **Manual refresh:** "Refresh status" is offered whenever something shown is in flight,
+ *   both while reads are automatic and after they stop; it reads at once and restarts the
+ *   schedule. Activating it while something stays in flight keeps it mounted and focused.
+ *   When a read shows nothing in flight any more it is removed; if it had keyboard focus at
+ *   that moment, the page moves focus to the request's Run now (fallback: the page heading),
+ *   and otherwise focus is never moved.
  */
 export const STATUS_POLL_POLICY = {
   fastMs: 2_000,
@@ -76,6 +81,7 @@ export class StatusPollSchedule {
   #restartAt: number | null = null;
   #seen = new Map<string, string | null>();
   #stopped = false;
+  #snapshot: { active: boolean; stopped: boolean } = { active: false, stopped: false };
   #listeners = new Set<() => void>();
 
   /** Record what `source` showed at `at` (its read time); a change while in flight restarts. */
@@ -89,6 +95,7 @@ export class StatusPollSchedule {
       this.#restartAt = null;
       this.#setStopped(false);
     }
+    this.#publish();
   }
 
   /**
@@ -112,6 +119,12 @@ export class StatusPollSchedule {
   /** True once automatic reads have stopped while something is still shown in flight. */
   isStopped = (): boolean => this.#stopped;
 
+  /** True while any source shows something in flight. */
+  isActive = (): boolean => this.#inFlight();
+
+  /** Stable snapshot for React: { active, stopped }, replaced only when either changes. */
+  getSnapshot = (): { active: boolean; stopped: boolean } => this.#snapshot;
+
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -125,6 +138,13 @@ export class StatusPollSchedule {
   #setStopped(stopped: boolean): void {
     if (this.#stopped === stopped) return;
     this.#stopped = stopped;
+    this.#publish();
+  }
+
+  #publish(): void {
+    const active = this.#inFlight();
+    if (this.#snapshot.active === active && this.#snapshot.stopped === this.#stopped) return;
+    this.#snapshot = { active, stopped: this.#stopped };
     this.#listeners.forEach((listener) => listener());
   }
 }
@@ -147,11 +167,14 @@ export function pollingOptions<T>(
   };
 }
 
-/** A page's schedule, and whether its automatic reads have stopped (re-renders on change). */
+/**
+ * A page's schedule; whether anything shown is in flight (`active`: offer "Refresh status");
+ * and whether automatic reads have stopped (`stopped`: show the note). Re-renders on change.
+ */
 export function useStatusPolling() {
   const [schedule] = useState(() => new StatusPollSchedule());
-  const stopped = useSyncExternalStore(schedule.subscribe, schedule.isStopped, schedule.isStopped);
-  return { schedule, stopped };
+  const { active, stopped } = useSyncExternalStore(schedule.subscribe, schedule.getSnapshot, schedule.getSnapshot);
+  return { schedule, active, stopped };
 }
 
 /** "id:status" of the in-flight items, sorted, or null when none is in flight. */

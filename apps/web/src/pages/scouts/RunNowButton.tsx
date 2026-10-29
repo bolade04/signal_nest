@@ -44,6 +44,8 @@ export function RunNowButton({
       }}
       aria-disabled={busy !== null ? true : undefined}
       aria-busy={busy !== null ? true : undefined}
+      // Lets a page find this request's Run now to return focus to (see StatusRefresh).
+      data-run-now=""
       // The look of the native disabled state, without its focus loss.
       className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-primary"
     >
