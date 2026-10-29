@@ -155,13 +155,26 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   schedule stays enabled and the chain reseeds, so resuming the request restores
   scheduled scouting at the next boundary). A paused request's already-queued run is
   skipped by the worker (`result_summary.outcome=skipped_request_paused`) rather
-  than executed: no source fetch, no model call, nothing written to the LLM budget
-  ledger. A pause issued while a run is in flight never un-pauses the request, but it
-  does not interrupt the run either. Measured on PostgreSQL 16 (lane evidence
-  `P6-W9-PAUSE-REFRESH-01`): the run's claim holds the request row's lock until the
-  run's transaction ends, so the HTTP pause **waits** (`Lock/transactionid`) for the
-  rest of the run and is serialised after it; the job records `completed` and the
-  request then ends `paused`. Everything the run still had to do happens meanwhile:
+  than executed: no source fetch, no model call, no new LLM budget reservation and
+  no usage row. (The skip's attempt-end release may still settle an earlier attempt
+  of the same job whose reservation was left in flight, at its worst case; that is
+  the ledger's normal recovery, not new spend.) A pause issued while a run is in
+  flight never un-pauses the request, but it does not interrupt the run either.
+  Measured on PostgreSQL 16 (lane evidence `P6-W9-PAUSE-REFRESH-01`): the run's claim
+  holds the request row's lock until the run's transaction ends, so the HTTP pause
+  **waits** (`Lock/transactionid`) for the **rest of the run** and is serialised after
+  it; the job records `completed` and the request then ends `paused`. That wait can
+  exceed a minute: a run may make up to `llm_max_calls_per_run` (100) provider
+  attempts, retries (`llm_max_retries`, 2) counted within that cap, each with a
+  transport timeout of `llm_timeout_seconds` (30 s, applied per HTTP phase), on top
+  of its source fetches. Behind the load balancer's 60 s idle timeout the customer
+  can therefore see a gateway timeout although the pause still lands when the run
+  commits; a client that gives up does not cancel it, and a retried pause is
+  harmless but waits too. While it waits, the pause holds an API worker thread and a
+  pooled database connection (`db_pool_size` 5 + `db_max_overflow` 10). No
+  application lock timeout or statement timeout bounds the wait today. Waiting is the
+  behaviour of D-25-a option (1) as implemented; it is not operator-accepted.
+  Everything the run still had to do happens meanwhile:
   its fetches and its model calls, each reserved and charged against the workspace
   budget in a transaction of its own; neither the pause nor a later rollback of the
   run undoes those charges. If the run is refused at the per-run bound or fails
