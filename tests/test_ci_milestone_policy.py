@@ -301,45 +301,167 @@ def test_the_milestone_suite_needs_the_binding_and_calls_ci_unmodified():
 
 
 # ============================================================================ event-gated steps (equivalence)
-EVENT_CONTEXT = re.compile(r"github\.(event|event_name|ref|ref_name|head_ref|base_ref|workflow|run_id|run_attempt)\b|inputs\.")
-ALLOWED_EVENT_EXPRESSIONS = {
+# Every expression in ci.yml that touches the `github` context, normalised, with its count, as on the base of this
+# change. Each is event-independent for what it decides, or decides only what the model above checks:
+#   the concurrency group and cancel-in-progress (modelled in the concurrency tests below);
+#   github.workflow (inside that group only);
+#   github.event.pull_request.head.sha || github.sha (the SBOM identity `--commit`: the tested SHA for push and
+#     dispatch alike, asserted below); github.sha (`--checkout`); github.workspace (a path).
+ALLOWED_GITHUB_EXPRESSIONS = {
     "github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || "
     "format('{0}-{1}', github.ref, github.run_id)": 1,
     "github.event_name == 'pull_request'": 1,
     "github.workflow": 1,
     "github.event.pull_request.head.sha || github.sha": 5,
+    "github.sha": 5,
+    "github.workspace": 2,
 }
+# The runner variables that reveal the event, the ref or the workflow (a milestone run differs from a push run only in
+# these), in any form: $NAME, ${NAME:-}, os.environ["NAME"], process.env.NAME, env.NAME.
+EVENT_VARIABLES = re.compile(
+    r"GITHUB_(EVENT_NAME|EVENT_PATH|REF|REF_NAME|REF_TYPE|HEAD_REF|BASE_REF|WORKFLOW|WORKFLOW_REF|WORKFLOW_SHA)\b")
+# Code the CI run executes lives under these roots (or at the repository root); a path ci.yml runs outside them fails
+# the test, so the scanned universe cannot silently miss a new location.
+CODE_ROOTS = ("scripts", "security", "apps", "infra", "tests")
+CODE_SUFFIXES = {".py", ".sh", ".bash", ".ts", ".tsx", ".js", ".mjs", ".cjs"}
+SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", "site-packages", "dist", "build", ".pytest_cache"}
+# Files allowed to name those variables, each justified:
+EVENT_VARIABLE_READERS = {
+    # the bindings themselves: run by milestone-validation.yml and main-push.yml, never by ci.yml
+    "scripts/verify_milestone_evidence.py",
+    # this guard's own patterns and the binding tests' runner environments
+    "tests/test_ci_milestone_policy.py",
+    # models scripts/docker_boundary.py's CI-marker check, which tests GITHUB_WORKFLOW for PRESENCE only (the policy's
+    # expected_marker_values constrains GITHUB_ACTIONS alone; pinned below), so it cannot tell a milestone run apart
+    "tests/test_i28at_docker_boundary.py",
+}
+_GITHUB_WORD = re.compile(r"(?i)(?<![\w.$-])github(?![\w-])")
 
 
-def _expressions(text: str) -> list[str]:
-    return [" ".join(m.group(1).split()) for m in _TEMPLATE.finditer(text)]
+def _strings(node):
+    """Every string in a parsed YAML document, keys included."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _strings(k)
+            yield from _strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _strings(v)
+    elif isinstance(node, str):
+        yield node
+
+
+def _conditions(doc):
+    """Every job-level and step-level `if:` value (an implicit expression even without ${{ }})."""
+    for job in (doc.get("jobs") or {}).values():
+        if "if" in job:
+            yield str(job["if"])
+        for step in job.get("steps") or []:
+            if "if" in step:
+                yield str(step["if"])
+
+
+def _code_files():
+    roots = [REPO_ROOT / r for r in CODE_ROOTS]
+    files = [p for p in REPO_ROOT.iterdir() if p.is_file() and p.suffix in CODE_SUFFIXES]
+    for root in roots:
+        stack = [root]
+        while stack:
+            d = stack.pop()
+            if d.name in SKIP_DIRS or (d / "pyvenv.cfg").exists():
+                continue
+            for entry in d.iterdir():
+                if entry.is_dir():
+                    stack.append(entry)
+                elif entry.suffix in CODE_SUFFIXES:
+                    files.append(entry)
+    return files
+
+
+def event_gating_problems(ci_text: str, code_overrides: dict | None = None) -> list[str]:
+    """Every way ci.yml (or code it runs) could behave differently in a milestone run than in a push run."""
+    problems = []
+    doc = yaml.safe_load(ci_text)
+    found = {}
+    for string in _strings(doc):
+        for m in _TEMPLATE.finditer(string):
+            expr = " ".join(m.group(1).split())
+            if _GITHUB_WORD.search(expr):
+                found[expr] = found.get(expr, 0) + 1
+    if found != ALLOWED_GITHUB_EXPRESSIONS:
+        problems.append(f"a `github` context expression changed: {found}")
+    for cond in _conditions(doc):
+        if _GITHUB_WORD.search(cond) or "inputs" in cond or "toJSON" in cond:
+            problems.append(f"a condition reads the run's context: {cond!r}")
+    for job_id, job in (doc.get("jobs") or {}).items():
+        if "if" in job:
+            problems.append(f"{job_id}: a job-level condition")
+    if EVENT_VARIABLES.search(ci_text):
+        problems.append("ci.yml names an event/ref/workflow runner variable")
+    texts = {p.relative_to(REPO_ROOT).as_posix(): p.read_text(encoding="utf-8", errors="replace")
+             for p in _code_files()}
+    texts.update(code_overrides or {})
+    readers = {rel for rel, text in texts.items() if EVENT_VARIABLES.search(text)}
+    if readers != EVENT_VARIABLE_READERS:
+        problems.append(f"event/ref/workflow variable readers changed: {sorted(readers)}")
+    return problems
 
 
 def test_no_ci_step_or_job_is_gated_on_the_event_so_the_milestone_suite_runs_everything_a_main_push_ran():
-    """Coordinator review point 1: the called suite must execute at least what a push-to-main run executed."""
-    text = CI.read_text(encoding="utf-8")
-    doc = _load(CI)
-    found = {}
-    for expr in _expressions(text):
-        if EVENT_CONTEXT.search(expr):
-            found[expr] = found.get(expr, 0) + 1
-    assert found == ALLOWED_EVENT_EXPRESSIONS, f"an event-dependent expression changed: {found}"
-    for job_id, job in doc["jobs"].items():
-        assert "if" not in job, f"{job_id}: a job-level condition"
-        for step in job.get("steps") or []:
-            cond = str(step.get("if", ""))
-            assert "github." not in cond and "inputs." not in cond, f"{job_id}: {step.get('name')}: {cond}"
-    for tree in ("scripts", "security", "apps/api/tools"):
-        for path in (REPO_ROOT / tree).rglob("*.py"):
-            if path.name == "verify_milestone_evidence.py":
-                continue
-            src = path.read_text(encoding="utf-8")
-            assert not re.search(r"GITHUB_(EVENT_NAME|EVENT_PATH|REF|BASE_REF|HEAD_REF)\b", src), path
+    """Coordinator review point 1 and ADV-3: the called suite must execute at least what a push-to-main run did."""
+    assert event_gating_problems(CI.read_text(encoding="utf-8")) == []
+    marker = json.loads((REPO_ROOT / "tests/fixtures/docker-boundary-policy.json").read_text(encoding="utf-8"))
+    assert marker["ci_assumption"]["expected_marker_values"] == {"GITHUB_ACTIONS": "true"}, \
+        "a value constraint on GITHUB_WORKFLOW would make the Docker boundary differ between a push and a milestone run"
     push_main = {"github": {"event_name": "push", "sha": SHA, "ref": "refs/heads/main", "event": {"after": SHA}}}
     for event_name in ("workflow_dispatch", "workflow_call"):
         milestone = {"github": {"event_name": event_name, "sha": SHA, "ref": "refs/heads/main", "event": {}}}
         for ctx in (push_main, milestone):
             assert evaluate("${{ github.event.pull_request.head.sha || github.sha }}", ctx) == SHA
+
+
+PG_STEP = "      - name: PostgreSQL proofs (P6-CI-4 migration chain, P6-CI-5 job-store concurrency)\n"
+
+
+@pytest.mark.parametrize("label, line", [
+    ("index syntax", "        if: github['event_name'] != 'workflow_dispatch'\n"),
+    ("toJSON of the whole context", "        if: ${{ !contains(toJSON(github), 'workflow_dispatch') }}\n"),
+    ("another spelling of the context", "        if: GitHub.event_name != 'workflow_dispatch'\n"),
+    ("an inputs condition", "        if: inputs.milestone_id == ''\n"),
+])
+def test_the_event_gating_guard_catches_a_conditioned_step(label, line):
+    text = CI.read_text(encoding="utf-8")
+    assert text.count(PG_STEP) == 1
+    assert event_gating_problems(text.replace(PG_STEP, PG_STEP + line)), label
+
+
+def test_the_event_gating_guard_catches_run_text_and_invoked_scripts():
+    text = CI.read_text(encoding="utf-8")
+    early_exit = text.replace("            app.tests.test_postgres_job_store_concurrency \\\n",
+                              "            app.tests.test_postgres_job_store_concurrency \\\n"
+                              '          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then exit 0; fi\n', 1)
+    assert early_exit != text and event_gating_problems(early_exit)
+    smoke = (REPO_ROOT / "scripts/ci-smoke.sh").read_text(encoding="utf-8")
+    for injected in ('[ "${GITHUB_EVENT_NAME:-}" = workflow_dispatch ] && exit 0\n',
+                     '[ "$GITHUB_WORKFLOW" != CI ] && exit 0\n'):
+        assert event_gating_problems(text, {"scripts/ci-smoke.sh": smoke + injected})
+    assert event_gating_problems(text, {"apps/web/vite.config.ts": "if (process.env.GITHUB_REF_NAME) {}"})
+
+
+def test_every_path_ci_runs_is_inside_the_scanned_roots():
+    """The event-variable scan covers the code ci.yml runs: every working directory and script path is in a root."""
+    doc = _load(CI)
+    for job in doc["jobs"].values():
+        for step in job.get("steps") or []:
+            wd = step.get("working-directory")
+            if wd:
+                assert wd.split("/")[0] in CODE_ROOTS, wd
+            for token in re.findall(r"[\w./-]+\.(?:sh|py|ts|js|mjs|cjs)\b", str(step.get("run", ""))):
+                resolved = (REPO_ROOT / (wd or "") / token).resolve()
+                if not resolved.is_file():
+                    continue
+                rel = resolved.relative_to(REPO_ROOT)
+                assert len(rel.parts) == 1 or rel.parts[0] in CODE_ROOTS, f"ci.yml runs {rel} outside the roots"
 
 
 # ============================================================================ concurrency isolation
@@ -384,6 +506,13 @@ def test_the_concurrency_check_can_fail():
 
 
 # ============================================================================ the short main check
+SHORT_RECORD_RUN = ('python3 scripts/verify_milestone_evidence.py short-record --checked-out "$(git rev-parse HEAD)" '
+                    "--out short-check-evidence/short-check-binding.json")
+BIND_RUN = ('python3 scripts/verify_milestone_evidence.py bind --checked-out "$(git rev-parse HEAD)" '
+            '--main-tip "$(git ls-remote --exit-code origin refs/heads/main)" '
+            "--out milestone-evidence/milestone-binding.json")
+
+
 def test_the_short_check_is_the_integration_smoke_job_verbatim_plus_its_binding():
     ci, mp = _load(CI), _load(MAIN_PUSH)
     assert mp["on"] == {"push": {"branches": ["main"]},
@@ -398,11 +527,15 @@ def test_the_short_check_is_the_integration_smoke_job_verbatim_plus_its_binding(
     ism = ci["jobs"]["integration-smoke"]["steps"]
     steps = job["steps"]
     assert steps[0] == ism[0]
-    assert steps[1]["name"].startswith("Bind this run") and set(steps[1]) == {"name", "run"}
-    assert "scripts/verify_milestone_evidence.py short-record" in steps[1]["run"]
+    assert steps[1] == {"name": "Bind this run to the commit it checked out (main short check evidence)",
+                        "run": SHORT_RECORD_RUN}, "the binding step is pinned exactly: no install, no masking"
     assert steps[2:-1] == ism[1:], "every install, scan, gate and control step is the reviewed twin's"
-    assert steps[-1]["uses"] == "actions/upload-artifact@v7" and steps[-1]["if"] == "always()"
-    assert steps[-1]["with"]["path"] == "short-check-evidence/"
+    assert steps[-1] == {"name": "Upload the main short check binding record", "if": "always()",
+                         "uses": "actions/upload-artifact@v7",
+                         "with": {"name": "short-check-evidence-attempt-${{ github.run_attempt }}",
+                                  "path": "short-check-evidence/", "retention-days": 90,
+                                  "if-no-files-found": "error"}}
+    assert "continue-on-error" not in MAIN_PUSH.read_text(encoding="utf-8")
 
 
 def test_the_short_check_passes_the_merge_path_scanner_checks():
@@ -436,14 +569,21 @@ def test_the_milestone_workflow_is_dispatch_only_and_passes_inputs_through_the_e
     assert doc["permissions"] == {"contents": "read"} and "secrets" not in MILESTONE.read_text(encoding="utf-8")
     assert doc["run-name"] == vme.RUN_NAME.format(milestone_id="${{ inputs.milestone_id }}",
                                                    sha="${{ inputs.milestone_sha }}")
-    steps = doc["jobs"]["milestone-binding"]["steps"]
-    assert [s.get("uses") for s in steps] == ["actions/checkout@v7", None, "actions/upload-artifact@v7"]
-    assert steps[1]["env"] == {"MILESTONE_ID": "${{ inputs.milestone_id }}",
-                               "MILESTONE_SCOPE": "${{ inputs.milestone_scope }}",
-                               "MILESTONE_SHA": "${{ inputs.milestone_sha }}"}
-    assert "verify_milestone_evidence.py bind" in steps[1]["run"]
-    assert steps[2]["if"] == "always()"
-    assert "trivy" not in MILESTONE.read_text(encoding="utf-8").lower()
+    job = doc["jobs"]["milestone-binding"]
+    assert set(job) == {"name", "runs-on", "timeout-minutes", "steps"}, "no continue-on-error, if:, needs: or env:"
+    steps = job["steps"]
+    assert steps == [
+        {"name": "Check out repository", "uses": "actions/checkout@v7"},
+        {"name": "Bind the request to the dispatched commit, the checked-out commit and the main tip",
+         "env": {"MILESTONE_ID": "${{ inputs.milestone_id }}", "MILESTONE_SCOPE": "${{ inputs.milestone_scope }}",
+                 "MILESTONE_SHA": "${{ inputs.milestone_sha }}"},
+         "run": BIND_RUN},
+        {"name": "Upload the milestone binding record", "if": "always()", "uses": "actions/upload-artifact@v7",
+         "with": {"name": "milestone-evidence-attempt-${{ github.run_attempt }}", "path": "milestone-evidence/",
+                  "retention-days": 90, "if-no-files-found": "error"}},
+    ], "the binding job is pinned exactly: no install, no masking, no continue-on-error"
+    text = MILESTONE.read_text(encoding="utf-8")
+    assert "continue-on-error" not in text and "trivy" not in text.lower()
 
 
 # ============================================================================ bind (milestone binding)
@@ -509,6 +649,38 @@ def test_bind_cli_exits_nonzero_and_still_writes_the_record(tmp_path, monkeypatc
     assert "Milestone binding: REJECTED" in summary.read_text()
 
 
+@pytest.mark.parametrize("over, code", [
+    ({"MILESTONE_ID": "M-1\n"}, "milestone-id"),
+    ({"MILESTONE_ID": "M-1\u202e"}, "milestone-id"),
+    ({"MILESTONE_SCOPE": "line one\u2028line two"}, "milestone-scope"),
+    ({"MILESTONE_SCOPE": "line one\u0085line two"}, "milestone-scope"),
+    ({"MILESTONE_SCOPE": "scope \u202edesrever"}, "milestone-scope"),
+    ({"MILESTONE_SCOPE": "zero\u200bwidth"}, "milestone-scope"),
+    ({"MILESTONE_SHA": SHA + "\n"}, "requested-sha"),
+])
+def test_input_validation_matches_whole_values_and_one_printable_line(over, code):
+    rec = vme.bind(_bind_env(**over), SHA, TIP)
+    assert rec["verdict"] == "REJECTED" and code in _codes(rec), rec["reasons"]
+
+
+def test_whole_value_matching_in_verify():
+    assert not vme._is_sha(SHA + "\n") and vme._is_sha(SHA)
+    for kwargs in ({"milestone_id": "M-1\n"}, {"repo": REPO + "\n"}):
+        with pytest.raises(vme.EvidenceError):
+            vme.verify(vme.FixtureApi(scenario()), kwargs.get("repo", REPO), SHA, RUN,
+                       milestone_id=kwargs.get("milestone_id"))
+
+
+def test_only_the_exact_main_ref_counts_in_ls_remote_output():
+    """ls-remote matches the pattern against ref-name tails: a branch `x/refs/heads/main` must not block binding."""
+    decoy = f"{NEWER}\trefs/heads/x/refs/heads/main\n"
+    rec = vme.bind(_bind_env(), SHA, TIP + decoy)
+    assert rec["verdict"] == "BOUND" and rec["main_tip_sha"] == SHA, rec["reasons"]
+    rec = vme.bind(_bind_env(), SHA, decoy + TIP)
+    assert rec["verdict"] == "BOUND" and rec["main_tip_sha"] == SHA, rec["reasons"]
+    assert vme.parse_ls_remote(decoy) == (None, "expected exactly one refs/heads/main line from git ls-remote, got 0")
+
+
 def test_the_summary_renders_a_hostile_scope_inert():
     rec = vme.bind(_bind_env(MILESTONE_SCOPE="<img src=x> | `code` [l](u)"), SHA, TIP)
     md = vme.summary_markdown(rec, "Milestone binding")
@@ -552,9 +724,13 @@ def test_a_short_check_binding_that_does_not_hold_is_refused(env, checked_out, p
 
 
 # ============================================================================ the evidence verifier
-def _job(name, jid, attempt=1, conclusion="success", status="completed", sha=SHA, run_id=RUN):
+T0 = "2026-10-29T04:59:00Z"          # the default attempt's run_started_at
+T_JOB = "2026-10-29T05:00:00Z"       # the default job start (after T0)
+
+
+def _job(name, jid, attempt=1, conclusion="success", status="completed", sha=SHA, run_id=RUN, started_at=T_JOB):
     return {"id": jid, "run_id": run_id, "run_attempt": attempt, "name": name, "head_sha": sha, "status": status,
-            "conclusion": conclusion, "started_at": "2026-10-29T05:00:00Z", "completed_at": "2026-10-29T06:00:00Z",
+            "conclusion": conclusion, "started_at": started_at, "completed_at": "2026-10-29T08:00:00Z",
             "check_run_url": f"https://api.github.com/repos/{REPO}/check-runs/{jid}",
             "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}/job/{jid}"}
 
@@ -576,14 +752,17 @@ def _paged(base: str, key: str, items: list, per_page: int) -> dict:
 
 def scenario(sha=SHA, run_id=RUN, attempt=1, path=vme.MILESTONE_WORKFLOW_PATH, event="workflow_dispatch",
              branch="main", title=None, jobs=None, extra_checks=(), conclusion="success", per_page=4,
-             base_id=10_000) -> dict:
-    jobs = jobs if jobs is not None else [_job(n, base_id + i, attempt, sha=sha, run_id=run_id)
+             base_id=10_000, run_started_at=T0, job_started_at=T_JOB, compare="identical") -> dict:
+    jobs = jobs if jobs is not None else [_job(n, base_id + i, attempt, sha=sha, run_id=run_id,
+                                               started_at=job_started_at)
                                           for i, n in enumerate(vme.REQUIRED_JOB_NAMES)]
     run = {"id": run_id, "path": path, "event": event, "head_branch": branch, "head_sha": sha,
            "display_title": title if title is not None else vme.RUN_NAME.format(milestone_id="M-1", sha=sha),
-           "status": "completed", "conclusion": conclusion, "run_attempt": attempt,
+           "status": "completed", "conclusion": conclusion, "run_attempt": attempt, "run_started_at": run_started_at,
            "repository": {"full_name": REPO}, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
     responses = {f"/repos/{REPO}/actions/runs/{run_id}": {"body": run, "next": None}}
+    if compare is not None:
+        responses[f"/repos/{REPO}/compare/{sha}...main"] = {"body": {"status": compare}, "next": None}
     responses.update(_paged(f"/repos/{REPO}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100", "jobs",
                             jobs, per_page))
     checks = [_check(j) for j in jobs] + list(extra_checks)
@@ -592,7 +771,19 @@ def scenario(sha=SHA, run_id=RUN, attempt=1, path=vme.MILESTONE_WORKFLOW_PATH, e
     return {"responses": responses}
 
 
+def _record_for(doc, run_id):
+    """The run's own binding record (what milestone-evidence-attempt-<latest> carries) for a fixture run."""
+    run = doc["responses"][f"/repos/{REPO}/actions/runs/{run_id}"]["body"]
+    m = re.fullmatch(r"Milestone (\S+) at [0-9a-f]{40}", run.get("display_title") or "")
+    head = run["head_sha"]
+    return vme.bind(_bind_env(GITHUB_SHA=head, MILESTONE_SHA=head, GITHUB_RUN_ID=str(run_id),
+                              GITHUB_RUN_ATTEMPT=str(run["run_attempt"]), MILESTONE_ID=m.group(1) if m else "M-1"),
+                    head, f"{head}\trefs/heads/main\n")
+
+
 def run_verify(doc, sha=SHA, run_id=RUN, **kw):
+    """verify() with the run's own binding record unless the test passes one (or None) explicitly."""
+    kw.setdefault("binding_record", _record_for(doc, run_id))
     return vme.verify(vme.FixtureApi(doc), REPO, sha, run_id, **kw)
 
 
@@ -609,9 +800,19 @@ def test_a_full_rerun_after_a_partial_failure_passes_on_its_own_check_runs():
     """Coordinator point 2: attempt 1's check runs stay on the SHA; each job binds to ITS OWN check run."""
     failed_first = [_job(n, 20_000 + i, 1, conclusion="failure" if "Backend" in n else "success")
                     for i, n in enumerate(vme.REQUIRED_JOB_NAMES)]
-    doc = scenario(attempt=2, base_id=30_000, extra_checks=[_check(j) for j in failed_first])
+    # Re-run ALL jobs: attempt 2 starts at 07:00 and every job starts at or after it, with new ids.
+    doc = scenario(attempt=2, base_id=30_000, extra_checks=[_check(j) for j in failed_first],
+                   run_started_at="2026-10-29T07:00:00Z", job_started_at="2026-10-29T07:00:00Z")
     assert run_verify(doc)["verdict"] == "PASS"
     assert run_verify(doc, attempt=2)["verdict"] == "PASS"
+
+
+def _real_partial_rerun_jobs():
+    """The shape GitHub returns after "Re-run failed jobs" (measured, runs 40156345312/37984410563/36409983538):
+    EVERY job carries the latest run_attempt and a new id; the five not re-run keep their attempt-1 started_at."""
+    rerun = {"Milestone full suite / Backend quality", "Milestone full suite / Integration smoke"}
+    return [_job(n, 70_000 + i, 2, started_at="2026-10-29T07:01:00Z" if n in rerun else T_JOB)
+            for i, n in enumerate(vme.REQUIRED_JOB_NAMES)]
 
 
 def test_two_milestone_runs_on_one_sha_each_pass():
@@ -679,9 +880,19 @@ REJECTIONS = {
     "a missing required job": (lambda: scenario(jobs=_mutated_jobs(lambda j: j.pop(6))), {}, "job-missing"),
     "a duplicated (ambiguous) required job": (lambda: scenario(jobs=_mutated_jobs(
         lambda j: j.append(_job(j[1]["name"], 19_999)))), {}, "job-ambiguous"),
-    "a job carried over from an earlier attempt": (lambda: scenario(attempt=2, jobs=[
+    "a job carried over from an earlier attempt (real shape: latest stamp, new id, earlier start)": (
+        lambda: scenario(attempt=2, jobs=_real_partial_rerun_jobs(), run_started_at="2026-10-29T07:00:00Z"), {},
+        "job-carried-over"),
+    "a job stamped with an earlier attempt": (lambda: scenario(attempt=2, jobs=[
         _job(n, 10_000 + i, attempt=1 if i == 2 else 2) for i, n in enumerate(vme.REQUIRED_JOB_NAMES)]), {},
         "job-carried-over"),
+    "a job without a start time": (lambda: scenario(jobs=_mutated_jobs(lambda j: j[3].pop("started_at"))), {},
+                                   "job-carried-over"),
+    "a run without run_started_at": (lambda: scenario(run_started_at=None), {}, "run-started-at"),
+    "no binding record": (lambda: scenario(), {"binding_record": None}, "binding-record"),
+    "a SHA behind main's history (compare: behind)": (lambda: scenario(compare="behind"), {}, "not-on-main"),
+    "a SHA off main (compare: diverged)": (lambda: scenario(compare="diverged"), {}, "not-on-main"),
+    "a SHA the compare call cannot place": (lambda: scenario(compare=None), {}, "not-on-main"),
     "a job of another commit": (lambda: scenario(jobs=_mutated_jobs(lambda j: j[1].update(head_sha=NEWER))), {},
                                 "job-sha"),
     "a run name for another SHA": (lambda: scenario(title=vme.RUN_NAME.format(milestone_id="M-1", sha=NEWER)), {},
@@ -791,3 +1002,21 @@ def test_the_evidence_record_carries_the_milestone_fields_and_no_inheritance(tmp
     assert vme.main(["verify", "--repo", REPO, "--sha", NEWER, "--run", str(RUN), "--fixtures", str(fx)]) \
         == vme.EXIT_REJECT
     assert vme.main(["verify", "--repo", REPO, "--sha", SHA, "--run", "1", "--fixtures", str(fx)]) == vme.EXIT_ERROR
+
+
+def test_a_malformed_response_cannot_establish_and_exits_2(tmp_path):
+    doc = scenario()
+    first = f"/repos/{REPO}/actions/runs/{RUN}/attempts/1/jobs?per_page=100"
+    doc["responses"][first]["body"]["jobs"][0] = "not a job object"
+    fx, rec = tmp_path / "f.json", tmp_path / "b.json"
+    fx.write_text(json.dumps(doc))
+    rec.write_text(json.dumps(_record_for(doc, RUN)))
+    assert vme.main(["verify", "--repo", REPO, "--sha", SHA, "--run", str(RUN), "--fixtures", str(fx),
+                     "--binding-record", str(rec)]) == vme.EXIT_ERROR
+
+
+def test_a_pass_needs_the_binding_record():
+    """ADV-1: without the run's own binding record the verifier never passes, whatever the API shows."""
+    v = run_verify(scenario(), binding_record=None)
+    assert v["verdict"] == "REJECT" and _codes_of(v) == {"binding-record"}
+

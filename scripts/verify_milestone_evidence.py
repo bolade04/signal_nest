@@ -16,9 +16,11 @@ evidence verifier:
                 A push to main is main short-check evidence; a pull_request run (the path-filtered measurement
                 trigger) is recorded as "pr-measurement" and is never main evidence.
   verify        the milestone evidence verifier, for the operator or coordinator before a release, launch or
-                full-validation closure claim. Reads the run, the jobs of its latest attempt and the check runs of
-                the SHA from the GitHub REST API (GET only; pagination followed and its completeness checked), or
-                from captured JSON (--fixtures). Exit 0 PASS, 1 REJECT, 2 cannot establish (usage or API error).
+                full-validation closure claim. Reads the run, the jobs of its latest attempt, the check runs of the
+                SHA and the SHA's comparison with main from the GitHub REST API (GET only; pagination followed, its
+                total_count and duplicate ids checked), or from captured JSON (--fixtures). A PASS needs the run's
+                own binding record (--binding-record) for the latest attempt. Exit 0 PASS, 1 REJECT, 2 cannot
+                establish (usage, API or malformed-response error).
 
 Stdlib only; no subprocess (the workflow passes `git rev-parse HEAD` and `git ls-remote` output as arguments, and
 an argument a failed command substitution left empty is refused here). The milestone inputs reach `bind` through
@@ -34,6 +36,7 @@ import re
 import sys
 import urllib.error
 import urllib.parse
+import unicodedata
 import urllib.request
 from datetime import datetime, timezone
 
@@ -61,9 +64,10 @@ BINDING_SCHEMA = "signalnest-milestone-binding/1"
 SHORT_SCHEMA = "signalnest-main-short-check/1"
 EVIDENCE_SCHEMA = "signalnest-milestone-evidence/1"
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-MILESTONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Matched with fullmatch(): `$` alone would also accept a trailing newline.
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+MILESTONE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SCOPE_MAX = 300
 MAX_PAGES = 50
 PER_PAGE = 100
@@ -76,7 +80,34 @@ class EvidenceError(Exception):
 
 
 def _is_sha(value) -> bool:
-    return isinstance(value, str) and bool(SHA_RE.match(value))
+    return isinstance(value, str) and bool(SHA_RE.fullmatch(value))
+
+
+def _forbidden_character(text: str) -> str | None:
+    """The first character of a Unicode control (Cc), format (Cf), line- or paragraph-separator (Zl, Zp) category:
+    each can break a one-line field or reorder how it displays (U+0085, U+2028, U+202E, ...)."""
+    for c in text:
+        if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp"):
+            return f"U+{ord(c):04X} ({unicodedata.category(c)})"
+    return None
+
+
+def _milestone_id_problem(milestone_id) -> str | None:
+    if not isinstance(milestone_id, str) or not MILESTONE_ID_RE.fullmatch(milestone_id):
+        return f"milestone id {milestone_id!r} must match {MILESTONE_ID_RE.pattern} in full"
+    bad = _forbidden_character(milestone_id)
+    return f"milestone id contains {bad}" if bad else None
+
+
+def _parse_time(value):
+    """An API timestamp (`2026-10-29T04:10:55Z`) as an aware datetime, or None when absent or malformed."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def _scope_problem(scope: str) -> str | None:
@@ -84,20 +115,24 @@ def _scope_problem(scope: str) -> str | None:
         return "the milestone scope is empty"
     if len(scope) > SCOPE_MAX:
         return f"the milestone scope is longer than {SCOPE_MAX} characters"
-    if any(ord(c) < 32 or ord(c) == 127 for c in scope):
-        return "the milestone scope contains a control character or a line break (one line only)"
+    bad = _forbidden_character(scope)
+    if bad:
+        return f"the milestone scope contains {bad}: one line of printable text only"
     return None
 
 
 def parse_ls_remote(output: str) -> tuple[str | None, str | None]:
-    """(sha, problem) from `git ls-remote --exit-code origin refs/heads/main` output: exactly one main line."""
+    """(sha, problem) from `git ls-remote --exit-code origin refs/heads/main` output.
+
+    ls-remote matches its pattern against the TAIL of each ref name, so a branch such as `x/refs/heads/main` is
+    listed too; only lines whose ref field is exactly refs/heads/main count, and there must be exactly one."""
     lines = [line for line in (output or "").splitlines() if line.strip()]
-    if len(lines) != 1:
-        return None, f"expected exactly one refs/heads/main line from git ls-remote, got {len(lines)}"
-    parts = lines[0].split("\t")
-    if len(parts) != 2 or parts[1] != MAIN_REF or not _is_sha(parts[0]):
-        return None, f"unrecognised git ls-remote line {lines[0][:120]!r}"
-    return parts[0], None
+    exact = [line.split("\t") for line in lines if len(line.split("\t")) == 2 and line.split("\t")[1] == MAIN_REF]
+    if len(exact) != 1:
+        return None, f"expected exactly one refs/heads/main line from git ls-remote, got {len(exact)}"
+    if not _is_sha(exact[0][0]):
+        return None, f"unrecognised git ls-remote line {exact[0][0][:60]!r}\t{MAIN_REF}"
+    return exact[0][0], None
 
 
 # ------------------------------------------------------------------------------------------------ bind
@@ -126,8 +161,9 @@ def bind(env: dict, checked_out: str, main_tip_output: str) -> dict:
     expected_wf = f"{repo}/{MILESTONE_WORKFLOW_PATH}@{MAIN_REF}"
     if workflow_ref != expected_wf:
         reject("workflow-ref", f"workflow ref {workflow_ref!r} is not {expected_wf!r}")
-    if not MILESTONE_ID_RE.match(milestone_id or ""):
-        reject("milestone-id", f"milestone id {milestone_id!r} must match {MILESTONE_ID_RE.pattern}")
+    problem = _milestone_id_problem(milestone_id)
+    if problem:
+        reject("milestone-id", problem)
     problem = _scope_problem(scope)
     if problem:
         reject("milestone-scope", problem)
@@ -346,18 +382,20 @@ def _check_run_id(job: dict) -> int | None:
 
 def verify(api, repo: str, sha: str, run_id: int, attempt: int | None = None, milestone_id: str | None = None,
            binding_record: dict | None = None) -> dict:
-    """The verdict on one milestone run for one SHA. Every rule appends a coded reason; PASS needs none."""
+    """The verdict on one milestone run for one SHA. Every rule appends a coded reason; PASS needs none.
+
+    The binding record (the run's own milestone-binding.json for its latest attempt) is required for a PASS."""
     reasons: list[dict] = []
 
     def reject(code: str, detail: str) -> None:
         reasons.append({"code": code, "detail": detail})
 
-    if not REPO_RE.match(repo or ""):
+    if not REPO_RE.fullmatch(repo or ""):
         raise EvidenceError(f"repository {repo!r} is not owner/name")
     if not _is_sha(sha):
         raise EvidenceError(f"SHA {sha!r} is not 40 lowercase hex characters")
-    if milestone_id is not None and not MILESTONE_ID_RE.match(milestone_id):
-        raise EvidenceError(f"milestone id {milestone_id!r} must match {MILESTONE_ID_RE.pattern}")
+    if milestone_id is not None and _milestone_id_problem(milestone_id):
+        raise EvidenceError(_milestone_id_problem(milestone_id))
 
     run, _ = api.get(f"/repos/{repo}/actions/runs/{run_id}")
     if not isinstance(run, dict):
@@ -397,6 +435,25 @@ def verify(api, repo: str, sha: str, run_id: int, attempt: int | None = None, mi
     if attempt is not None and attempt != latest:
         reject("stale-attempt", f"attempt {attempt} was presented but the run's latest attempt is {latest}; only "
                                 "the latest attempt's results count")
+    # GitHub stamps a job that "Re-run failed jobs" did NOT re-run with the latest run_attempt, a new job id and a new
+    # check run, but keeps its earlier started_at — so the only reliable mark of a carried-over result is a start
+    # before the latest attempt began (measured on runs 40156345312, 37984410563, 36409983538).
+    attempt_started = _parse_time(run.get("run_started_at"))
+    if attempt_started is None:
+        reject("run-started-at", f"run_started_at {run.get('run_started_at')!r} is missing or malformed, so a "
+                                 "carried-over job cannot be told from a re-run one")
+
+    # The SHA must be on main: the run's head_branch is only a name (a tag can be called main), and the trust root is
+    # that the workflow file at the SHA is the reviewed one on main.
+    try:
+        comparison, _ = api.get(f"/repos/{repo}/compare/{sha}...main")
+        status = comparison.get("status") if isinstance(comparison, dict) else None
+    except EvidenceError as exc:
+        status = None
+        reject("not-on-main", f"could not compare {sha} with main: {exc}")
+    else:
+        if status not in ("identical", "ahead"):
+            reject("not-on-main", f"compare {sha}...main is {status!r}: the SHA is not main or an ancestor of main")
 
     jobs = collect(api, f"/repos/{repo}/actions/runs/{run_id}/attempts/{latest}/jobs?per_page={PER_PAGE}",
                    "jobs", reasons)
@@ -418,6 +475,13 @@ def verify(api, repo: str, sha: str, run_id: int, attempt: int | None = None, mi
             if job.get("run_attempt") != latest:
                 reject("job-carried-over", f"{name}: result from attempt {job.get('run_attempt')!r}, not the latest "
                                            f"attempt {latest} (re-run ALL jobs; a carried-over result is refused)")
+            job_started = _parse_time(job.get("started_at"))
+            if job_started is None:
+                reject("job-carried-over", f"{name}: started_at {job.get('started_at')!r} is missing or malformed")
+            elif attempt_started is not None and job_started < attempt_started:
+                reject("job-carried-over", f"{name}: started {job.get('started_at')} before attempt {latest} began "
+                                           f"({run.get('run_started_at')}): a result carried over from an earlier "
+                                           "attempt (re-run ALL jobs; a carried-over result is refused)")
             if job.get("run_id") != run_id:
                 reject("job-run", f"{name}: belongs to run {job.get('run_id')!r}")
             if job.get("head_sha") != sha:
@@ -448,7 +512,10 @@ def verify(api, repo: str, sha: str, run_id: int, attempt: int | None = None, mi
             if f"/actions/runs/{run_id}/" not in str(cr.get("html_url") or ""):
                 reject("check-run-run", f"{name}: its check run {cid} does not link to run {run_id}")
 
-    if binding_record is not None:
+    if binding_record is None:
+        reject("binding-record", f"no binding record presented: a PASS needs milestone-binding.json from the run's "
+                                 f"artifact milestone-evidence-attempt-{latest}")
+    else:
         b = binding_record
         expected = {"schema": BINDING_SCHEMA, "verdict": "BOUND", "requested_sha": sha, "github_sha": sha,
                     "checked_out_sha": sha, "main_tip_sha": sha, "ref": MAIN_REF, "event": "workflow_dispatch",
@@ -547,8 +614,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.record_out and verdict["verdict"] == "PASS":
             args.record_out.write_text(json.dumps(evidence_record(verdict, binding), indent=2, sort_keys=True)
                                        + "\n", encoding="utf-8")
-    except (EvidenceError, OSError, ValueError) as exc:
-        print(json.dumps({"verdict": "ERROR", "detail": str(exc)}, indent=2))
+    except (EvidenceError, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        # A malformed response is "cannot establish" (2), not a REJECT (1): neither is ever a PASS.
+        print(json.dumps({"verdict": "ERROR", "detail": f"{type(exc).__name__}: {exc}"}, indent=2))
         return EXIT_ERROR
     print(json.dumps(verdict, indent=2))
     return EXIT_PASS if verdict["verdict"] == "PASS" else EXIT_REJECT
