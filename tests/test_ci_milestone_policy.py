@@ -14,6 +14,7 @@ rightly refuses in a tracked file, so the real-run negative controls are kept as
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -348,10 +349,19 @@ EVENT_VARIABLE_READERS = {
         'for name in ("GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_WORKFLOW"):',
     ),
 }
-# This module names the variables in its own patterns, pinned lines and test environments; its lines cannot pin
-# themselves, so its match COUNT is pinned instead (a new read here changes it).
+# This module names the variables in its own patterns, pinned lines and test environments. Its matching lines cannot
+# be listed here (the list would pin itself), so their CONTENT is pinned by digest: sha256 over the sorted, stripped
+# matching lines joined by newlines. The digest's own line names no variable, so it is not part of what it pins. Any
+# added, removed, swapped or edited matching line in this module changes it (R3-1).
+# Not claimed: a read through indirection (os.environ.get(<computed name>), a variable name built at run time, or an
+# event payload read by path) is outside what a name-based guard can see; review covers it.
 SELF_READER = "tests/test_ci_milestone_policy.py"
-SELF_READER_MATCHES = 39
+SELF_READER_LINES_SHA256 = "1aa698fee923ea9aa656eea1a65e9b6b56e21d7b658dca0c88a1e5b895f135b2"
+
+
+def _self_reader_digest(text: str) -> str:
+    lines = sorted(line.strip() for line in text.splitlines() if EVENT_VARIABLES.search(line))
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 _GITHUB_WORD = re.compile(r"(?i)(?<![\w.$-])github(?![\w-])")
 
 
@@ -448,9 +458,10 @@ def event_gating_problems(ci_text: str, code_overrides: dict | None = None) -> l
         lines = sorted(line.strip() for line in texts.get(rel, "").splitlines() if EVENT_VARIABLES.search(line))
         if lines != sorted(pinned) or len(EVENT_VARIABLES.findall(texts.get(rel, ""))) != len(pinned):
             problems.append(f"{rel}: its event/ref/workflow variable matches changed: {lines}")
-    own = len(EVENT_VARIABLES.findall(texts.get(SELF_READER, "")))
-    if own != SELF_READER_MATCHES:
-        problems.append(f"{SELF_READER}: {own} event/ref/workflow variable matches, pinned {SELF_READER_MATCHES}")
+    own = _self_reader_digest(texts.get(SELF_READER, ""))
+    if own != SELF_READER_LINES_SHA256:
+        problems.append(f"{SELF_READER}: its event/ref/workflow variable lines changed (digest {own}, pinned "
+                        f"{SELF_READER_LINES_SHA256})")
     return problems
 
 
@@ -496,6 +507,21 @@ def test_the_event_gating_guard_catches_run_text_and_invoked_scripts():
     web = _package_scripts()["apps/web/package.json#scripts"]
     assert event_gating_problems(text, {"apps/web/package.json#scripts": web.replace(
         "test: vitest run", 'test: [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || vitest run')})
+
+
+def test_the_guard_module_pins_its_own_lines_by_content():
+    """R3-1: a swap (one match removed, a skip-on-dispatch read added: the count unchanged), an addition alone and an
+    in-place edit of a pinned line in THIS module each fail the guard."""
+    text = CI.read_text(encoding="utf-8")
+    own = (REPO_ROOT / SELF_READER).read_text(encoding="utf-8")
+    skip = ('import os  # noqa: E402\nif os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":\n'
+            '    pytest.skip("not in a milestone run", allow_module_level=True)\n')
+    comment = "which tests GITHUB_WORKFLOW for PRESENCE only"
+    assert own.count(comment) >= 1
+    swapped = own.replace(comment, "which tests the workflow marker for PRESENCE only", 1) + skip
+    assert len(EVENT_VARIABLES.findall(swapped)) == len(EVENT_VARIABLES.findall(own)), "the swap keeps the count"
+    for variant in (swapped, own + skip, own.replace(comment, "which tests GITHUB_WORKFLOW for presence only", 1)):
+        assert variant != own and event_gating_problems(text, {SELF_READER: variant})
 
 
 def test_a_new_read_inside_an_allow_listed_file_is_caught():
