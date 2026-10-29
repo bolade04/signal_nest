@@ -195,6 +195,29 @@ export const degradedOpportunityId = 'opp-loc-dallas-1';
 export const DEGRADED_WHY =
   'AI explanation unavailable: the language-model provider did not return a usable response for this run.';
 
+// The score breakdown exactly as apps/api/app/scoring/opportunity.py `_weighted` persists
+// it: factor -> {weight, value, points}, points = round(value * weight, 2), and the panel
+// total = round(sum(points)). The previous fixture served bare numbers ({relevance: 25}),
+// a shape the API never returns, which is why every row rendering "—" passed CI (F1).
+const OPPORTUNITY_WEIGHTS = { relevance: 25, trend: 15, discussion: 15, commercial: 15, engagement: 10, source_credibility: 10, recency: 10 };
+const CONFIDENCE_WEIGHTS = { evidence_quantity: 20, evidence_diversity: 20, source_reliability: 20, signal_clarity: 15, score_consistency: 15, recency_reliability: 10 };
+type ScoreFactor = { weight: number; value: number; points: number };
+
+/**
+ * Factors that add up to `total` (the weights sum to 100). `zero` names a factor that
+ * scored nothing, as `trend` does in the seeded data, so "0 / 15" is exercised.
+ */
+export function scoreFactors(weights: Record<string, number>, total: number, zero?: string): Record<string, ScoreFactor> {
+  const scored = Object.entries(weights).filter(([k]) => k !== zero).reduce((sum, [, w]) => sum + w, 0);
+  const value = Math.min(1, total / scored);
+  return Object.fromEntries(
+    Object.entries(weights).map(([k, weight]) => {
+      const v = k === zero ? 0 : value;
+      return [k, { weight, value: Math.round(v * 1000) / 1000, points: Math.round(v * weight * 100) / 100 }];
+    }),
+  );
+}
+
 function detailFor(o: Opp): OpportunityDetail {
   const degraded = o.id === degradedOpportunityId;
   return {
@@ -219,8 +242,8 @@ function detailFor(o: Opp): OpportunityDetail {
     claims_warnings: [],
     brand_id: brand.id,
     scores: [
-      { kind: 'opportunity', total: o.opportunity_score, breakdown: { relevance: 25, trend: 15 } },
-      { kind: 'confidence', total: o.confidence_score, breakdown: { evidence_quantity: 20, diversity: 15 } },
+      { kind: 'opportunity', total: o.opportunity_score, breakdown: scoreFactors(OPPORTUNITY_WEIGHTS, o.opportunity_score, 'trend') },
+      { kind: 'confidence', total: o.confidence_score, breakdown: scoreFactors(CONFIDENCE_WEIGHTS, o.confidence_score) },
     ],
     validation_evidence: [
       { source_type: 'rss_news', detail: 'Corroborated by a local news mention.', weight: 2, source_url: 'https://example.com/article' },
