@@ -25,8 +25,12 @@ export function AppShell() {
     setMobileOpen(false);
   }
 
+  // The shell grows with its content (min-h-screen, no fixed h-full): html, body and #root
+  // are height:100%, so a fixed-height shell ended at one viewport while the page kept
+  // scrolling; the sidebar column stopped there, blank below, and its sticky nav could
+  // only stick within it (UI-AUDIT F5). The document stays the only vertical scroller.
   return (
-    <div className="flex h-full min-h-screen bg-background">
+    <div className="flex min-h-screen bg-background">
       {/* Skip link for keyboard / screen-reader users */}
       <a
         href="#main-content"
