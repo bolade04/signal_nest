@@ -422,7 +422,10 @@ export function PendingInvitations({
         ) : query.data.length === 0 ? (
           <p className="text-sm text-muted-foreground">No pending invitations.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
+            {/* `relative` contains the sr-only (absolutely positioned) "Actions" header in this
+                scroll box; without it the header escapes to the page and widens it on a phone
+                (UI-AUDIT F4). The table itself still scrolls inside the box. */}
             <table className="w-full text-left text-sm">
               <caption className="sr-only">Pending invitations</caption>
               <thead className="text-xs text-muted-foreground">
