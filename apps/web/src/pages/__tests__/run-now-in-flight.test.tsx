@@ -63,6 +63,16 @@ function installBackend({ emptyOpportunities = false } = {}) {
   );
 }
 
+/** Busy is `aria-disabled` and stays focusable; never native `disabled` (W11 A1, review F-01). */
+function expectBusy(el: HTMLElement) {
+  expect(el).toHaveAttribute('aria-disabled', 'true');
+  expect(el).not.toBeDisabled();
+}
+function expectAvailable(el: HTMLElement) {
+  expect(el).not.toHaveAttribute('aria-disabled');
+  expect(el).toBeEnabled();
+}
+
 async function advance(ms: number) {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
@@ -122,7 +132,7 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
 
     await waitFor(() => expect(header(screen).getByText('Queued')).toBeInTheDocument(), WAIT);
     const queued = await screen.findByRole('button', { name: 'Queued…' }, WAIT);
-    expect(queued).toBeDisabled();
+    expectBusy(queued);
     expect(queued).toHaveAttribute('aria-busy', 'true');
     await user.click(queued);
     expect(posts).toBe(1);
@@ -130,13 +140,13 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     phase = 'running';
     await advance(INTERVAL);
     const running = await screen.findByRole('button', { name: 'Running…' }, WAIT);
-    expect(running).toBeDisabled();
+    expectBusy(running);
 
     phase = 'completed';
     await advance(INTERVAL);
     await waitFor(() => expect(header(screen).getByText('Completed')).toBeInTheDocument(), WAIT);
     const again = screen.getByRole('button', { name: 'Run now' });
-    expect(again).toBeEnabled();
+    expectAvailable(again);
     await user.click(again);
     await waitFor(() => expect(posts).toBe(2), WAIT);
   });
@@ -150,7 +160,7 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     expect(buttons).toHaveLength(2);
     for (const button of buttons) {
       expect(button).toHaveAccessibleName('Queued…');
-      expect(button).toBeDisabled();
+      expectBusy(button);
     }
   });
 
@@ -162,19 +172,19 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     await user.click(runButtons(dallasRow(screen))[0]!);
 
     await waitFor(() => expect(dallasRow(screen).getByText('Queued')).toBeInTheDocument(), WAIT);
-    expect(dallasRow(screen).getByRole('button', { name: 'Queued…' })).toBeDisabled();
+    expectBusy(dallasRow(screen).getByRole('button', { name: 'Queued…' }));
     // Other rows are untouched.
     const london = within(screen.getByRole('link', { name: 'London demand scan' }).closest('.rounded-lg') as HTMLElement);
     expect(runButtons(london)[0]).toHaveAccessibleName('Run now');
 
     phase = 'running';
     await advance(INTERVAL);
-    await waitFor(() => expect(dallasRow(screen).getByRole('button', { name: 'Running…' })).toBeDisabled(), WAIT);
+    await waitFor(() => expectBusy(dallasRow(screen).getByRole('button', { name: 'Running…' })), WAIT);
 
     phase = 'completed';
     await advance(INTERVAL);
     await waitFor(() => expect(dallasRow(screen).getByText('Completed')).toBeInTheDocument(), WAIT);
-    expect(dallasRow(screen).getByRole('button', { name: 'Run now' })).toBeEnabled();
+    expectAvailable(dallasRow(screen).getByRole('button', { name: 'Run now' }));
     expect(posts).toBe(1);
   });
 
@@ -185,7 +195,7 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(runButtons(screen)[0]!);
     expect(await screen.findByText('Could not queue scout', undefined, WAIT)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled(), WAIT);
+    await waitFor(() => expectAvailable(screen.getByRole('button', { name: 'Run now' })), WAIT);
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     await waitFor(() => expect(header(screen).getByText('Queued')).toBeInTheDocument(), WAIT);
     expect(posts).toBe(2);
@@ -195,11 +205,11 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     installBackend();
     phase = 'queued';
     const screen = await openDetail();
-    expect(screen.getByRole('button', { name: 'Queued…' })).toBeDisabled();
+    expectBusy(screen.getByRole('button', { name: 'Queued…' }));
     phase = 'failed';
     await advance(INTERVAL);
     await waitFor(() => expect(header(screen).getByText('Failed')).toBeInTheDocument(), WAIT);
-    expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
+    expectAvailable(screen.getByRole('button', { name: 'Run now' }));
   });
 
   it('a run started elsewhere (422 "already queued or running") re-reads the request and shows it queued', async () => {
@@ -210,7 +220,7 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(await screen.findByText('Request is already queued or running.', undefined, WAIT)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Queued…' })).toBeDisabled(), WAIT);
+    await waitFor(() => expectBusy(screen.getByRole('button', { name: 'Queued…' })), WAIT);
     expect(posts).toBe(1);
   });
 
@@ -224,7 +234,7 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     phase = 'paused';
     screen = await openDetail();
     // Run on a paused request is still offered; the API answers it, as before.
-    expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
+    expectAvailable(screen.getByRole('button', { name: 'Run now' }));
     expect(screen.getByRole('button', { name: /resume/i })).toBeEnabled();
   });
 });
