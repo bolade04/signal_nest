@@ -141,7 +141,9 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
   }
 
   const geocodeMutation = useMutation({
-    mutationFn: () => api.geocode({ query: [form.address, form.city, form.country].filter(Boolean).join(', ') }),
+    // The dialog's workspace is the active one (Locations renders it inside RequireWorkspace).
+    mutationFn: () =>
+      api.geocode(workspaceId, { query: [form.address, form.city, form.country].filter(Boolean).join(', ') }),
     onSuccess: (res) => {
       setGeocodeNote(null);
       setForm((f) => ({

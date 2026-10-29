@@ -1731,8 +1731,33 @@ export const handlers = [
     return HttpResponse.json({ ...body, id: 'geo-1', location_id: params.id });
   }),
   // Shape of GeocodeResponse (apps/api/app/locations/schemas.py), as the fixture geocoder answers "Dallas".
-  http.post(P('/geocode'), () =>
-    HttpResponse.json({
+  // The route resolves its tenant through get_tenant_context (apps/api/app/locations/routes.py,
+  // auth/dependencies.py), so `workspace_id` is a REQUIRED query parameter: without it FastAPI
+  // answers 422 before the route runs, with the body below (captured from the local API at
+  // 7a183a12, P6-W10-UIFIX-01 raw/011). The previous handler accepted the request without it,
+  // which is why the client's missing parameter passed CI (UI-AUDIT F2). Membership is
+  // checked as the tenant gate does for path-scoped routes.
+  http.post(P('/geocode'), async ({ request }) => {
+    const { user } = await record(request);
+    const workspaceId = new URL(request.url).searchParams.get('workspace_id');
+    if (!workspaceId) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'validation_error',
+            message: 'Request validation failed',
+            request_id: 'req-model',
+            details: [{ type: 'missing', loc: ['query', 'workspace_id'], msg: 'Field required' }],
+          },
+        },
+        { status: 422 },
+      );
+    }
+    const orgId = workspaceOrganization(workspaceId);
+    if (orgId && user && !membershipOf(orgId, user.id)) {
+      return modelError(403, 'permission_denied', 'You are not a member of this organization.');
+    }
+    return HttpResponse.json({
       latitude: 32.7767,
       longitude: -96.797,
       city: 'Dallas',
@@ -1744,8 +1769,8 @@ export const handlers = [
       region_code: 'US-TX',
       label: 'Dallas, Texas, United States',
       provider: 'fixture',
-    }),
-  ),
+    });
+  }),
 
   // ---- Scout requests ----
   http.get(P('/workspaces/:ws/scout-requests'), () => HttpResponse.json(scoutRequests)),
