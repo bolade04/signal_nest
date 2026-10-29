@@ -272,7 +272,10 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
                           : 'Not set — enter an address and geocode.'}
                     </p>
                     {geocodeNote && !readOnly ? (
-                      <p role="status" className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+                      // Foreground text on the warning tint, as the e-mail verification banner
+                      // does. `warning-foreground` is for text ON a solid warning fill; on this
+                      // 10% tint it measured 1.06:1 (light) and 1.18:1 (dark) (UI-AUDIT F3).
+                      <p role="status" className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground">
                         {geocodeNote}
                       </p>
                     ) : null}
