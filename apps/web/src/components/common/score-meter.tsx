@@ -1,6 +1,6 @@
 import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { scoreBand, type Intent } from '@/lib/labels';
+import { scoreBand, type Intent, type ScoreBand } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 
 const barColor: Record<Intent, string> = {
@@ -21,10 +21,16 @@ export function ScoreMeter({
   label: string;
   value: number;
   help?: string;
-  band?: boolean;
+  /**
+   * true: the generic 0–100 band (`scoreBand`); false: no band word; a band: that band,
+   * as for confidence, whose band the API defines (`confidenceBand`). Null means none.
+   */
+  band?: boolean | ScoreBand | null;
 }) {
   const rounded = Math.round(value);
-  const { label: bandLabel, intent } = scoreBand(value);
+  const given = typeof band === 'object' && band !== null ? band : null;
+  const { label: bandLabel, intent } = given ?? scoreBand(value);
+  const showBand = band === true || given !== null;
   return (
     <div>
       <div className="mb-1 flex items-center justify-between text-sm">
@@ -43,7 +49,7 @@ export function ScoreMeter({
         </span>
         <span className="tabular-nums text-muted-foreground">
           {rounded}
-          {band ? <span className="ml-1 text-xs">· {bandLabel}</span> : null}
+          {showBand ? <span className="ml-1 text-xs">· {bandLabel}</span> : null}
         </span>
       </div>
       <div

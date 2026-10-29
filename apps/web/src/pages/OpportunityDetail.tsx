@@ -33,7 +33,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/toast';
-import { scoreHelp } from '@/lib/labels';
+import { confidenceBand, scoreHelp } from '@/lib/labels';
 import { checkBreakdown, formatComponent, formatPoints, readScoreComponents } from '@/lib/score-breakdown';
 import { safeExternalHref } from '@/lib/links';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
@@ -394,7 +394,12 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
             <CardContent className="space-y-4">
               <ScoreMeter label="Opportunity" value={o.opportunity_score} help={scoreHelp.opportunity_score} />
               <ScoreMeter label="Relevance" value={o.relevance_score} help={scoreHelp.relevance_score} />
-              <ScoreMeter label="Confidence" value={o.confidence_score} help={scoreHelp.confidence_score} />
+              <ScoreMeter
+                label="Confidence"
+                value={o.confidence_score}
+                help={scoreHelp.confidence_score}
+                band={confidenceBand(o.confidence_level)}
+              />
               <ScoreMeter label="Priority" value={o.priority_score} help={scoreHelp.priority_score} band={false} />
 
               {(o.scores ?? []).map((breakdown) => (

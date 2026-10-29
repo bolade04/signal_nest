@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   classificationIntent,
   classificationLabels,
-  confidenceIntent,
+  confidenceBand,
   decisionIntent,
   decisionLabels,
   jobStatusIntent,
@@ -43,9 +43,11 @@ export const JobStatusBadge = ({ value }: { value: string }) => (
   <Badge intent={jobStatusIntent[value] ?? 'neutral'}>{label(jobStatusLabels, value)}</Badge>
 );
 
-export const ConfidenceBadge = ({ level }: { level: string }) => (
-  <Badge intent={confidenceIntent[level] ?? 'neutral'}>{label({}, level)} confidence</Badge>
-);
+// Same word as the confidence pill and meter: all three read `confidenceBand`.
+export const ConfidenceBadge = ({ level }: { level: string }) => {
+  const band = confidenceBand(level);
+  return <Badge intent={band?.intent ?? 'neutral'}>{band?.label ?? label({}, level)} confidence</Badge>;
+};
 
 export const SimulatedBadge = () => (
   <Badge intent="warning" title="Generated from fixture data, not a live source">
