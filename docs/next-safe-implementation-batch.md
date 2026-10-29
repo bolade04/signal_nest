@@ -5,7 +5,7 @@
 > was subsequently implemented and closed out as **Phase 3B** (SB-A/B/C/D, PRs #48–#51)
 > and the human-feedback loop as **Phase 3C**, all merged dark and verified through the
 > Phase 3 closeout (PR #62). Its baseline SHA and Alembic-head references below are
-> historical and no longer current (current single head: `47028898175f`). For the
+> historical and no longer current (current single head: `8005724d811a`). For the
 > current forward-looking plan see **`docs/phase-4a-plan.md`** (Phase 4A — Operator
 > Observability and Controlled Activation Foundation). Nothing below is re-authorized by
 > that supersession; it records prior owner decisions only.
