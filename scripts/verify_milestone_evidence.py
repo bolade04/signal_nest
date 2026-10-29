@@ -444,9 +444,10 @@ def verify(api, repo: str, sha: str, run_id: int, attempt: int | None = None, mi
                                  "carried-over job cannot be told from a re-run one")
 
     # The SHA must be on main: the run's head_branch is only a name (a tag can be called main), and the trust root is
-    # that the workflow file at the SHA is the reviewed one on main.
+    # that the workflow file at the SHA is the reviewed one on main. The branch is named by its full ref: a bare
+    # `main` is ambiguous once a tag called main exists, and git resolves the ambiguity to the tag.
     try:
-        comparison, _ = api.get(f"/repos/{repo}/compare/{sha}...main")
+        comparison, _ = api.get(f"/repos/{repo}/compare/{sha}...refs/heads/main")
         status = comparison.get("status") if isinstance(comparison, dict) else None
     except EvidenceError as exc:
         status = None

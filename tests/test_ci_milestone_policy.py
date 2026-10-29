@@ -325,16 +325,33 @@ EVENT_VARIABLES = re.compile(
 CODE_ROOTS = ("scripts", "security", "apps", "infra", "tests")
 CODE_SUFFIXES = {".py", ".sh", ".bash", ".ts", ".tsx", ".js", ".mjs", ".cjs"}
 SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", "site-packages", "dist", "build", ".pytest_cache"}
-# Files allowed to name those variables, each justified:
+# The only matches allowed, per file, each justified. Exemptions are per MATCH, not per file (MINOR-10): every
+# matching line is pinned exactly (as a multiset), so a new read inside an allow-listed file fails the guard too.
 EVENT_VARIABLE_READERS = {
     # the bindings themselves: run by milestone-validation.yml and main-push.yml, never by ci.yml
-    "scripts/verify_milestone_evidence.py",
-    # this guard's own patterns and the binding tests' runner environments
-    "tests/test_ci_milestone_policy.py",
+    "scripts/verify_milestone_evidence.py": (
+        'event = env.get("GITHUB_EVENT_NAME", "")',
+        'ref = env.get("GITHUB_REF", "")',
+        'workflow_ref = env.get("GITHUB_WORKFLOW_REF", "")',
+        'event = env.get("GITHUB_EVENT_NAME", "")',
+        'ref = env.get("GITHUB_REF", "")',
+        'workflow_ref = env.get("GITHUB_WORKFLOW_REF", "")',
+        'path = os.environ.get("GITHUB_EVENT_PATH")',
+    ),
     # models scripts/docker_boundary.py's CI-marker check, which tests GITHUB_WORKFLOW for PRESENCE only (the policy's
-    # expected_marker_values constrains GITHUB_ACTIONS alone; pinned below), so it cannot tell a milestone run apart
-    "tests/test_i28at_docker_boundary.py",
+    # expected_marker_values constrains GITHUB_ACTIONS alone; pinned below), so it cannot tell a milestone run apart;
+    # it sets and pops the markers, it never reads a real value
+    "tests/test_i28at_docker_boundary.py": (
+        '_GH_MARKERS = ("GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_WORKFLOW")',
+        'os.environ.update({"GITHUB_ACTIONS": "true", "GITHUB_RUN_ID": "1", "GITHUB_WORKFLOW": "ci"})',
+        'os.environ.update({"GITHUB_ACTIONS": "yes", "GITHUB_RUN_ID": "1", "GITHUB_WORKFLOW": "ci"})',
+        'for name in ("GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_WORKFLOW"):',
+    ),
 }
+# This module names the variables in its own patterns, pinned lines and test environments; its lines cannot pin
+# themselves, so its match COUNT is pinned instead (a new read here changes it).
+SELF_READER = "tests/test_ci_milestone_policy.py"
+SELF_READER_MATCHES = 39
 _GITHUB_WORD = re.compile(r"(?i)(?<![\w.$-])github(?![\w-])")
 
 
@@ -359,6 +376,28 @@ def _conditions(doc):
         for step in job.get("steps") or []:
             if "if" in step:
                 yield str(step["if"])
+
+
+def _package_scripts() -> dict:
+    """The `scripts` of every repository package.json (ci.yml runs them through npm), keyed `<path>#scripts`."""
+    found = {}
+    candidates = [REPO_ROOT / "package.json"] + [p for p in (REPO_ROOT / "apps").glob("*/package.json")]
+    for path in candidates:
+        if path.is_file():
+            scripts = json.loads(path.read_text(encoding="utf-8")).get("scripts") or {}
+            found[f"{path.relative_to(REPO_ROOT).as_posix()}#scripts"] = "\n".join(
+                f"{name}: {command}" for name, command in sorted(scripts.items()))
+    return found
+
+
+def test_the_package_scripts_ci_runs_are_scanned():
+    """R2-2: ci.yml runs npm scripts (lint, type-check, test, build, gen:types, e2e:install); they are in the scan."""
+    scripts = _package_scripts()
+    assert {"package.json#scripts", "apps/web/package.json#scripts"} <= set(scripts)
+    assert "test: vitest run" in scripts["apps/web/package.json#scripts"]
+    ci_text = CI.read_text(encoding="utf-8")
+    for invoked in re.findall(r"npm run ([\w:-]+)", ci_text):
+        assert any(f"\n{invoked}: " in "\n" + text for text in scripts.values()), f"npm run {invoked} is not scanned"
 
 
 def _code_files():
@@ -400,10 +439,18 @@ def event_gating_problems(ci_text: str, code_overrides: dict | None = None) -> l
         problems.append("ci.yml names an event/ref/workflow runner variable")
     texts = {p.relative_to(REPO_ROOT).as_posix(): p.read_text(encoding="utf-8", errors="replace")
              for p in _code_files()}
+    texts.update(_package_scripts())
     texts.update(code_overrides or {})
     readers = {rel for rel, text in texts.items() if EVENT_VARIABLES.search(text)}
-    if readers != EVENT_VARIABLE_READERS:
+    if readers != set(EVENT_VARIABLE_READERS) | {SELF_READER}:
         problems.append(f"event/ref/workflow variable readers changed: {sorted(readers)}")
+    for rel, pinned in EVENT_VARIABLE_READERS.items():
+        lines = sorted(line.strip() for line in texts.get(rel, "").splitlines() if EVENT_VARIABLES.search(line))
+        if lines != sorted(pinned) or len(EVENT_VARIABLES.findall(texts.get(rel, ""))) != len(pinned):
+            problems.append(f"{rel}: its event/ref/workflow variable matches changed: {lines}")
+    own = len(EVENT_VARIABLES.findall(texts.get(SELF_READER, "")))
+    if own != SELF_READER_MATCHES:
+        problems.append(f"{SELF_READER}: {own} event/ref/workflow variable matches, pinned {SELF_READER_MATCHES}")
     return problems
 
 
@@ -446,6 +493,20 @@ def test_the_event_gating_guard_catches_run_text_and_invoked_scripts():
                      '[ "$GITHUB_WORKFLOW" != CI ] && exit 0\n'):
         assert event_gating_problems(text, {"scripts/ci-smoke.sh": smoke + injected})
     assert event_gating_problems(text, {"apps/web/vite.config.ts": "if (process.env.GITHUB_REF_NAME) {}"})
+    web = _package_scripts()["apps/web/package.json#scripts"]
+    assert event_gating_problems(text, {"apps/web/package.json#scripts": web.replace(
+        "test: vitest run", 'test: [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || vitest run')})
+
+
+def test_a_new_read_inside_an_allow_listed_file_is_caught():
+    """MINOR-10: the exemptions are per match; a new read inside the verifier or test_i28at fails the guard."""
+    text = CI.read_text(encoding="utf-8")
+    for rel, injected in (("scripts/verify_milestone_evidence.py", '_PROBE = os.environ.get("GITHUB_EVENT_NAME")\n'),
+                          ("tests/test_i28at_docker_boundary.py", '_PROBE = os.environ.get("GITHUB_REF_NAME")\n')):
+        original = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert event_gating_problems(text, {rel: original + injected}), rel
+        moved = original.replace('"GITHUB_WORKFLOW"', '"GITHUB_REF"', 1)
+        assert moved == original or event_gating_problems(text, {rel: moved}), rel
 
 
 def test_every_path_ci_runs_is_inside_the_scanned_roots():
@@ -657,6 +718,7 @@ def test_bind_cli_exits_nonzero_and_still_writes_the_record(tmp_path, monkeypatc
     ({"MILESTONE_SCOPE": "scope \u202edesrever"}, "milestone-scope"),
     ({"MILESTONE_SCOPE": "zero\u200bwidth"}, "milestone-scope"),
     ({"MILESTONE_SHA": SHA + "\n"}, "requested-sha"),
+    ({"MILESTONE_SCOPE": "para one\u2029para two"}, "milestone-scope"),
 ])
 def test_input_validation_matches_whole_values_and_one_printable_line(over, code):
     rec = vme.bind(_bind_env(**over), SHA, TIP)
@@ -762,7 +824,7 @@ def scenario(sha=SHA, run_id=RUN, attempt=1, path=vme.MILESTONE_WORKFLOW_PATH, e
            "repository": {"full_name": REPO}, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
     responses = {f"/repos/{REPO}/actions/runs/{run_id}": {"body": run, "next": None}}
     if compare is not None:
-        responses[f"/repos/{REPO}/compare/{sha}...main"] = {"body": {"status": compare}, "next": None}
+        responses[f"/repos/{REPO}/compare/{sha}...refs/heads/main"] = {"body": {"status": compare}, "next": None}
     responses.update(_paged(f"/repos/{REPO}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100", "jobs",
                             jobs, per_page))
     checks = [_check(j) for j in jobs] + list(extra_checks)
@@ -941,6 +1003,15 @@ def _edit_check(doc, job_id, **fields):
 def test_each_required_job_is_bound_to_its_own_check_run(label, edit, code):
     v = run_verify(edit(scenario()))
     assert v["verdict"] == "REJECT" and code in _codes_of(v), (label, v["reasons"])
+
+
+def test_the_compare_names_the_branch_ref_unambiguously():
+    """R2-1: the on-main check compares against refs/heads/main, never a bare `main` (a tag can be called main)."""
+    api = vme.FixtureApi(scenario())
+    assert vme.verify(api, REPO, SHA, RUN, binding_record=_record_for(scenario(), RUN))["verdict"] == "PASS"
+    compares = [r for r in api.requests if "/compare/" in r]
+    assert compares == [f"/repos/{REPO}/compare/{SHA}...refs/heads/main"]
+    assert not any(r.endswith("...main") for r in api.requests)
 
 
 def test_incomplete_or_shifting_pagination_is_refused():
