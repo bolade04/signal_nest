@@ -61,7 +61,7 @@
 | API service | **ECS/Fargate** task (`uvicorn app.main:app`, port 8000) behind an ALB | **Mandatory before canary** |
 | Background worker | **ECS/Fargate** service (`python -m app.jobs.worker`, no port) | **Mandatory before canary** |
 | Migration task | **ECS run-task** (one-shot `python -m app.db.migrate`) | **Mandatory before canary** |
-| PostgreSQL + pgvector | **RDS for PostgreSQL** (managed) | **Mandatory before canary** |
+| PostgreSQL ~~+ pgvector~~ *(2026-10-27: no pgvector by decision, see §G)* | **RDS for PostgreSQL** (managed) | **Mandatory before canary** |
 | Redis / Valkey | **ElastiCache** (managed) | **Mandatory before canary** if the staging profile selects a Redis-backed cache/queue coordination path (see §H) |
 | Object storage | **S3** bucket(s) | **Mandatory before canary** |
 | Container registry | **ECR** | **Mandatory before canary** |
@@ -185,16 +185,23 @@ creates no role or policy.**
 
 - **Managed PostgreSQL** (RDS), **private access only**, **encryption at rest and in
   transit**, a **dedicated staging database**, **no customer data**.
-- **pgvector** extension enabled (production-shaped mode requires a persistent vector
-  backend — `config.py`). *(2026-10-20, `P6-PLAT-1`: no code uses the extension, and
+- ~~**pgvector** extension enabled (production-shaped mode requires a persistent vector
+  backend — `config.py`).~~ *(2026-10-20, `P6-PLAT-1`: no code uses the extension, and
   `vector_backend=pgvector` is now refused at startup in every environment until a
   pgvector path is implemented. Staging runs the default `bruteforce`, and the composed
-  root omits `VECTOR_BACKEND`. Whether to enable the extension at all is the open
-  P6-PLAT-1 operator decision.)*
+  root omits `VECTOR_BACKEND`.)* **Decided 2026-10-27 (operator, D-PLAT-1 strategy B):
+  the extension is not enabled. The production vector configuration is in-process per-run similarity, bound N_max = 100 signals per run (engineering capacity bound, not a quota); no cross-run or history-wide similarity; pgvector refused until implemented (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists.
+  Production accepts `vector_backend=bruteforce` only with
+  `VECTOR_INPROCESS_PRODUCTION_APPROVED=true` and a bound within the build's hard
+  ceiling (`VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN`, default 100, ceiling 100); a run that
+  would index more signals is refused (status `failed`, reason
+  `signal_volume_above_bound`), never truncated or chunked. The migration actor's
+  task environment needs no `REDIS_URL` (`migration_mode` opens no Redis connection).
+  Input limits - two, independent, applied in this order, with the takedown re-check between them, on every source path (#255's live multi-source path - every approved, or replayed, source that serves the run's market -, the sandbox feed and the demo library). (1) Fetch limit, per source: a connector reads at most 100 entries from each source per run (`FetchScope.max_items`, default 100, `apps/api/app/connectors/base.py`; unchanged) and looks one entry past it (`parse_feed(max_entries=max_items + 1)`, shared by the live and the sandbox connector; on the live path on every read: fresh response, politeness-interval cache, cool-down cache, 304 revalidation). What is bounded, as measured: the XML parser builds the whole document, bounded only by the byte caps - the 2 MiB feed size cap and, on the live path, the egress guard's `connector_egress_max_response_bytes` (at most 2 MiB; the guard stops reading past it) - at maximum density about 72,000 entries under the cap: roughly 0.16 s and 13 MiB of extra peak memory; entry extraction is bounded to `max_items + 1` and normalisation to `max_items`; there is no streaming XML parser. A source that fails is reported `failed` with a closed `failure_reason`, never as an empty source: `feed_too_large` (a byte cap), `xml_unsafe` (DOCTYPE/entity), `xml_malformed` (malformed XML, no channel, unknown format or encoding), `rate_limited` (429, cool-down, no token), `retries_exhausted` (timeout, network or 5xx after the attempts), `response_refused` (live: an encoded body or a media type that is not a feed), `egress_blocked` (live: the egress guard refused the target) or `fetch_error` (any other permanent failure, e.g. a 404); a document rejected as a whole contributes no entries even if the malformation lies beyond the limit. The demo fixture library declares no per-source limit (`max_items` null) and is never clipped. Then the takedown re-check (P6-PRIV-4) drops the signals of any source taken down while the sources were read. (2) Run bound, per run: the pipeline counts what would actually be indexed - the signals from all sources, after the fetch limits and the takedown re-check - and refuses a run above N_max = 100 before anything is stored, embedded or sent to a model, so a refused run makes no model call, no budget reservation and no usage row (P6-LLM-4). A source that held more than its limit is not hidden: next to the `coverage` outcome (`sources` / `sources_failed`, P6-DATA-2) the run's `stats` carry `fetch_limits` (one entry per consulted source: `source_key`, `max_items`, `clipped`, `fetched`, `eligible_seen`, `failed`, `failure_reason`) and, when any source was clipped or failed, `partial_fetch = true` with `partial_fetch_reasons` listing `fetch_limit_reached` (a source was clipped) and/or `source_failed` (a source failed), neither collapsed into the other; `scanned` stays the number of signals actually processed (after the re-check; a dropped source's `fetch_limits` entry still shows what it delivered). A run that completes with `partial_fetch = true` did not read everything its sources held - it is not a complete read, and it is not refused (a clip is not a refusal). One source can never exceed the bound (its fetch limit equals N_max), so a single-source run is never refused, only marked partial when clipped; two or more sources whose total exceeds 100 are refused, with every source's `fetch_limits` (clipped, failed or whole) shown next to `refusal_reason` and no `coverage` object (it describes a completed run). Whether the per-source fetch limit may ever exceed N_max is a pending operator question (Q2); this build keeps them equal. The customer sees these facts on the request's `stats` and in the job's result summary; the run-history list shows the four counts and the coverage outcome, not the fetch facts or a refusal reason (their presentation is the pending UI question Q1). Proven offline (`test_live_fetch_boundary`, `test_fetch_limit_boundary`) with named test doubles only: a loopback replay origin standing in for publishers, a scripted HTTP wire, a fake model provider and a takedown snapshot.**
 - **Migrations** run as a **controlled one-time ECS task** using the **approved image**
   (`python -m app.db.migrate`); replicas never migrate (`docs/operations/deployment.md`,
   `docs/operations/migrations.md`).
-- **Single Alembic head** verified before/after: `98289430a3ec`.
+- **Single Alembic head** verified before/after: `8005724d811a` (19 revisions).
 - A **migration backup / recovery checkpoint** (snapshot) is taken before applying
   migrations.
 - **Forward and rollback** procedures follow the additive-first policy

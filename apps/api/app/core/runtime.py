@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.connectors.fetch_limits import DEFAULT_MAX_ITEMS_PER_SOURCE
 from app.core import config as _config
 from app.core.config import Settings, get_settings
 
@@ -125,6 +126,16 @@ def _status(
 
 
 def _vector_detail(s: Settings) -> str | None:
+    if s.vector_backend == "bruteforce":
+        # P6-PLAT-1 (strategy B): the backend that runs, with its bound from settings
+        # (an engineering capacity bound, not a quota) and what it does not do.
+        return (
+            "in-process per-run similarity; bound "
+            f"N_max={s.vector_inprocess_max_signals_per_run} signals per run "
+            "(engineering capacity bound); per-source fetch limit "
+            f"{DEFAULT_MAX_ITEMS_PER_SOURCE} items (independent of the run bound); no "
+            "cross-run, cross-workspace or history-wide similarity"
+        )
     if s.vector_backend != "pgvector":
         return None
     if not _config.PGVECTOR_IMPLEMENTED:

@@ -2,7 +2,11 @@
 
 Models are written to work on both SQLite (local mode) and PostgreSQL (full mode).
 We use portable column types (String UUID, JSON, Text) so a single model set targets
-both engines. pgvector columns are added only in full mode via a dedicated adapter.
+both engines. There is no vector column type: embeddings are JSON, and similarity is
+in-process per-run similarity, bound N_max = 100 signals per run (engineering capacity
+bound, not a quota); no cross-run or history-wide similarity; pgvector refused until
+implemented (P6-LLM-7 deferred); B-5 not applicable while no pgvector path exists
+(P6-PLAT-1, operator decision 2026-10-27).
 """
 
 from __future__ import annotations

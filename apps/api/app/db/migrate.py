@@ -100,7 +100,9 @@ def upgrade_and_verify() -> int:
     # Read the applied revision back through the application DATABASE_URL over its
     # own short-lived TLS connection (never app.db.session; the URL carries the
     # TLS mode). Any driver error is swallowed to a fixed classification.
-    engine = create_engine(get_settings().database_url, poolclass=NullPool)
+    engine = create_engine(
+        get_settings().database_url, poolclass=NullPool, hide_parameters=True
+    )
     try:
         with engine.connect() as conn:
             db_revisions = (
@@ -290,7 +292,7 @@ def downgrade_confirmation(target: str) -> int:
     # captured as part of it.
     logging.getLogger("alembic").setLevel(logging.WARNING)
     try:
-        engine = create_engine(settings.database_url)
+        engine = create_engine(settings.database_url, hide_parameters=True)
         # One connection for both reads, so the identity bound into the token is
         # the identity of the database that answered this invocation.
         with engine.connect() as connection:

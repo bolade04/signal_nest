@@ -169,7 +169,9 @@ def _run(argv: list[str]) -> int:
     try:
         from app.core.config import get_settings
 
-        engine = create_engine(get_settings().database_url, poolclass=NullPool)
+        engine = create_engine(
+            get_settings().database_url, poolclass=NullPool, hide_parameters=True
+        )
     except Exception:
         return _fail("configuration-failure", EXIT_CONFIG_OR_CONNECT_FAILURE)
     try:

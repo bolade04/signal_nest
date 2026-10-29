@@ -15,7 +15,7 @@ dropped by :func:`pg_database`), never against a shared one:
 * an **interrupted / failed migration**, in two forms that prove different things:
 
   1. *a tracked revision failing partway* — the real sessions revision
-     (``87198ab57b59``, ``auth_sessions``, two below head) is run against a database
+     (``87198ab57b59``, ``auth_sessions``, four below head) is run against a database
      that already holds a relation with its index's name, so ``CREATE TABLE`` succeeds
      and ``CREATE INDEX`` fails inside the same revision. This proves that PostgreSQL's
      transactional DDL (the revision's statements run inside one transaction, which
@@ -58,10 +58,15 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (P6-LLM-4: adds the ``llm_usage_events`` table).
-HEAD = "47028898175f"
-#: One below head (P6-LLM-5: adds ``opportunities.explanation_source``).
-BELOW_HEAD = "6ad2ff77f691"
+#: The code head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
+#: ``llm_budget_reservations`` tables).
+HEAD = "8005724d811a"
+#: One below head (P6-DATA-1/PRIV-4: adds ``source_takedowns``).
+BELOW_HEAD = "da25533622b2"
+#: Two below head (P6-LLM-4: adds the ``llm_usage_events`` table).
+USAGE = "47028898175f"
+#: Three below head (P6-LLM-5: adds ``opportunities.explanation_source``).
+EXPLANATION = "6ad2ff77f691"
 #: The P6-AUTH-4 sessions revision (``auth_sessions``), the tracked revision that M2(a)
 #: breaks midway.
 SESSIONS = "87198ab57b59"
@@ -240,7 +245,20 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     refused = _run(["downgrade", "base"], pg_url)
     assert refused.returncode != 0
     assert "confirm" in (refused.stdout + refused.stderr)
-    assert _version(pg_url) == [HEAD] and "llm_usage_events" in _tables(pg_url)
+    assert _version(pg_url) == [HEAD] and "llm_budget_reservations" in _tables(pg_url)
+    assert "llm_budget_periods" in _tables(pg_url) and "source_takedowns" in _tables(pg_url)
+    # D-9d: the suppression record carries no actor, reason or reference column.
+    assert _columns(pg_url, "source_takedowns") == {
+        "id", "source_key", "taken_down_at", "purge_summary", "repeat_purges",
+        "created_at", "updated_at",
+    }
+    # D-9e: the operator's private reason lives in a separate case record (no retention
+    # column: no duration is approved yet).
+    assert _columns(pg_url, "source_takedown_cases") == {
+        "id", "takedown_id", "source_key", "reason", "external_reference",
+        "actor_user_id", "created_at",
+    }
+    assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
 
     # One guarded step down undoes exactly the head revision; the spent token does not
@@ -249,8 +267,12 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert "llm_usage_events" not in _tables(pg_url)
+    assert "llm_budget_periods" not in _tables(pg_url)
+    assert "llm_budget_reservations" not in _tables(pg_url)
+    assert "source_takedowns" in _tables(pg_url)
+    assert "source_takedown_cases" in _tables(pg_url)
     # The revisions below head are untouched.
+    assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
     assert "auth_sessions" in _tables(pg_url)
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
@@ -322,7 +344,7 @@ def test_migration_actor_upgrade_and_verify_then_check_on_postgresql(pg_url):
 # M2(a) — a TRACKED revision failing partway: no partial object, version unmoved
 # --------------------------------------------------------------------------- #
 def test_tracked_revision_that_fails_midway_leaves_no_partial_schema_and_retries(pg_url):
-    """The sessions revision (two below head) creates ``auth_sessions`` and then its
+    """The sessions revision (four below head) creates ``auth_sessions`` and then its
     index; the index's name is occupied in advance, so the revision fails AFTER its first
     DDL statement and the upgrade to head stops there."""
     _alembic(pg_url, "upgrade", PREV)

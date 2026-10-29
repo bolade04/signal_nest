@@ -1037,6 +1037,13 @@
    "review_record_id": "REV-2026-10-23-P6-CI6-O11-AMENDMENT-R1",
    "reviewed_digest": "sha256:9f5925c9d32525a76fe542afd9925434c75f1f5400a194c057d10dde6b4b4173",
    "source": "live"
+  },
+  "verify_milestone_evidence.py::REQUIRED_JOB_NAMES": {
+   "collection_id": "verify_milestone_evidence.py::REQUIRED_JOB_NAMES",
+   "ordered": true,
+   "review_record_id": "REV-2026-10-29-P6-CI-MILESTONE-POLICY",
+   "reviewed_digest": "sha256:fadb350dc16ab89d96ec913391cb5ba33618e69d07b5267369ade272b625f0ed",
+   "source": "live"
   }
  }
 }

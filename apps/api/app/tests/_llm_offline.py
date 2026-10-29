@@ -26,6 +26,24 @@ from app.llm.mock import MockLLMProvider
 from app.llm.service import LLMService
 
 
+def wire_payload(
+    model: str = "claude-sonnet-4-6",
+    *,
+    content: str = "x",
+    task: str = "classify_signal",
+    max_tokens: int = 1024,
+    tenant_ref: str | None = None,
+) -> bytes:
+    """The body bytes the Anthropic adapter would send for ``content`` (nothing is sent)."""
+    from app.llm.base import LLMRequest
+    from app.llm.providers_real import AnthropicProvider
+
+    request = LLMRequest(
+        task=task, inputs={"content": content}, max_tokens=max_tokens, tenant_ref=tenant_ref
+    )
+    return AnthropicProvider("fixture-key", model, 5).prepare(request).content
+
+
 def offline_settings(**overrides: Any) -> Settings:
     llm_defaults = {
         name: field.get_default(call_default_factory=True)

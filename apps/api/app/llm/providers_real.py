@@ -6,8 +6,10 @@ can decide what is retryable:
 
 * transport timeout -> ``LLMTimeoutError`` (retryable)
 * 429 -> ``LLMRateLimitError`` carrying the provider's ``retry-after`` (retryable)
-* 408, 409, 5xx (incl. Anthropic 529 overloaded), connection failure ->
-  ``LLMUnavailableError`` (retryable)
+* 408, 409, 5xx (incl. Anthropic 529 overloaded), any other ``httpx`` error ->
+  ``LLMUnavailableError`` (retryable). Cost classification is default-deny (see the
+  outcome classifier below): only ``ConnectError`` and a 4xx/429 reply are known-free;
+  everything else carries ``outcome_unknown`` and is charged the call's bound
 * any other non-2xx -> ``LLMProviderError`` (permanent: bad key, model or request)
 * a 2xx whose body is not the documented envelope, whose text is not one JSON
   object, or that stopped early -> ``LLMMalformedError``; a refusal ->
@@ -41,6 +43,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 
@@ -57,9 +60,10 @@ from app.llm.base import (
     LLMUnavailableError,
     LLMUsage,
 )
+from app.llm.bound import encode_body
 from app.llm.prompts import SYSTEM_PROMPT, render_prompt
 
-__all__ = ["SYSTEM_PROMPT", "AnthropicProvider", "OpenAIProvider"]
+__all__ = ["SYSTEM_PROMPT", "AnthropicProvider", "OpenAIProvider", "PreparedCall"]
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -80,6 +84,38 @@ _RETRYABLE_STATUS = frozenset({408, 409})
 _FENCED_JSON = re.compile(r"\A```(?:json)?[ \t]*\n(.*)\n```\Z", re.DOTALL)
 _ERROR_TYPE = re.compile(r"[a-z_]{1,64}")
 _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+@dataclass(frozen=True)
+class PreparedCall:
+    """One provider request exactly as it is sent: URL, headers and the body bytes.
+
+    ``content`` is what the transport writes as the request body, byte for byte
+    (:func:`app.llm.bound.encode_body`); the budget bound is computed from the same
+    bytes (:func:`app.llm.bound.worst_case_cost`).
+    """
+
+    url: str
+    headers: dict[str, str]
+    content: bytes
+
+
+#: **Outcome classifier (default-deny).** An attempt costs nothing only when the adapter can
+#: positively say the provider did not process the request:
+#:
+#: * ``httpx.ConnectError`` - raised while the connection is being established (TCP or TLS),
+#:   before any request byte is written: the one exception class known to precede dispatch;
+#: * an HTTP 4xx or 429 reply - the provider stated that the request was not processed
+#:   (rejected, or rate limited); a 4xx other than 408/409 is permanent.
+#:
+#: Everything else may have reached the provider and is charged the call's bound
+#: (``LLMError.outcome_unknown`` or the timeout rule): a timeout of any phase (including
+#: ``ConnectTimeout`` and ``PoolTimeout``, which are not proven byte-free), any other
+#: ``httpx`` error after the request (read, write or protocol errors, a dropped connection,
+#: ``DecodingError``, ``TooManyRedirects``, a proxy error), and an HTTP 5xx reply (a
+#: gateway's 502/503/504 says nothing about whether the origin processed it) or any
+#: non-2xx reply that is not a 4xx.
+_PRE_DISPATCH_ERRORS = (httpx.ConnectError,)
 
 
 def _render(request: LLMRequest) -> str:
@@ -106,7 +142,7 @@ def _error_detail(resp: httpx.Response) -> str:
     request_id = resp.headers.get("request-id")
     try:
         data = resp.json()
-    except ValueError:
+    except Exception:  # noqa: BLE001 - any decode failure (RecursionError included): no detail
         data = None
     if isinstance(data, dict):
         err = data.get("error")
@@ -144,15 +180,27 @@ def _raise_for_status(resp: httpx.Response, provider: str) -> None:
         raise LLMRateLimitError(
             f"{provider} rate limited (HTTP 429{detail})", retry_after=_retry_after(resp)
         )
-    if status in _RETRYABLE_STATUS or status >= 500:
+    if status >= 500:
+        # Not proof of non-processing (a gateway 502/503/504 may front a processed call).
+        unavailable = LLMUnavailableError(f"{provider} unavailable (HTTP {status}{detail})")
+        unavailable.outcome_unknown = True
+        raise unavailable
+    if status in _RETRYABLE_STATUS:
+        # 408 / 409: a 4xx - the provider stated the request was not processed.
         raise LLMUnavailableError(f"{provider} unavailable (HTTP {status}{detail})")
-    raise LLMProviderError(f"{provider} rejected the request (HTTP {status}{detail})")
+    error = LLMProviderError(f"{provider} rejected the request (HTTP {status}{detail})")
+    # A 4xx is the provider's statement that the request was not processed; any other
+    # non-2xx (1xx, 3xx) is not, so it is charged the bound.
+    error.outcome_unknown = not 400 <= status < 500
+    raise error
 
 
 def _json_body(resp: httpx.Response, provider: str) -> dict[str, Any]:
     try:
         data = resp.json()
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001 - default-deny: whatever the decode path raises
+        # ValueError / UnicodeDecodeError, but also RecursionError for deeply nested JSON:
+        # an undecodable reply is charged the bound, never an escape from the classifier.
         raise LLMMalformedError(f"{provider} returned a non-JSON body") from exc
     if not isinstance(data, dict):
         raise LLMMalformedError(f"{provider} returned an unexpected body shape")
@@ -171,7 +219,7 @@ def _json_object(text: str, provider: str) -> dict[str, Any]:
         candidate = fenced.group(1).strip()
     try:
         value = json.loads(candidate)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except Exception as exc:  # noqa: BLE001 - JSONDecodeError, RecursionError, anything else
         raise LLMMalformedError(f"{provider} returned non-JSON text") from exc
     if not isinstance(value, dict):
         raise LLMMalformedError(f"{provider} returned JSON that is not an object")
@@ -220,15 +268,28 @@ class _HTTPProvider:
         # built with.
         self._client.cookies = CookieJar(policy=_NoCookiePolicy())
 
-    def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> httpx.Response:
+    def _prepare(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> PreparedCall:
+        return PreparedCall(
+            url=url,
+            headers={**headers, "content-type": "application/json"},
+            content=encode_body(body),
+        )
+
+    def _post(self, call: PreparedCall) -> httpx.Response:
         try:
-            resp = self._client.post(url, headers=headers, json=body, timeout=self.timeout)
+            resp = self._client.post(
+                call.url, headers=call.headers, content=call.content, timeout=self.timeout
+            )
         except httpx.TimeoutException as exc:
             raise LLMTimeoutError(f"{self.name} request timed out") from exc
-        except httpx.TransportError as exc:
-            raise LLMUnavailableError(
+        except httpx.HTTPError as exc:
+            unavailable = LLMUnavailableError(
                 f"{self.name} connection failed ({type(exc).__name__})"
-            ) from exc
+            )
+            # Request body possibly sent, no response: unknown, not known-free usage -
+            # unless the error is positively one that precedes dispatch (default-deny).
+            unavailable.outcome_unknown = not isinstance(exc, _PRE_DISPATCH_ERRORS)
+            raise unavailable from exc
         _raise_for_status(resp, self.name)
         return resp
 
@@ -263,8 +324,7 @@ class OpenAIProvider(_HTTPProvider):
     ):
         super().__init__(api_key, model or "gpt-4o-mini", timeout, client=client)
 
-    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
-        started = time.perf_counter()
+    def prepare(self, request: LLMRequest) -> PreparedCall:
         body: dict[str, Any] = {
             "model": self.model,
             "temperature": request.temperature,
@@ -277,7 +337,11 @@ class OpenAIProvider(_HTTPProvider):
         }
         if request.tenant_ref:
             body["user"] = request.tenant_ref
-        resp = self._post(OPENAI_CHAT_URL, {"Authorization": f"Bearer {self.api_key}"}, body)
+        return self._prepare(OPENAI_CHAT_URL, {"Authorization": f"Bearer {self.api_key}"}, body)
+
+    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
+        started = time.perf_counter()
+        resp = self._post(self.prepare(request))
         data = _json_body(resp, self.name)
         raw_usage = data.get("usage")
         usage = LLMUsage(
@@ -314,8 +378,7 @@ class AnthropicProvider(_HTTPProvider):
     ):
         super().__init__(api_key, model or "claude-sonnet-4-6", timeout, client=client)
 
-    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
-        started = time.perf_counter()
+    def prepare(self, request: LLMRequest) -> PreparedCall:
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": request.max_tokens,
@@ -327,11 +390,15 @@ class AnthropicProvider(_HTTPProvider):
         if request.tenant_ref:
             # Opaque per-tenant reference for the provider's abuse signals (P6-LLM-4).
             body["metadata"] = {"user_id": request.tenant_ref}
-        resp = self._post(
+        return self._prepare(
             ANTHROPIC_MESSAGES_URL,
             {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION},
             body,
         )
+
+    def generate(self, request: LLMRequest, prompt_name: str, prompt_version: str) -> LLMResponse:
+        started = time.perf_counter()
+        resp = self._post(self.prepare(request))
         data = _json_body(resp, self.name)
         raw_usage = data.get("usage")
         usage = LLMUsage(

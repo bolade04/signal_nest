@@ -294,7 +294,7 @@ are committed here:
   run `ahead` (startup-safe) against the newer additive schema; new replicas run `compatible`
   — except across the AUTH4 boundary: no coexistence (deployment.md).
   A replica against an un-advanced schema reports `pending` and fails fast.
-- **Alembic single head `98289430a3ec`** is the current baseline; the migration task advances
+- **Alembic single head `8005724d811a`** (19 revisions) is the current baseline; the migration task advances
   the schema, never a replica. Rollback favors additive-first forward-compat, and never goes
   below `AUTH4_ROLLBACK_FLOOR` (deployment.md); an explicit
   `downgrade` is a deliberate single-actor action with an explicit target revision.

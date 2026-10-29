@@ -45,6 +45,13 @@ _MAX_SUPPORT_CONTACT_LENGTH = 200
 #: False. It is a fact about the code, not a deployment setting: it becomes True in
 #: the change that implements pgvector, never through the environment.
 PGVECTOR_IMPLEMENTED = False
+#: Hard ceiling on ``vector_inprocess_max_signals_per_run`` (P6-PLAT-1, strategy B:
+#: operator decision 2026-10-27). The in-process per-run similarity index is bounded
+#: by an engineering capacity bound, not a quota; a configured bound above this
+#: ceiling is refused in every environment, so the setting can never re-create the
+#: unbounded path. Like ``PGVECTOR_IMPLEMENTED`` it is a fact about this build
+#: (measured on the brute-force path), never raised through the environment.
+VECTOR_INPROCESS_HARD_CEILING = 100
 # --- end P6 platform services -----------------------------------------------
 
 
@@ -414,6 +421,32 @@ class Settings(BaseSettings):
     #: Bounded retry attempts (incl. the first) for a transient RSS fetch fault.
     connector_rss_max_attempts: int = 3
 
+    # --- Live RSS egress (P6-DATA-1 / P6-DATA-4) — dark by default -----------
+    #: Master switch for live network egress to approved feeds
+    #: (``app.connectors.sources.APPROVED_SOURCES``, which ships empty). Turning it
+    #: on needs the operator's first-source decision and terms sign-off (P6-D03, X1).
+    connector_rss_live_enabled: bool = False
+    #: Emergency stop: overrides every other live-egress setting.
+    connector_rss_kill_switch: bool = False
+    #: Public https page identifying the fetcher to publishers; carried in the
+    #: User-Agent. Required whenever live egress is enabled.
+    connector_egress_contact_url: str | None = None
+    connector_egress_connect_timeout_seconds: float = 5.0
+    connector_egress_read_timeout_seconds: float = 10.0
+    #: Overall bound on one feed fetch, redirects included.
+    connector_egress_total_timeout_seconds: float = 20.0
+    connector_egress_max_response_bytes: int = 2 * 1024 * 1024
+    connector_egress_max_redirects: int = 3
+    #: Politeness floor: a source is fetched at most once per interval per process
+    #: (a source record may only raise it).
+    connector_rss_min_fetch_interval_seconds: float = 900.0
+    #: Development/test only: a ``http://127.0.0.1:PORT`` origin serving recorded
+    #: feed captures (``app.connectors.replay``). Refused in staging/production.
+    connector_rss_replay_origin: str | None = None
+    #: Serve the simulated demo fixture library for the four demo markets when no
+    #: live source covers a market. Off ⇒ such a market reports ``not_covered``.
+    connector_fixture_fallback_enabled: bool = True
+
     # --- Geocoding (P6-DATA-3) -----------------------------------------------
     #: Geocoder backend. ``fixture`` answers from seven offline cities (development
     #: and test only); ``aws_location`` calls Amazon Location Service Places v2
@@ -510,6 +543,26 @@ class Settings(BaseSettings):
     #: Total wall-clock budget for the whole readiness sweep across all probes.
     readiness_total_timeout_seconds: float = 5.0
 
+    # --- Privacy: retention durations (P6-PRIV-1) — BEGIN privacy block -------
+    #: Retention duration per data class, in days. How long each class is kept is an
+    #: operator/legal decision (O-5 / P6-D05) that has NOT been made, so none of these
+    #: has a default: unset means undecided, and the retention purge refuses that
+    #: class (it deletes nothing and reports ``policy_unset``). environment=production
+    #: refuses to start until every one is set; development, test and staging may
+    #: leave them unset. Each, when set, must be 1..36500. Classes and what they purge:
+    #: ``app/privacy/inventory.py`` and ``docs/operations/data-inventory.md``.
+    retention_auth_sessions_days: int | None = None
+    retention_account_tokens_days: int | None = None
+    retention_invitations_days: int | None = None
+    retention_signal_evidence_days: int | None = None
+    retention_opportunities_days: int | None = None
+    retention_job_history_days: int | None = None
+    retention_audit_logs_days: int | None = None
+    #: Root rows one purge batch deletes (with their dependents). 1..10000.
+    retention_purge_batch_size: int = 500
+    #: Batches per class per sweep, and links per workspace job chain. >= 1.
+    retention_purge_max_batches: int = 100
+    # --- END privacy block ----------------------------------------------------
     # --- P6 platform services: request rate limiting (P6-PLAT-3) -------------
     #: Where request counts live. ``memory`` counts in this process only (bounded;
     #: development and test - production refuses it); ``redis`` counts in the shared
@@ -520,6 +573,21 @@ class Settings(BaseSettings):
     #: counter (the per-replica limit) and logs + counts the degradation; ``deny``
     #: answers 503 until Redis answers again.
     rate_limit_redis_failure_mode: Literal["local", "deny"] = "local"
+
+    # --- P6 platform services: bounded in-process similarity (P6-PLAT-1 B) -----
+    #: Most signals one scout run may index in the in-process per-run similarity
+    #: index (``vector_backend=bruteforce``). A run that would index more is refused
+    #: before the index is built - never truncated, chunked or partially deduplicated.
+    #: An engineering capacity bound (measured: the dedupe stage is linear in n per
+    #: signal, quadratic per run), not a subscription quota; it is capped by
+    #: ``VECTOR_INPROCESS_HARD_CEILING`` in every environment.
+    vector_inprocess_max_signals_per_run: int = 100
+    #: The operator's explicit acknowledgement that production runs the bounded
+    #: in-process per-run backend: similarity is computed per run, in process, with
+    #: no cross-run, cross-workspace or history-wide similarity (no vector store).
+    #: A positive statement in the task environment, never an absence: without it
+    #: production keeps refusing ``vector_backend=bruteforce``.
+    vector_inprocess_production_approved: bool = False
     # --- end P6 platform services --------------------------------------------
 
     # --- Derived helpers -----------------------------------------------------
@@ -600,10 +668,17 @@ class Settings(BaseSettings):
         if self.app_mode == "full":
             if self.is_sqlite:
                 errors.append("app_mode=full requires a PostgreSQL database_url")
-            if self.queue_backend == "redis" and not self.redis_url:
-                errors.append("queue_backend=redis requires redis_url")
-            if self.cache_backend == "redis" and not self.redis_url:
-                errors.append("cache_backend=redis requires redis_url")
+            # The one-shot migration actor (``migration_mode``) opens no Redis
+            # connection: ``app.db.migrate`` imports neither the cache nor the queue
+            # adapters (only Alembic, the engine and the schema reader), so a Redis
+            # URL in its task environment would be an unused secret. Ordinary
+            # full-mode startup keeps requiring it; the PostgreSQL rule above holds
+            # for the migration actor too.
+            if not self.migration_mode:
+                if self.queue_backend == "redis" and not self.redis_url:
+                    errors.append("queue_backend=redis requires redis_url")
+                if self.cache_backend == "redis" and not self.redis_url:
+                    errors.append("cache_backend=redis requires redis_url")
 
         # Production must run on the production-shaped runtime end to end. Local
         # zero-dependency backends are development conveniences and must never be
@@ -631,10 +706,24 @@ class Settings(BaseSettings):
                     "environment=production requires durable object storage "
                     "(storage_backend=local is local-only)"
                 )
-            if self.vector_backend == "bruteforce":
+            # P6-PLAT-1 (strategy B, operator decision 2026-10-27): production runs
+            # the in-process per-run similarity only as an explicitly acknowledged,
+            # bounded backend - the acknowledgement is a positive statement in the
+            # task environment and the bound must sit within the build's hard
+            # ceiling. Without both, the original refusal stands. This path has no
+            # cross-run, cross-workspace or history-wide similarity.
+            if self.vector_backend == "bruteforce" and not (
+                self.vector_inprocess_production_approved
+                and 1
+                <= self.vector_inprocess_max_signals_per_run
+                <= VECTOR_INPROCESS_HARD_CEILING
+            ):
                 errors.append(
                     "environment=production requires a persistent vector backend "
-                    "(vector_backend=bruteforce is local-only)"
+                    "(vector_backend=bruteforce is local-only); set "
+                    "VECTOR_INPROCESS_PRODUCTION_APPROVED=true to run the explicitly "
+                    "acknowledged bounded in-process backend (N_max <= "
+                    f"{VECTOR_INPROCESS_HARD_CEILING})"
                 )
 
         # The one-shot migration actor applies schema DDL and needs only
@@ -967,13 +1056,21 @@ class Settings(BaseSettings):
         # --- P6 platform services (P6-PLAT-1 / P6-PLAT-3) -------------------
         # P6-PLAT-1: a vector backend this build does not implement is refused in
         # every environment rather than silently run as brute force. Production
-        # also refuses bruteforce (above), so until the P6-PLAT-1 decision is
-        # implemented production has no accepted vector_backend - by design.
+        # accepts bruteforce only as the explicitly acknowledged bounded in-process
+        # backend (above); pgvector stays refused until implemented (P6-LLM-7
+        # deferred), so B-5 is not applicable while no pgvector path exists.
         if self.vector_backend == "pgvector" and not PGVECTOR_IMPLEMENTED:
             errors.append(
                 "vector_backend=pgvector is not implemented in this build (no vector "
                 "extension, column or query exists, so it would silently run the "
                 "in-process brute-force path)"
+            )
+        # P6-PLAT-1 (strategy B): the per-run bound of the in-process index is
+        # refused above the build's hard ceiling in every environment.
+        if not 1 <= self.vector_inprocess_max_signals_per_run <= VECTOR_INPROCESS_HARD_CEILING:
+            errors.append(
+                "vector_inprocess_max_signals_per_run must be between 1 and "
+                f"{VECTOR_INPROCESS_HARD_CEILING} (VECTOR_INPROCESS_HARD_CEILING)"
             )
         # P6-PLAT-3: production counts requests in the shared store so the limit
         # holds across replicas. The one-shot migration actor serves no HTTP and
@@ -987,6 +1084,41 @@ class Settings(BaseSettings):
                     "(rate_limit_backend=memory counts per process)"
                 )
         # --- end P6 platform services ----------------------------------------
+
+        # Live RSS egress bounds (P6-DATA-1 / P6-DATA-4).
+        for name in (
+            "connector_egress_connect_timeout_seconds",
+            "connector_egress_read_timeout_seconds",
+            "connector_egress_total_timeout_seconds",
+        ):
+            if getattr(self, name) <= 0:
+                errors.append(f"{name} must be greater than 0")
+        # The feed parser refuses anything above 2 MiB, so a larger fetch cap is moot.
+        if not 1 <= self.connector_egress_max_response_bytes <= 2 * 1024 * 1024:
+            errors.append("connector_egress_max_response_bytes must be between 1 and 2 MiB")
+        if not 0 <= self.connector_egress_max_redirects <= 5:
+            errors.append("connector_egress_max_redirects must be between 0 and 5")
+        if self.connector_rss_min_fetch_interval_seconds < 60:
+            errors.append("connector_rss_min_fetch_interval_seconds must be >= 60")
+        if self.connector_rss_replay_origin is not None:
+            from app.connectors.egress import parse_replay_origin
+
+            if self.environment not in ("development", "test"):
+                errors.append(
+                    "connector_rss_replay_origin is allowed only in development or test"
+                )
+            if parse_replay_origin(self.connector_rss_replay_origin) is None:
+                errors.append(
+                    "connector_rss_replay_origin must be http://127.0.0.1:PORT or "
+                    "http://[::1]:PORT"
+                )
+        elif self.connector_rss_live_enabled:
+            contact = urlsplit(self.connector_egress_contact_url or "")
+            if contact.scheme != "https" or not contact.hostname:
+                errors.append(
+                    "connector_rss_live_enabled requires connector_egress_contact_url "
+                    "(an https URL)"
+                )
 
         # --- Geocoding (P6-DATA-3) -------------------------------------------
         # Fixture answers are invented coordinates for seven cities: never served
@@ -1015,6 +1147,38 @@ class Settings(BaseSettings):
         if not 0 <= self.geocoder_min_match_score <= 1:
             errors.append("geocoder_min_match_score must be between 0 and 1")
 
+        if errors:
+            raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
+        return self
+
+    # --- Privacy: retention validation (P6-PRIV-1) — privacy block ------------
+    @model_validator(mode="after")
+    def _validate_retention(self) -> Settings:
+        """Retention durations: bounded when set; all required in production.
+
+        Production has no silently assumed duration: an unset class would otherwise be
+        kept indefinitely, which is itself a retention decision nobody made. The
+        one-shot migration actor (``migration_mode``) never purges, so it is exempt,
+        as it is from the other runtime-only requirements.
+        """
+        from app.privacy.inventory import RetentionClass
+
+        errors: list[str] = []
+        for data_class in RetentionClass:
+            name = data_class.setting_name
+            value = getattr(self, name)
+            if value is None:
+                if self.is_production and not self.migration_mode:
+                    errors.append(
+                        f"{name} must be set explicitly in production (retention durations "
+                        "are an operator/legal decision, O-5 / P6-D05; there is no default)"
+                    )
+            elif not 1 <= value <= 36500:
+                errors.append(f"{name} must be between 1 and 36500 days")
+        if not 1 <= self.retention_purge_batch_size <= 10000:
+            errors.append("retention_purge_batch_size must be between 1 and 10000")
+        if self.retention_purge_max_batches < 1:
+            errors.append("retention_purge_max_batches must be >= 1")
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
         return self

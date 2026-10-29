@@ -87,7 +87,7 @@ advisory `ingest_metadata["intelligence"]` annotation is unchanged and stays the
 source of the record, so the two never diverge.
 
 - **Migration:** one additive Alembic revision `0155a5c468e3` (down_revision
-  `a1b2c3d4e5f6`); single head. Apply with `python -m app.db.migrate upgrade`. The
+  `a1b2c3d4e5f6`); it was the single head when introduced (current single head: `8005724d811a`). Apply with `python -m app.db.migrate upgrade`. The
   app's startup schema guard refuses to boot if the DB is behind this head, so
   migrate before deploying the code.
 - **Idempotency:** the insert runs inside a SAVEPOINT and relies on the unique

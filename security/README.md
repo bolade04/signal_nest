@@ -3,7 +3,10 @@
 This directory wires CVE, dependency, SAST and IaC analysis plus SBOM generation into the
 two existing **required** CI contexts that build artifacts — `Container build and security`
 and `Revision reader (unit, IaC contract, in-image)` — so that every pull request to `main`
-and every push to `main` is analysed before merge. *(Since the coverage-gap tranche of
+~~and every push to `main`~~ is analysed before merge *(2026-10-29, milestone-based post-merge CI: a push to
+`main` now runs only the Main short check — the Integration smoke steps, i.e. the API virtualenv scanned as installed
+and the Trivy binary analysis, under the same gates — and the six contexts' full analysis runs on pull requests and,
+for a completed milestone, on its exact final `main` commit; see `docs/operations/milestone-ci-policy.md`)*. *(Since the coverage-gap tranche of
 2026-10-20, the four other required contexts — `Frontend quality`, `Backend quality`,
 `Migrations and API contract` and `Integration smoke` — also scan, as installed, the API virtualenv
 they install (`apps/api/.venv`, and the lock toolchain `.locktools` in Backend quality), and every
@@ -105,7 +108,16 @@ uploaded as a workflow artifact (`security-reports-container-build`,
     the two above and `CVE-2025-69720` in `libncursesw6`/`libtinfo6` of all three images (two
     vendors CRITICAL, Trivy HIGH, no fix: `EXCLUDED`). In all, 166 report rows carry some vendor
     rating above Trivy's selection; the complete list is kept in the review-request evidence
-    record.
+    record. *(Re-measured 2026-10-23 in push run 39859641559 on `main` `831cc2ea`, counted over every
+    `trivy-*vuln.json` report in that run's `security-reports-*` artifacts: six distinct CVEs that some vendor rates
+    CRITICAL are selected lower — the three above (`CVE-2019-1010022` is in the worker image too, in that run and in
+    run 39310040179 on `52d0aa6e`) and, in the OpenTofu binary, `CVE-2026-39821` (`golang.org/x/net`
+    and `stdlib`, selected HIGH), `CVE-2026-56857` (`stdlib`, LOW) and `CVE-2026-78663` (`golang.org/x/net` and
+    `stdlib`, MEDIUM); 187 report rows carry some vendor rating above Trivy's selection. The two row counts cover
+    different populations: over the seven reports of the earlier record (run 39310040179 on `52d0aa6e`, 166 rows)
+    the comparable count is 164, and the other 23 rows are the OpenTofu binary's, in Revision reader's
+    `trivy-scanner-binaries-vuln.json`, a population scanned since 2026-10-20. Neither count is a resolution of the
+    earlier ones; in general, the set changes with Trivy's database.)*
   - **UNKNOWN.** A valid `UNKNOWN` severity means unscored. The finding stays reported for
     triage (the summary lists it with the reported severities, tagged `[UNKNOWN]`); it is not
     LOW, resolved or proof of safety. A missing or unrecognized severity, a malformed report, an
@@ -165,7 +177,8 @@ uploaded as a workflow artifact (`security-reports-container-build`,
   below)*: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
 - **SBOM identity**: each identity record names the reviewed commit (`commit`: the pull
-  request head, or the pushed commit on `main`) and the commit actually checked out
+  request head, or the pushed commit on `main` *(from the milestone-policy change, #274: the dispatched `main` commit of a milestone
+  run; main pushes no longer build images)*) and the commit actually checked out
   (`checkout_commit`: on a pull_request event GitHub builds the ephemeral merge ref), the
   image id, the SBOM's serial and sha256 and both component counts.
 - **SBOM**: CycloneDX 1.5–1.7 JSON with a `urn:uuid` serial, the expected described
@@ -720,10 +733,19 @@ scope of the environment that contains them.)*
    | `CVE-2026-78669` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
    | `CVE-2026-97031` | `stdlib` | v1.26.5 | 1.26.9, 1.27.2 |
 
+   *(Re-measured 2026-10-23 in push run 39859641559 on `main` `831cc2ea`, Trivy 0.76.0 with that run's database; the
+   table above stays the record of run 39514455981.)* OpenTofu v1.12.5: 30 HIGH rows, 27 distinct advisories, each
+   with a published fix — the 28 rows above and two more, `CVE-2026-63209` (`github.com/klauspost/compress` v1.18.5,
+   fixed in 1.18.7) and `CVE-2026-111943` (`stdlib` v1.26.5, fixed in 1.26.10, 1.27.3); also 30 MEDIUM rows (23
+   distinct), 6 LOW (3 distinct) and the same UNKNOWN. Trivy v0.76.0 now has one HIGH, `CVE-2026-111943` (`stdlib`
+   v1.27.2, fixed in 1.26.10, 1.27.3), in every job, besides its one UNKNOWN. Each HIGH row is `REPORTED` at the
+   development scope in that run's `scanner-binaries.summary.txt` gate summaries (MEDIUM, LOW and UNKNOWN rows are
+   listed as `lower`), and all six end `RESULT: PASS`; none is resolved by this record.
+
 **Population floors, re-derived from measured inventories** (local measurements on macOS builds of
 the same locks, which carry no environment markers; the pull request's exact-head CI run is the
 measurement of record). The floors are set somewhat below the measured counts, as the closure
-tranche's were (60 of 67, 15 of 17, 40 of 48: 83 to 90 %; here 52 of 58 and 7 of 8), so that a routine
+tranche's were (60 of 67, 15 of 17, 40 of 48: 83 to 90 %; here 52 of 58 and 7 of 8 *(2026-10-27, P6-CI-8: 52 of 60 for `api-venv`, see the table below)*), so that a routine
 dependency removal does not trip them while an empty or truncated inventory does. For the two
 hash-locked environments the binding check is the exact reconciliation against their locks; the floor
 only guards the inventory before that check. ~~Every floor has a control that truncates the population
@@ -779,7 +801,7 @@ one below it and must fail.~~ *(Corrected 2026-10-21; the account below replaces
 
 | Gate | Floor | Before | After | Truncation control |
 |---|---|---|---|---|
-| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, ~~pip 26.2.1~~ pip 26.2.2 since CERT-2 — 58 measured locally from the bootstrap and dev locks on 2026-10-21 — setuptools 84.0.0, the project) | `<job>-api-venv-truncated-inventory` |
+| `api-venv`, `api-venv-final` (4 jobs) | 52 (new) | no gate; 57 installed (55 dev pins, pip 26.2.2 from the unpinned upgrade, the project) | 58 (55 dev pins, ~~pip 26.2.1~~ pip 26.2.2 since CERT-2 — 58 measured locally from the bootstrap and dev locks on 2026-10-21 — setuptools 84.0.0, the project) *(2026-10-27, P6-CI-8 report-only coverage: 60 — 57 dev pins (`coverage`, `pytest-cov` entered the dev lock), pip 26.2.2, setuptools 84.0.0, the project; 58 → 60 measured locally from the bootstrap and dev locks on 2026-10-27, floor unchanged at 52. The Trivy/vuln scan of the `api-venv` population now covers `coverage` and `pytest-cov` as installed, two more distributions than before; the pull request's exact-head CI run is the measurement of record.)* | `<job>-api-venv-truncated-inventory` |
 | `locktools`, `locktools-final` | 7 (new) | no gate; 8 installed, transitive versions floating | 8, all from the lock | `backend-locktools-truncated-inventory` |
 | `security-tooling-venv` | 60 (unchanged) | 67 | 67 | `security-tooling-truncated-inventory` |
 | `reader-tooling-venv` | 15 (unchanged) | 17 | 17 | `reader-tooling-truncated-inventory` |

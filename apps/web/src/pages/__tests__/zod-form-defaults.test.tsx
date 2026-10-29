@@ -1,12 +1,16 @@
-import { within } from '@testing-library/react';
+import { waitFor, within } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type * as HookformZod from '@hookform/resolvers/zod';
 import type * as ReactHookForm from 'react-hook-form';
 import { App } from '@/App';
 import { setAuthToken } from '@/api/client';
+import { API_PREFIX } from '@/api/config';
 import * as api from '@/api/endpoints';
+import type { AccountDeletionPreviewOut } from '@/api/types';
 import { orgModel } from '@/test/handlers';
+import { server } from '@/test/server';
 import {
   distinctForms,
   initialisation,
@@ -322,5 +326,37 @@ describe('settings forms submit untouched with their own messages (FU-258-2)', (
     // The role default is a valid choice, so no role message appears at all.
     expect(shown).not.toContain('Choose a role');
     await expectDefaultsCoverRequiredInputs(/pages\/settings\/Invitations\.tsx/);
+  });
+
+  // P6-PRIV-1: the two deletion forms in DataPrivacy.tsx. The account form's submit stays
+  // disabled until the deletion preview answers, so the scenario serves one that allows it.
+  const DELETABLE_PREVIEW: AccountDeletionPreviewOut = {
+    can_delete: true,
+    organizations: [],
+    email_keyed_data: { status: 'included', note: 'Your email address is verified.' },
+  };
+
+  it('delete account', async () => {
+    server.use(http.get(`*${API_PREFIX}/account/deletion-preview`, () => HttpResponse.json(DELETABLE_PREVIEW)));
+    const screen = await settingsAsOwner();
+    await screen.user.click(await screen.findByRole('button', { name: /delete account/i }));
+    const dialog = await screen.findByRole('dialog', { name: /delete account/i });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /delete my account/i })).toBeEnabled());
+    const shown = await submitUntouched(screen, dialog, /delete my account/i);
+    expect(shown).toEqual(
+      expect.arrayContaining(['Enter your current password', 'Type DELETE, in capitals, to confirm']),
+    );
+    await expectDefaultsCoverRequiredInputs(/pages\/settings\/DataPrivacy\.tsx/);
+  });
+
+  it('delete organization (owner only)', async () => {
+    const screen = await settingsAsOwner();
+    await screen.user.click(await screen.findByRole('button', { name: /delete organization/i }));
+    const dialog = await screen.findByRole('dialog', { name: /delete organization/i });
+    const shown = await submitUntouched(screen, dialog, /^delete organization$/i);
+    expect(shown).toEqual(
+      expect.arrayContaining(['Enter your current password', 'Type the organization’s name to confirm']),
+    );
+    await expectDefaultsCoverRequiredInputs(/pages\/settings\/DataPrivacy\.tsx/);
   });
 });

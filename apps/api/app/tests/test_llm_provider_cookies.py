@@ -238,7 +238,8 @@ def test_a_cookie_cannot_slip_between_one_tenants_reply_and_anothers_request(nam
         )
 
     def build_request(self, method, url, **kwargs):
-        body = kwargs.get("json")
+        raw = kwargs.get("content")
+        body = json.loads(raw) if isinstance(raw, (bytes, str)) else None
         if isinstance(body, dict) and _tenant_of(name, body) == "t_tenant_B":
             b_building.set()
             assert a_extracted.wait(timeout=5), "A's reply was never processed"

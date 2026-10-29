@@ -24,6 +24,8 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
+from app.connectors.fetch_limits import fetch_stats, partial_fetch_facts
+from app.connectors.takedown import active_takedowns, without_taken_down
 from app.core.config import get_settings
 from app.core.enums import (
     DecisionAction,
@@ -35,7 +37,13 @@ from app.core.enums import (
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
 from app.geography.markets import market_from_parts
-from app.infra.vector import build_index, embed_text
+from app.infra.vector import (
+    SIGNAL_VOLUME_ABOVE_BOUND,
+    SignalVolumeAboveBoundError,
+    build_index,
+    check_inprocess_bound,
+    embed_text,
+)
 from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
 from app.intelligence.models import AnalysisInput, OpportunityCandidate
@@ -63,7 +71,7 @@ from app.scoring.opportunity import (
 from app.scoring.relevance import RELEVANCE_ACTION_FLOOR, score_relevance
 from app.scoring.types import SignalInput
 from app.scoring.validation import score_validation
-from app.scouting_requests.connectors import get_connector
+from app.scouting_requests.connectors import _rss_enabled_for, fetch_signals
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import (
     NormalizedSignal,
@@ -88,6 +96,43 @@ PAUSED_DURING_RUN = "paused_during_run"
 # e.g. a pause followed by a resume inside the run's transaction); no producer in the
 # shipped routes today. The run is not settled; what it produced is kept.
 STATUS_CHANGED_DURING_RUN = "status_changed_during_run"
+
+
+def _signal_is_simulated(signal) -> bool:
+    """Fixture signals carry no flag; anything not explicitly live is simulated."""
+    return bool(getattr(signal, "is_simulated", True))
+
+
+def _card_is_simulated(members) -> bool:
+    """An opportunity is simulated if any member is: one fixture signal makes it so."""
+    return any(m.is_simulated for m in members)
+
+
+def refused_run_stats(*, scanned: int, bound: int, fetch_limits: list[dict] | None = None) -> dict:
+    """The ``ScoutRequest.stats`` of a run refused at the in-process bound (P6-PLAT-1 B).
+
+    The four ordinary counts are present (nothing was analysed, so they are honest
+    zeros apart from ``scanned``), plus the stable reason code and the bound the run
+    exceeded. When the per-source fetch-limit facts are known (``fetch_limits``), they are
+    carried too, with the ``partial_fetch`` marker: the fetch limit applies first (per
+    source), the bound second (per run, over the total after the takedown re-check). Every
+    consulted source appears in ``fetch_limits``, clipped, failed or whole. There is no
+    ``coverage`` object: it describes a completed run (P6-DATA-2), and a refused run did
+    not complete. Safe aggregates only - never content.
+    """
+    stats = {
+        "scanned": scanned,
+        "noise_filtered": 0,
+        "signals_analyzed": 0,
+        "opportunities": 0,
+        "refused": True,
+        "refusal_reason": SIGNAL_VOLUME_ABOVE_BOUND,
+        "bound": bound,
+    }
+    if fetch_limits is not None:
+        stats["fetch_limits"] = fetch_limits
+        stats.update(partial_fetch_facts(fetch_limits))
+    return stats
 
 
 def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
@@ -210,8 +255,17 @@ def _run(
     if claimed.rowcount != 1:
         return _skip_paused(request)
 
+    settings = get_settings()
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
-    # opaque tenant reference sent to the provider.
+    # opaque tenant reference sent to the provider. The production caller is the durable
+    # handler (``app.jobs.handlers.execute_scout_request``), which supplies a shared-ledger
+    # meter through :func:`metered_run`; the bare ``LLMMeter(get_settings())`` fallback has
+    # no session factory, so it is the same-session path even on PostgreSQL. Outside tests
+    # it is reached only by the replay demo seed (``app.connectors.replay.seed_replay``),
+    # which refuses anything but a local development/test SQLite database before it calls
+    # this function (pinned by ``test_llm_budget_reservation`` and
+    # ``test_replay_seed_guard``). A new production caller must pass a meter built with a
+    # session factory.
     meter = (meter or _run_meter.get() or LLMMeter(get_settings())).bind(
         db,
         organization_id=request.organization_id,
@@ -222,21 +276,54 @@ def _run(
     ctx = build_business_context(db, request.workspace_id)
     coverage, market = _coverage_rule_for(db, request)
 
+    # Source selection records why the run holds what it holds (P6-DATA-2): live
+    # feeds, the simulated sandbox/demo library, or an explicit "not covered".
     # P6-CAP-1: the request's own tenant scope decides RSS through the resolver.
-    connector = get_connector(
-        source_types=request.source_types or [],
-        market=market,
-        db=db,
-        organization_id=request.organization_id,
-        workspace_id=request.workspace_id,
-    )
-    fixtures = connector.fetch(
+    # #268: the fetch limit applies first, per source - each source reads at most
+    # ``max_items`` entries (looking one past it) and reports what it delivered, clipped
+    # or failed, in ``batch.reports``.
+    batch = fetch_signals(
         market=market,
         keywords=request.keywords or ctx.keywords,
         source_types=request.source_types or [],
+        rss_enabled=_rss_enabled_for(
+            db,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+        ),
+        takedowns=active_takedowns(db),
     )
+    # A takedown may have committed while the sources were read: re-check under each
+    # source's lock before anything is written (P6-PRIV-4; see app.connectors.takedown).
+    fixtures = without_taken_down(db, batch.signals)
+    fetch = fetch_stats(batch.reports)
 
     scanned = len(fixtures)
+    # P6-PLAT-1 (strategy B): the per-run in-process index is bounded. A run that
+    # would index more signals than the bound is refused here, before any signal is
+    # stored, embedded, compared or sent to a model - no partial dedupe, no chunking, no
+    # truncation. The bound counts what would actually be indexed: the total over every
+    # source, after the fetch limits and after the takedown re-check above.
+    # The handler records the refusal as the run's outcome (status failed, stats
+    # carrying the reason code); it is per run, per workspace, so it never affects
+    # another workspace's run.
+    try:
+        check_inprocess_bound(scanned, settings)
+    except SignalVolumeAboveBoundError as exc:
+        logger.warning(
+            "scout.refused",
+            extra={
+                "extra_fields": {
+                    "request": request.id,
+                    "reason": exc.reason,
+                    "scanned": exc.scanned,
+                    "bound": exc.bound,
+                    "partial_fetch": fetch["partial_fetch"],
+                }
+            },
+        )
+        exc.fetch_limits = fetch["fetch_limits"]
+        raise
     normalized: list[NormalizedSignal] = []
     # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
     # index is the configured vector backend (P6-PLAT-1); there is no fallback.
@@ -244,6 +331,9 @@ def _run(
     noise_filtered = 0
 
     for fx in fixtures:
+        simulated = _signal_is_simulated(fx)
+        provenance = dict(getattr(fx, "attribution", None) or {})
+        source_key = provenance.get("source_key")
         raw = RawSignal(
             organization_id=request.organization_id,
             workspace_id=request.workspace_id,
@@ -254,8 +344,13 @@ def _run(
             published_at=datetime.now(UTC),
             language=fx.language,
             content=fx.content,
-            raw_metadata={"topics": fx.topics, "market": fx.market},
-            is_simulated=True,
+            raw_metadata={
+                "topics": fx.topics,
+                "market": fx.market,
+                **({"provenance": provenance} if provenance else {}),
+            },
+            is_simulated=simulated,
+            source_key=source_key,
         )
         db.add(raw)
         db.flush()
@@ -345,13 +440,15 @@ def _run(
             is_noise=is_noise,
             noise_reasons=noise_reasons,
             is_duplicate=is_duplicate,
-            is_simulated=True,
+            is_simulated=simulated,
+            source_key=source_key,
             ingest_metadata={
                 "audience_label": audience_label,
                 "classification_source": classification_source,
                 "market": fx.market,
                 "engagement": fx.engagement,
                 "intelligence": intelligence_annotation,
+                **({"provenance": provenance} if provenance else {}),
             },
         )
         db.add(norm)
@@ -395,6 +492,8 @@ def _run(
         "noise_filtered": noise_filtered,
         "signals_analyzed": len(normalized),
         "opportunities": len(opportunities),
+        "coverage": batch.coverage.as_stats(),
+        **fetch,
     }
     db.flush()
 
@@ -548,10 +647,7 @@ def _build_opportunities(
             inside_scout_area=geo.inside_scout_area,
             why_it_matters=explanation.get("why_it_matters"),
             who_cares=explanation.get("who_cares"),
-            observed_evidence=[
-                {"source_type": m.source_type, "source_url": m.source_url, "excerpt": m.excerpt}
-                for m in members
-            ],
+            observed_evidence=[_evidence(m) for m in members],
             ai_inference=explanation.get("ai_inference"),
             recommended_action=(
                 explanation.get("recommended_action")
@@ -567,7 +663,7 @@ def _build_opportunities(
             source_summary=sorted({m.source_type for m in members}),
             explanation_source=explanation_source.value,
             status=OpportunityStatus.NEW.value,
-            is_simulated=True,
+            is_simulated=_card_is_simulated(members),
         )
         db.add(opp)
         db.flush()
@@ -651,6 +747,9 @@ def _analyze_candidate(fx, ctx) -> OpportunityCandidate | None:
                 has_active_ads=fx.has_active_ads,
                 news_coverage=fx.news_coverage,
                 search_trend_up=fx.search_trend_up,
+                # A live source's record must not be labelled simulated (the SPA shows
+                # the intelligence record's flag as a badge); fixtures carry no flag.
+                is_simulated=_signal_is_simulated(fx),
             ),
             ctx,
         )
@@ -690,6 +789,21 @@ def _persist_intelligence_record(db, request, norm, candidate: OpportunityCandid
                 }
             },
         )
+
+
+def _evidence(member: NormalizedSignal) -> dict:
+    """One observed-evidence entry; live entries name their source (P6-PRIV-4)."""
+    entry = {
+        "source_type": member.source_type,
+        "source_url": member.source_url,
+        "excerpt": member.excerpt,
+    }
+    provenance = (member.ingest_metadata or {}).get("provenance") or {}
+    if member.source_key:
+        entry["source_key"] = member.source_key
+        entry["publisher"] = provenance.get("publisher")
+        entry["delivery"] = provenance.get("delivery")
+    return entry
 
 
 def _mean_embedding(members) -> list[float]:

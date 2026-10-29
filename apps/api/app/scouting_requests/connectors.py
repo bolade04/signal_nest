@@ -1,20 +1,40 @@
-"""Signal connectors.
+"""Signal connectors and per-run source selection.
 
 A single ``Connector`` interface is what live connectors (Phase 3B onward)
 implement. The default ``FixtureConnector`` reads from the simulated fixture
 library, filtered by the request's market + keywords + enabled source types, so
 results stay isolated per location.
 
-Since Phase 3B, :func:`get_connector` consults the connector registry
-(``app.connectors``): when a live connector is enabled *and* its policy permits
-the request scope, that connector is used; otherwise this falls back to the
-sandbox ``FixtureConnector``, so default behaviour is unchanged.
+:func:`fetch_signals` is what a scout run calls. It picks the run's sources in a
+fixed order and always says why it holds what it holds (P6-DATA-2):
+
+1. approved **live** feeds for the market (``app.connectors.live`` — dark by
+   default, and only for a workspace whose RSS the capability resolver admits,
+   P6-CAP-1) → ``covered/live_sources``, or ``unavailable/sources_unavailable`` when
+   every live source failed;
+2. the **sandbox** RSS feed, when ``connector_rss_enabled`` and its policy admit the
+   request and the sandbox has a feed for the market → ``covered/sandbox_feed``;
+3. the simulated **demo library** for the four demo markets, unless
+   ``connector_fixture_fallback_enabled`` is off → ``covered/fixture_library``;
+4. otherwise ``not_covered/no_source_for_market`` with no signals — an explicit,
+   user-visible outcome instead of a silent empty result.
+
+Every source the run consulted also reports what it delivered against its per-source
+fetch limit (#268, :mod:`app.connectors.fetch_limits`): ``SignalBatch.reports`` holds one
+:class:`~app.connectors.fetch_limits.SourceFetchReport` per live source, one for the
+sandbox feed, or one for the demo library (which declares no limit); none when no source
+covers the market. A failed source is reported as failed, never as an empty one.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Protocol
 
+from app.connectors.base import FetchScope
+from app.connectors.coverage import Coverage, CoverageReason
+from app.connectors.fetch_limits import FetchOutcome, SourceFetchReport
+from app.core.config import Settings, get_settings
 from app.scouting_requests.fixtures import FixtureSignal, fixtures_for_market
 
 
@@ -51,6 +71,52 @@ class FixtureConnector:
             results.append(signal)
         return results
 
+    def fetch_reported(
+        self, *, market: str | None, keywords: list[str], source_types: list[str]
+    ) -> FetchOutcome:
+        results = self.fetch(market=market, keywords=keywords, source_types=source_types)
+        # The demo library declares no fetch limit: nothing it holds is ever clipped.
+        report = SourceFetchReport(
+            source_key=self.name,
+            max_items=None,
+            fetched=len(results),
+            eligible_seen=len(results),
+            clipped_by_fetch_limit=False,
+        )
+        return FetchOutcome(signals=results, reports=[report])
+
+
+def fetch_with_reports(
+    connector,
+    *,
+    market: str | None,
+    keywords: list[str],
+    source_types: list[str],
+) -> FetchOutcome:
+    """The connector's signals plus its per-source fetch-limit reports (#268).
+
+    A connector without ``fetch_reported`` (a test double, a future adapter) is reported
+    as one source with no declared fetch limit, so the run's stats still say so rather
+    than staying silent.
+    """
+    reported = getattr(connector, "fetch_reported", None)
+    if callable(reported):
+        return reported(market=market, keywords=keywords, source_types=source_types)
+    signals = connector.fetch(market=market, keywords=keywords, source_types=source_types)
+    return FetchOutcome(signals=signals, reports=[_undeclared_limit_report(connector, signals)])
+
+
+def _undeclared_limit_report(connector, signals: list) -> SourceFetchReport:
+    """One source with no declared fetch limit: what a connector that does not report
+    (a test double, a future adapter) is recorded as, rather than leaving stats silent."""
+    return SourceFetchReport(
+        source_key=getattr(connector, "name", "unknown"),
+        max_items=None,
+        fetched=len(signals),
+        eligible_seen=len(signals),
+        clipped_by_fetch_limit=False,
+    )
+
 
 def _rss_enabled_for(db, *, organization_id: str, workspace_id: str) -> bool:
     """P6-CAP-1: the one RSS enforcement decision — the capability resolver's.
@@ -83,15 +149,16 @@ def get_connector(
     organization_id: str | None = None,
     workspace_id: str | None = None,
 ) -> Connector:
-    """Resolve the connector for a request scope.
+    """Resolve the sandbox connector for a request scope.
 
-    Returns a live connector when one is enabled and its policy permits the
-    scope; otherwise the sandbox :class:`FixtureConnector`. Called with no
-    arguments (the legacy signature) it always returns the fixture connector.
+    Returns the sandbox RSS connector when it is enabled and its policy permits the
+    scope; otherwise the :class:`FixtureConnector`. Called with no arguments (the
+    legacy signature) it always returns the fixture connector. Live feeds are chosen
+    by :func:`fetch_signals`, never here.
 
     "Enabled" is :func:`_rss_enabled_for` for the request's workspace (P6-CAP-1).
     Without a session and a full tenant scope there is no workspace to decide for,
-    so RSS counts as disabled — deny-biased, never the raw global flag.
+    so RSS counts as disabled - deny-biased, never the raw global flag.
     """
     from app.connectors.registry import resolve_connector
 
@@ -109,3 +176,83 @@ def get_connector(
         rss_enabled=rss_enabled,
     )
     return live or FixtureConnector()
+
+
+@dataclass
+class SignalBatch:
+    """The signals for one scout run, the coverage outcome that explains them and each
+    consulted source's fetch report (#268: fetch limit, clip, failure)."""
+
+    signals: list = field(default_factory=list)
+    coverage: Coverage = field(
+        default_factory=lambda: Coverage(CoverageReason.NO_SOURCE_FOR_MARKET, is_simulated=False)
+    )
+    reports: list[SourceFetchReport] = field(default_factory=list)
+
+
+def fetch_signals(
+    *,
+    market: str | None,
+    keywords: list[str],
+    source_types: list[str],
+    rss_enabled: bool,
+    takedowns: frozenset[str] = frozenset(),
+    settings: Settings | None = None,
+) -> SignalBatch:
+    """Select the run's sources (see the module doc) and collect their signals."""
+    from app.connectors.live import live_connector_for
+    from app.connectors.registry import resolve_connector
+    from app.connectors.sample_feeds import sample_feed_covers
+
+    settings = settings or get_settings()
+    types = tuple(source_types or ())
+    scope = FetchScope(market=market, keywords=tuple(keywords or ()), source_types=types)
+
+    live = live_connector_for(
+        market=market,
+        source_types=types,
+        takedowns=takedowns,
+        rss_enabled=rss_enabled,
+        settings=settings,
+    )
+    if live is not None:
+        result = live.collect(scope)
+        total, failed = len(live.targets), len(live.failed_sources)
+        reason = (
+            CoverageReason.SOURCES_UNAVAILABLE
+            if failed == total
+            else CoverageReason.LIVE_SOURCES
+        )
+        return SignalBatch(
+            signals=result.signals,
+            coverage=Coverage(
+                reason,
+                is_simulated=any(s.is_simulated for s in result.signals),
+                sources=total,
+                sources_failed=failed,
+            ),
+            reports=list(result.reports),
+        )
+
+    sandbox = resolve_connector(
+        source_types=types, market=market, rss_enabled=rss_enabled, settings=settings
+    )
+    if sandbox is not None and sample_feed_covers(market):
+        result = sandbox.collect(scope)
+        return SignalBatch(
+            signals=result.signals,
+            coverage=Coverage(CoverageReason.SANDBOX_FEED, is_simulated=True),
+            reports=list(result.reports) or [_undeclared_limit_report(sandbox, result.signals)],
+        )
+
+    if settings.connector_fixture_fallback_enabled and fixtures_for_market(market):
+        outcome = FixtureConnector().fetch_reported(
+            market=market, keywords=list(keywords or ()), source_types=list(types)
+        )
+        return SignalBatch(
+            signals=outcome.signals,
+            coverage=Coverage(CoverageReason.FIXTURE_LIBRARY, is_simulated=True),
+            reports=outcome.reports,
+        )
+
+    return SignalBatch()

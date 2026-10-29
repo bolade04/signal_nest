@@ -4,22 +4,32 @@ name: CI
 # zero-dependency local mode: SQLite, in-process queue, in-memory cache,
 # brute-force vector index, local-file storage and the deterministic mock LLM.
 # No Docker, PostgreSQL, Redis or paid API keys are required.
+#
+# Triggers (milestone-based post-merge CI, docs/operations/milestone-ci-policy.md). Pull requests to main run these
+# six jobs, unchanged, as the six required contexts. A push to main does NOT run this workflow: it runs the Main
+# short check (.github/workflows/main-push.yml) on the merge commit. At a completed milestone,
+# .github/workflows/milestone-validation.yml binds the milestone to its exact final main commit and then CALLS this
+# workflow (workflow_call), so these same jobs run there as "Milestone full suite / <job>". No step or job here is
+# conditioned on the event (tests/test_ci_milestone_policy.py), so the called suite runs everything a push run ran.
+# A manual dispatch of this file runs the six on the chosen ref and is never milestone evidence.
 
 on:
   pull_request:
     branches: [main]
   push:
     branches:
-      - main
       - 'feature/**'
   workflow_dispatch:
+  workflow_call:
 
 # Concurrency (2026-10-22, queued CI-6 follow-up). pull_request runs: one group per PR NUMBER — not the
 # head branch name, since two PRs whose source branches share a name (fork PRs included) must not cancel
 # each other — and a newer push to that PR cancels its older in-flight run (a superseded run only wastes
-# runners). Every other event — push to main or feature/**, workflow_dispatch — gets a group of its own,
-# keyed by the run id, so a push-to-main run is never cancelled by, nor queued behind, a later push: it
-# always completes. Before 2026-10-22 one group (`pull_request.number || ref`) cancelled for every event.
+# runners). Every other event — push to feature/**, workflow_dispatch, and the milestone workflow's call
+# (workflow_call, evaluated in the milestone run's context: never a pull_request) — gets a group of its own,
+# keyed by the run id, so such a run is never cancelled by, nor queued behind, any other run: it always
+# completes. (Until the milestone policy change this also covered pushes to main.) Before 2026-10-22 one
+# group (`pull_request.number || ref`) cancelled for every event.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -87,7 +97,19 @@ jobs:
         run: npm run type-check 2>&1 | tee ci-logs/frontend-typecheck.log
 
       - name: Test
-        run: npm run test 2>&1 | tee ci-logs/frontend-test.log
+        # P6-CI-8: coverage is enabled by the CI env var in apps/web/vite.config.ts (report only, no threshold).
+        run: |
+          npm run test 2>&1 | tee ci-logs/frontend-test.log
+          { echo '### Web coverage (report only, no threshold)'; grep -E '^(Statements|Branches|Functions|Lines) +:' ci-logs/frontend-test.log || echo 'coverage total not found'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload web coverage report (P6-CI-8, report only)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-web
+          path: ci-logs/coverage-web/
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: Production build
         run: npm run build 2>&1 | tee ci-logs/frontend-build.log
@@ -543,10 +565,22 @@ jobs:
           TEST_POSTGRES_URL: postgresql+psycopg://signalnest:signalnest@localhost:5432/signalnest_test
         run: |
           bash scripts/demo-setup.sh 2>&1 | tee ci-logs/backend-demo-setup.log
-          bash scripts/run-tests-api.sh 2>&1 | tee ci-logs/backend-pytest.log
+          # P6-CI-8: measure and REPORT coverage; this is not a gate (no --cov-fail-under).
+          bash scripts/run-tests-api.sh --cov=app --cov-branch --cov-report=term --cov-report=xml:../../ci-logs/coverage-api.xml 2>&1 | tee ci-logs/backend-pytest.log
+          { echo '### API coverage (report only, no threshold)'; grep -E '^TOTAL' ci-logs/backend-pytest.log || echo 'coverage total not found'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload API coverage report (P6-CI-8, report only)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-api
+          path: ci-logs/coverage-api.xml
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: PostgreSQL proofs (P6-CI-4 migration chain, P6-CI-5 job-store concurrency)
-        # The two PostgreSQL proof modules run again on their own, as a REQUIRED result
+        # The PostgreSQL proof modules (migration chain, job-store concurrency, LLM budget accounting,
+        # production boot) run again on their own, as a REQUIRED result
         # of this check: against the disposable service above, each test in a database
         # of its own (created and dropped per test; never the shared one). With
         # TEST_POSTGRES_URL unset they FAIL here (CI=true), never skip; an unreachable
@@ -563,6 +597,8 @@ jobs:
           .venv/bin/python -m pytest --pyargs \
             app.tests.test_postgres_migration_proof \
             app.tests.test_postgres_job_store_concurrency \
+            app.tests.test_postgres_llm_accounting \
+            app.tests.test_postgres_production_boot \
             -q -rsxX -p no:cacheprovider 2>&1 | tee ../../ci-logs/backend-postgres-proofs.log
           echo "== no PostgreSQL proof may be skipped or xfailed =="
           if grep -Eiq "skipped|xfail|xpass" ../../ci-logs/backend-postgres-proofs.log; then
@@ -570,6 +606,11 @@ jobs:
             exit 1
           fi
           grep -E "^[0-9]+ passed" ../../ci-logs/backend-postgres-proofs.log
+          # The production-boot proof (P6-PLAT-1) is labelled by its Redis mode. This job has no
+          # Redis service, so TEST_REDIS_URL is unset and the proof (which asserts the mode it ran
+          # in) booted against fakeredis; say so in the summary instead of implying a real Redis.
+          if [ -n "${TEST_REDIS_URL:-}" ]; then redis_mode='real Redis (TEST_REDIS_URL)'; else redis_mode='doubled by fakeredis (no Redis service in this job)'; fi
+          { echo '### PostgreSQL proofs'; echo "- production-boot proof, Redis mode: ${redis_mode}"; } >> "$GITHUB_STEP_SUMMARY"
 
       # Real-scanner negative control for the installed-environment (rootfs) scans (this job runs its own Trivy and DB): an inert
       # dist-info (metadata only, no code) of a known-vulnerable PyYAML, with its inventory, must be found by Trivy rootfs and fail

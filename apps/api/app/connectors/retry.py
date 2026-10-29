@@ -21,9 +21,13 @@ T = TypeVar("T")
 class ConnectorFetchError(Exception):
     """Raised by a fetch attempt, carrying a classified :class:`FetchFailure`."""
 
-    def __init__(self, kind: FailureKind, detail: str) -> None:
+    def __init__(
+        self, kind: FailureKind, detail: str, *, retry_after_seconds: float | None = None
+    ) -> None:
         super().__init__(detail)
         self.failure = FetchFailure(kind=kind, detail=detail)
+        #: A source's own ``Retry-After`` (seconds), when it sent one with a 429/503.
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)

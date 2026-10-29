@@ -103,13 +103,14 @@ def flag_on(monkeypatch):
 
 @pytest.fixture
 def no_fetch(monkeypatch):
-    """Fail the test if the pipeline reaches for a connector: a paused request must
-    trigger no fetch, and every model call sits behind the fetch."""
+    """Fail the test if the pipeline reaches for its sources: a paused request must
+    trigger no fetch, and every model call sits behind the fetch. ``fetch_signals`` is
+    the pipeline's one source-selection entry on main since #255/#268."""
 
     def _refuse(*args, **kwargs):
         raise AssertionError("connector fetch attempted for a paused scout request")
 
-    monkeypatch.setattr(pipeline, "get_connector", _refuse)
+    monkeypatch.setattr(pipeline, "fetch_signals", _refuse)
 
 
 @pytest.fixture

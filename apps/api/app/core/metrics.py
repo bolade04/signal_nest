@@ -71,6 +71,15 @@ WORKER_POLL_TOTAL = "worker_poll_total"
 WORKER_LEASE_RECOVERED_TOTAL = "worker_lease_recovered_total"
 WORKER_ACTIVE = "worker_active"
 
+# LLM budget ledger (D-LLM-1 option B): reservations charged their worst case by recovery
+LLM_RESERVATIONS_RELEASED_TOTAL = "llm_reservations_released_total"
+#: A call settled after recovery had already released its reservation (usage row still written)
+LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL = "llm_settlements_after_release_total"
+#: A settled call reported usage above its reserved worst-case bound (the bound's premise failed)
+LLM_COST_BOUND_VIOLATIONS_TOTAL = "llm_cost_bound_violations_total"
+#: A settlement arrived for a reservation whose workspace or organization was deleted
+LLM_SETTLEMENTS_ORPHANED_TOTAL = "llm_settlements_orphaned_total"
+
 # Dependencies (Redis / object store / database)
 REDIS_NOTIFY_TOTAL = "redis_notify_total"
 DEPENDENCY_OPERATION_TOTAL = "dependency_operation_total"
@@ -100,6 +109,10 @@ METRIC_NAMES: frozenset[str] = frozenset(
         WORKER_POLL_TOTAL,
         WORKER_LEASE_RECOVERED_TOTAL,
         WORKER_ACTIVE,
+        LLM_RESERVATIONS_RELEASED_TOTAL,
+        LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
+        LLM_COST_BOUND_VIOLATIONS_TOTAL,
+        LLM_SETTLEMENTS_ORPHANED_TOTAL,
         REDIS_NOTIFY_TOTAL,
         DEPENDENCY_OPERATION_TOTAL,
         DEPENDENCY_OPERATION_DURATION_MS,

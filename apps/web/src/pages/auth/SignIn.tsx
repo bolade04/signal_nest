@@ -12,7 +12,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { toAppPath } from '@/auth/intended-path';
 import { SESSION_ENDED_COPY, SESSION_ENDED_NOTICE } from '@/auth/session-ended';
 import { signOutNoticeCopy } from '@/auth/sign-out';
-import { PASSWORD_CHANGED_NOTICE, PASSWORD_RESET_NOTICE } from './account-token';
+import { ACCOUNT_DELETED_NOTICE, PASSWORD_CHANGED_NOTICE, PASSWORD_RESET_NOTICE } from './account-token';
 import { AuthLayout } from './AuthLayout';
 // Static import on purpose: a dynamic import would be code-split before the
 // `import.meta.env.DEV` branch below is folded away, shipping the demo
@@ -38,6 +38,7 @@ export function SignInPage() {
   const sessionEnded = notice === SESSION_ENDED_NOTICE;
   const passwordReset = notice === PASSWORD_RESET_NOTICE;
   const passwordChanged = notice === PASSWORD_CHANGED_NOTICE;
+  const accountDeleted = notice === ACCOUNT_DELETED_NOTICE;
   const signedOut = signOutNoticeCopy(notice);
 
   const form = useForm<FormValues>({
@@ -94,6 +95,11 @@ export function SignInPage() {
         {passwordChanged ? (
           <p role="status" className="rounded-md border border-border bg-secondary/50 px-3 py-2 text-sm">
             Your password has been changed. Sign in with your new password.
+          </p>
+        ) : null}
+        {accountDeleted ? (
+          <p role="status" className="rounded-md border border-border bg-secondary/50 px-3 py-2 text-sm">
+            Your account has been deleted.
           </p>
         ) : null}
         {signedOut ? (
