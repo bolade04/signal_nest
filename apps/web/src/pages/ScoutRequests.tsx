@@ -7,6 +7,7 @@ import { queryKeys } from '@/api/queryKeys';
 import type { ScoutRequestOut } from '@/api/types';
 import { ScoutStatusBadge } from '@/components/common/badges';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
+import { StatusUpdatesPaused } from '@/components/common/status-updates-paused';
 import { PageHeader } from '@/components/layout/page-header';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
 import { Badge } from '@/components/ui/badge';
@@ -23,7 +24,8 @@ import {
 import { scoutStatusLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
-import { isScoutInFlight, SCOUT_POLL_MS } from '@/lib/scout-status';
+import { isScoutInFlight } from '@/lib/scout-status';
+import { inFlightSignature, pollingOptions, useStatusPolling } from '@/lib/status-polling';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { RunNowButton } from './scouts/RunNowButton';
@@ -46,13 +48,19 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
   // cannot spring back open by itself if the gate later reopens.
   if (!canEdit && dialogOpen) setDialogOpen(false);
 
+  const { schedule, stopped: statusUpdatesPaused } = useStatusPolling();
   const query = useQuery({
     queryKey: queryKeys.scoutRequests(workspaceId),
     queryFn: ({ signal }) => api.listScoutRequests(workspaceId, signal),
     // Re-read while any run is queued or running, so each row's status (and its Run now
-    // button) follows the worker without a reload (UI-AUDIT F8 / P8).
-    refetchInterval: (q) => ((q.state.data ?? []).some((r) => isScoutInFlight(r.status)) ? SCOUT_POLL_MS : false),
+    // button) follows the worker without a reload (UI-AUDIT F8 / P8), on the bounded,
+    // backed-off schedule of lib/status-polling.ts (review F-02).
+    ...pollingOptions<ScoutRequestOut[]>(schedule, 'requests', (rows) => inFlightSignature(rows, isScoutInFlight)),
   });
+  const refreshStatus = () => {
+    schedule.restart(Date.now());
+    void query.refetch();
+  };
 
   const locName = (id: string | null) => locations.find((l) => l.id === id)?.name;
 
@@ -105,6 +113,8 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
           </SelectContent>
         </Select>
       </div>
+
+      {statusUpdatesPaused ? <StatusUpdatesPaused onRefresh={refreshStatus} className="mb-4" /> : null}
 
       {query.isLoading ? (
         <LoadingRows rows={3} />

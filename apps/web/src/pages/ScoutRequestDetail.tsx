@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import type { OpportunityFilters } from '@/api/types';
+import type { OpportunityFilters, ScoutRequestOut } from '@/api/types';
 import { ScoutStatusBadge } from '@/components/common/badges';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
+import { StatusUpdatesPaused } from '@/components/common/status-updates-paused';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,10 +16,12 @@ import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
-import { SCOUT_IN_FLIGHT, SCOUT_POLL_MS } from '@/lib/scout-status';
+import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
+import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
+import { jobFilters } from './scouts/jobFilters';
 import { JobsPanel } from './scouts/JobsPanel';
 import { RunNowButton } from './scouts/RunNowButton';
 import { SchedulePanel } from './scouts/SchedulePanel';
@@ -40,13 +43,22 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const actions = useScoutActions(workspaceId);
   const queryClient = useQueryClient();
+  const { schedule, stopped: statusUpdatesPaused } = useStatusPolling();
 
   const query = useQuery({
     queryKey: queryKeys.scoutRequest(workspaceId, requestId),
     queryFn: ({ signal }) => api.getScoutRequest(workspaceId, requestId, signal),
-    // Poll only while the run is in flight, matching the JobsPanel cadence.
-    refetchInterval: (q) => (IN_FLIGHT.has(q.state.data?.status ?? '') ? SCOUT_POLL_MS : false),
+    // Re-read only while the run is in flight, on the bounded, backed-off schedule of
+    // lib/status-polling.ts (review F-02), shared with the jobs panel below.
+    ...pollingOptions<ScoutRequestOut>(schedule, 'request', (r) =>
+      r && IN_FLIGHT.has(r.status) ? `${r.id}:${r.status}` : null,
+    ),
   });
+  const refreshStatus = () => {
+    schedule.restart(Date.now());
+    void query.refetch();
+    void queryClient.refetchQueries({ queryKey: queryKeys.jobs(workspaceId, jobFilters(requestId)), exact: true });
+  };
 
   const oppFilters: OpportunityFilters = useMemo(
     () => ({ scout_request_id: requestId, limit: 100 }),
@@ -124,6 +136,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
         </div>
       </div>
 
+      {statusUpdatesPaused ? <StatusUpdatesPaused onRefresh={refreshStatus} /> : null}
+
       <div className="rounded-md border border-warning/40 bg-warning/10 px-4 py-2.5 text-sm">
         <span className="inline-flex items-center gap-1.5 font-medium text-warning">
           <Sparkles className="size-3.5" /> Simulated sources
@@ -194,7 +208,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
 
           <SchedulePanel workspaceId={workspaceId} requestId={requestId} />
 
-          <JobsPanel workspaceId={workspaceId} scoutRequestId={requestId} />
+          <JobsPanel workspaceId={workspaceId} scoutRequestId={requestId} schedule={schedule} />
         </div>
 
         <div className="lg:col-span-2">

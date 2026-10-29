@@ -22,6 +22,9 @@ export interface RunBackendState {
   detailGets: number;
   listGets: number;
   jobsGets: number;
+  /** Clock time (Date.now(), the fake clock under fake timers) of each read. */
+  detailTimes: number[];
+  listTimes: number[];
   /** Answer the next POST with this HTTP status (one shot). */
   failNextPost: number | null;
   /** While set, a POST waits for this promise before answering ("Starting…"). */
@@ -36,6 +39,8 @@ export const runBackend: RunBackendState = {
   detailGets: 0,
   listGets: 0,
   jobsGets: 0,
+  detailTimes: [],
+  listTimes: [],
   failNextPost: null,
   holdPost: null,
   jobs: [],
@@ -74,6 +79,8 @@ export function resetRunBackend(phase = 'completed') {
     detailGets: 0,
     listGets: 0,
     jobsGets: 0,
+    detailTimes: [],
+    listTimes: [],
     failNextPost: null,
     holdPost: null,
     jobs: [],
@@ -84,11 +91,15 @@ export function installRunBackend({ emptyOpportunities = false } = {}) {
   server.use(
     http.get(P('/workspaces/:ws/scout-requests'), async ({ request }) => {
       runBackend.listGets += 1;
+      runBackend.listTimes.push(Date.now());
       const rows = (await (await getResponse(handlers, request))!.json()) as Array<Record<string, unknown>>;
       return HttpResponse.json(rows.map((r) => (r.id === RUN_REQ ? { ...r, status: runBackend.phase } : r)));
     }),
     http.get(P('/workspaces/:ws/scout-requests/:id'), async ({ request, params }) => {
-      if (params.id === RUN_REQ) runBackend.detailGets += 1;
+      if (params.id === RUN_REQ) {
+        runBackend.detailGets += 1;
+        runBackend.detailTimes.push(Date.now());
+      }
       const row = (await (await getResponse(handlers, request))!.json()) as Record<string, unknown>;
       return HttpResponse.json(params.id === RUN_REQ ? { ...row, status: runBackend.phase } : row);
     }),

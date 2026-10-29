@@ -2,7 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import type { JobOut } from '@/api/types';
+import type { JobListOut } from '@/api/types';
+import { inFlightSignature, pollingOptions, type StatusPollSchedule } from '@/lib/status-polling';
+import { jobFilters } from './jobFilters';
 import { JobStatusBadge } from '@/components/common/badges';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
 import { Button } from '@/components/ui/button';
@@ -28,23 +30,28 @@ const CANCELLABLE = new Set(['pending', 'scheduled', 'claimed', 'running', 'retr
 export function JobsPanel({
   workspaceId,
   scoutRequestId,
+  schedule,
 }: {
   workspaceId: string;
   scoutRequestId: string;
+  /** The detail page's status-poll schedule (lib/status-polling.ts), shared with its request. */
+  schedule: StatusPollSchedule;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { organizationId } = useWorkspace();
   // Cancelling is an editor action (EDITORS gate); the job list stays readable.
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
-  const filters = { scout_request_id: scoutRequestId, limit: 10 };
+  const filters = jobFilters(scoutRequestId);
 
   const query = useQuery({
     queryKey: queryKeys.jobs(workspaceId, filters),
     queryFn: ({ signal }) => api.listJobs(workspaceId, filters, signal),
-    // Poll only while a job is still in flight; the run endpoint is async.
-    refetchInterval: (q) =>
-      (q.state.data?.items ?? []).some((j: JobOut) => ACTIVE.has(j.status)) ? 2000 : false,
+    // Poll only while a job is still in flight (the run endpoint is async), on the page's
+    // bounded, backed-off schedule (lib/status-polling.ts, review F-02); it was a fixed 2 s.
+    ...pollingOptions<JobListOut>(schedule, 'jobs', (page) =>
+      inFlightSignature(page?.items, (status) => ACTIVE.has(status)),
+    ),
   });
 
   const cancel = useMutation({

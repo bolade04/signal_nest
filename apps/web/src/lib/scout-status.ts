@@ -12,5 +12,5 @@ export function isScoutInFlight(status: string | null | undefined): boolean {
   return SCOUT_IN_FLIGHT.has(status ?? '');
 }
 
-/** How often a view re-reads a scout request while a run is in flight. */
-export const SCOUT_POLL_MS = 2000;
+// How often a view re-reads an in-flight request: see lib/status-polling.ts (bounded,
+// backed-off schedule shared by the list and the detail page).
