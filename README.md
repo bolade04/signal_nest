@@ -106,8 +106,9 @@ isolation and geo accuracy.
 **Continuous integration.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs
 six jobs — **Frontend quality**, **Backend quality**, **Migrations and API contract**,
 **Integration smoke**, **Container build and security** and **Revision reader (unit, IaC
-contract, in-image)** — all six required by the `main` ruleset (observed 2026-10-03) — on pull requests to `main`, pushes to `main` and `feature/**`,
-and manual dispatch. CI runs entirely in zero-dependency local mode (SQLite, in-process
+contract, in-image)** — all six required by the `main` ruleset (observed 2026-10-03) — on pull requests to `main`, pushes to `feature/**`
+and manual dispatch; *(since 2026-10-29)* a push to `main` runs the short **Main short check** and the full suite runs
+on each completed milestone's exact `main` commit ([milestone-based post-merge CI](docs/operations/milestone-ci-policy.md)). CI runs entirely in zero-dependency local mode (SQLite, in-process
 adapters, fixture connectors, mock LLM); **no Docker, PostgreSQL, Redis or paid API keys
 are required.**
 
