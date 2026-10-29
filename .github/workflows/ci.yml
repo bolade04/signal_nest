@@ -4,22 +4,32 @@ name: CI
 # zero-dependency local mode: SQLite, in-process queue, in-memory cache,
 # brute-force vector index, local-file storage and the deterministic mock LLM.
 # No Docker, PostgreSQL, Redis or paid API keys are required.
+#
+# Triggers (milestone-based post-merge CI, docs/operations/milestone-ci-policy.md). Pull requests to main run these
+# six jobs, unchanged, as the six required contexts. A push to main does NOT run this workflow: it runs the Main
+# short check (.github/workflows/main-push.yml) on the merge commit. At a completed milestone,
+# .github/workflows/milestone-validation.yml binds the milestone to its exact final main commit and then CALLS this
+# workflow (workflow_call), so these same jobs run there as "Milestone full suite / <job>". No step or job here is
+# conditioned on the event (tests/test_ci_milestone_policy.py), so the called suite runs everything a push run ran.
+# A manual dispatch of this file runs the six on the chosen ref and is never milestone evidence.
 
 on:
   pull_request:
     branches: [main]
   push:
     branches:
-      - main
       - 'feature/**'
   workflow_dispatch:
+  workflow_call:
 
 # Concurrency (2026-10-22, queued CI-6 follow-up). pull_request runs: one group per PR NUMBER — not the
 # head branch name, since two PRs whose source branches share a name (fork PRs included) must not cancel
 # each other — and a newer push to that PR cancels its older in-flight run (a superseded run only wastes
-# runners). Every other event — push to main or feature/**, workflow_dispatch — gets a group of its own,
-# keyed by the run id, so a push-to-main run is never cancelled by, nor queued behind, a later push: it
-# always completes. Before 2026-10-22 one group (`pull_request.number || ref`) cancelled for every event.
+# runners). Every other event — push to feature/**, workflow_dispatch, and the milestone workflow's call
+# (workflow_call, evaluated in the milestone run's context: never a pull_request) — gets a group of its own,
+# keyed by the run id, so such a run is never cancelled by, nor queued behind, any other run: it always
+# completes. (Until the milestone policy change this also covered pushes to main.) Before 2026-10-22 one
+# group (`pull_request.number || ref`) cancelled for every event.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

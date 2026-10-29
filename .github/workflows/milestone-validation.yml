@@ -1,0 +1,79 @@
+name: Milestone validation
+run-name: Milestone ${{ inputs.milestone_id }} at ${{ inputs.milestone_sha }}
+
+# Milestone-based post-merge CI (docs/operations/milestone-ci-policy.md). At a completed milestone — a named,
+# completed group of work, not every merge — the operator dispatches this workflow ON main for the milestone's exact
+# final main commit. It first binds the request (Milestone binding), and only a bound request runs the full suite:
+# the six jobs of .github/workflows/ci.yml from the same commit, called unmodified (workflow_call), including the
+# PostgreSQL proofs and their no-skip guard and every scan, gate and negative control with a fresh vulnerability
+# database. Inside this run those jobs are named "Milestone full suite / <job>", so they can neither satisfy nor
+# block the six required pull-request contexts. Evidence: scripts/verify_milestone_evidence.py verify.
+#
+# THE BINDING (before any suite job). The suite job `needs:` the binding job, so a refused binding starts no suite
+# job at all. Refused unless: the run is a dispatch of this file on refs/heads/main; milestone_sha (40 lowercase hex)
+# equals the dispatched commit, the checked-out commit and the refs/heads/main tip read at bind time; the id is
+# [A-Za-z0-9][A-Za-z0-9._-]{0,63}; the scope is one non-empty line of at most 300 characters. A dispatch on any other
+# ref runs that ref's copy of this file and is refused by the same rule. The inputs reach the script through env
+# only, never interpolated into script text. Later main commits do not inherit a milestone's validation.
+on:
+  workflow_dispatch:
+    inputs:
+      milestone_id:
+        description: 'Milestone identifier ([A-Za-z0-9][A-Za-z0-9._-], at most 64 characters)'
+        required: true
+        type: string
+      milestone_scope:
+        description: 'Included scope, one line (e.g. the PRs and plan rows the milestone completes)'
+        required: true
+        type: string
+      milestone_sha:
+        description: 'The exact final main commit this milestone validates (40 lowercase hex characters)'
+        required: true
+        type: string
+
+# No workflow-level concurrency on purpose. The called ci.yml evaluates its own group in this run's context: not a
+# pull_request, so `cancel-in-progress` is false and the group carries this run's id — no pull-request or main-push
+# run can cancel or queue it, and two milestone runs never share a group. A group here could only add a deadlock
+# risk against the called workflow's group.
+
+# Least privilege: the jobs only read repository contents (the called workflow asks for no more).
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  milestone-binding:
+    name: Milestone binding
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Bind the request to the dispatched commit, the checked-out commit and the main tip
+        env:
+          MILESTONE_ID: ${{ inputs.milestone_id }}
+          MILESTONE_SCOPE: ${{ inputs.milestone_scope }}
+          MILESTONE_SHA: ${{ inputs.milestone_sha }}
+        run: >-
+          python3 scripts/verify_milestone_evidence.py bind
+          --checked-out "$(git rev-parse HEAD)"
+          --main-tip "$(git ls-remote --exit-code origin refs/heads/main)"
+          --out milestone-evidence/milestone-binding.json
+
+      - name: Upload the milestone binding record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: milestone-evidence-attempt-${{ github.run_attempt }}
+          path: milestone-evidence/
+          retention-days: 90
+          if-no-files-found: error
+
+  milestone-suite:
+    name: Milestone full suite
+    needs: milestone-binding
+    uses: ./.github/workflows/ci.yml
