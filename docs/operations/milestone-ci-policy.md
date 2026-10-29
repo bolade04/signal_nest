@@ -27,7 +27,9 @@ activation checkpoint holds the integration queue (see [Activation](#activation-
   database, the HTTP isolation smoke against the mock LLM and fixture connectors, the negative controls, the final
   inventory and the completeness gate — plus a binding record (`short-check-evidence-attempt-<n>` artifact) tying
   the run to the commit it checked out. The slot advances after both pass; **a failed short check holds further
-  integration pending investigation.** The short check publishes no coverage or full-suite figures.
+  integration pending investigation**, and so does an absent one (a `[skip ci]` marker in the merge message, for
+  example, suppresses the push run: no run is not a pass). The short check publishes no coverage or full-suite
+  figures.
 - **At a completed milestone** the full suite runs on the milestone's exact final `main` commit (below). Later
   `main` commits do not inherit a milestone's validation.
 - **Before a deployment, launch or closure claim that requires full validation**, a passing milestone validation of
@@ -47,7 +49,8 @@ A milestone is a named, completed group of work — not automatically every smal
 integration queue is idle (no merge in flight), the operator (or the coordinator on the operator's instruction):
 
 ```bash
-SHA=$(git ls-remote https://github.com/bolade04/signal_nest.git refs/heads/main | cut -f1)
+# ls-remote matches ref-name TAILS (a branch x/refs/heads/main would also print): keep the exact ref only
+SHA=$(git ls-remote https://github.com/bolade04/signal_nest.git refs/heads/main | awk -F'\t' '$2 == "refs/heads/main" {print $1}')
 gh workflow run milestone-validation.yml --ref main \
   -f milestone_id=M-2026-11-EXAMPLE \
   -f milestone_scope='PRs #280-#284: <what the milestone completes>' \
@@ -57,35 +60,46 @@ gh workflow run milestone-validation.yml --ref main \
 The run is named `Milestone <id> at <sha>`. **Milestone binding** refuses — and no suite job starts — unless the run
 is a dispatch of `milestone-validation.yml` on `refs/heads/main` and `milestone_sha` equals the dispatched commit,
 the checked-out commit and the `refs/heads/main` tip at bind time, with a valid id (`[A-Za-z0-9][A-Za-z0-9._-]`, at
-most 64) and a one-line scope (at most 300 characters). A dispatch on another ref, for another commit, or after
+most 64, matched in full) and a one-line scope (at most 300 characters, no control, format or line/paragraph-separator
+character). A dispatch on another ref, for another commit, or after
 `main` moved is refused; re-dispatch for the current tip. The binding record is uploaded as
 `milestone-evidence-attempt-<n>` and shown in the job summary.
 
 ## Validating a milestone
 
+Run it from a checkout of the tested SHA (the verifier's required-job list is the reviewed one at that commit):
+
 ```bash
-gh run download <run-id> -n milestone-evidence-attempt-<n> -D /tmp/m   # the binding record
+N=$(gh api repos/bolade04/signal_nest/actions/runs/<run-id> --jq .run_attempt)   # the LATEST attempt
+gh run download <run-id> -n milestone-evidence-attempt-$N -D /tmp/m              # that attempt's binding record
 python3 scripts/verify_milestone_evidence.py verify --repo bolade04/signal_nest \
   --sha <tested-sha> --run <run-id> --milestone-id <id> \
   --binding-record /tmp/m/milestone-binding.json --record-out milestone-evidence.json
 ```
 
-GET-only against the GitHub REST API (set `GH_TOKEN` to avoid anonymous rate limits); `--fixtures <file>` reads
-captured responses instead. Exit 0 **PASS**, 1 **REJECT** (reasons listed), 2 cannot establish. It rejects: a run of
-any workflow other than `milestone-validation.yml` (pull-request, push, short-check or plain `ci.yml` dispatch runs),
-an event other than `workflow_dispatch`, a branch other than `main`; a run for another SHA (an earlier milestone
-presented for a newer commit); a run name for another SHA or milestone; a run not completed successfully; a
-presented attempt that is not the latest; any of the seven required jobs (`Milestone binding` and the six
-`Milestone full suite / …`) missing, duplicated in the attempt, incomplete, or concluded failure, cancelled, skipped
-or anything but success; a job result carried over from an earlier attempt; a job not bound to its own successful
-check run on the SHA; incomplete or shifting pagination; and a binding record that disagrees with the run.
+The binding record is **mandatory for a PASS**: it must be the run's own record for its latest attempt (run id,
+attempt, SHA and milestone id are cross-checked). GET-only against the GitHub REST API (set `GH_TOKEN` to avoid
+anonymous rate limits; if the interpreter has no CA bundle, point `SSL_CERT_FILE` at one); `--fixtures <file>` reads
+captured responses instead. Exit 0 **PASS**, 1 **REJECT** (reasons listed), 2 cannot establish (usage, API or
+malformed-response error). It rejects: a run of any workflow other than `milestone-validation.yml` (pull-request,
+push, short-check or plain `ci.yml` dispatch runs), an event other than `workflow_dispatch`, a branch other than
+`main`; a SHA that is not `main` or an ancestor of `main` (`compare/<sha>...main` must be `identical` or `ahead`); a
+run for another SHA (an earlier milestone presented for a newer commit); a run name for another SHA or milestone; a
+run not completed successfully; a presented attempt that is not the latest; any of the seven required jobs
+(`Milestone binding` and the six `Milestone full suite / …`) missing, duplicated in the attempt, incomplete, or
+concluded failure, cancelled, skipped or anything but success; a job result carried over from an earlier attempt —
+one stamped with an earlier attempt, or (the shape GitHub returns after *Re-run failed jobs*) one that started before
+the latest attempt began; a job not bound to its own successful check run on the SHA; incomplete pagination; and a
+missing binding record or one that disagrees with the run.
 
 ## Failure handling
 
 - **Binding refused:** nothing ran; correct the inputs or re-dispatch on the current `main` tip.
-- **A suite job failed or was cancelled:** the milestone is not validated. Investigate; a flaky job may be re-run
-  with **Re-run all jobs** (the verifier refuses results carried over by *Re-run failed jobs*). A defect is fixed by
-  an ordinary pull request (all six checks), and the milestone is then validated on the new final `main` commit —
+- **A suite job failed or was cancelled:** the milestone is not validated. Investigate. A flaky job may be re-run
+  with **Re-run all jobs** — but only while `main` is still at the milestone SHA, because the re-run repeats
+  **Milestone binding**, which refuses once `main` has moved. Once `main` has moved, validate the current tip as a
+  new milestone run instead. (The verifier refuses results carried over by *Re-run failed jobs*.) A defect is fixed
+  by an ordinary pull request (all six checks), and the milestone is then validated on the new final `main` commit —
   the earlier run never transfers to it.
 - **A failed Main short check** holds further integration until investigated, as above.
 
@@ -103,9 +117,12 @@ check run on the SHA; incomplete or shifting pagination; and a binding record th
 
 A commit is eligible for a deployment, launch or full-validation closure claim only when the verifier PASSes a
 milestone run for **that exact commit** and every separate gate passes. This check is **operator-controlled**: the
-publish and run workflows (`staging-publish.yml`, `reader-publish.yml`, `reader-run.yml`) are manual dispatches behind
-protected environments with human approval, and they do not read CI results — running the verifier before
-dispatching them is the operator's step, not something those workflows enforce. Milestone creation, the decision
+publish and run workflows are manual dispatches that refuse any ref but `main`. `staging-publish.yml` runs in the
+protected `staging` environment (required reviewers and a branch policy). `reader-publish.yml` and `reader-run.yml`
+declare the environments `staging-reader-publish` and `staging-reader-run`, which **do not exist yet** (open plan row
+P6-INF-8: GitHub would create them without protection on first dispatch); without their environment variables those
+two jobs fail closed. None of the three reads CI results — running the verifier before dispatching any of them is the
+operator's step, not something those workflows enforce. Milestone creation, the decision
 that a group of work is complete, and holding the integration queue are operator or coordinator actions.
 
 ## Activation checkpoint
@@ -119,6 +136,9 @@ that a group of work is complete, and holding the integration queue are operator
    six checks once step 1 lands, the queue stays held from that merge until the milestone validation of step 3
    passes: no other change reaches `main` while neither the earlier six-check validation nor the new policy is in
    force.
+
+If step 2 or 3 fails, the queue **stays held**. Whether the next merge is a fix for that failure or the rollback
+revert is an operator decision; steps 2–4 then repeat on that merge commit.
 
 ## Rollback
 

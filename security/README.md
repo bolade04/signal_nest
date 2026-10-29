@@ -177,7 +177,7 @@ uploaded as a workflow artifact (`security-reports-container-build`,
   below)*: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
 - **SBOM identity**: each identity record names the reviewed commit (`commit`: the pull
-  request head, or the pushed commit on `main` *(since 2026-10-29: the dispatched `main` commit of a milestone
+  request head, or the pushed commit on `main` *(from the milestone-policy change, #274: the dispatched `main` commit of a milestone
   run; main pushes no longer build images)*) and the commit actually checked out
   (`checkout_commit`: on a pull_request event GitHub builds the ephemeral merge ref), the
   image id, the SBOM's serial and sha256 and both component counts.
