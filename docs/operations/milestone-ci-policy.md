@@ -83,7 +83,8 @@ anonymous rate limits; if the interpreter has no CA bundle, point `SSL_CERT_FILE
 captured responses instead. Exit 0 **PASS**, 1 **REJECT** (reasons listed), 2 cannot establish (usage, API or
 malformed-response error). It rejects: a run of any workflow other than `milestone-validation.yml` (pull-request,
 push, short-check or plain `ci.yml` dispatch runs), an event other than `workflow_dispatch`, a branch other than
-`main`; a SHA that is not `main` or an ancestor of `main` (`compare/<sha>...main` must be `identical` or `ahead`); a
+`main`; a SHA that is not `main` or an ancestor of `main` (`compare/<sha>...refs/heads/main` must be `identical` or
+`ahead`); a
 run for another SHA (an earlier milestone presented for a newer commit); a run name for another SHA or milestone; a
 run not completed successfully; a presented attempt that is not the latest; any of the seven required jobs
 (`Milestone binding` and the six `Milestone full suite / …`) missing, duplicated in the attempt, incomplete, or
@@ -138,7 +139,9 @@ that a group of work is complete, and holding the integration queue are operator
    force.
 
 If step 2 or 3 fails, the queue **stays held**. Whether the next merge is a fix for that failure or the rollback
-revert is an operator decision; steps 2–4 then repeat on that merge commit.
+revert is an operator decision. After a fix, steps 2–4 repeat on the fix's merge commit. After the rollback revert
+the earlier policy applies: the revert removes `milestone-validation.yml` and restores `ci.yml`'s push trigger, so the
+revert's merge commit is validated by its own six-check push CI.
 
 ## Rollback
 
