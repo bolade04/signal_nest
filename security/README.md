@@ -3,7 +3,10 @@
 This directory wires CVE, dependency, SAST and IaC analysis plus SBOM generation into the
 two existing **required** CI contexts that build artifacts — `Container build and security`
 and `Revision reader (unit, IaC contract, in-image)` — so that every pull request to `main`
-and every push to `main` is analysed before merge. *(Since the coverage-gap tranche of
+~~and every push to `main`~~ is analysed before merge *(2026-10-29, milestone-based post-merge CI: a push to
+`main` now runs only the Main short check — the Integration smoke steps, i.e. the API virtualenv scanned as installed
+and the Trivy binary analysis, under the same gates — and the six contexts' full analysis runs on pull requests and,
+for a completed milestone, on its exact final `main` commit; see `docs/operations/milestone-ci-policy.md`)*. *(Since the coverage-gap tranche of
 2026-10-20, the four other required contexts — `Frontend quality`, `Backend quality`,
 `Migrations and API contract` and `Integration smoke` — also scan, as installed, the API virtualenv
 they install (`apps/api/.venv`, and the lock toolchain `.locktools` in Backend quality), and every
@@ -174,7 +177,8 @@ uploaded as a workflow artifact (`security-reports-container-build`,
   below)*: Semgrep `ERROR` severity fails; `WARNING`/`INFO` are reported. Any Semgrep
   scanner error (a rule timeout, a parse failure) makes the analysis incomplete and fails.
 - **SBOM identity**: each identity record names the reviewed commit (`commit`: the pull
-  request head, or the pushed commit on `main`) and the commit actually checked out
+  request head, or the pushed commit on `main` *(since 2026-10-29: the dispatched `main` commit of a milestone
+  run; main pushes no longer build images)*) and the commit actually checked out
   (`checkout_commit`: on a pull_request event GitHub builds the ephemeral merge ref), the
   image id, the SBOM's serial and sha256 and both component counts.
 - **SBOM**: CycloneDX 1.5–1.7 JSON with a `urn:uuid` serial, the expected described

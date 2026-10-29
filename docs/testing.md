@@ -222,12 +222,21 @@ GitHub Actions runs the Phase 1–2 quality gates on every change:
 **Triggers**
 
 - Pull requests targeting `main`
-- Pushes to `main`
 - Pushes to `feature/**`
 - Manual `workflow_dispatch`
+- `workflow_call` from `.github/workflows/milestone-validation.yml` (the milestone full suite)
 
-Concurrency is grouped per workflow + branch/PR with `cancel-in-progress: true`, so a
-newer commit cancels older in-flight runs. Workflow permissions are `contents: read`.
+*(2026-10-29, milestone-based post-merge CI.)* Pushes to `main` no longer run this workflow: they
+run the **Main short check** (`.github/workflows/main-push.yml`, the Integration smoke steps on the
+merge commit; not a required context), and the full six-job suite runs on a completed milestone's
+exact final `main` commit as `Milestone full suite / <job>`. See
+[Milestone-based post-merge CI](operations/milestone-ci-policy.md).
+
+Concurrency: pull-request runs are grouped per PR number and a newer push to that PR cancels its
+older in-flight run; every other run (feature-branch push, dispatch, milestone call) has a group of
+its own keyed by its run id, so it is never cancelled by, nor queued behind, another run. *(Corrected
+2026-10-29: the earlier text described the single cancel-everything group replaced on 2026-10-22.)*
+Workflow permissions are `contents: read`.
 
 **Reliable failure propagation.** Every job step runs under a strict shell
 (`shell: bash --noprofile --norc -euo pipefail {0}`) so a failing command in a
@@ -254,7 +263,7 @@ writes the `TOTAL` line to the job step summary and uploads the Cobertura XML as
 `apps/web/vite.config.ts` switches `@vitest/coverage-v8` on when `CI=true`
 (`text-summary`, `json-summary`, `lcov` into `ci-logs/coverage-web/`), the summary lines go
 to the step summary and the directory is uploaded as the `coverage-web` artifact (30 days).
-First `main` baseline (2026-10-28, merge commit `b0b53951` of #270, CI run `40637670580`; report only, not a gate): API — coverage.py `TOTAL` 94% (combined statement and branch coverage, 14,567 of 15,487), line rate 95.37% (12,165 of 12,755 statements), branch rate 87.92% (2,402 of 2,732 branches); web — statements 91.86% (2,880 of 3,135), branches 82.33% (1,985 of 2,411), functions 87.84% (1,005 of 1,144), lines 94.54% (2,566 of 2,714). Later runs publish their own figures in the job summaries and artifacts; this line records the baseline only. Locally:
+First `main` baseline (2026-10-28, merge commit `b0b53951` of #270, CI run `40637670580`; report only, not a gate): API — coverage.py `TOTAL` 94% (combined statement and branch coverage, 14,567 of 15,487), line rate 95.37% (12,165 of 12,755 statements), branch rate 87.92% (2,402 of 2,732 branches); web — statements 91.86% (2,880 of 3,135), branches 82.33% (1,985 of 2,411), functions 87.84% (1,005 of 1,144), lines 94.54% (2,566 of 2,714). Later runs publish their own figures in the job summaries and artifacts; this line records the baseline only. *(2026-10-29: pushes to `main` now run only the Main short check, which measures no coverage, so later full-suite figures come from pull-request runs and milestone validation runs.)* Locally:
 `cd apps/api && .venv/bin/python -m pytest --cov=app --cov-branch --cov-report=term`, and
 `cd apps/web && CI=true npx vitest run --coverage --maxWorkers=2`.
 
