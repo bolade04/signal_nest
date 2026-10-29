@@ -15,21 +15,18 @@ import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
+import { SCOUT_IN_FLIGHT, SCOUT_POLL_MS } from '@/lib/scout-status';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { JobsPanel } from './scouts/JobsPanel';
+import { RunNowButton } from './scouts/RunNowButton';
 import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
 
-// Scout statuses where the backend is still working, so this view has to keep
-// re-reading: the run endpoint returns `queued` immediately and a durable worker
-// settles it later, with nothing pushing that change to the client. Mirrors
-// `_IN_FLIGHT_SCOUT_STATUSES` in apps/api/app/jobs/handlers.py. Deliberately an
-// explicit allowlist rather than "anything that is not completed": the status
-// column is an unconstrained string, so an unrecognised value would otherwise
-// poll forever. `draft` and `paused` are settled states, not in-flight ones.
-const IN_FLIGHT = new Set(['queued', 'running']);
+// In-flight statuses (queued, running): see SCOUT_IN_FLIGHT in lib/scout-status.ts, shared
+// with the list page and the Run now button.
+const IN_FLIGHT = SCOUT_IN_FLIGHT;
 
 // The outcomes a run settles into. Arriving at one of these FROM an in-flight
 // status is the moment this scout's opportunities have actually changed.
@@ -48,7 +45,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
     queryKey: queryKeys.scoutRequest(workspaceId, requestId),
     queryFn: ({ signal }) => api.getScoutRequest(workspaceId, requestId, signal),
     // Poll only while the run is in flight, matching the JobsPanel cadence.
-    refetchInterval: (q) => (IN_FLIGHT.has(q.state.data?.status ?? '') ? 2000 : false),
+    refetchInterval: (q) => (IN_FLIGHT.has(q.state.data?.status ?? '') ? SCOUT_POLL_MS : false),
   });
 
   const oppFilters: OpportunityFilters = useMemo(
@@ -112,12 +109,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
           </div>
           {canEdit ? (
             <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => actions.run.mutate(r.id)}
-                disabled={actions.run.isPending && actions.run.variables === r.id}
-              >
-                <Radar className="size-4" /> Run now
-              </Button>
+              <RunNowButton request={r} actions={actions} />
               {isPaused ? (
                 <Button variant="outline" onClick={() => actions.resume.mutate(r.id)}>
                   <Play className="size-4" /> Resume
@@ -232,14 +224,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
                   : 'This scout has not produced any opportunities yet.'
               }
               action={
-                canEdit ? (
-                  <Button
-                    onClick={() => actions.run.mutate(r.id)}
-                    disabled={actions.run.isPending && actions.run.variables === r.id}
-                  >
-                    <Radar className="size-4" /> Run now
-                  </Button>
-                ) : undefined
+                canEdit ? <RunNowButton request={r} actions={actions} /> : undefined
               }
             />
           )}

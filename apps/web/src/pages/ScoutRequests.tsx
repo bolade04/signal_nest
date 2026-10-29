@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ListChecks, Pause, Play, Plus, Radar, Search } from 'lucide-react';
+import { ListChecks, Pause, Play, Plus, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '@/api/endpoints';
@@ -23,8 +23,10 @@ import {
 import { scoutStatusLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
+import { isScoutInFlight, SCOUT_POLL_MS } from '@/lib/scout-status';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { RunNowButton } from './scouts/RunNowButton';
 import { ScoutRequestDialog } from './scouts/ScoutRequestDialog';
 import { useScoutActions } from './scouts/useScoutActions';
 
@@ -47,6 +49,9 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
   const query = useQuery({
     queryKey: queryKeys.scoutRequests(workspaceId),
     queryFn: ({ signal }) => api.listScoutRequests(workspaceId, signal),
+    // Re-read while any run is queued or running, so each row's status (and its Run now
+    // button) follows the worker without a reload (UI-AUDIT F8 / P8).
+    refetchInterval: (q) => ((q.state.data ?? []).some((r) => isScoutInFlight(r.status)) ? SCOUT_POLL_MS : false),
   });
 
   const locName = (id: string | null) => locations.find((l) => l.id === id)?.name;
@@ -130,13 +135,7 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
                   </div>
                   {canEdit ? (
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => actions.run.mutate(r.id)}
-                        disabled={actions.run.isPending && actions.run.variables === r.id}
-                      >
-                        <Radar className="size-4" /> Run now
-                      </Button>
+                      <RunNowButton request={r} actions={actions} size="sm" />
                       {isPaused ? (
                         <Button size="sm" variant="outline" onClick={() => actions.resume.mutate(r.id)}>
                           <Play className="size-4" /> Resume
