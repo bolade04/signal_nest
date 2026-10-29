@@ -305,8 +305,8 @@ def _run(
     # truncation. The bound counts what would actually be indexed: the total over every
     # source, after the fetch limits and after the takedown re-check above.
     # The handler records the refusal as the run's outcome (status failed, stats
-    # carrying the reason code); it is per run, per workspace, so it never affects
-    # another workspace's run.
+    # carrying the reason code; a request paused meanwhile stays paused, D-25); it is
+    # per run, per workspace, so it never affects another workspace's run.
     try:
         check_inprocess_bound(scanned, settings)
     except SignalVolumeAboveBoundError as exc:

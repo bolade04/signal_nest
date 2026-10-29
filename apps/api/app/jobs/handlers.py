@@ -18,6 +18,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -51,6 +52,13 @@ def _record_refused_run(
     counts (P6-PLAT-1 B). Tenant guard as in :func:`settle_failed_scout_request`:
     the context is the job row's, so a mis-enqueued id never settles another
     tenant's request.
+
+    D-25: the refusal never overwrites a pause. ``failed`` is written with a
+    compare-and-set that excludes ``paused``: a pause that waited behind the run's
+    row lock commits as soon as the attempt rolls back, i.e. before this writer runs,
+    and a pause committing between the load below and the write is not overwritten
+    either. A paused request keeps its status; the refusal's ``stats`` are stored as
+    for any other run (the run's terminal guard keeps a paused run's stats too).
     """
 
     def write(db: Session) -> None:
@@ -62,11 +70,20 @@ def _record_refused_run(
             or request.workspace_id != context.workspace_id
         ):
             return
-        request.status = ScoutRequestStatus.FAILED.value
         request.stats = refused_run_stats(
             scanned=exc.scanned, bound=exc.bound, fetch_limits=exc.fetch_limits
         )
         db.flush()
+        settled = db.execute(
+            update(ScoutRequest)
+            .where(
+                ScoutRequest.id == request.id,
+                ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+            )
+            .values(status=ScoutRequestStatus.FAILED.value)
+            .execution_options(synchronize_session=False)
+        )
+        db.refresh(request, attribute_names=["status"])
         log_event(
             logger,
             "scout_request.refused_at_bound",
@@ -76,6 +93,7 @@ def _record_refused_run(
             scanned=exc.scanned,
             bound=exc.bound,
             partial_fetch=request.stats.get("partial_fetch"),
+            request_paused=settled.rowcount != 1,
         )
 
     return write
@@ -313,8 +331,20 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
     if request.status not in _IN_FLIGHT_SCOUT_STATUSES:
         return
 
-    request.status = ScoutRequestStatus.FAILED.value
-    ctx.db.flush()
+    # D-25: a compare-and-set on the in-flight states, so a pause that commits after
+    # the read above is not overwritten either (the read alone leaves that window).
+    settled = ctx.db.execute(
+        update(ScoutRequest)
+        .where(
+            ScoutRequest.id == request.id,
+            ScoutRequest.status.in_(sorted(_IN_FLIGHT_SCOUT_STATUSES)),
+        )
+        .values(status=ScoutRequestStatus.FAILED.value)
+        .execution_options(synchronize_session=False)
+    )
+    ctx.db.refresh(request, attribute_names=["status"])
+    if settled.rowcount != 1:
+        return
     log_event(
         logger,
         "scout_request.settled_after_job_failure",

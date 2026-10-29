@@ -155,12 +155,22 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   schedule stays enabled and the chain reseeds, so resuming the request restores
   scheduled scouting at the next boundary). A paused request's already-queued run is
   skipped by the worker (`result_summary.outcome=skipped_request_paused`) rather
-  than executed. A pause issued while a run is in flight never un-pauses the request:
-  on PostgreSQL the run holds the request row's lock, so the HTTP pause is serialised
-  after the run's commit (the job records `completed`, the request then ends
-  `paused`); a pause written without that lock is seen by the run's final status
-  re-read and the job records `paused_during_run`. Either way the run's findings and
-  stats are kept.
+  than executed: no source fetch, no model call, nothing written to the LLM budget
+  ledger. A pause issued while a run is in flight never un-pauses the request, but it
+  does not interrupt the run either. Measured on PostgreSQL 16 (lane evidence
+  `P6-W9-PAUSE-REFRESH-01`): the run's claim holds the request row's lock until the
+  run's transaction ends, so the HTTP pause **waits** (`Lock/transactionid`) for the
+  rest of the run and is serialised after it; the job records `completed` and the
+  request then ends `paused`. Everything the run still had to do happens meanwhile:
+  its fetches and its model calls, each reserved and charged against the workspace
+  budget in a transaction of its own; neither the pause nor a later rollback of the
+  run undoes those charges. If the run is refused at the per-run bound or fails
+  instead, the pause lands as soon as the attempt rolls back and the refusal
+  (`scout_request.refused_at_bound`, now with `request_paused`) and the failure
+  settlement leave the request `paused` (the refusal's stats are stored). A pause
+  written without the row lock (only possible inside the run's own transaction) is
+  seen by the run's final status re-read and the job records `paused_during_run`.
+  The run's findings and stats are kept in every case.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete
