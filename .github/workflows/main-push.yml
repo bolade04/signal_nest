@@ -1,0 +1,321 @@
+name: Main push check
+
+# Milestone-based post-merge CI (docs/operations/milestone-ci-policy.md). Every push to main runs THIS short check
+# against the exact merge commit; .github/workflows/ci.yml no longer runs on main pushes. The full six-job suite runs
+# on pull requests to main (unchanged) and, at a completed milestone, on the milestone's exact final main commit
+# through .github/workflows/milestone-validation.yml. This check never stands in for milestone validation, and its
+# job name ("Main short check") is distinct from the six required contexts.
+#
+# CONTENTS. The job is the Integration smoke job of ci.yml, step for step (tests/test_ci_milestone_policy.py pins the
+# parsed equality, so a drift fails the governance suite): a fresh API venv from the hash locks, scanned AS INSTALLED
+# and gated (CRITICAL fails, exactly the locks, vendored packages analysed, read-only), the scanner binary bound to its
+# pinned release digest (security/scanner-binaries.json, under the twin job's key `integration-smoke`: the same
+# binaries), a disposable migrated + seeded SQLite database, the HTTP isolation smoke against the mock LLM and
+# fixture connectors, the real-scanner and adopted-policy negative controls, the final inventory and the completeness
+# gate. Nothing is installed outside those scanned steps. One binding step and one evidence upload are added.
+#
+# The pull_request trigger is a MEASUREMENT path only: a PR that changes this file or the binding code runs the check
+# so its duration and behaviour are observed before merge. Such a run is labelled "pr-measurement" and is not main
+# evidence; it is not a required context.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/main-push.yml'
+      - 'scripts/verify_milestone_evidence.py'
+
+# A push run has a group of its own (keyed by the run id): it is never cancelled by, nor queued behind, any other run.
+# A measurement run is grouped per PR number and superseded by a newer push to that PR.
+concurrency:
+  group: main-push-check-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: the job only reads repository contents.
+permissions:
+  contents: read
+
+# The workflow's strict shell, as in ci.yml.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  NODE_VERSION: '20'          # repository engines: node >=20 <21
+  PYTHON_VERSION: '3.12'      # backend supports >=3.11; 3.12 matches development
+  # Backend CI runtime configuration — actual Settings field names (see
+  # apps/api/app/core/config.py). Safe, non-secret, zero-dependency values.
+  APP_MODE: local
+  ENVIRONMENT: test
+  DATABASE_URL: sqlite:///./signalnest.db
+  QUEUE_BACKEND: inprocess
+  CACHE_BACKEND: memory
+  VECTOR_BACKEND: bruteforce
+  STORAGE_BACKEND: local
+  LLM_PROVIDER: mock
+  LLM_MOCK_SEED: signalnest-ci
+
+jobs:
+  main-short-check:
+    name: Main short check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # The short check's evidence is bound to the exact commit it checked out: on a push to main that commit is the
+      # merge commit (GITHUB_SHA, = the push payload's `after`); a pull_request run (the path-filtered measurement
+      # trigger above) is recorded as "pr-measurement" and is never main evidence. Refusal fails the job.
+      - name: Bind this run to the commit it checked out (main short check evidence)
+        run: python3 scripts/verify_milestone_evidence.py short-record --checked-out "$(git rev-parse HEAD)" --out short-check-evidence/short-check-binding.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/requirements-dev.txt
+
+      - name: Create fresh API virtualenv and install
+        # P6-CI-6 coverage gaps (operator order 2026-10-20): pip and the setuptools build backend come from the
+        # hash-locked apps/api/requirements-bootstrap.txt (the interpreter's bundled pip performs that one install and
+        # is replaced by the locked pip) instead of an unpinned self-upgrade, and the editable install runs with
+        # --no-build-isolation, so no unpinned build dependency is fetched; --only-binary :all: refuses a source build of any locked
+        # dependency, whose build requirements pip would otherwise fetch unpinned and unhashed; --isolated ignores PIP_* variables and
+        # user pip configuration, through which a constraint file could re-enable one. The venv is created with --clear,
+        # so nothing an earlier step left there survives, and the last line makes it read-only, so no later step runs with it
+        # writable; it is scanned as installed below.
+        run: |
+          python -m venv --clear apps/api/.venv
+          apps/api/.venv/bin/python -m pip install --isolated --require-hashes --only-binary :all: --no-deps -r apps/api/requirements-bootstrap.txt
+          apps/api/.venv/bin/pip install --isolated --require-hashes --only-binary :all: -r apps/api/requirements-dev.txt
+          apps/api/.venv/bin/pip install --no-deps --no-build-isolation -e apps/api
+          python3 security/stage_inputs.py readonly apps/api/.venv
+
+      # P6-CI-6 coverage gaps (operator order 2026-10-20): the API venv this job installed is scanned AS INSTALLED,
+      # reconciled against its own pip inspect inventory and against its hash locks (installed == the locks' pins plus
+      # the editable project), and the packages its pip vendors without dist-info are analysed from a staged pin list.
+      # The environment was made read-only at the end of its own install, so no later step ran with it writable, and both of
+      # its gates require that, so an ordinary later install or uninstall fails its step instead of escaping both
+      # inventories; the inventory is taken again at the end of the job, so an install that does land fails completeness.
+      # The Trivy binary on the job's PATH is analysed and bound to its pinned release digest (security/scanner-binaries.json).
+      - name: Inventory the API venv as installed and stage the packages its installer vendors
+        if: always()
+        run: |
+          mkdir -p security-reports
+          apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed.json
+          python3 security/stage_inputs.py vendored --out .vendored-pins --env api-venv apps/api/.venv security-reports/api-venv-installed.json
+
+      - name: Trivy — API venv vulnerabilities, scanned as installed
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: apps/api/.venv
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-api-venv-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Trivy — packages vendored inside the installed environments (staged pin lists)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: fs
+          scan-ref: .vendored-pins
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-vendored-pins-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy.yaml
+
+      - name: Stage the scanner binary on this job's PATH
+        if: always()
+        run: python3 security/stage_inputs.py binaries --pins security/scanner-binaries.json --job integration-smoke --out .scanner-binaries --manifest security-reports/scanner-binaries-manifest.json
+
+      - name: Trivy — the scanner binary on this job's PATH (Go binary analysis)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: .scanner-binaries
+          scanners: vuln
+          format: json
+          output: security-reports/trivy-scanner-binaries-vuln.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Gate — the scanner binary on this job's PATH (pinned release digest, Go binary analysis present; CRITICAL fails)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-scanner-binaries-vuln.json --name scanner-binaries
+          --kind binary --artifact .scanner-binaries --binary-job integration-smoke --binary-pins security/scanner-binaries.json
+          --binary-manifest security-reports/scanner-binaries-manifest.json
+
+      - name: Gate — API venv (every installed distribution scanned, exactly the locks, vendored packages analysed; CRITICAL fails)
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-api-venv-vuln.json --name api-venv
+          --kind tooling --artifact apps/api/.venv --env-root apps/api/.venv --min-lang-packages 52
+          --locked-by apps/api/requirements-bootstrap.txt --locked-by apps/api/requirements-dev.txt --locked-extra signalnest-api
+          --vendored-report security-reports/trivy-vendored-pins-vuln.json --vendored-artifact .vendored-pins --vendored-target api-venv/requirements-vendored-pip.txt
+          --require-read-only
+          --installed-inventory security-reports/api-venv-installed.json
+
+      - name: Prepare a fresh, migrated + seeded demo database
+        # Python-only job: call the bash script directly (no npm/Node dependency).
+        run: |
+          rm -f apps/api/signalnest.db
+          bash scripts/demo-setup.sh
+
+      - name: HTTP isolation smoke test
+        # ci-smoke.sh starts uvicorn, waits on /health with a bounded loop, runs
+        # scripts/smoke_http.py, and always stops the server (trap on EXIT).
+        run: bash scripts/ci-smoke.sh
+
+      # Real-scanner negative control for the installed-environment (rootfs) scans (this job runs its own Trivy and DB): an inert
+      # dist-info (metadata only, no code) of a known-vulnerable PyYAML, with its inventory, must be found by Trivy rootfs and fail
+      # the tooling gate.
+      - name: Negative control — Trivy scans an inert installed environment carrying a known CRITICAL (rootfs)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: security/controls/tooling-env
+          scanners: vuln
+          format: json
+          output: security-reports/control-tooling-rootfs.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Negative control — the tooling gate must fail on it
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/control-tooling-rootfs.json --name control-tooling-rootfs
+          --kind tooling --artifact security/controls/tooling-env --env-root security/controls/tooling-env --min-lang-packages 1
+          --installed-inventory security/controls/tooling-env-installed.json --expect-fail
+
+      # Real-scanner negative control for the vendored-pin scan: an inert environment (metadata only, no code) whose pip
+      # declares a known-vulnerable PyYAML in pip/_vendor/vendor.txt, and nowhere else, must be staged, found by the Trivy
+      # filesystem scan and fail the tooling gate with a violation in its vendored-pin target.
+      - name: Negative control — stage the vendored pins of an inert environment whose installer vendors a known CRITICAL
+        if: always()
+        run: python3 security/stage_inputs.py vendored --out .vendored-pins-control --env control security/controls/vendored-env security/controls/vendored-env-installed.json
+
+      - name: Negative control — Trivy scans the inert environment (rootfs)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: rootfs
+          scan-ref: security/controls/vendored-env
+          scanners: vuln
+          format: json
+          output: security-reports/control-vendored-env-rootfs.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy-scan.yaml
+
+      - name: Negative control — Trivy scans its staged vendored pins
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.0
+          scan-type: fs
+          scan-ref: .vendored-pins-control
+          scanners: vuln
+          format: json
+          output: security-reports/control-vendored-pins.json
+          exit-code: '0'
+          list-all-pkgs: true
+          trivy-config: security/trivy.yaml
+
+      - name: Negative control — the tooling gate must fail on the vendored copy
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/control-vendored-env-rootfs.json --name control-vendored-pins
+          --kind tooling --artifact security/controls/vendored-env --env-root security/controls/vendored-env --min-lang-packages 1
+          --vendored-report security-reports/control-vendored-pins.json --vendored-artifact .vendored-pins-control --vendored-target control/requirements-vendored-pip.txt
+          --installed-inventory security/controls/vendored-env-installed.json --expect-fail
+          --expect-violation target=control/requirements-vendored-pip.txt
+
+      - name: Negative control — the adopted vulnerability policy over this job's installed-environment reports
+        if: always()
+        run: python3 security/vuln_policy_controls.py check integration security-reports
+
+      - name: Inventory the API venv again, after every other step (a later install must fail)
+        if: always()
+        run: apps/api/.venv/bin/python -m pip inspect > security-reports/api-venv-installed-final.json
+
+      - name: Gate — API venv, final inventory against the same scans
+        if: always()
+        run: >-
+          python3 security/gate.py vuln security-reports/trivy-api-venv-vuln.json --name api-venv-final
+          --kind tooling --artifact apps/api/.venv --env-root apps/api/.venv --min-lang-packages 52
+          --locked-by apps/api/requirements-bootstrap.txt --locked-by apps/api/requirements-dev.txt --locked-extra signalnest-api
+          --vendored-report security-reports/trivy-vendored-pins-vuln.json --vendored-artifact .vendored-pins --vendored-target api-venv/requirements-vendored-pip.txt
+          --require-read-only
+          --installed-inventory security-reports/api-venv-installed-final.json
+
+      - name: Every required installed-environment analysis of this job ran and was gated (completeness)
+        if: always()
+        run: >-
+          python3 security/gate.py complete --name complete
+          --expect-pass api-venv --expect-pass api-venv-final --expect-pass scanner-binaries
+          --expect-control control-tooling-rootfs --expect-control control-vendored-pins
+          --expect-control control-vulnpol-baseline-integration-api-venv
+          --expect-control control-vulnpol-critical-nofix-integration-api-venv
+          --expect-control control-vulnpol-critical-nofix-integration-api-venv-vendored-pin
+          --expect-control control-vulnpol-high-fix-integration-api-venv
+          --expect-control control-vulnpol-integration-api-venv-package-not-scanned
+          --expect-control control-vulnpol-integration-api-venv-installed-after-scan
+          --expect-control control-vulnpol-integration-api-venv-installed-outside-the-locks
+          --expect-control control-vulnpol-integration-api-venv-version-differs-from-the-lock
+          --expect-control control-vulnpol-integration-api-venv-vendored-pin-not-scanned
+          --expect-control control-vulnpol-integration-api-venv-vendored-report-of-another-directory
+          --expect-control control-vulnpol-integration-api-venv-truncated-inventory
+          --expect-control control-vulnpol-integration-api-venv-project-not-from-the-checkout
+          --expect-control control-vulnpol-integration-api-venv-project-from-an-index-url
+          --expect-control control-vulnpol-integration-api-venv-project-from-outside-the-workspace
+          --expect-control control-vulnpol-baseline-integration-binaries
+          --expect-control control-vulnpol-critical-nofix-integration-binary-trivy
+          --expect-control control-vulnpol-high-fix-integration-binary-trivy
+          --expect-control control-vulnpol-integration-binary-trivy-analysis-missing
+          --expect-control control-vulnpol-integration-binary-trivy-stdlib-missing
+          --expect-control control-vulnpol-integration-binary-trivy-manifest-digest-differs
+
+      - name: Upload integration smoke security reports and gate summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-reports-integration
+          path: security-reports/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-logs
+          path: api-smoke.log
+          retention-days: 7
+
+      - name: Upload the main short check binding record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: short-check-evidence-attempt-${{ github.run_attempt }}
+          path: short-check-evidence/
+          retention-days: 90
+          if-no-files-found: error
