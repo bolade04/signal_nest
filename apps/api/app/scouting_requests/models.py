@@ -44,9 +44,7 @@ class ScoutRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     stats: Mapped[dict] = mapped_column(JSON, default=dict)  # scanned/filtered/opportunities
     #: D-25 run fence (PROPOSED, ``app.jobs.admission``): advanced by every pause; a run
     #: may continue only while it still equals the value its job was enqueued under.
-    run_fence: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
+    run_fence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class ScoutSchedule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
