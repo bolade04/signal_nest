@@ -213,9 +213,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     and the customer then cancels the re-queued job, the request stays `running` (before:
     `queued`, the F-03 shape) until Pause -> Resume; Run now answers `422` meanwhile.
     Cancel semantics are unchanged and the stuck state is the existing F-03 defect class.
-    If the old attempt is still alive, the calls it had already been admitted to make are
-    charged before its rollback; that spend predates this change (a lease check in the
-    admission is a proposed option, not implemented).
+    If the old attempt is still alive, it keeps passing its admissions (the request is
+    still `running` with its fence) and can run its remaining operations to completion;
+    every call it makes is charged, and its writes are rolled back when it loses its lease
+    at completion. A Pause stops it at its next admission. That behaviour predates this
+    change (a lease check in the admission, option O1, is proposed, not implemented).
   - **A scheduled occurrence can be lost after Pause -> Resume (PROPOSED, §6.2 Q-6):**
     if the next tick fires while the fenced job of the previous occurrence is still
     pending, the tick coalesces against it and that occurrence is skipped, not caught
