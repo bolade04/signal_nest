@@ -64,6 +64,13 @@ class HandlerContext:
     #: in the attempt's own transaction. A callable must only add rows; it never
     #: commits or rolls back itself.
     after_rollback: list[Callable[[Session], None]] = field(default_factory=list)
+    #: Writes that must commit if and only if this attempt still holds its job when it
+    #: fails (execution controls, contract §9.1, PROPOSED). When the attempt fails, the
+    #: worker runs each callable in the SAME transaction as the attempt's token-fenced job
+    #: transition (``fail`` or ``finish_cancel``), before that transition, and commits them
+    #: together; if the lease was lost (the fence matches no row) they are rolled back with
+    #: it. On success, or a lease lost at completion, none runs. A callable never commits.
+    on_fenced_failure: list[Callable[[Session], None]] = field(default_factory=list)
 
 
 #: A handler returns a *safe* result summary (counts/status only — never secrets,

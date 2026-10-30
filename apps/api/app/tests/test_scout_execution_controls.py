@@ -404,3 +404,20 @@ def test_the_terminal_write_checks_status_and_fence_on_their_own(s, state):
         admission.finish(s, stats={"scanned": 1}, now=_NOW)
     assert stopped.value.cause == "request_paused"
     assert _request(s, req)[0] == state
+
+
+def test_a_stale_attempt_releases_no_owner_once_its_job_has_moved_on(s):
+    """Contract §9.1: the owner release can commit outside the fenced job transaction, so it
+    carries the full identity. The job was re-claimed (a new token) before the request's
+    claim moved: the stale attempt's release leaves the owner as it is."""
+    req, job, admission = _owned_run(s, "dallas")
+    job.lease_token = "tok-replacement"
+    s.flush()
+    s.execute(admission.release_owner_statement())
+    s.flush()
+    assert _request(s, req) == ("running", job.id)
+    job.lease_token = "tok"  # control: the attempt holding its job releases its owner
+    s.flush()
+    s.execute(admission.release_owner_statement())
+    s.flush()
+    assert _request(s, req) == ("running", None)

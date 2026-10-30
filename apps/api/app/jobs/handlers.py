@@ -54,7 +54,12 @@ _NO_OWNER = {"owner_job_id": None, "owner_attempt": None, "owner_lease_token": N
 
 
 def _owned_by(job_id: str | None) -> list:
-    """The request has no owner, or its owner is an attempt of ``job_id`` (O2)."""
+    """The request has no owner, or its owner is an attempt of ``job_id`` (O2).
+
+    Job-level only, so it is used only where the write commits inside the worker's
+    token-fenced job transaction (the final-failure hook), which already proves this
+    attempt holds the job (contract §9.1). Writes that can commit outside it carry the
+    attempt's full identity instead (``RunAdmission._is_me`` + ``holds_job``)."""
     if job_id is None:
         return []
     return [or_(ScoutRequest.owner_job_id.is_(None), ScoutRequest.owner_job_id == job_id)]
@@ -65,9 +70,9 @@ def _record_refused_run(
     context: ExecutionContext,
     exc: SignalVolumeAboveBoundError,
     run_fence: int | None = None,
-    job_id: str | None = None,
+    owner: RunAdmission | None = None,
 ) -> Callable[[Session], None]:
-    """An after-rollback writer that settles a run refused at the in-process bound.
+    """A writer that settles a run refused at the in-process bound.
 
     The attempt is rolled back (the refusal happens before any signal is written),
     so the outcome is recorded in the worker's after-rollback transaction: the
@@ -88,6 +93,14 @@ def _record_refused_run(
     fence: a request paused (or paused and resumed, and run again) since this run claimed
     it is left exactly as it is, stats included, so an old run can never settle a newer
     one. Without it (legacy callers) the behaviour above is unchanged.
+
+    Execution controls (contract §9.1, PROPOSED): with ``owner`` (the claimed attempt) the
+    compare-and-set also requires the attempt's full identity - the request's owner is this
+    job, attempt and lease token, and the job row still carries this worker, attempt and
+    token in an active status - and the durable handler registers this writer to commit in
+    the worker's token-fenced failure transaction (``HandlerContext.on_fenced_failure``), so
+    it commits if and only if the attempt still holds its job. A stale attempt (its job
+    re-claimed by a newer attempt) writes nothing over its replacement.
     """
 
     def write(db: Session) -> None:
@@ -121,7 +134,7 @@ def _record_refused_run(
                     ScoutRequest.id == request.id,
                     ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
                     ScoutRequest.run_fence == run_fence,
-                    *_owned_by(job_id),
+                    *([owner._is_me(ScoutRequest), owner.holds_job()] if owner else []),
                 )
                 .values(status=ScoutRequestStatus.FAILED.value, stats=stats, **_NO_OWNER)
                 .execution_options(synchronize_session=False)
@@ -280,13 +293,16 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                 # The refusal precedes every model call of the run, so it reserved and
                 # spent nothing (P6-LLM-4); the terminal-failure hook below still
                 # releases anything this job holds, as for every final failure.
-                ctx.after_rollback.append(
+                # Execution controls (contract §9.1, PROPOSED): the settlement commits in
+                # the worker's token-fenced failure transaction, guarded by the attempt's
+                # full identity, so a stale attempt never fails its replacement's run.
+                ctx.on_fenced_failure.append(
                     _record_refused_run(
                         scout_request_id,
                         ctx.context,
                         exc,
                         run_fence=admission.fence if admission.claimed else None,
-                        job_id=ctx.job_id if admission.claimed else None,
+                        owner=admission if admission.claimed else None,
                     )
                 )
                 raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc

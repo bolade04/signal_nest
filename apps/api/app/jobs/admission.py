@@ -614,12 +614,28 @@ class RunAdmission:
         self.granted("commit")
 
     # -- owner release and status restore ---------------------------------------------
+    def holds_job(self):
+        """``EXISTS``: the job row still carries this attempt's claim (this worker, attempt
+        and lease token) in an active status (contract §9.1: a request write that can commit
+        outside the worker's token-fenced job transaction carries the full identity). No
+        lease-time test: a lapsed but not recovered lease still releases its own owner."""
+        from app.jobs.models import Job
+
+        return exists().where(
+            Job.id == self.job_id,
+            Job.worker_id == self.worker_id,
+            Job.attempt_count == self.attempt,
+            Job.lease_token == self.lease_token,
+            Job.status.in_((*_LIVE_JOB, "cancel_requested")),
+        )
+
     def release_owner_statement(self):
-        """Clear the owner, only while it is still this attempt."""
+        """Clear the owner, only while it is still this attempt and this attempt still
+        holds its job (a stale attempt never writes the request, §9.1)."""
         model = self._model()
         return (
             update(model)
-            .where(model.id == self.scout_request_id, self._is_me(model))
+            .where(model.id == self.scout_request_id, self._is_me(model), self.holds_job())
             .values(owner_job_id=None, owner_attempt=None, owner_lease_token=None)
             .execution_options(synchronize_session=False)
         )
