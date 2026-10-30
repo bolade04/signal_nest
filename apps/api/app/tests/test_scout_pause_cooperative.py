@@ -36,6 +36,7 @@ from app.jobs.models import Job
 from app.jobs.registry import TerminalFailureContext
 from app.jobs.service import enqueue_job
 from app.jobs.status import JobErrorCode, JobStatus, JobType
+from app.llm.base import LLMTimeoutError as promise_llm_timeout
 from app.llm.models import LLMUsageEvent
 from app.scouting_requests import schedules as sched
 from app.scouting_requests.models import ScoutRequest
@@ -379,3 +380,151 @@ def test_a_final_failure_of_an_old_job_does_not_settle_a_newer_run(s):
     assert req.status == QUEUED  # the old job (fence 0) leaves the newer run's request
     hook(1)
     assert req.status == ScoutRequestStatus.FAILED.value  # control: its own fence settles
+
+
+def _rival_case(s, case: str):
+    """A request whose claim was made by THIS attempt (fence 0, ``queued`` before it) and
+    then superseded as ``case`` says; returns the request and the stale attempt."""
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "lagos"))
+    context = ExecutionContext.for_scout_request(
+        organization_id=req.organization_id, workspace_id=req.workspace_id
+    )
+    mine = enqueue_job(
+        s,
+        job_type=JobType.SCOUT_REQUEST_EXECUTE,
+        context=context,
+        payload={"scout_request_id": req.id, "run_fence": 0},
+        scout_request_id=req.id,
+        now=_NOW,
+    )
+    mine.status, mine.worker_id, mine.attempt_count = JobStatus.RUNNING.value, "w-mine", 1
+    req.run_fence = 0
+    states = {
+        "newer_pause": (PAUSED, 1),
+        "resume": (ScoutRequestStatus.DRAFT.value, 1),
+        "newer_claim_new_fence": (RUNNING, 1),
+        "newer_claim_same_fence_other_job": (RUNNING, 0),
+        "completed_by_another_run": (ScoutRequestStatus.COMPLETED.value, 0),
+        "failed_by_another_run": (ScoutRequestStatus.FAILED.value, 0),
+    }
+    req.status, req.run_fence = states[case]
+    if case == "newer_claim_same_fence_other_job":
+        rival = enqueue_job(
+            s,
+            job_type=JobType.SCOUT_REQUEST_EXECUTE,
+            context=context,
+            payload={"scout_request_id": req.id, "run_fence": 0},
+            scout_request_id=req.id,
+            idempotency_key="rival",
+            now=_NOW,
+        )
+        rival.status, rival.worker_id, rival.attempt_count = JobStatus.RUNNING.value, "w-rival", 1
+    s.flush()
+    stale = RunAdmission(
+        scout_request_id=req.id,
+        organization_id=req.organization_id,
+        workspace_id=req.workspace_id,
+        fence=0,
+        session_factory=None,
+        job_id=mine.id,
+        worker_id="w-mine",
+        attempt=1,
+        claimed=True,
+        pre_claim_status=QUEUED,
+    )
+    return req, stale
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "newer_pause",
+        "resume",
+        "newer_claim_new_fence",
+        "newer_claim_same_fence_other_job",
+        "completed_by_another_run",
+        "failed_by_another_run",
+    ],
+)
+def test_the_status_restore_never_overwrites_a_newer_state(s, case):
+    """§6.2 Q-2 (B), PROPOSED: the restore after a failed attempt is conditional on run
+    identity (job, worker, attempt), the run fence, lease ownership and no rival active
+    execute job. It must leave every newer state exactly as it is."""
+    req, stale = _rival_case(s, case)
+    before = (req.status, req.run_fence)
+    stale.restore_writer(now=_NOW)(s)
+    s.refresh(req)
+    assert (req.status, req.run_fence) == before
+
+
+# --------------------------------------------------------------------------- #
+# S1: one admission never authorizes the rest of a run
+# --------------------------------------------------------------------------- #
+def _record_checks(monkeypatch, events: list) -> None:
+    real_check = RunAdmission.check
+
+    def check(self, session, operation):
+        events.append(("admit", operation))
+        return real_check(self, session, operation)
+
+    monkeypatch.setattr(RunAdmission, "check", check)
+
+
+def test_every_model_attempt_and_retry_passes_its_own_admission(factory, committed, monkeypatch):
+    rid = seed_mod.sid("scout", "dallas")
+    job_id = _queue(factory, rid)
+    events: list = []
+    _record_checks(monkeypatch, events)
+    real_generate = promise.MockLLMProvider.generate
+
+    def generate(provider, *args, **kwargs):
+        events.append(("send", "model"))
+        if sum(1 for e in events if e == ("send", "model")) == 1:
+            raise promise_llm_timeout("first attempt times out: a retry follows")
+        return real_generate(provider, *args, **kwargs)
+
+    monkeypatch.setattr(promise.MockLLMProvider, "generate", generate)
+    assert _poll(factory)
+
+    assert _job(factory, job_id).result_summary["outcome"] == "completed"
+    sends = [i for i, e in enumerate(events) if e == ("send", "model")]
+    assert len(sends) >= 2  # the timed-out attempt and its retry, at least
+    # Every model send, the retry included, directly follows an admission of its own.
+    assert all(events[i - 1] == ("admit", "model") for i in sends)
+    assert sum(1 for e in events if e == ("admit", "model")) == len(sends)
+    assert events.index(("admit", "post_fetch")) < sends[0]
+
+
+def test_every_live_fetch_attempt_passes_its_own_admission(factory, committed, monkeypatch):
+    from app.connectors import live as live_mod
+    from app.connectors.base import FailureKind
+    from app.connectors.feedcache import FeedCache
+    from app.connectors.live import LiveRssConnector
+    from app.connectors.retry import ConnectorFetchError
+    from app.tests.test_live_rss_connector import record, target
+
+    rid = seed_mod.sid("scout", "dallas")
+    job_id = _queue(factory, rid)
+    events: list = []
+    _record_checks(monkeypatch, events)
+
+    class FailingFetcher:
+        def fetch(self, url, *, allowed_hosts, validators=None):
+            events.append(("send", "fetch"))
+            raise ConnectorFetchError(FailureKind.NETWORK, "fake network failure")
+
+    connector = LiveRssConnector(
+        [target(record("src-a")), target(record("src-b"))],
+        fetcher=FailingFetcher(),
+        cache=FeedCache(),
+        sleep=lambda _s: None,
+        max_attempts=2,
+    )
+    monkeypatch.setattr(live_mod, "live_connector_for", lambda **_kw: connector)
+    assert _poll(factory)
+
+    sends = [i for i, e in enumerate(events) if e == ("send", "fetch")]
+    assert len(sends) == 4  # 2 sources x 2 attempts (a retry each)
+    assert all(events[i - 1] == ("admit", "fetch") for i in sends)
+    assert events[sends[-1] + 1] == ("admit", "post_fetch")
+    assert _job(factory, job_id).result_summary["outcome"] == "completed"

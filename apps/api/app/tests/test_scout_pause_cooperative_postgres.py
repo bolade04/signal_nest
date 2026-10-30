@@ -605,3 +605,118 @@ def test_late_ledger_and_terminal_callbacks_after_erasure_recreate_nothing(world
         assert metrics.counter_value(LLM_SETTLEMENTS_ORPHANED_TOTAL, outcome="settle") == 1
     finally:
         configure_metrics(None)
+
+
+# --------------------------------------------------------------------------- #
+# S4: schedule continuity after Pause -> Resume (no catch-up is added)
+# --------------------------------------------------------------------------- #
+def _tick_outcomes(w: World) -> list[tuple[str, str]]:
+    with w.factory() as s:
+        rows = s.execute(
+            select(Job.payload, Job.result_summary)
+            .where(Job.scout_request_id == w.rid, Job.job_type == JobType.SCOUT_SCHEDULE_TICK.value)
+            .order_by(Job.scheduled_for)
+        ).all()
+    return [(p["occurrence_at"], (r or {}).get("outcome", "pending")) for p, r in rows]
+
+
+def _executions(w: World) -> list[tuple[int | None, str, str | None]]:
+    with w.factory() as s:
+        rows = s.execute(
+            select(Job.payload, Job.status, Job.result_summary)
+            .where(
+                Job.scout_request_id == w.rid,
+                Job.job_type == JobType.SCOUT_REQUEST_EXECUTE.value,
+                Job.id != w.job_id,
+            )
+            .order_by(Job.created_at)
+        ).all()
+    return [(p.get("run_fence"), st, (r or {}).get("outcome")) for p, st, r in rows]
+
+
+@pytest.mark.parametrize("order", ["fenced_job_first", "tick_first"])
+def test_the_schedule_chain_survives_pause_resume_and_a_stale_fenced_job(world, monkeypatch, order):
+    """Rapid Pause -> Resume leaves the occurrence's execute job fenced (stale) while the
+    tick chain goes on. Two claim orders:
+
+    * ``fenced_job_first`` (the store's FIFO order: the stale job became due first): the
+      stale job is skipped, the next tick fans out a new run under the new fence; no
+      occurrence is missed;
+    * ``tick_first`` (the next tick is claimed while the stale job is still pending): the
+      tick coalesces against it (that occurrence is missed, PROPOSED B7), the stale job is
+      then skipped, and the following tick fans out normally.
+
+    Either way the chain survives (no re-arming needed), the schedule stays enabled, and no
+    catch-up run is created for a missed occurrence."""
+    from app.core.config import get_settings
+    from app.core.enums import ScheduleInterval
+    from app.scouting_requests import schedules as sched
+    from app.scouting_requests.models import ScoutSchedule
+
+    w = world
+    monkeypatch.setattr(get_settings(), "scout_scheduling_enabled", True)
+    monkeypatch.setattr(pipeline, "fetch_signals", Sources())
+    t0 = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1)  # after the seed
+    clock = [t0]
+    runner = _runner(w, clock=lambda: clock[0])
+    with offline_llm():
+        assert _start_worker(w, runner).join_ok() is True  # the seeded run completes
+        with w.factory() as s:
+            req = s.get(ScoutRequest, w.rid)
+            schedule = sched.create_schedule(
+                s, request=req, interval=ScheduleInterval.DAILY, now=t0
+            )
+            s.commit()
+            schedule_id = schedule.id
+        day = timedelta(days=1)
+
+        def poll_at(when) -> bool:
+            clock[0] = when
+            return _start_worker(w, runner).join_ok()
+
+        assert poll_at(t0 + day) is True  # tick 1 fans out run E1 (fence 0)
+        _pause(w)
+        _resume(w)  # E1 is now stale: its fence (0) is not the request's (1)
+        if order == "tick_first":
+            with w.factory() as s:  # hold E1 back so tick 2 is claimed while it is pending
+                s.execute(
+                    update(Job)
+                    .where(
+                        Job.scout_request_id == w.rid,
+                        Job.job_type == JobType.SCOUT_REQUEST_EXECUTE.value,
+                        Job.status == JobStatus.PENDING.value,
+                    )
+                    .values(available_at=t0 + 2 * day + timedelta(hours=1))
+                )
+                s.commit()
+        while poll_at(t0 + 2 * day + timedelta(hours=2)):
+            pass  # drain everything due by then: tick 2 and E1 (in the order under test)
+        while poll_at(t0 + 3 * day + timedelta(hours=2)):
+            pass  # tick 3 and whatever it fanned out
+
+    ticks, runs = _tick_outcomes(w), _executions(w)
+    with w.factory() as s:
+        schedule = s.get(ScoutSchedule, schedule_id)
+        enabled, next_run = schedule.enabled, schedule.next_run_at
+        status = s.get(ScoutRequest, w.rid).status
+    outcomes = [o for _, o in ticks]
+    assert enabled is True and next_run is not None and next_run > t0 + 3 * day  # alive
+    assert outcomes[:3] == (
+        ["fanned_out", "fanned_out", "fanned_out"]
+        if order == "fenced_job_first"
+        else ["fanned_out", "coalesced", "fanned_out"]
+    )
+    assert outcomes[3:] == ["pending"]  # the chain's next tick is seeded, nothing extra
+    stale = runs[0]
+    assert stale == (0, JobStatus.SUCCEEDED.value, "skipped_request_paused")
+    fresh = runs[1:]
+    assert fresh and all(f == (1, JobStatus.SUCCEEDED.value, "completed") for f in fresh)
+    assert len(fresh) == (2 if order == "fenced_job_first" else 1)  # no catch-up run
+    assert status == "completed"
+    _measure(
+        "schedule_continuity",
+        order=order,
+        tick_outcomes=outcomes,
+        executions=runs,
+        missed_occurrences=outcomes[:3].count("coalesced"),
+    )

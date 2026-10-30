@@ -272,7 +272,8 @@ class RunAdmission:
         is still ``running`` with this run's fence. Anything else is a stop at the commit
         boundary (:class:`RunStopped`, operation ``commit``): the run's findings are then
         discarded with its savepoint, so they become visible only if this write commits
-        before a pause.
+        before a pause (§6.2 Q-1, PROPOSED: discarding the stopped run's uncommitted
+        findings is a candidate choice, not a ruling).
         """
         model = self._model()
         result = db.execute(
@@ -294,15 +295,19 @@ class RunAdmission:
 
     # -- after a failed attempt -------------------------------------------------------
     def restore_writer(self, *, now: datetime) -> Callable[[Session], None] | None:
-        """An after-rollback writer that puts back the pre-claim status (§6.2 Q-2 (B)).
+        """An after-rollback writer that puts back the pre-claim status (§6.2 Q-2 (B),
+        PROPOSED).
 
         A failed attempt's rollback no longer undoes the claim (it was committed on its
         own), so the request would show ``running`` while the job waits to retry. The
         writer restores the status the claim replaced, only while the request is still
         ``running`` with this run's fence **and** this attempt still owns the job (same
         worker, same attempt, still running): a lease that was lost and reclaimed meanwhile
-        makes it a no-op, so it can never undo a newer attempt's claim. Returns ``None``
-        when nothing was claimed or there is nothing to restore.
+        makes it a no-op, so it can never undo a newer attempt's claim; and so is any other
+        active execute job of the same request (a same-fence rival owning ``running``). It
+        therefore never overwrites a newer pause, a resume (``draft``), a newer claim (a new
+        fence or another job) or another run's terminal result. Returns ``None`` when
+        nothing was claimed or there is nothing to restore.
         """
         if not self.claimed or self.pre_claim_status in (None, _RUNNING):
             return None
@@ -311,13 +316,22 @@ class RunAdmission:
 
         def write(db: Session) -> None:
             from app.jobs.models import Job
-            from app.jobs.status import JobStatus
+            from app.jobs.status import ACTIVE_STATUSES, JobStatus, JobType
 
+            # Run identity and lease ownership: this job, this worker, this attempt.
             owned = exists().where(
                 Job.id == self.job_id,
                 Job.worker_id == self.worker_id,
                 Job.attempt_count == self.attempt,
                 Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]),
+            )
+            # A rival execute job of the same request (same fence, e.g. a manual run that
+            # raced a tick) may own the ``running`` now: never undo its claim.
+            rival = exists().where(
+                Job.scout_request_id == self.scout_request_id,
+                Job.id != self.job_id,
+                Job.job_type == JobType.SCOUT_REQUEST_EXECUTE.value,
+                Job.status.in_([status.value for status in ACTIVE_STATUSES]),
             )
             db.execute(
                 update(model)
@@ -328,6 +342,7 @@ class RunAdmission:
                     model.status == _RUNNING,
                     model.run_fence == self.fence,
                     owned,
+                    ~rival,
                 )
                 .values(status=pre, updated_at=now)
                 .execution_options(synchronize_session=False)
