@@ -255,6 +255,20 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     to that row's own deadline (fetch: 20 s + lease; model: 3 x 30 s + lease). It never
     waits for a row with an unknown end. **Wait expiry:** the job fails (`NON_RETRYABLE`,
     `admission_unresolved`), the request ends `failed`, the admission stays unresolved.
+  - **Persisted deadlines (D-25 recovery, PROPOSED).** Each admission stores its deadline
+    (`deadline_at`) and the basis it was computed from (`deadline_rule = client_plus_lease`,
+    the admitting worker's client deadline for the operation and its lease, in seconds),
+    written by the admitting INSERT from one database-clock reading shared with
+    `admitted_at`. The waiting rule, reconciliation's gate, the listings and the Scout's
+    derived state all read that stored value and compare it strictly with the database clock
+    (eligible once `clock_timestamp() > deadline_at`): a worker, CLI or later settings change
+    can neither shorten nor lengthen an existing admission's gate. The deadline is a
+    procedural gate, not evidence that the external party stopped. **Legacy rows** (created
+    before the deadline was stored) were not back-filled: `deadline_rule = unrecorded`, no
+    deadline, listed as "not recorded". One with a recorded unknown end is reconcilable as
+    before; one with no recorded end is never made eligible by time (see Reconciliation); a
+    run blocked by one waits up to its own computed bound (the end of a wait resolves
+    nothing).
   - **Unknown outcomes block the Scout (the availability cost).** An unknown end leaves an
     unresolved admission: its retry is not admitted, the run fails (`admission_unresolved`),
     and the Scout admits nothing - and its schedule fans out no run (`admission_unresolved`
@@ -269,26 +283,68 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     read-only GET under a 20 s deadline). Operator alternatives, none adopted: R3 (a fetch's
     unknown outcome resolves), R5 (a provider-originated 5xx counts as known: it blocks less),
     R6 (a fetch 5xx counts as unknown: the bound is strict).
+  - **Recovery state (D-25 recovery, PROPOSED).** Every single-Scout API response carries a
+    derived, read-only `execution` field `{state, reason, next_action, since}` (the list
+    returns `null`: not computed there), computed on each read from committed rows and the
+    database clock; nothing is stored. `needs_attention` when an unresolved admission is
+    eligible for reconciliation (its attempt holds no valid authority, and its end is unknown,
+    or it has no end and its deadline has passed, or it is a legacy row with no end), whatever
+    the request status; else `paused`; else `in_progress` while a live job not fenced out by a
+    pause exists or an admission is still finishing (a healthy in-flight one is never
+    `needs_attention`); else `stopped` (`queued`/`running` with no live job is
+    `run_interrupted`, contact support: Run now refuses those statuses; or a failed or
+    cancelled last run); else `idle`. Reasons and next actions are closed codes; no id,
+    worker, token, attempt, payload, URL or setting is exposed; visible to every role that
+    can read the Scout, scoped to its tenancy. The Scout page shows a notice for
+    `needs_attention`, `paused` and `stopped`, and keeps polling while `in_progress`.
+    **Run now on a `needs_attention` Scout is refused** (HTTP 422, `scout_needs_attention`)
+    and creates no job; Resume returns the Scout to `draft` but the state stays
+    `needs_attention`. Customers cannot clear an unresolved operation: no customer route
+    resolves, reconciles or hides one. **Operator view:**
+    `python -m app.jobs.reconcile blocked [--organization <id>] [--workspace <id>]` lists every
+    Scout in `needs_attention` with its tenancy, the operation, `admitted_at`, the stored
+    deadline (or "not recorded") and its basis, whether it has passed, the end kind (or "no
+    recorded end"), the job's status and the exact `resolve` command to run.
   - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
     exactly three categories - the current owner's admissions, earlier owners' outstanding
     admissions, admissions with an unknown end - each with its job's status and
     `lease_expires_at`, its deadline and whether that deadline has passed;
     `python -m app.jobs.reconcile resolve --admission <id> --operator <name> --reason <code>
     [--note <= 200 chars]` resolves one after the operator has ascertained the operation is
-    over. Refused over a valid in-flight admission, and refused for any admission with no
-    recorded end until its own deadline (`admitted_at` + the operation's client deadline +
-    the lease, by the database clock) has passed; idempotent; audited; accounting unchanged.
+    over. Refused while the admitting attempt still holds valid authority (**whatever the end
+    kind**, an unknown end included: D-25 recovery A2, PROPOSED), and refused for any
+    admission with no recorded end until its own **stored** deadline has passed by the
+    database clock; a legacy admission with no recorded end and no stored deadline requires
+    `--acknowledge-unrecorded-deadline` (recorded in the audit row; refused where it does not
+    apply). Idempotent; audited; accounting unchanged.
     **Caveat:** the deadline guard covers SignalNest's client side only. After the deadline
     the external party (the provider or the feed's server) may still be working;
     reconciling is the operator's declaration that it is not, and the bound then rests on
-    that declaration. There is no signal yet (log or metric) for a blocked Scout: operators
-    must look. This operational burden is a stated limitation.
+    that declaration. A blocked Scout is now visible (the `blocked` listing and the customer
+    indication above), but there is still no alert or metric: operators must look. This
+    operational burden is a stated limitation.
   - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
-    the run at its next admission (including while it waits): the job ends `cancelled`, the
-    request returns to its pre-claim status (`queued` for a manual run: the F-03 shape,
-    unresolved). A recovered attempt's pre-claim status is `running`, so Cancelling it leaves
-    the request `running` with no job (the same shape; Pause -> Resume clears it). Cancel
-    never resolves an admission.
+    the run at its next admission (including while it waits): the job ends `cancelled`.
+    **Cancel recovery (D-25 recovery, PROPOSED):** whenever Cancel makes an execute job
+    terminal (before its claim, after the job claim but before the run's, during the run,
+    while it waits, after a lease recovery), the request returns, in the same transaction as
+    the job's terminal write, to the status it had before the run was requested, recorded
+    once on the job (Run now records it when it creates the job; a scheduled job at its first
+    claim), or `draft` for a job with none recorded (legacy, or a scheduled job never
+    claimed): never `queued`/`running`, never a result the run did not produce. A
+    compare-and-set preserves a newer pause, resume, claim, owner, fence or completed result,
+    and another live job of the Scout not fenced out by a pause; it may clear an owner that is
+    an attempt of the cancelled job. The Cancel route's job transition is itself a
+    compare-and-set on the status it read, so a job that completed meanwhile keeps its result.
+    Cancel never resolves an admission and writes no accounting row: a Scout cancelled while
+    an operation is still unresolved is idle but `in_progress`/`needs_attention`, and its
+    next admission is still refused (K = 1). Requests left `queued`/`running` by an earlier
+    candidate's Cancel are not repaired; they show `stopped` / `run_interrupted`.
+  - **Lock order of the fenced terminal transaction (a defect fix, PROPOSED).** The worker's
+    fenced failure / Cancel transaction now locks the job row before its writers update the
+    request, restoring the single order job -> request -> ledger -> period -> reservation.
+    The previous order (request -> job) could deadlock (`40P01`) against a stale attempt's
+    admission check. No end state changed.
   - **Stale-stop end states.** Lease lapsed (not yet recovered): a retryable failure, so the
     run is retried, never lost; the request stays `running` with the owner cleared until the
     retry claims it. Token rotated or owner superseded: the attempt stops and writes nothing
