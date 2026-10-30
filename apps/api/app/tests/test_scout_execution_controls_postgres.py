@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from app.connectors import live as live_mod
 from app.connectors.base import FailureKind
@@ -230,6 +231,37 @@ def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_adm
     assert ledger["reservations"] == calls
 
 
+def test_the_migrated_schema_enforces_k1_with_the_partial_unique_index(world):
+    """The Alembic schema itself (not the ORM metadata): a resolved and an unresolved admission
+    coexist for one Scout; a second unresolved one is refused by the partial unique index
+    ``uq_scout_admission_unresolved``."""
+    w = world
+    now = datetime.now(UTC)
+
+    def row(**values) -> ScoutAdmission:
+        base = dict(
+            scout_request_id=w.rid,
+            organization_id=w.org,
+            workspace_id=w.ws,
+            job_id=None,
+            attempt=1,
+            worker_id="w-1",
+            operation="model",
+            admitted_at=now,
+        )
+        base.update(values)
+        return ScoutAdmission(**base)
+
+    with w.factory() as s:
+        s.add_all([row(ended_at=now, end_kind="known", resolved_at=now), row()])
+        s.commit()
+    with w.factory() as s:
+        s.add(row(operation="fetch"))
+        with pytest.raises(IntegrityError) as refused:
+            s.commit()
+    assert "uq_scout_admission_unresolved" in str(refused.value)
+
+
 # --------------------------------------------------------------------------- #
 # §6.4: Cancel during an admitted operation (a PROPOSED cancellation change)
 # --------------------------------------------------------------------------- #
@@ -242,6 +274,7 @@ def test_cancel_during_an_admitted_operation_stops_at_the_next_admission(world, 
     with w.factory() as s:
         DurableJobStore().request_cancel(s, s.get(Job, w.job_id))
         s.commit()
+    assert _unresolved(w) == 1  # Cancel resolves nothing (G4)
     provider.release.set()
     assert worker.join_ok() is True
 

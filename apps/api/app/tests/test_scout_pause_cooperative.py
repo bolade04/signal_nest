@@ -407,8 +407,14 @@ def _rival_case(s, case: str):
         now=_NOW,
     )
     mine.status, mine.worker_id, mine.attempt_count = JobStatus.RUNNING.value, "w-mine", 1
+    # Execution controls (PROPOSED): the stale attempt carries its full claimed identity (lease
+    # token, a live lease, the O2 owner columns), so each case below is refused by its own
+    # state alone; the control test shows the same attempt's restore applies otherwise.
+    mine.lease_token, mine.lease_expires_at = "tok-mine", _NOW + timedelta(minutes=5)
+    req.owner_job_id, req.owner_attempt, req.owner_lease_token = mine.id, 1, "tok-mine"
     req.run_fence = 0
     states = {
+        "unchanged": (RUNNING, 0),
         "newer_pause": (PAUSED, 1),
         "resume": (ScoutRequestStatus.DRAFT.value, 1),
         "newer_claim_new_fence": (RUNNING, 1),
@@ -438,8 +444,10 @@ def _rival_case(s, case: str):
         job_id=mine.id,
         worker_id="w-mine",
         attempt=1,
+        lease_token="tok-mine",
         claimed=True,
         pre_claim_status=QUEUED,
+        process_now=_NOW,
     )
     return req, stale
 
@@ -464,6 +472,15 @@ def test_the_status_restore_never_overwrites_a_newer_state(s, case):
     stale.restore_writer(now=_NOW)(s)
     s.refresh(req)
     assert (req.status, req.run_fence) == before
+
+
+def test_the_same_attempt_restores_when_nothing_newer_happened(s):
+    """Control for the cases above (execution controls, PROPOSED): with its claimed identity
+    complete and nothing newer, the same attempt's restore applies."""
+    req, stale = _rival_case(s, "unchanged")
+    stale.restore_writer(now=_NOW)(s)
+    s.refresh(req)
+    assert (req.status, req.owner_job_id) == (QUEUED, None)
 
 
 # --------------------------------------------------------------------------- #

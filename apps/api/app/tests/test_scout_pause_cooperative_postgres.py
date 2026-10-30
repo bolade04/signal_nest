@@ -582,6 +582,7 @@ def test_late_ledger_and_terminal_callbacks_after_erasure_recreate_nothing(world
             job_id=w.job_id,
             worker_id="w-gone",
             attempt=1,
+            lease_token="tok-gone",  # a complete claimed identity (execution controls)
         )
         with pytest.raises(RunStopped) as gone:
             admission.admit("model")

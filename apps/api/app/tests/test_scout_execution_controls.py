@@ -246,3 +246,65 @@ def test_a_claim_is_refused_over_a_valid_owner_and_takes_over_a_lapsed_one(facto
         )
         check.query(Job).filter(Job.id.in_([owner_id, me_id])).delete(synchronize_session=False)
         check.commit()
+
+
+def _owned_run(s, city: str):
+    """A run holding its claim (what the committed claim leaves): the job running with a live
+    lease and token ``tok``, the request ``running`` with this attempt as its O2 owner."""
+    req = s.get(ScoutRequest, seed_mod.sid("scout", city))
+    job = _job(s, req, lease=_NOW + timedelta(minutes=5))
+    req.status = "running"
+    req.owner_job_id, req.owner_attempt, req.owner_lease_token = job.id, 1, "tok"
+    s.flush()
+    admission = _admission(req, job_id=job.id)
+    admission.claimed, admission.pre_claim_status = True, "queued"
+    return req, job, admission
+
+
+def _request(s, req) -> tuple:
+    return s.execute(
+        select(ScoutRequest.status, ScoutRequest.owner_job_id).where(ScoutRequest.id == req.id)
+    ).one()
+
+
+@pytest.mark.parametrize(
+    ("change", "cause"),
+    [("token_rotated", "lease_lost"), ("owner_superseded", "owner_superseded")],
+)
+def test_each_authority_component_alone_stops_admission_terminal_write_and_restore(
+    s, change, cause
+):
+    """G2: a rotated lease token alone (same worker, same attempt, the owner columns still
+    naming this attempt), or a changed owner alone (the job's authority intact), is enough.
+    The admission, the guarded terminal write and the status restore all refuse, and nothing is
+    written over the request."""
+    req, job, admission = _owned_run(s, "dallas")
+    admission.check(s, "model")  # control: the claimed identity is admitted
+    if change == "token_rotated":
+        job.lease_token = "tok-rotated"
+    else:
+        rival = _job(s, req, worker="w-2", lease=_NOW + timedelta(minutes=5))
+        req.owner_job_id = rival.id
+    s.flush()
+    with pytest.raises(RunStopped) as at_admission:
+        admission.check(s, "model")
+    assert at_admission.value.cause == cause
+    with pytest.raises(RunStopped) as at_commit:
+        admission.finish(s, stats={"scanned": 1}, now=_NOW)
+    assert at_commit.value.cause == cause
+    admission.restore_writer(now=_NOW)(s)
+    s.flush()
+    assert _request(s, req)[0] == "running"
+
+
+@pytest.mark.parametrize(("write", "status"), [("terminal", "completed"), ("restore", "queued")])
+def test_the_owning_attempt_writes_when_nothing_changed(s, write, status):
+    """Control for the test above: the same attempt, nothing changed, writes (and clears the
+    owner)."""
+    req, _job_row, admission = _owned_run(s, "dallas")
+    if write == "terminal":
+        admission.finish(s, stats={"scanned": 1}, now=_NOW)
+    else:
+        admission.restore_writer(now=_NOW)(s)
+    s.flush()
+    assert _request(s, req) == (status, None)
