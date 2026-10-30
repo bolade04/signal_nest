@@ -11,11 +11,21 @@ import {
 } from '@/components/common/badges';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { scoreBand, scoreHelp } from '@/lib/labels';
+import { confidenceBand, scoreBand, scoreHelp, type ScoreBand } from '@/lib/labels';
 import { formatRelative } from '@/lib/utils';
 
-function ScorePill({ label, value, help }: { label: string; value: number; help: string }) {
-  const band = scoreBand(value);
+function ScorePill({
+  label,
+  value,
+  help,
+  band = scoreBand(value),
+}: {
+  label: string;
+  value: number;
+  help: string;
+  /** The band word; confidence passes the API's own (`confidenceBand`), null for none. */
+  band?: ScoreBand | null;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -23,7 +33,7 @@ function ScorePill({ label, value, help }: { label: string; value: number; help:
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
           <p className="text-sm font-semibold tabular-nums">
             {Math.round(value)}
-            <span className="ml-1 text-[10px] font-normal text-muted-foreground">{band.label}</span>
+            {band ? <span className="ml-1 text-[10px] font-normal text-muted-foreground">{band.label}</span> : null}
           </p>
         </div>
       </TooltipTrigger>
@@ -60,7 +70,12 @@ export function OpportunityCardView({ opportunity }: { opportunity: OpportunityC
         <div className="grid grid-cols-3 gap-1.5">
           <ScorePill label="Score" value={o.opportunity_score} help={scoreHelp.opportunity_score} />
           <ScorePill label="Relevance" value={o.relevance_score} help={scoreHelp.relevance_score} />
-          <ScorePill label="Confidence" value={o.confidence_score} help={scoreHelp.confidence_score} />
+          <ScorePill
+            label="Confidence"
+            value={o.confidence_score}
+            help={scoreHelp.confidence_score}
+            band={confidenceBand(o.confidence_level)}
+          />
         </div>
 
         <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1 text-xs text-muted-foreground">

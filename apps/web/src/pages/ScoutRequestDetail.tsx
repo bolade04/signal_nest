@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import type { OpportunityFilters } from '@/api/types';
+import type { OpportunityFilters, ScoutRequestOut } from '@/api/types';
 import { ScoutStatusBadge } from '@/components/common/badges';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
+import { StatusRefresh } from '@/components/common/status-refresh';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,21 +16,21 @@ import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
+import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
+import { moveFocusTo } from '@/lib/focus';
+import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
 import { formatDateTime, formatRelative, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { OpportunityCardView } from './opportunities/OpportunityCardView';
+import { jobFilters } from './scouts/jobFilters';
 import { JobsPanel } from './scouts/JobsPanel';
+import { RunNowButton } from './scouts/RunNowButton';
 import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
 
-// Scout statuses where the backend is still working, so this view has to keep
-// re-reading: the run endpoint returns `queued` immediately and a durable worker
-// settles it later, with nothing pushing that change to the client. Mirrors
-// `_IN_FLIGHT_SCOUT_STATUSES` in apps/api/app/jobs/handlers.py. Deliberately an
-// explicit allowlist rather than "anything that is not completed": the status
-// column is an unconstrained string, so an unrecognised value would otherwise
-// poll forever. `draft` and `paused` are settled states, not in-flight ones.
-const IN_FLIGHT = new Set(['queued', 'running']);
+// In-flight statuses (queued, running): see SCOUT_IN_FLIGHT in lib/scout-status.ts, shared
+// with the list page and the Run now button.
+const IN_FLIGHT = SCOUT_IN_FLIGHT;
 
 // The outcomes a run settles into. Arriving at one of these FROM an in-flight
 // status is the moment this scout's opportunities have actually changed.
@@ -43,13 +44,34 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const actions = useScoutActions(workspaceId);
   const queryClient = useQueryClient();
+  const { schedule, active: statusInFlight, stopped: statusUpdatesStopped } = useStatusPolling();
+  // R2-01: if "Refresh status" is removed (nothing in flight any more) while it has keyboard
+  // focus, return focus to this request's Run now, else to the page heading. Never otherwise.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const refocusAfterSettle = useRef(false);
+  useEffect(() => {
+    if (statusInFlight || !refocusAfterSettle.current) return;
+    refocusAfterSettle.current = false;
+    moveFocusTo(
+      headerRef.current?.querySelector<HTMLElement>('[data-run-now]'),
+      headerRef.current?.querySelector<HTMLElement>('h1'),
+    );
+  }, [statusInFlight]);
 
   const query = useQuery({
     queryKey: queryKeys.scoutRequest(workspaceId, requestId),
     queryFn: ({ signal }) => api.getScoutRequest(workspaceId, requestId, signal),
-    // Poll only while the run is in flight, matching the JobsPanel cadence.
-    refetchInterval: (q) => (IN_FLIGHT.has(q.state.data?.status ?? '') ? 2000 : false),
+    // Re-read only while the run is in flight, on the bounded, backed-off schedule of
+    // lib/status-polling.ts (review F-02), shared with the jobs panel below.
+    ...pollingOptions<ScoutRequestOut>(schedule, 'request', (r) =>
+      r && IN_FLIGHT.has(r.status) ? `${r.id}:${r.status}` : null,
+    ),
   });
+  const refreshStatus = () => {
+    schedule.restart(Date.now());
+    void query.refetch();
+    void queryClient.refetchQueries({ queryKey: queryKeys.jobs(workspaceId, jobFilters(requestId)), exact: true });
+  };
 
   const oppFilters: OpportunityFilters = useMemo(
     () => ({ scout_request_id: requestId, limit: 100 }),
@@ -92,7 +114,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
 
   return (
     <div className="space-y-6">
-      <div>
+      <div ref={headerRef}>
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-3 -ml-2">
           <ArrowLeft className="size-4" /> Back
         </Button>
@@ -112,12 +134,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
           </div>
           {canEdit ? (
             <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => actions.run.mutate(r.id)}
-                disabled={actions.run.isPending && actions.run.variables === r.id}
-              >
-                <Radar className="size-4" /> Run now
-              </Button>
+              <RunNowButton request={r} actions={actions} />
               {isPaused ? (
                 <Button variant="outline" onClick={() => actions.resume.mutate(r.id)}>
                   <Play className="size-4" /> Resume
@@ -131,6 +148,16 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
           ) : null}
         </div>
       </div>
+
+      {statusInFlight ? (
+        <StatusRefresh
+          stopped={statusUpdatesStopped}
+          onRefresh={refreshStatus}
+          onRemovedWhileFocused={() => {
+            refocusAfterSettle.current = true;
+          }}
+        />
+      ) : null}
 
       <div className="rounded-md border border-warning/40 bg-warning/10 px-4 py-2.5 text-sm">
         <span className="inline-flex items-center gap-1.5 font-medium text-warning">
@@ -202,7 +229,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
 
           <SchedulePanel workspaceId={workspaceId} requestId={requestId} />
 
-          <JobsPanel workspaceId={workspaceId} scoutRequestId={requestId} />
+          <JobsPanel workspaceId={workspaceId} scoutRequestId={requestId} schedule={schedule} />
         </div>
 
         <div className="lg:col-span-2">
@@ -232,14 +259,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
                   : 'This scout has not produced any opportunities yet.'
               }
               action={
-                canEdit ? (
-                  <Button
-                    onClick={() => actions.run.mutate(r.id)}
-                    disabled={actions.run.isPending && actions.run.variables === r.id}
-                  >
-                    <Radar className="size-4" /> Run now
-                  </Button>
-                ) : undefined
+                canEdit ? <RunNowButton request={r} actions={actions} /> : undefined
               }
             />
           )}

@@ -35,7 +35,15 @@ an engine of its own, barrier-synchronised):
   consistent;
 * tenant isolation, month rollover, and the run endpoint's gate: eight concurrent
   callers all pass the read-only gate, and the reservations behind them admit exactly
-  the one call that still fits.
+  the one call that still fits;
+* P9 the same-session record (``record_settled``, FU-269-R7): a first record writes the
+  settled reservation, the period's totals and the usage row; a repeated key - in the same
+  transaction, a later one, or racing on separate connections - adds nothing and returns
+  ``False``; a caller rollback leaves no row; a report above the bound is charged the bound
+  and counted once; erasing the workspace or organization removes the rows; and both
+  callers that reach it on PostgreSQL (the mock-provider calls of the handler's meter, at
+  run end and in the after-rollback write, and the bare meter without a session factory)
+  record every call.
 
 Everything is offline: the provider is a fixed-cost fake. Every connection carries a
 ``statement_timeout``/``lock_timeout``; every join is bounded. Gate:
@@ -50,17 +58,19 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.metrics import (
+    LLM_COST_BOUND_VIOLATIONS_TOTAL,
     LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
     InMemoryMetrics,
     configure_metrics,
@@ -70,7 +80,13 @@ from app.jobs.status import JobStatus
 from app.jobs.store import DurableJobStore
 from app.jobs.worker import JobRunner
 from app.llm import budget as ledger
-from app.llm.metering import LLMBudgetExhaustedError, LLMMeter, ensure_run_allowed
+from app.llm.metering import (
+    LLMBudgetExhaustedError,
+    LLMMeter,
+    ensure_run_allowed,
+    month_to_date_usd,
+)
+from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
 from app.llm.service import LLMService
 from app.organizations.models import Organization, Workspace
@@ -1136,3 +1152,297 @@ def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factor
         assert all(
             (r.usage_recorded_at is not None) == (per_key.get(r.attempt_key, 0) == 1) for r in rows
         )
+
+
+# --------------------------------------------------------------------------- #
+# P9 - the same-session record (record_settled) on PostgreSQL (FU-269-R7)
+# --------------------------------------------------------------------------- #
+def _record(
+    db: Session,
+    key: str,
+    cost: Decimal = child.FIXED_COST,
+    *,
+    ws: str = WS,
+    worst: Decimal | None = None,
+) -> bool:
+    return ledger.record_settled(
+        db,
+        workspace_id=ws,
+        organization_id=ORG,
+        job_id=None,
+        attempt_key=key,
+        settled_usd=cost,
+        now=datetime.now(UTC),
+        usage=_usage(cost),
+        worst_usd=worst,
+    )
+
+
+def _ledger_counts(db: Session, ws: str = WS) -> tuple[int, int, int]:
+    """(reservation rows, period rows, usage rows) of ``ws``."""
+    return tuple(
+        db.scalar(select(func.count()).select_from(model).where(model.workspace_id == ws))
+        for model in (LLMBudgetReservation, LLMBudgetPeriod, LLMUsageEvent)
+    )
+
+
+def _assert_recorded_once(db: Session, key: str, charge: Decimal) -> None:
+    """One settled reservation, the period's totals counted once, one usage row."""
+    assert _ledger_counts(db) == (1, 1, 1)
+    (row,) = _reservations(db)
+    assert (row.attempt_key, row.state, row.reserved_usd, row.settled_usd) == (
+        key,
+        "settled",
+        charge,
+        charge,
+    )
+    assert row.usage_recorded_at is not None
+    period = _period(db)
+    assert (period.reserved_usd, period.settled_usd) == (charge, charge)
+    _assert_period_invariants(db, Decimal("1"))
+
+
+def _wait_until_lock_waiting(observer: Engine, pid: int) -> str:
+    """Block until backend ``pid`` waits on a lock; returns its wait event."""
+    deadline = time.monotonic() + JOIN_SECONDS
+    while time.monotonic() < deadline:
+        with observer.connect() as conn:
+            row = conn.execute(
+                text("select wait_event_type, wait_event from pg_stat_activity where pid = :p"),
+                {"p": pid},
+            ).first()
+        if row is not None and row.wait_event_type == "Lock":
+            return row.wait_event
+        time.sleep(0.01)
+    raise AssertionError(f"backend {pid} never waited on a lock")
+
+
+def test_p9_a_same_session_record_writes_the_reservation_the_period_and_the_usage_row(factory):
+    """FU-269-R7: the record's ``INSERT ... ON CONFLICT DO NOTHING`` must report the row it
+    inserted, or the call keeps only its reservation row (no period, no usage row)."""
+    with factory() as db:
+        assert _record(db, "same:0:0") is True
+        db.commit()
+    with factory() as db:
+        _assert_recorded_once(db, "same:0:0", child.FIXED_COST)
+        assert _period(db).bound_violations == 0
+        (usage,) = db.scalars(select(LLMUsageEvent)).all()
+        assert (usage.organization_id, usage.workspace_id, usage.provider) == (
+            ORG,
+            WS,
+            "anthropic",
+        )
+        assert usage.cost_usd == pytest.approx(float(child.FIXED_COST))
+
+
+def test_p9_a_repeated_attempt_key_adds_nothing_and_returns_false(factory):
+    with factory() as db:
+        assert _record(db, "same:0:0") is True
+        assert _record(db, "same:0:0") is False  # the same transaction
+        db.commit()
+    with factory() as db:
+        assert _record(db, "same:0:0") is False  # a later transaction
+        db.commit()
+    with factory() as db:
+        _assert_recorded_once(db, "same:0:0", child.FIXED_COST)
+
+
+@pytest.mark.parametrize("first_ends", ["commit", "rollback"])
+def test_p9_a_duplicate_racing_on_another_connection_waits_then_counts_once(
+    pg_url, factory, first_ends
+):
+    """A real race on PostgreSQL: the second record of the key blocks on the first's
+    uncommitted row (the unique index's wait). If the first commits, the second inserts
+    nothing and returns ``False``; if it rolls back, the second records the call. Either
+    way the key is accounted exactly once."""
+    observer = create_engine(pg_url, isolation_level="AUTOCOMMIT")
+    first, second = factory(), factory()
+    outcome: list[object] = []
+
+    def record_second() -> None:
+        try:
+            outcome.append(_record(second, "race:0:0"))
+            second.commit()
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the test
+            outcome.append(exc)
+
+    try:
+        assert _record(first, "race:0:0") is True  # holds the new row, uncommitted
+        pid = second.execute(text("select pg_backend_pid()")).scalar_one()
+        racer = threading.Thread(target=record_second, daemon=True)
+        racer.start()
+        assert _wait_until_lock_waiting(observer, pid) == "transactionid"
+        assert outcome == []  # still waiting on the first transaction
+        getattr(first, first_ends)()
+        racer.join(JOIN_SECONDS)
+        assert not racer.is_alive()
+    finally:
+        first.close()
+        second.close()
+        observer.dispose()
+    assert outcome == [first_ends == "rollback"], outcome
+    with factory() as db:
+        _assert_recorded_once(db, "race:0:0", child.FIXED_COST)
+
+
+def test_p9_concurrent_records_of_one_key_on_separate_connections_count_it_once(factory):
+    n = 6
+    barrier = threading.Barrier(n)
+    returned: list[bool] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def caller() -> None:
+        try:
+            db = factory()
+            try:
+                barrier.wait(JOIN_SECONDS)
+                ok = _record(db, "storm:0:0")
+                db.commit()
+            finally:
+                db.close()
+            with lock:
+                returned.append(ok)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the test
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=caller, daemon=True) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(JOIN_SECONDS)
+    assert not any(t.is_alive() for t in threads) and not errors, errors
+    assert sorted(returned) == [False] * (n - 1) + [True]
+    with factory() as db:
+        _assert_recorded_once(db, "storm:0:0", child.FIXED_COST)
+
+
+def test_p9_a_caller_rollback_after_a_same_session_record_leaves_no_accounting(factory):
+    """The record writes in the caller's transaction and commits nothing itself: a rollback
+    takes the reservation, the period row and the usage row with it, and drops the queued
+    violation effect."""
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with factory() as db:
+            assert _record(db, "rb:0:0", Decimal("0.030000"), worst=Decimal("0.020000"))
+            assert _ledger_counts(db) == (1, 1, 1)  # visible inside the transaction
+            db.rollback()
+        with factory() as db:
+            assert _ledger_counts(db) == (0, 0, 0)
+            assert _record(db, "rb:0:0") is True  # nothing left behind to collide with
+            db.commit()
+            _assert_recorded_once(db, "rb:0:0", child.FIXED_COST)
+    finally:
+        configure_metrics(None)
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="same_session") == 0
+
+
+def test_p9_a_same_session_report_above_the_bound_is_charged_the_bound_and_counted_once(
+    factory,
+):
+    bound, reported = Decimal("0.020000"), Decimal("0.030000")
+    metrics = InMemoryMetrics()
+    configure_metrics(metrics)
+    try:
+        with factory() as db:
+            assert _record(db, "over:0:0", reported, worst=bound) is True
+            db.commit()
+        with factory() as db:
+            assert _record(db, "over:0:0", reported, worst=bound) is False  # a repeat
+            db.commit()
+    finally:
+        configure_metrics(None)
+    with factory() as db:
+        _assert_recorded_once(db, "over:0:0", bound)  # the bound is the charge
+        assert _period(db).bound_violations == 1
+        (usage,) = db.scalars(select(LLMUsageEvent)).all()
+        assert usage.cost_usd == pytest.approx(float(reported))  # the report, on record
+    assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="same_session") == 1
+
+
+def test_p9_erasing_the_workspace_or_organization_removes_the_same_session_rows(factory):
+    """The #246 erasure walk (the primitive the organization deletion uses) removes what
+    the same-session record wrote, leaves the other workspace's rows alone, and a late
+    record for the erased workspace recreates nothing."""
+    from app.privacy.erasure import delete_rows
+
+    with factory() as db:
+        assert _record(db, "ws1:0:0")
+        assert _record(db, "ws2:0:0", ws=WS2)
+        db.commit()
+        assert _ledger_counts(db, WS) == _ledger_counts(db, WS2) == (1, 1, 1)
+        delete_rows(db, Workspace.__table__, [WS])
+        db.commit()
+        assert _ledger_counts(db, WS) == (0, 0, 0)
+        assert _ledger_counts(db, WS2) == (1, 1, 1)
+        assert _record(db, "ws1:0:1") is False  # the tenant is gone: nothing recreated
+        db.commit()
+        assert _ledger_counts(db, WS) == (0, 0, 0)
+        delete_rows(db, Organization.__table__, [ORG])
+        db.commit()
+        assert _ledger_counts(db, WS2) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("write", ["run_end", "after_rollback"])
+def test_p9_mock_provider_calls_of_the_handlers_meter_are_recorded_in_full(factory, write):
+    """The durable handler's meter on PostgreSQL (a session factory, so the shared ledger)
+    with the mock provider. Mock calls are never reserved, so ``flush`` writes them through
+    ``record_settled``: at run end in the run's transaction (``pipeline._run``), or after the
+    attempt's rollback (the handler's after-rollback write). Mock calls cost nothing."""
+    settings = offline_settings()
+    with factory() as db:
+        job_id = _enqueue(db, f"mock-{write}")
+    meter = LLMMeter(settings, job_id=job_id, attempt=1, session_factory=factory)
+    service = LLMService(MockLLMProvider(seed=settings.llm_mock_seed), settings=settings)
+    with factory() as db:
+        meter.bind(db, organization_id=ORG, workspace_id=WS, scout_request_id=None)
+        assert meter.shared_ledger
+        for content in ("a", "b", "c"):
+            service.run("classify_signal", {"content": content}, meter=meter)
+        assert _ledger_counts(db) == (0, 0, 0)  # nothing reserved for a mock call
+        if write == "after_rollback":
+            db.rollback()  # the attempt failed: the worker rolls it back, then writes
+        meter.flush(db)
+        db.commit()
+    with factory() as db:
+        meter.flush(db)  # a second write (another after-rollback) adds nothing
+        db.commit()
+    with factory() as db:
+        assert _ledger_counts(db) == (3, 1, 3)
+        rows = _reservations(db)
+        assert {r.attempt_key for r in rows} == {f"{job_id}:1:{i}" for i in range(3)}
+        assert {(r.state, r.reserved_usd, r.settled_usd) for r in rows} == {
+            ("settled", Decimal(0), Decimal(0))
+        }
+        assert all(r.usage_recorded_at is not None for r in rows)
+        period = _period(db)
+        assert (period.reserved_usd, period.settled_usd) == (Decimal(0), Decimal(0))
+        usage = db.scalars(select(LLMUsageEvent)).all()
+        assert {(u.job_id, u.provider, u.cost_usd) for u in usage} == {(job_id, "mock", 0.0)}
+        _assert_period_invariants(db, Decimal("1"))
+
+
+def test_p9_the_bare_meter_without_a_session_factory_records_priced_calls(factory):
+    """``pipeline._run``'s fallback meter has no session factory, so it is the same-session
+    path even on PostgreSQL. Its priced calls must reach the period and usage rows that
+    the next meter's month-to-date and the run gate read."""
+    settings = child.settings_for(1.0)
+    meter = LLMMeter(settings)
+    service = LLMService(child.FixedCostProvider(), settings=settings)
+    with factory() as db:
+        meter.bind(db, organization_id=ORG, workspace_id=WS, scout_request_id=None)
+        assert not meter.shared_ledger
+        for content in ("a", "b"):
+            service.run("classify_signal", {"content": content}, meter=meter)
+        meter.flush(db)
+        db.commit()
+    spent = 2 * child.FIXED_COST
+    with factory() as db:
+        assert _ledger_counts(db) == (2, 1, 2)
+        assert (_period(db).reserved_usd, _period(db).settled_usd) == (spent, spent)
+        _assert_period_invariants(db, Decimal("1"))
+        assert month_to_date_usd(db, WS) == pytest.approx(float(spent))
+        with pytest.raises(LLMBudgetExhaustedError):
+            ensure_run_allowed(db, child.settings_for(float(spent)), WS)

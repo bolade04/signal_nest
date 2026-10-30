@@ -16,7 +16,7 @@ import {
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import type { OpportunityDetail } from '@/api/types';
+import type { OpportunityDetail, ScoreBreakdown } from '@/api/types';
 import {
   ClassificationBadge,
   ConfidenceBadge,
@@ -33,7 +33,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/toast';
-import { scoreHelp } from '@/lib/labels';
+import { confidenceBand, scoreHelp } from '@/lib/labels';
+import { checkBreakdown, formatComponent, formatPoints, readScoreComponents } from '@/lib/score-breakdown';
 import { safeExternalHref } from '@/lib/links';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatDateTime, titleCase } from '@/lib/utils';
@@ -74,6 +75,51 @@ function EvidenceItem({ item }: { item: Record<string, unknown> }) {
         </a>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * One score's explainable breakdown: each component's points out of its weight, as the
+ * API reports them (`{weight, value, points}`). A component that scored zero shows
+ * "0 / 15"; one with no data shows "—". The total is the API's own, never recomputed;
+ * when the listed points do not add up to it (beyond the API's whole-number rounding),
+ * or a component has no data, a note says so instead of leaving the mismatch silent.
+ */
+function ScoreBreakdownPanel({ breakdown }: { breakdown: ScoreBreakdown }) {
+  const total = Math.round(breakdown.total);
+  const components = readScoreComponents(breakdown.breakdown);
+  const check = checkBreakdown(components, breakdown.total);
+  return (
+    <div className="rounded-md border border-border p-3">
+      <p className="mb-2 text-sm font-medium">
+        {titleCase(breakdown.kind)} · {total}
+      </p>
+      <dl className="space-y-1">
+        {components.map((component) => (
+          <div key={component.key} className="flex justify-between gap-3 text-xs text-muted-foreground">
+            <dt>{titleCase(component.key)}</dt>
+            <dd
+              className="tabular-nums text-foreground"
+              title={
+                component.points == null
+                  ? 'No data for this component'
+                  : component.weight == null
+                    ? `${formatPoints(component.points)} points`
+                    : `${formatPoints(component.points)} of ${formatPoints(component.weight)} points`
+              }
+            >
+              {formatComponent(component)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {check.unavailable > 0 || !check.sumAgrees ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {check.unavailable > 0 ? 'Some components have no data (—). ' : ''}
+          {check.sumAgrees ? '' : `Listed points add up to ${formatPoints(check.listed)}; the total is ${total}.`}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -348,23 +394,16 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
             <CardContent className="space-y-4">
               <ScoreMeter label="Opportunity" value={o.opportunity_score} help={scoreHelp.opportunity_score} />
               <ScoreMeter label="Relevance" value={o.relevance_score} help={scoreHelp.relevance_score} />
-              <ScoreMeter label="Confidence" value={o.confidence_score} help={scoreHelp.confidence_score} />
+              <ScoreMeter
+                label="Confidence"
+                value={o.confidence_score}
+                help={scoreHelp.confidence_score}
+                band={confidenceBand(o.confidence_level)}
+              />
               <ScoreMeter label="Priority" value={o.priority_score} help={scoreHelp.priority_score} band={false} />
 
               {(o.scores ?? []).map((breakdown) => (
-                <div key={breakdown.kind} className="rounded-md border border-border p-3">
-                  <p className="mb-2 text-sm font-medium">
-                    {titleCase(breakdown.kind)} · {Math.round(breakdown.total)}
-                  </p>
-                  <dl className="space-y-1">
-                    {Object.entries(breakdown.breakdown).map(([key, value]) => (
-                      <div key={key} className="flex justify-between text-xs text-muted-foreground">
-                        <dt>{titleCase(key)}</dt>
-                        <dd className="tabular-nums text-foreground">{str(value) ?? '—'}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
+                <ScoreBreakdownPanel key={breakdown.kind} breakdown={breakdown} />
               ))}
             </CardContent>
           </Card>
