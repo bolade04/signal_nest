@@ -439,3 +439,63 @@ def test_erasure_proceeds_over_an_unresolved_admission_and_late_ends_write_nothi
             s.scalar(select(func.count()).select_from(ScoutRequest).where(ScoutRequest.id == w.rid))
             == 0
         )
+
+
+# --------------------------------------------------------------------------- #
+# §8.2.3: a lapsed lease alone loses no run; §8.1.8: wait expiry is definite
+# --------------------------------------------------------------------------- #
+def test_a_lapsed_lease_stops_the_run_retryably_and_loses_nothing(world, monkeypatch):
+    """The run's lease lapses while it is parked in its fetch, and nobody has recovered the
+    job yet. Its next admission is refused (``lease_lapsed``): a retryable failure, so the
+    job waits to retry (not terminal), the owner is cleared, and the retry runs the Scout."""
+    w = world
+    sources = Sources(gate=True)
+    monkeypatch.setattr(pipeline, "fetch_signals", sources)
+    _use_mock_llm = LLMService(
+        MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
+        settings=offline_settings(),
+    )
+    monkeypatch.setattr(pipeline, "llm_service", _use_mock_llm)
+    shift = [timedelta(0)]
+    runner = _runner(w, clock=lambda: datetime.now(UTC) + shift[0])
+    worker = _start_worker(w, runner)
+    assert sources.started.wait(JOIN_SECONDS)
+    _expire_lease(w, w.job_id)
+    sources.release.set()
+    assert worker.join_ok() is True
+    first = _end_state(w)
+    with w.factory() as s:
+        owner = s.get(ScoutRequest, w.rid).owner_job_id
+    sources.gate = False
+    shift[0] = timedelta(hours=1)  # past the retry backoff
+    assert _start_worker(w, runner).join_ok() is True
+    end = _end_state(w)
+    assert first.job_status == JobStatus.RETRY_WAIT.value
+    assert first.job_error == ("transient", "authority_lapsed")
+    assert owner is None
+    assert end.job_status == JobStatus.SUCCEEDED.value
+    assert end.job_summary["outcome"] == "completed" and end.status == "completed"
+
+
+def test_a_wait_behind_an_outstanding_admission_expires_definitely(world, monkeypatch):
+    """A re-claim waits behind the zombie's outstanding admission; once that admission's
+    deadline has passed (database time) the run ends ``failed`` (``admission_unresolved``),
+    the request ``failed``, the owner cleared, and the admission is NOT resolved by it."""
+    w = world
+    provider = Provider(park={1})
+    _use(monkeypatch, provider)
+    zombie = _start_worker(w)
+    assert provider.parked.wait(JOIN_SECONDS)
+    _expire_lease(w, w.job_id)
+    monkeypatch.setattr("app.jobs.admission.RunAdmission._deadline_seconds", lambda self, op: 0.2)
+    assert _start_worker(w, _runner(w)).join_ok() is True
+    expired = _end_state(w)
+    still_unresolved = _unresolved(w)
+    with w.factory() as s:
+        owner = s.get(ScoutRequest, w.rid).owner_job_id
+    provider.release.set()
+    zombie.join_ok()
+    assert expired.job_status == JobStatus.FAILED.value
+    assert expired.job_error == ("non_retryable", "admission_unresolved")
+    assert expired.status == "failed" and owner is None
+    assert still_unresolved == 1 and len(provider.calls) == 1
