@@ -51,7 +51,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, event, func, select, text
+from sqlalchemy import create_engine, event, func, select, text, update
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import sessionmaker
 
@@ -619,6 +619,18 @@ def test_pause_committed_between_the_load_and_the_claim_wins_the_race(world, mon
     _measure("pause_between_load_and_claim", pause_ms=pause_ms, waited=False, job=end.job_status)
 
 
+def _hold_uncommitted_pause(session, w) -> None:
+    """The pause route's write (``paused`` and a new run fence), left UNCOMMITTED in
+    ``session``: the route itself now commits before answering, so a test that needs the
+    pause in flight issues the same statement and commits it later itself."""
+    session.execute(
+        update(ScoutRequest)
+        .where(ScoutRequest.id == w.rid, ScoutRequest.workspace_id == w.ws)
+        .values(status=PAUSED, run_fence=ScoutRequest.run_fence + 1)
+        .execution_options(synchronize_session=False)
+    )
+
+
 def test_claim_issued_while_a_pause_is_uncommitted_waits_for_it_then_skips(world, monkeypatch):
     """The other order: the pause has written the row but not committed when the worker
     claims. The claim's compare-and-set waits on the pause's row lock; once the pause
@@ -630,7 +642,7 @@ def test_claim_issued_while_a_pause_is_uncommitted_waits_for_it_then_skips(world
     models = ModelCalls(monkeypatch)
     with w.factory() as pause_session, offline_llm():
         pause_pid = pause_session.execute(text("select pg_backend_pid()")).scalar_one()
-        pause_scout_request(workspace_id=w.ws, request_id=w.rid, db=pause_session, ctx=w.ctx)
+        _hold_uncommitted_pause(pause_session, w)
         worker = _start_worker(w)
         waiter = _await(lambda: _waiter_blocked_by(w, pause_pid), "the claim to wait")
         time.sleep(HOLD_SECONDS)

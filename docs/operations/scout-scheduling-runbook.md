@@ -158,32 +158,61 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   than executed: no source fetch, no model call, no new LLM budget reservation and
   no usage row. (The skip's attempt-end release may still settle an earlier attempt
   of the same job whose reservation was left in flight, at its worst case; that is
-  the ledger's normal recovery, not new spend.) A pause issued while a run is in
-  flight never un-pauses the request, but it does not interrupt the run either.
-  Measured on PostgreSQL 16 (lane evidence `P6-W9-PAUSE-REFRESH-01`): the run's claim
-  holds the request row's lock until the run's transaction ends, so the HTTP pause
-  **waits** (`Lock/transactionid`) for the **rest of the run** and is serialised after
-  it; the job records `completed` and the request then ends `paused`. That wait can
-  exceed a minute: a run may make up to `llm_max_calls_per_run` (100) provider
-  attempts, retries (`llm_max_retries`, 2) counted within that cap, each with a
-  transport timeout of `llm_timeout_seconds` (30 s, applied per HTTP phase), on top
-  of its source fetches. Behind the load balancer's 60 s idle timeout the customer
-  can therefore see a gateway timeout although the pause still lands when the run
-  commits; a client that gives up does not cancel it, and a retried pause is
-  harmless but waits too. While it waits, the pause holds an API worker thread and a
-  pooled database connection (`db_pool_size` 5 + `db_max_overflow` 10). No
-  application lock timeout or statement timeout bounds the wait today. Waiting is the
-  behaviour of D-25-a option (1) as implemented; it is not operator-accepted.
-  Everything the run still had to do happens meanwhile:
-  its fetches and its model calls, each reserved and charged against the workspace
-  budget in a transaction of its own; neither the pause nor a later rollback of the
-  run undoes those charges. If the run is refused at the per-run bound or fails
-  instead, the pause lands as soon as the attempt rolls back and the refusal
-  (`scout_request.refused_at_bound`, now with `request_paused`) and the failure
-  settlement leave the request `paused` (the refusal's stats are stored). A pause
-  written without the row lock (only possible inside the run's own transaction) is
-  seen by the run's final status re-read and the job records `paused_during_run`.
-  The run's findings and stats are kept in every case.
+  the ledger's normal recovery, not new spend.)
+
+  **A pause during a run: cooperative stop (PROPOSED pending D-25; not
+  operator-accepted).** Candidate of `D-25-COOPERATIVE-PAUSE-CONTRACT-01` §6, measured on
+  PostgreSQL 16 in lane evidence `P6-W13-PAUSECOOP-01`:
+  - **Pause recorded is not work stopped.** The pause response (`200`, the request
+    `paused`) means the pause is recorded: the route commits `paused` and a new run
+    fence before it answers. It does not mean the active work has stopped. Work has
+    stopped when the run's job reaches a terminal state: `succeeded` with
+    `result_summary.outcome` `stopped_request_paused` (or `skipped_request_paused` for
+    a run that had not been claimed yet), or any other terminal state.
+  - **What the pause waits for.** Only short database transactions that make no
+    external call: an admission, a claim, or a run's terminal write. The run's claim is
+    committed in a transaction of its own, so the pause no longer waits for the rest of
+    a run (the previous option-(1) behaviour). No latency bound is promised; the lane's
+    measurements are observations.
+  - **Nothing is admitted after the pause commits.** Every live fetch attempt (first
+    try and each retry), every model attempt (each retry included), a post-fetch
+    boundary and the run's terminal write pass an admission that reads the request row
+    `FOR SHARE` and requires `running` with the run's fence. It is not "nothing is sent"
+    and not "stops immediately": an operation admitted before the pause commits may
+    still be transmitted and completed after it, and its charge stands (reservation,
+    settlement and usage row as the #269 ledger defines them; nothing is undone).
+  - **The bound.** Per run, after the cut-off at most one admitted operation can still
+    complete: one model attempt (charge at most its reserved worst case), or one fetch
+    attempt (at most 4 HTTP requests in one redirect chain, at most 20 s total
+    deadline). This is per run, not per Scout: several attempts of one Scout can be
+    active at once (a manual run racing a schedule tick; Pause -> Resume -> Run now
+    while the old run is still in flight; a lease that expired while the old worker is
+    alive and a re-claim by another worker), and each can have one admitted operation
+    in flight when the pause commits. Retries and lease recovery do not add operations
+    to one attempt; a re-claim adds an attempt (at most the job's attempts in all).
+  - **No escape through Pause -> Resume.** Every pause advances the request's run fence;
+    every execute job carries the fence it was queued under. A job queued, claimed,
+    retried or recovered before a pause skips or stops even after a resume. Resume is
+    unchanged (`draft`).
+  - **The stopped run's own uncommitted findings are discarded (PROPOSED, §6.2 Q-1):**
+    a run's findings become visible only if its terminal write commits before the pause.
+    Everything committed before (earlier runs' findings, configuration, run history,
+    job records) stays.
+  - **Status after a failed attempt (PROPOSED, §6.2 Q-2):** the claim is committed on
+    its own, so a failed attempt puts back the pre-claim status for its retry (never
+    over a newer pause, resume, claim or terminal result). Visible change: a worker
+    crash mid-run now leaves `running` committed until lease recovery retries or
+    dead-letters the job; before, the rollback left the pre-claim status.
+  - **A scheduled occurrence can be lost after Pause -> Resume (PROPOSED, §6.2 Q-6):**
+    if the next tick fires while the fenced job of the previous occurrence is still
+    pending, the tick coalesces against it and that occurrence is skipped, not caught
+    up. The chain itself survives; the following occurrence runs normally.
+  - **Refusal and failure after a pause** leave the request `paused`; a refusal's stats
+    are no longer stored on a request paused since the run claimed it.
+  - **SQLite (development and tests only):** the logic is the same, but from a run's
+    first write until its commit the run holds the database write lock, so a pause
+    then waits up to `busy_timeout` (5 s) and may fail. The prompt pause is a
+    PostgreSQL property.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete
@@ -210,7 +239,7 @@ Source: `apps/api/app/scouting_requests/routes.py`.
 | Schedule in `stalled` | A tick failed and its re-seed could not run (scheduling unavailable for the workspace at the time, or the hook itself failed — see `worker.terminal_failure_hook_failed`) | Fix the cause, then resume/activate the schedule; it seeds one fresh tick. |
 | Ticks pile up in `SCHEDULED`, never fire | No healthy worker, or flag off on the worker | Check worker fleet; confirm the worker env carries the flag. |
 | A run failed | Pipeline error for that request | The failure is **market-isolated** — other schedules are unaffected. Inspect the failed `scout_request.execute` job; the chain continues. |
-| Duplicate runs feared | — | Cannot occur: idempotency keys collapse duplicate ticks/runs to one row. |
+| Duplicate runs feared | — | Ticks and their fanned-out runs cannot duplicate: idempotency keys collapse them to one row. Two attempts of one Scout can still run at once (a manual run racing a tick, or a re-claim after a lease expired while the old worker was alive); a pause stops each at its next admission (PROPOSED pending D-25, see above). |
 
 ## Retained design observations
 

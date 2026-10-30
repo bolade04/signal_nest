@@ -207,6 +207,18 @@ def test_a_pause_during_a_parked_live_fetch_admits_no_retry_and_no_further_sourc
 # --------------------------------------------------------------------------- #
 # The admission's lock mode
 # --------------------------------------------------------------------------- #
+def _hold_uncommitted_pause(session, w) -> None:
+    """The pause route's write (``paused`` and a new run fence), left UNCOMMITTED in
+    ``session``: the route itself now commits before answering, so a test that needs the
+    pause in flight issues the same statement and commits it later itself."""
+    session.execute(
+        update(ScoutRequest)
+        .where(ScoutRequest.id == w.rid, ScoutRequest.workspace_id == w.ws)
+        .values(status=PAUSED, run_fence=ScoutRequest.run_fence + 1)
+        .execution_options(synchronize_session=False)
+    )
+
+
 def test_an_admission_waits_for_an_uncommitted_pause_and_then_refuses(world, monkeypatch):
     """The pause has written the row but not committed when the run reaches an admission
     (the post-fetch boundary). The admission's ``SELECT ... FOR SHARE`` waits on the
@@ -221,7 +233,7 @@ def test_an_admission_waits_for_an_uncommitted_pause_and_then_refuses(world, mon
         worker = _start_worker(w)
         assert sources.started.wait(JOIN_SECONDS)
         pause_pid = pause_session.execute(text("select pg_backend_pid()")).scalar_one()
-        pause_scout_request(workspace_id=w.ws, request_id=w.rid, db=pause_session, ctx=w.ctx)
+        _hold_uncommitted_pause(pause_session, w)
         sources.release.set()
         waiter = _await_short(lambda: _waiter_blocked_by(w, pause_pid), "the admission to wait")
         time.sleep(0.5)
