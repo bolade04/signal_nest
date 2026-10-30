@@ -2,9 +2,11 @@
 
 Several tests here are the independent reviewer's (W14-REV-EXECCTL,
 ``scripts/test_rev_execctl_postgres.py``), adopted with small adaptations: the two refusal-writer
-tests (r1 F1) and the Y11 / Y12 / Y13 killers (r1 F4). The harness is
-``test_scout_pause_postgres``'s (separate connections, the real worker, the Alembic schema);
-offline fakes only.
+tests (r1 F1) and the Y11 / Y12 / Y13 killers (r1 F4); and, from review r2
+(``scripts/test_rev_execctl_r2_postgres.py``), the killers of its mutants Z1, Z2 and Z4: a raising
+fenced writer is rolled back, the reconcile deadline carries its lease term, and the gate runs on
+the database clock. The harness is ``test_scout_pause_postgres``'s (separate connections, the
+real worker, the Alembic schema); offline fakes only.
 
 * §9.1: the refusal-at-bound settlement commits if and only if the attempt still holds its job
   (it runs inside the worker's token-fenced failure transaction, with the full identity).
@@ -30,7 +32,7 @@ from app.connectors.live import LiveRssConnector
 from app.core.config import get_settings
 from app.infra.vector import SignalVolumeAboveBoundError
 from app.jobs import pipeline
-from app.jobs.admission import RunAdmission, RunStopped, admitted_run
+from app.jobs.admission import RunAdmission, RunStopped, admission_deadline_seconds, admitted_run
 from app.jobs.context import ExecutionContext
 from app.jobs.handlers import _record_refused_run
 from app.jobs.models import Job
@@ -505,6 +507,96 @@ def test_an_unknown_end_is_reconcilable_before_its_deadline(world):
         assert item["deadline_passed"] is False and item["end_kind"] == "unknown"
         assert resolve(s, admission_id=row, operator="ops", reason="provider_confirmed") is True
         s.commit()
+
+
+def _admitted_ago(w, admission_id: str, seconds: float) -> None:
+    """The reviewer's helper: ``admitted_at`` set ``seconds`` before the database clock."""
+    with w.observer.connect() as c:
+        c.execute(
+            text(
+                "update scout_admissions set admitted_at = clock_timestamp()"
+                " - make_interval(secs => :s) where id = :i"
+            ),
+            {"s": seconds, "i": admission_id},
+        )
+
+
+def test_k3_cancel_case_refused_before_the_deadline_then_permitted(world):
+    """Review r2 (adopted; kills its Z2): the gate's deadline is the waiting rule's, lease
+    included. A Cancel-requested attempt's call is in flight (no recorded end): refused at once,
+    refused 3 s before the deadline, permitted 3 s after it (database clock)."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    inflight, _ = _adm(w, attempt=1, token="tok-a", worker="w-a").admit_external("model")
+    with w.factory() as s:
+        s.execute(update(Job).where(Job.id == w.job_id).values(status="cancel_requested"))
+        s.commit()
+    with w.factory() as s:
+        with pytest.raises(ReconciliationRefused):
+            resolve(s, admission_id=inflight, operator="rev", reason="operator_decision")
+    deadline = admission_deadline_seconds("model")
+    _admitted_ago(w, inflight, deadline - 3)  # 3 s before the deadline
+    with w.factory() as s:
+        with pytest.raises(ReconciliationRefused):
+            resolve(s, admission_id=inflight, operator="rev", reason="operator_decision")
+    _admitted_ago(w, inflight, deadline + 3)  # 3 s after it
+    with w.factory() as s:
+        assert resolve(s, admission_id=inflight, operator="rev", reason="operator_decision") is True
+        s.commit()
+    assert _unresolved(w) == 0
+
+
+def test_k3_the_gate_uses_the_database_clock_not_the_process_clock(world, monkeypatch):
+    """Review r2 (adopted; kills its Z4): with the process clock a day ahead, an in-flight
+    admission with no recorded end is still refused: the gate reads ``clock_timestamp()``."""
+    from datetime import datetime as real_datetime
+
+    from app.jobs import reconcile as rec
+
+    class Future(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real_datetime.now(tz) + timedelta(days=1)
+
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    inflight, _ = _adm(w, attempt=1, token="tok-a", worker="w-a").admit_external("fetch")
+    with w.factory() as s:
+        s.execute(update(Job).where(Job.id == w.job_id).values(status="cancel_requested"))
+        s.commit()
+    monkeypatch.setattr(rec, "datetime", Future)  # the process clock one day ahead
+    with w.factory() as s:
+        with pytest.raises(ReconciliationRefused):
+            resolve(s, admission_id=inflight, operator="rev", reason="operator_decision")
+
+
+def test_k1_a_raising_fenced_writer_leaves_job_and_request_consistent(world, monkeypatch):
+    """Review r2 (adopted; kills its Z1): a valid attempt refused at the bound whose fenced
+    writer writes and then raises. Its partial write is discarded, the job ends ``failed`` and
+    the terminal hook settles the request ``failed`` with the owner cleared."""
+    from app.jobs import handlers as hnd
+
+    w = world
+    monkeypatch.setattr(get_settings(), "vector_inprocess_max_signals_per_run", 2)
+    monkeypatch.setattr(pipeline, "fetch_signals", Sources(count=5))
+
+    def raising_writer(*_a, **_k):
+        def write(db):
+            db.execute(
+                update(ScoutRequest).where(ScoutRequest.id == w.rid).values(stats={"partial": True})
+            )
+            raise RuntimeError("fenced writer fails")
+
+        return write
+
+    monkeypatch.setattr(hnd, "_record_refused_run", raising_writer)
+    _start_worker(w).join_ok()
+    with w.factory() as s:
+        job = s.get(Job, w.job_id)
+        req = s.get(ScoutRequest, w.rid)
+        assert job.status == "failed", job.status
+        assert req.status == "failed" and req.owner_job_id is None
+        assert (req.stats or {}).get("partial") is None
 
 
 # --------------------------------------------------------------------------- #
