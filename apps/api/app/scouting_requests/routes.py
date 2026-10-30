@@ -279,6 +279,11 @@ def pause_scout_request(
         .values(
             status=ScoutRequestStatus.PAUSED.value,
             run_fence=ScoutRequest.run_fence + 1,
+            # Execution controls (PROPOSED): the pause also clears the O2 owner, so a run
+            # after Pause -> Resume can take ownership while the old attempt is fenced.
+            owner_job_id=None,
+            owner_attempt=None,
+            owner_lease_token=None,
         )
         .execution_options(synchronize_session=False)
     )

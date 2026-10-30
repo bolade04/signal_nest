@@ -74,6 +74,24 @@ SCHEDULED_TRIGGER = "scheduled"
 # Tick outcome while the schedule's scout request is paused (D-25): no run is fanned
 # out, the chain still reseeds, so a resumed request is scouted at the next boundary.
 REQUEST_PAUSED_OUTCOME = "request_paused"
+# Tick outcome while the Scout has an unresolved admission (execution controls, PROPOSED).
+ADMISSION_UNRESOLVED_OUTCOME = "admission_unresolved"
+
+
+def _has_unresolved_admission(db: Session, scout_request_id: str) -> bool:
+    from app.scouting_requests.models import ScoutAdmission
+
+    return (
+        db.scalar(
+            select(ScoutAdmission.id)
+            .where(
+                ScoutAdmission.scout_request_id == scout_request_id,
+                ScoutAdmission.resolved_at.is_(None),
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 #: Statuses that mean a scout request already has execution work in flight, so a
 #: scheduled run must coalesce (skip) rather than pile a second run on top.
@@ -427,14 +445,19 @@ def run_schedule_tick(
 
     request = db.get(ScoutRequest, schedule.scout_request_id)
     request_paused = request is not None and request.status == ScoutRequestStatus.PAUSED.value
-    coalesced = not request_paused and has_active_execution(
+    # Execution controls (PROPOSED): while the Scout has an unresolved admission (K = 1) no
+    # run is fanned out (it could admit nothing); the chain continues, nothing is caught up.
+    admission_unresolved = (
+        not request_paused and request is not None and _has_unresolved_admission(db, request.id)
+    )
+    coalesced = not request_paused and not admission_unresolved and has_active_execution(
         db,
         organization_id=schedule.organization_id,
         workspace_id=schedule.workspace_id,
         scout_request_id=schedule.scout_request_id,
     )
     run_enqueued = False
-    if not request_paused and not coalesced:
+    if not request_paused and not coalesced and not admission_unresolved:
         enqueue_scout_request(
             db,
             organization_id=schedule.organization_id,
@@ -476,6 +499,8 @@ def run_schedule_tick(
         outcome = "fanned_out"
     elif request_paused:
         outcome = REQUEST_PAUSED_OUTCOME
+    elif admission_unresolved:
+        outcome = ADMISSION_UNRESOLVED_OUTCOME
     else:
         outcome = "coalesced"
     return {

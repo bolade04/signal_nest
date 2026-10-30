@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -45,6 +56,59 @@ class ScoutRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: D-25 run fence (PROPOSED, ``app.jobs.admission``): advanced by every pause; a run
     #: may continue only while it still equals the value its job was enqueued under.
     run_fence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    #: D-25 execution owner (O2, PROPOSED): the single attempt that may run this Scout.
+    owner_job_id: Mapped[str | None] = mapped_column(String(32))
+    owner_attempt: Mapped[int | None] = mapped_column(Integer)
+    owner_lease_token: Mapped[str | None] = mapped_column(String(64))
+
+
+class ScoutAdmission(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """One admitted external operation of a Scout run (D-25 K = 1 ledger, PROPOSED).
+
+    Committed before a connector fetch attempt or a model attempt is dispatched; resolved only
+    by a known recorded end or by reconciliation. At most one unresolved row per Scout
+    (``uq_scout_admission_unresolved``). Keys, states and timestamps only - no content.
+    """
+
+    __tablename__ = "scout_admissions"
+    __table_args__ = (
+        CheckConstraint("operation IN ('fetch', 'model')", name="ck_scout_admission_operation"),
+        CheckConstraint(
+            "end_kind IS NULL OR end_kind IN ('known', 'unknown')",
+            name="ck_scout_admission_end_kind",
+        ),
+        Index(
+            "uq_scout_admission_unresolved",
+            "scout_request_id",
+            unique=True,
+            postgresql_where=text("resolved_at IS NULL"),
+            sqlite_where=text("resolved_at IS NULL"),
+        ),
+    )
+
+    scout_request_id: Mapped[str] = mapped_column(
+        ForeignKey("scout_requests.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), index=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempt_key: Mapped[str | None] = mapped_column(String(200))
+    admitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_kind: Mapped[str | None] = mapped_column(String(16))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[str | None] = mapped_column(String(200))
+    #: A reason code plus at most 200 characters; never secrets or customer content.
+    resolution_note: Mapped[str | None] = mapped_column(String(240))
 
 
 class ScoutSchedule(Base, UUIDPrimaryKeyMixin, TimestampMixin):

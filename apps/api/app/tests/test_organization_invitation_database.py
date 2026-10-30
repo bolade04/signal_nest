@@ -78,7 +78,8 @@ EXPLANATION = "6ad2ff77f691"
 USAGE = "47028898175f"
 TAKEDOWNS = "da25533622b2"
 BUDGET = "8005724d811a"
-CODE_HEAD = "b5e0c7a3d2f1"
+FENCE = "b5e0c7a3d2f1"
+CODE_HEAD = "c6f1d8e2a4b7"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -281,7 +282,8 @@ def test_revision_chain() -> None:
     assert script.get_revision(EXPLANATION).down_revision == SESSIONS
     assert script.get_revision(USAGE).down_revision == EXPLANATION
     assert script.get_revision(TAKEDOWNS).down_revision == USAGE
-    assert script.get_revision(CODE_HEAD).down_revision == BUDGET
+    assert script.get_revision(CODE_HEAD).down_revision == FENCE
+    assert script.get_revision(FENCE).down_revision == BUDGET
     assert script.get_revision(BUDGET).down_revision == TAKEDOWNS
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
 

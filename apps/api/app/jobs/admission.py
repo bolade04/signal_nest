@@ -38,6 +38,24 @@ database write lock (``busy_timeout``); the prompt pause is a PostgreSQL propert
 The opt-in is :func:`admitted_run`, a context variable the production handler sets. Code
 that calls ``pipeline._run`` without it (the replay demo seed, direct test calls) keeps
 the in-session claim and makes no admissions.
+
+**Execution controls (D-25-EXECUTION-CONTROL-CONTRACT-01, PROPOSED).** On top of the above:
+
+* **O1.** Every admission, terminal write and status restore checks the attempt's identity as
+  captured at its claim (``job_id``, ``attempt``, ``worker_id``, ``lease_token``, fence) against
+  fresh job and request rows read ``FOR SHARE`` in the admitting transaction, with the lease
+  still running by database time. An attempt never adopts a re-read token, attempt or owner.
+  A missing identity fails closed (refused, never admitted).
+* **O2.** The Scout records ONE execution owner (``scout_requests.owner_*``), set by the
+  committed claim's compare-and-set, taken over only once the recorded owner's authority has
+  lapsed by fresh observation, cleared by the pause, the run's end, its stop or failure.
+* **K = 1.** Every external operation (a connector fetch attempt, a model attempt) commits a
+  ``scout_admissions`` row first; the partial unique index allows one unresolved row per Scout.
+  A row is resolved only by a known recorded end (written by the admitting attempt, guarded by
+  the row's own identity) or by reconciliation (``app.jobs.reconcile``) - never by lease
+  expiry, recovery, Cancel, Pause -> Resume, a new owner or elapsed time. An admission refused
+  by an outstanding row waits (no lock held) up to that row's own deadline; an unknown end is
+  never waited for. Lock order: job -> request -> ledger -> period -> reservation.
 """
 
 from __future__ import annotations
@@ -47,10 +65,11 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import DateTime, and_, bindparam, case, exists, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.enums import ScoutRequestStatus
@@ -61,23 +80,43 @@ logger = get_logger("signalnest.jobs.admission")
 SessionFactory = Callable[[], Session]
 
 #: Run outcomes (``result_summary.outcome``) a cooperative stop can produce (D-25, PROPOSED).
-#: The run was stopped at an admission because the request was paused (or paused and
-#: resumed: its fence moved) after this run claimed it.
 STOPPED_REQUEST_PAUSED = "stopped_request_paused"
-#: The run was stopped because the request left ``running`` with its fence unchanged (a
-#: rival run of the same fence settled it). Shares #267's literal.
 STATUS_CHANGED_DURING_RUN = "status_changed_during_run"
-#: The request row no longer exists (its organization was erased).
 REQUEST_GONE = "request_gone"
-#: The skip literal for a claim refused by a pause or a moved fence (#267's literal).
 SKIPPED_REQUEST_PAUSED = "skipped_request_paused"
+#: Execution controls (PROPOSED): another attempt owns the Scout (claim refused / owner
+#: superseded), or this attempt lost its job lease (token rotated, job no longer running).
+SKIPPED_OWNER_ACTIVE = "skipped_owner_active"
+STOPPED_OWNER_SUPERSEDED = "stopped_owner_superseded"
+STOPPED_LEASE_LOST = "stopped_lease_lost"
+
+#: Causes of a refused admission (RunStopped.cause); the handler maps each to an end state.
+CAUSE_REQUEST_PAUSED = "request_paused"
+CAUSE_STATUS_CHANGED = "status_changed"
+CAUSE_REQUEST_GONE = "request_gone"
+CAUSE_OWNER_SUPERSEDED = "owner_superseded"
+CAUSE_CANCEL_REQUESTED = "cancel_requested"
+CAUSE_LEASE_LAPSED = "lease_lapsed"
+CAUSE_LEASE_LOST = "lease_lost"
+CAUSE_IDENTITY_INCOMPLETE = "identity_incomplete"
+
+_OUTCOME = {
+    CAUSE_REQUEST_PAUSED: STOPPED_REQUEST_PAUSED,
+    CAUSE_STATUS_CHANGED: STATUS_CHANGED_DURING_RUN,
+    CAUSE_REQUEST_GONE: REQUEST_GONE,
+    CAUSE_OWNER_SUPERSEDED: STOPPED_OWNER_SUPERSEDED,
+    CAUSE_LEASE_LOST: STOPPED_LEASE_LOST,
+}
 
 _RUNNING = ScoutRequestStatus.RUNNING.value
 _PAUSED = ScoutRequestStatus.PAUSED.value
 _COMPLETED = ScoutRequestStatus.COMPLETED.value
+_LIVE_JOB = ("claimed", "running")
 
 #: A deadlock or serialization failure is retried at most this many times in all.
 _CONFLICT_ATTEMPTS = 3
+#: The unique index that enforces K = 1.
+_K_INDEX = "uq_scout_admission_unresolved"
 
 
 class RunStopped(Exception):  # noqa: N818 - a control-flow signal, not an error class
@@ -87,33 +126,45 @@ class RunStopped(Exception):  # noqa: N818 - a control-flow signal, not an error
     it propagates out of the pipeline to the durable handler.
     """
 
-    def __init__(self, outcome: str, operation: str):
-        super().__init__(f"scout run stopped at {operation}: {outcome}")
-        #: One of :data:`STOPPED_REQUEST_PAUSED`, :data:`STATUS_CHANGED_DURING_RUN`,
-        #: :data:`REQUEST_GONE`.
+    def __init__(self, outcome: str, operation: str, cause: str | None = None):
+        super().__init__(f"scout run stopped at {operation}: {cause or outcome}")
         self.outcome = outcome
-        #: Where the run stopped: ``fetch`` | ``post_fetch`` | ``model`` | ``commit``.
+        self.operation = operation
+        #: Why authority was refused (``CAUSE_*``); the handler maps it to an end state.
+        self.cause = cause or outcome
+
+
+class AdmissionUnresolved(Exception):  # noqa: N818 - a definite end, not a crash
+    """An external operation could not be admitted: the Scout's one allowed unresolved
+    admission (K = 1) stayed unresolved past its deadline, or ended with an unknown outcome.
+    The waiting never resolves it (PROPOSED)."""
+
+    def __init__(self, blocking_id: str, operation: str):
+        super().__init__(f"admission refused at {operation}: {blocking_id} unresolved")
+        self.blocking_id = blocking_id
         self.operation = operation
 
 
-def _refusal(row: Any, fence: int) -> str | None:
-    """Why ``row`` (``status, run_fence`` or ``None``) refuses fence ``fence``; ``None`` admits."""
-    if row is None:
-        return REQUEST_GONE
-    status, current = row
-    if status == _PAUSED or current != fence:
-        return STOPPED_REQUEST_PAUSED
-    if status != _RUNNING:
-        return STATUS_CHANGED_DURING_RUN
-    return None
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def is_k_violation(exc: BaseException) -> bool:
+    text_ = str(getattr(exc, "orig", exc))
+    return isinstance(exc, IntegrityError) and (
+        _K_INDEX in text_ or "scout_admissions.scout_request_id" in text_
+    )
 
 
 @dataclass
 class RunAdmission:
-    """The fence, claim and admissions of ONE attempt of ONE ``scout_request.execute`` job.
+    """The fence, ownership, claim and admissions of ONE attempt of ONE execute job.
 
-    The tenant predicates come from the durable job row's context (never the payload), so
-    a mis-enqueued id can neither claim nor admit another tenant's request.
+    The tenant predicates and the identity come from the durable job row's context and the
+    worker's claim (never the payload or a re-read), so a mis-enqueued id can neither claim
+    nor admit another tenant's request, and a stale attempt cannot borrow a newer identity.
     """
 
     scout_request_id: str
@@ -125,6 +176,8 @@ class RunAdmission:
     job_id: str | None = None
     worker_id: str | None = None
     attempt: int = 0
+    #: The lease token captured at the claim (O1); ``None`` fails closed.
+    lease_token: str | None = None
     #: Set by :meth:`claim`.
     claimed: bool = False
     pre_claim_status: str | None = None
@@ -132,6 +185,10 @@ class RunAdmission:
     admitted: dict[str, int] = field(default_factory=dict)
     #: The savepoint of the run's write phase (see :meth:`begin_writes`).
     _savepoint: Any = field(default=None, repr=False)
+    _dialect: str | None = field(default=None, repr=False)
+    #: The attempt's execution-boundary time from the worker's clock: the lease reference
+    #: on SQLite (development and tests); PostgreSQL always uses ``clock_timestamp()``.
+    process_now: datetime | None = None
 
     # -- statements -------------------------------------------------------------------
     def _model(self):
@@ -141,10 +198,58 @@ class RunAdmission:
 
     def _row(self):
         model = self._model()
-        return select(model.status, model.run_fence).where(
+        return select(
+            model.status,
+            model.run_fence,
+            model.owner_job_id,
+            model.owner_attempt,
+            model.owner_lease_token,
+        ).where(
             model.id == self.scout_request_id,
             model.organization_id == self.organization_id,
             model.workspace_id == self.workspace_id,
+        )
+
+    def _now(self, session: Session):
+        """Database time on PostgreSQL (``clock_timestamp()``, contract §8.1.6); on SQLite the
+        attempt's worker clock (a pinned test clock stays consistent with its leases)."""
+        if session.get_bind().dialect.name == "postgresql":
+            return func.clock_timestamp()
+        return bindparam(None, self.process_now or datetime.now(UTC), type_=DateTime(timezone=True))
+
+    def identity_complete(self) -> bool:
+        return bool(self.job_id and self.worker_id and self.lease_token and self.attempt >= 1)
+
+    def _is_me(self, model):
+        return and_(
+            model.owner_job_id == self.job_id,
+            model.owner_attempt == self.attempt,
+            model.owner_lease_token == self.lease_token,
+        )
+
+    def _job_authority(self, session: Session):
+        """``EXISTS``: this attempt still holds its job (O1), by fresh observation."""
+        from app.jobs.models import Job
+
+        return exists().where(
+            Job.id == self.job_id,
+            Job.status.in_(_LIVE_JOB),
+            Job.worker_id == self.worker_id,
+            Job.attempt_count == self.attempt,
+            Job.lease_token == self.lease_token,
+            Job.lease_expires_at > self._now(session),
+        )
+
+    def _owner_valid(self, session: Session, model):
+        """``EXISTS``: the recorded owner (whoever it is) still holds valid authority."""
+        from app.jobs.models import Job
+
+        return exists().where(
+            Job.id == model.owner_job_id,
+            Job.status.in_(_LIVE_JOB),
+            Job.attempt_count == model.owner_attempt,
+            Job.lease_token == model.owner_lease_token,
+            Job.lease_expires_at > self._now(session),
         )
 
     def _in_own_transaction(self, work: Callable[[Session], Any]) -> Any:
@@ -170,25 +275,92 @@ class RunAdmission:
                 session.close()
         raise AssertionError("unreachable")  # pragma: no cover
 
-    # -- the claim --------------------------------------------------------------------
-    def claim(self, *, now: datetime) -> str | None:
-        """Write ``running`` for this run in a committed transaction of its own.
+    # -- authority (O1, O2) -----------------------------------------------------------
+    def _cause(self, job: Any, row: Any) -> str | None:
+        """Why this attempt holds no valid authority, from fresh job and request rows."""
+        if row is None:
+            return CAUSE_REQUEST_GONE
+        status, current, owner_job, owner_attempt, owner_token = row
+        if status == _PAUSED or current != self.fence:
+            return CAUSE_REQUEST_PAUSED
+        if job is None:
+            return CAUSE_LEASE_LOST
+        job_status, worker_id, attempt, token, lease_ok = job
+        if job_status == "cancel_requested":
+            return CAUSE_CANCEL_REQUESTED
+        if (
+            job_status not in _LIVE_JOB
+            or worker_id != self.worker_id
+            or attempt != self.attempt
+            or token != self.lease_token
+        ):
+            return CAUSE_LEASE_LOST
+        if not lease_ok:
+            return CAUSE_LEASE_LAPSED
+        if (owner_job, owner_attempt, owner_token) != (self.job_id, self.attempt, self.lease_token):
+            return CAUSE_OWNER_SUPERSEDED
+        if status != _RUNNING:
+            return CAUSE_STATUS_CHANGED
+        return None
 
-        Returns ``None`` when claimed, else the skip outcome: :data:`SKIPPED_REQUEST_PAUSED`
-        (the request is paused, or its fence moved since this job was enqueued) or
-        :data:`REQUEST_GONE`. The row is read ``FOR NO KEY UPDATE`` first (a no-op on
-        SQLite), and the UPDATE repeats every condition, so the claim is a compare-and-set
-        either way.
-        """
+    def _read_job(self, session: Session, *, lock: bool):
+        from app.jobs.models import Job
+
+        stmt = select(
+            Job.status,
+            Job.worker_id,
+            Job.attempt_count,
+            Job.lease_token,
+            Job.lease_expires_at > self._now(session),
+        ).where(Job.id == self.job_id)
+        return session.execute(stmt.with_for_update(read=True) if lock else stmt).first()
+
+    def check(self, session: Session, operation: str) -> None:
+        """The admission read, in ``session``'s transaction: job row, then request row, both
+        ``FOR SHARE`` on PostgreSQL. Raises :class:`RunStopped` unless the attempt's claimed
+        identity is still current, the request is ``running`` with this fence and this
+        attempt is its owner."""
+        if not self.identity_complete():
+            raise RunStopped(CAUSE_IDENTITY_INCOMPLETE, operation, CAUSE_IDENTITY_INCOMPLETE)
+        job = self._read_job(session, lock=True)
+        row = session.execute(self._row().with_for_update(read=True)).first()
+        cause = self._cause(job, row)
+        if cause is not None:
+            raise RunStopped(_OUTCOME.get(cause, cause), operation, cause)
+
+    def granted(self, operation: str) -> None:
+        self.admitted[operation] = self.admitted.get(operation, 0) + 1
+
+    def admit(self, operation: str) -> None:
+        """An authority-only admission (the post-fetch boundary) in a short transaction."""
+        self._in_own_transaction(lambda session: self.check(session, operation))
+        self.granted(operation)
+
+    # -- the claim (O1 + O2 owner compare-and-set) -------------------------------------
+    def claim(self, *, now: datetime) -> str | None:
+        """Write ``running`` and this attempt as the Scout's owner, in a committed
+        transaction of its own. Returns ``None`` when claimed, else the skip outcome
+        (:data:`SKIPPED_REQUEST_PAUSED`, :data:`REQUEST_GONE`, :data:`SKIPPED_OWNER_ACTIVE`).
+        A missing identity raises :class:`RunStopped` (fails closed)."""
+        if not self.identity_complete():
+            raise RunStopped(CAUSE_IDENTITY_INCOMPLETE, "claim", CAUSE_IDENTITY_INCOMPLETE)
         model = self._model()
 
         def work(session: Session) -> str | None:
+            job = self._read_job(session, lock=True)
             row = session.execute(self._row().with_for_update(key_share=True)).first()
             if row is None:
                 return REQUEST_GONE
-            status, current = row
+            status, current = row[0], row[1]
             if status == _PAUSED or current != self.fence:
                 return SKIPPED_REQUEST_PAUSED
+            if (
+                job is None
+                or job[0] not in _LIVE_JOB
+                or (job[1], job[2], job[3]) != (self.worker_id, self.attempt, self.lease_token)
+                or not job[4]
+            ):
+                raise RunStopped(CAUSE_LEASE_LOST, "claim", CAUSE_LEASE_LOST)
             result = session.execute(
                 update(model)
                 .where(
@@ -197,12 +369,23 @@ class RunAdmission:
                     model.workspace_id == self.workspace_id,
                     model.status != _PAUSED,
                     model.run_fence == self.fence,
+                    or_(
+                        model.owner_job_id.is_(None),
+                        self._is_me(model),
+                        ~self._owner_valid(session, model),
+                    ),
                 )
-                .values(status=_RUNNING, updated_at=now)
+                .values(
+                    status=_RUNNING,
+                    owner_job_id=self.job_id,
+                    owner_attempt=self.attempt,
+                    owner_lease_token=self.lease_token,
+                    updated_at=now,
+                )
                 .execution_options(synchronize_session=False)
             )
             if result.rowcount != 1:
-                return SKIPPED_REQUEST_PAUSED
+                return SKIPPED_OWNER_ACTIVE
             self.pre_claim_status = status
             return None
 
@@ -210,40 +393,162 @@ class RunAdmission:
         self.claimed = outcome is None
         return outcome
 
-    # -- admissions -------------------------------------------------------------------
-    def check(self, session: Session, operation: str) -> None:
-        """The admission read, in ``session``'s transaction: ``FOR SHARE`` on PostgreSQL.
+    # -- external operations (K = 1) ---------------------------------------------------
+    def _deadline_seconds(self, operation: str) -> float:
+        from app.core.config import get_settings
+        from app.llm.budget import HTTP_TIMEOUT_PHASES
 
-        Raises :class:`RunStopped` unless the request is ``running`` with this run's fence.
+        settings = get_settings()
+        if operation == "model":
+            own = HTTP_TIMEOUT_PHASES * float(settings.llm_timeout_seconds)
+        else:
+            own = float(settings.connector_egress_total_timeout_seconds)
+        return own + float(settings.worker_lease_seconds)
+
+    def admit_external(
+        self,
+        operation: str,
+        *,
+        attempt_key: str | None = None,
+        extra: Callable[[Session], Any] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> tuple[str | None, Any]:
+        """Admit ONE external operation: authority, the ledger row and ``extra`` (the LLM
+        reservation, when priced) commit together. Returns ``(admission_id, extra_result)``.
+
+        Refused by the Scout's unresolved admission (K = 1): wait, holding no lock, while
+        that admission is outstanding and before its own deadline (database time),
+        re-checking this attempt's authority on every try; raise :class:`AdmissionUnresolved`
+        once it has an unknown end or its deadline has passed. The wait never resolves it.
         """
-        row = session.execute(self._row().with_for_update(read=True)).first()
-        refused = _refusal(row, self.fence)
-        if refused is not None:
-            raise RunStopped(refused, operation)
+        from app.scouting_requests.models import ScoutAdmission
 
-    def granted(self, operation: str) -> None:
-        self.admitted[operation] = self.admitted.get(operation, 0) + 1
+        if not self._ledger_enabled():
+            # SQLite (development and tests): the run's own connection holds the database
+            # write lock during its write phase, so a separate-connection ledger insert cannot
+            # commit. The authority check (a read) stays; the ledger and K = 1 are
+            # PostgreSQL-only, like the shared LLM ledger.
+            result = self._in_own_transaction(
+                lambda session: (
+                    self.check(session, operation),
+                    extra(session) if extra is not None else None,
+                )[1]
+            )
+            self.granted(operation)
+            return None, result
 
-    def admit(self, operation: str) -> None:
-        """An admission in a short committed transaction of its own."""
-        self._in_own_transaction(lambda session: self.check(session, operation))
-        self.granted(operation)
+        def work(session: Session) -> tuple[str, Any]:
+            self.check(session, operation)
+            row = ScoutAdmission(
+                scout_request_id=self.scout_request_id,
+                organization_id=self.organization_id,
+                workspace_id=self.workspace_id,
+                job_id=self.job_id,
+                attempt=self.attempt,
+                worker_id=self.worker_id,
+                operation=operation,
+                attempt_key=attempt_key,
+                admitted_at=datetime.now(UTC),
+            )
+            session.add(row)
+            session.flush()
+            return row.id, (extra(session) if extra is not None else None)
+
+        delay = 0.25
+        while True:
+            try:
+                admission_id, result = self._in_own_transaction(work)
+            except IntegrityError as exc:
+                if not is_k_violation(exc):
+                    raise
+                blocking = self._blocking(operation)
+                if blocking is None:
+                    continue  # resolved meanwhile: try again at once
+                blocking_id, ended, expired = blocking
+                if ended or expired:
+                    raise AdmissionUnresolved(blocking_id, operation) from None
+                sleep(delay)
+                delay = min(delay * 2, 2.0)
+                continue
+            self.granted(operation)
+            return admission_id, result
+
+    def _ledger_enabled(self) -> bool:
+        if self._dialect is None:
+            session = self.session_factory()
+            try:
+                self._dialect = session.get_bind().dialect.name
+            finally:
+                session.close()
+        return self._dialect == "postgresql"
+
+    def _blocking(self, operation: str) -> tuple[str, bool, bool] | None:
+        """The Scout's unresolved admission: ``(id, has_ended, deadline_passed)``."""
+        from app.scouting_requests.models import ScoutAdmission
+
+        def read(session: Session):
+            row = session.execute(
+                select(
+                    ScoutAdmission.id,
+                    ScoutAdmission.ended_at,
+                    ScoutAdmission.operation,
+                    ScoutAdmission.admitted_at,
+                ).where(
+                    ScoutAdmission.scout_request_id == self.scout_request_id,
+                    ScoutAdmission.resolved_at.is_(None),
+                )
+            ).first()
+            if row is None:
+                return None
+            now = session.execute(select(self._now(session))).scalar_one()
+            deadline = _aware(row[3]) + timedelta(seconds=self._deadline_seconds(row[2]))
+            return row[0], row[1] is not None, _aware(now) > deadline
+
+        return self._in_own_transaction(read)
+
+    def end_statement(self, admission_id: str, *, known: bool):
+        """The recorded end of one admission (guarded by the row's own identity only, so a
+        stale attempt can still record its known end; a reconciled row keeps its
+        resolution; an erased row matches nothing)."""
+        from app.scouting_requests.models import ScoutAdmission
+
+        stamp = datetime.now(UTC)
+        return (
+            update(ScoutAdmission)
+            .where(
+                ScoutAdmission.id == admission_id,
+                ScoutAdmission.job_id == self.job_id,
+                ScoutAdmission.attempt == self.attempt,
+                ScoutAdmission.ended_at.is_(None),
+            )
+            .values(
+                ended_at=stamp,
+                end_kind="known" if known else "unknown",
+                resolved_at=case(
+                    (ScoutAdmission.resolved_at.is_not(None), ScoutAdmission.resolved_at),
+                    else_=stamp if known else None,
+                ),
+                updated_at=stamp,
+            )
+            .execution_options(synchronize_session=False)
+        )
+
+    def record_end(self, admission_id: str | None, *, known: bool) -> None:
+        if admission_id is None:
+            return
+        self._in_own_transaction(
+            lambda session: session.execute(self.end_statement(admission_id, known=known))
+        )
 
     # -- the run's write phase --------------------------------------------------------
     def begin_writes(self, db: Session) -> None:
         """Open the savepoint that holds every domain write of this run.
 
         Called by the pipeline where its writes begin (after the fetch, the takedown
-        re-check and the bound check; nothing before writes). Opening it any earlier would
-        start a SQLite transaction whose reads hold the database's shared lock, so the
-        committed claim and a pause during the fetch could not commit on SQLite.
-
-        SQLite: until its first write the run has only read, so pysqlite has not begun a
-        transaction, and a SAVEPOINT would itself start one. SQLite then treats RELEASE of
-        that outermost savepoint as COMMIT, which would commit the run's writes before the
-        worker's fenced completion (a lease lost at completion could no longer roll them
-        back). The transaction is therefore begun explicitly first; the savepoint is then
-        nested in it, as it always is on PostgreSQL.
+        re-check and the bound check; nothing before writes). On SQLite the DBAPI
+        transaction is begun explicitly first: a SAVEPOINT that starts a transaction is
+        committed by its RELEASE, which would commit the run's writes before the worker's
+        fenced completion.
         """
         connection = db.connection()
         if connection.dialect.name == "sqlite":
@@ -266,15 +571,11 @@ class RunAdmission:
 
     # -- the commit boundary ----------------------------------------------------------
     def finish(self, db: Session, *, stats: dict, now: datetime) -> None:
-        """The guarded terminal write, in the run's own transaction.
-
-        ``completed``, ``stats`` and ``last_run_at`` in ONE statement, only while the request
-        is still ``running`` with this run's fence. Anything else is a stop at the commit
-        boundary (:class:`RunStopped`, operation ``commit``): the run's findings are then
-        discarded with its savepoint, so they become visible only if this write commits
-        before a pause (§6.2 Q-1, PROPOSED: discarding the stopped run's uncommitted
-        findings is a candidate choice, not a ruling).
-        """
+        """The guarded terminal write, in the run's own transaction: ``completed``, stats and
+        ``last_run_at`` in ONE statement, only while the request is ``running`` with this
+        fence, this attempt is its owner and still holds its job (O1); the owner is cleared.
+        Anything else is a stop at the commit boundary (findings discarded with the
+        savepoint, PROPOSED §6.2 Q-1)."""
         model = self._model()
         result = db.execute(
             update(model)
@@ -284,30 +585,51 @@ class RunAdmission:
                 model.workspace_id == self.workspace_id,
                 model.status == _RUNNING,
                 model.run_fence == self.fence,
+                self._is_me(model),
+                self._job_authority(db),
             )
-            .values(status=_COMPLETED, stats=stats, last_run_at=now, updated_at=now)
+            .values(
+                status=_COMPLETED,
+                stats=stats,
+                last_run_at=now,
+                updated_at=now,
+                owner_job_id=None,
+                owner_attempt=None,
+                owner_lease_token=None,
+            )
             .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
-            refused = _refusal(db.execute(self._row()).first(), self.fence)
-            raise RunStopped(refused or STATUS_CHANGED_DURING_RUN, "commit")
+            job = self._read_job(db, lock=False)
+            row = db.execute(self._row()).first()
+            cause = self._cause(job, row) or CAUSE_STATUS_CHANGED
+            raise RunStopped(_OUTCOME.get(cause, cause), "commit", cause)
         self.granted("commit")
 
-    # -- after a failed attempt -------------------------------------------------------
+    # -- owner release and status restore ---------------------------------------------
+    def release_owner_statement(self):
+        """Clear the owner, only while it is still this attempt."""
+        model = self._model()
+        return (
+            update(model)
+            .where(model.id == self.scout_request_id, self._is_me(model))
+            .values(owner_job_id=None, owner_attempt=None, owner_lease_token=None)
+            .execution_options(synchronize_session=False)
+        )
+
+    def release_owner_writer(self) -> Callable[[Session], None] | None:
+        if not self.claimed:
+            return None
+        return lambda db: db.execute(self.release_owner_statement())
+
     def restore_writer(self, *, now: datetime) -> Callable[[Session], None] | None:
         """An after-rollback writer that puts back the pre-claim status (§6.2 Q-2 (B),
-        PROPOSED).
+        PROPOSED), and clears the owner.
 
-        A failed attempt's rollback no longer undoes the claim (it was committed on its
-        own), so the request would show ``running`` while the job waits to retry. The
-        writer restores the status the claim replaced, only while the request is still
-        ``running`` with this run's fence **and** this attempt still owns the job (same
-        worker, same attempt, still running): a lease that was lost and reclaimed meanwhile
-        makes it a no-op, so it can never undo a newer attempt's claim; and so is any other
-        active execute job of the same request (a same-fence rival owning ``running``). It
-        therefore never overwrites a newer pause, a resume (``draft``), a newer claim (a new
-        fence or another job) or another run's terminal result. Returns ``None`` when
-        nothing was claimed or there is nothing to restore.
+        Conditional on run identity (job, worker, attempt, lease token), the lease still
+        running, the fence, this attempt being the owner, and no rival active execute job. It
+        therefore never overwrites a newer pause, a resume, a newer claim or owner, or another
+        run's terminal result. Returns ``None`` when nothing was claimed or nothing to restore.
         """
         if not self.claimed or self.pre_claim_status in (None, _RUNNING):
             return None
@@ -318,15 +640,14 @@ class RunAdmission:
             from app.jobs.models import Job
             from app.jobs.status import ACTIVE_STATUSES, JobStatus, JobType
 
-            # Run identity and lease ownership: this job, this worker, this attempt.
             owned = exists().where(
                 Job.id == self.job_id,
                 Job.worker_id == self.worker_id,
                 Job.attempt_count == self.attempt,
+                Job.lease_token == self.lease_token,
+                Job.lease_expires_at > self._now(db),
                 Job.status.in_([JobStatus.RUNNING.value, JobStatus.CANCEL_REQUESTED.value]),
             )
-            # A rival execute job of the same request (same fence, e.g. a manual run that
-            # raced a tick) may own the ``running`` now: never undo its claim.
             rival = exists().where(
                 Job.scout_request_id == self.scout_request_id,
                 Job.id != self.job_id,
@@ -341,10 +662,17 @@ class RunAdmission:
                     model.workspace_id == self.workspace_id,
                     model.status == _RUNNING,
                     model.run_fence == self.fence,
+                    self._is_me(model),
                     owned,
                     ~rival,
                 )
-                .values(status=pre, updated_at=now)
+                .values(
+                    status=pre,
+                    updated_at=now,
+                    owner_job_id=None,
+                    owner_attempt=None,
+                    owner_lease_token=None,
+                )
                 .execution_options(synchronize_session=False)
             )
 
@@ -370,20 +698,43 @@ def current_admission() -> RunAdmission | None:
 
 
 def admit_operation(operation: str) -> None:
-    """Admit one operation of the current run; a no-op outside :func:`admitted_run`."""
+    """An authority-only admission of the current run; a no-op outside :func:`admitted_run`."""
     admission = _current.get()
     if admission is not None:
         admission.admit(operation)
 
 
+def admit_external_operation(operation: str) -> str | None:
+    """Admit ONE external operation of the current run (ledger row, K = 1); returns the
+    admission id to record its end with, or ``None`` outside :func:`admitted_run`."""
+    admission = _current.get()
+    if admission is None:
+        return None
+    admission_id, _ = admission.admit_external(operation)
+    return admission_id
+
+
+def record_external_end(admission_id: str | None, *, known: bool) -> None:
+    """Record the end of an admission made by :func:`admit_external_operation`."""
+    admission = _current.get()
+    if admission is not None and admission_id is not None:
+        admission.record_end(admission_id, known=known)
+
+
 __all__ = [
     "REQUEST_GONE",
+    "SKIPPED_OWNER_ACTIVE",
     "SKIPPED_REQUEST_PAUSED",
     "STATUS_CHANGED_DURING_RUN",
+    "STOPPED_LEASE_LOST",
+    "STOPPED_OWNER_SUPERSEDED",
     "STOPPED_REQUEST_PAUSED",
+    "AdmissionUnresolved",
     "RunAdmission",
     "RunStopped",
+    "admit_external_operation",
     "admit_operation",
     "admitted_run",
     "current_admission",
+    "record_external_end",
 ]

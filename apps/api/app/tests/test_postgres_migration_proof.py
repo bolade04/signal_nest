@@ -58,12 +58,15 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (D-25 cooperative-pause candidate, PROPOSED: adds
+#: The code head (D-25 execution-control candidate, PROPOSED: adds the ``scout_requests``
+#: owner columns and the ``scout_admissions`` ledger).
+HEAD = "c6f1d8e2a4b7"
+#: One below head (D-25 cooperative-pause candidate, PROPOSED: adds
 #: ``scout_requests.run_fence``).
-HEAD = "b5e0c7a3d2f1"
-#: One below head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
+BELOW_HEAD = "b5e0c7a3d2f1"
+#: Two below head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
 #: ``llm_budget_reservations`` tables).
-BELOW_HEAD = "8005724d811a"
+BUDGET = "8005724d811a"
 #: Two below head (P6-DATA-1/PRIV-4: adds ``source_takedowns``).
 TAKEDOWNS = "da25533622b2"
 #: Two below head (P6-LLM-4: adds the ``llm_usage_events`` table).
@@ -264,6 +267,8 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
     assert "run_fence" in _columns(pg_url, "scout_requests")
+    assert "owner_job_id" in _columns(pg_url, "scout_requests")
+    assert "scout_admissions" in _tables(pg_url)
 
     # One guarded step down undoes exactly the head revision; the spent token does not
     # authorize the next step.
@@ -271,7 +276,9 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert "run_fence" not in _columns(pg_url, "scout_requests")
+    assert "scout_admissions" not in _tables(pg_url)
+    assert "owner_job_id" not in _columns(pg_url, "scout_requests")
+    assert "run_fence" in _columns(pg_url, "scout_requests")  # the revision below: untouched
     assert "scout_requests" in _tables(pg_url)
     # The revisions below head are untouched (the ledger tables of the revision below).
     assert "llm_budget_periods" in _tables(pg_url)

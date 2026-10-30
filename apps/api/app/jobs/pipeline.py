@@ -50,6 +50,7 @@ from app.intelligence.models import AnalysisInput, OpportunityCandidate
 from app.intelligence.persistence import attach_opportunity, persist_intelligence
 from app.jobs.admission import (
     REQUEST_GONE,
+    SKIPPED_OWNER_ACTIVE,
     STATUS_CHANGED_DURING_RUN,
     admit_operation,
     current_admission,
@@ -252,8 +253,9 @@ def _run(
     admission = current_admission()
     if admission is not None:
         skipped = admission.claim(now=datetime.now(UTC))
-        if skipped == REQUEST_GONE:
-            return {"scout_request_id": request.id, "outcome": REQUEST_GONE}
+        if skipped in (REQUEST_GONE, SKIPPED_OWNER_ACTIVE):
+            # Gone, or another attempt validly owns this Scout (O2, PROPOSED): nothing written.
+            return {"scout_request_id": request.id, "outcome": skipped}
         if skipped is not None:
             return _skip_paused(request)
         db.refresh(request, attribute_names=["status"])

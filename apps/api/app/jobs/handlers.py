@@ -18,14 +18,22 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
 from app.infra.vector import SignalVolumeAboveBoundError
-from app.jobs.admission import RunAdmission, RunStopped, admitted_run
+from app.jobs.admission import (
+    CAUSE_CANCEL_REQUESTED,
+    CAUSE_IDENTITY_INCOMPLETE,
+    CAUSE_LEASE_LAPSED,
+    AdmissionUnresolved,
+    RunAdmission,
+    RunStopped,
+    admitted_run,
+)
 from app.jobs.context import ExecutionContext
 from app.jobs.pipeline import _run, metered_run, refused_run_stats
 from app.jobs.registry import (
@@ -41,12 +49,23 @@ from app.scouting_requests.models import ScoutRequest
 
 logger = get_logger("signalnest.jobs.handlers")
 
+#: Clearing the Scout's O2 owner (execution controls, PROPOSED).
+_NO_OWNER = {"owner_job_id": None, "owner_attempt": None, "owner_lease_token": None}
+
+
+def _owned_by(job_id: str | None) -> list:
+    """The request has no owner, or its owner is an attempt of ``job_id`` (O2)."""
+    if job_id is None:
+        return []
+    return [or_(ScoutRequest.owner_job_id.is_(None), ScoutRequest.owner_job_id == job_id)]
+
 
 def _record_refused_run(
     scout_request_id: str,
     context: ExecutionContext,
     exc: SignalVolumeAboveBoundError,
     run_fence: int | None = None,
+    job_id: str | None = None,
 ) -> Callable[[Session], None]:
     """An after-rollback writer that settles a run refused at the in-process bound.
 
@@ -102,8 +121,9 @@ def _record_refused_run(
                     ScoutRequest.id == request.id,
                     ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
                     ScoutRequest.run_fence == run_fence,
+                    *_owned_by(job_id),
                 )
-                .values(status=ScoutRequestStatus.FAILED.value, stats=stats)
+                .values(status=ScoutRequestStatus.FAILED.value, stats=stats, **_NO_OWNER)
                 .execution_options(synchronize_session=False)
             )
         db.refresh(request, attribute_names=["status", "stats"])
@@ -190,6 +210,8 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
         job_id=ctx.job_id,
         worker_id=ctx.worker_id,
         attempt=ctx.attempt,
+        lease_token=ctx.lease_token,
+        process_now=ctx.now,
     )
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
@@ -207,6 +229,29 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                 # Not a failure: the job ends ``succeeded`` with the stop as its outcome, and
                 # is not retried.
                 admission.discard_writes()
+                # Execution controls (PROPOSED, contract §8.2.3): each cause of lost authority has
+                # its own end state. Cancel: acknowledged ``cancelled``, the request back to its
+                # pre-claim status. A lapsed lease alone: a retryable failure, so the run is not
+                # lost and recovery is not blocked. Missing claim identity: refused for good.
+                if stop.cause in (CAUSE_CANCEL_REQUESTED, CAUSE_LEASE_LAPSED):
+                    for writer in (
+                        admission.restore_writer(now=ctx.now),
+                        admission.release_owner_writer(),
+                    ):
+                        if writer is not None:
+                            ctx.after_rollback.append(writer)
+                    if stop.cause == CAUSE_CANCEL_REQUESTED:
+                        raise JobExecutionError(
+                            JobErrorCode.CANCELLED, "cancel requested during the run"
+                        ) from None
+                    raise JobExecutionError(JobErrorCode.TRANSIENT, "authority_lapsed") from None
+                if stop.cause == CAUSE_IDENTITY_INCOMPLETE:
+                    raise JobExecutionError(
+                        JobErrorCode.NON_RETRYABLE, "claim_identity_incomplete"
+                    ) from None
+                # Owner superseded, lease lost (token rotated), fence moved, request gone: a stop
+                # with no write over the request (the owner is cleared only if still this one).
+                ctx.db.execute(admission.release_owner_statement())
                 meter.flush(ctx.db)
                 result = {"scout_request_id": scout_request_id, "outcome": stop.outcome}
                 log_event(
@@ -217,6 +262,16 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                     stopped_at=stop.operation,
                     admitted=dict(admission.admitted),
                 )
+            except AdmissionUnresolved:
+                # Wait expiry (PROPOSED): the Scout's one allowed unresolved admission stayed
+                # unresolved. The job fails for good; the final-failure hook settles the
+                # request ``failed``; the owner is cleared; the admission stays unresolved.
+                writer = admission.release_owner_writer()
+                if writer is not None:
+                    ctx.after_rollback.append(writer)
+                raise JobExecutionError(
+                    JobErrorCode.NON_RETRYABLE, "admission_unresolved"
+                ) from None
             except SignalVolumeAboveBoundError as exc:
                 # P6-PLAT-1 (strategy B): the run would index more signals than the
                 # per-run in-process bound. Non-retryable - the condition is a property
@@ -231,6 +286,7 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                         ctx.context,
                         exc,
                         run_fence=admission.fence if admission.claimed else None,
+                        job_id=ctx.job_id if admission.claimed else None,
                     )
                 )
                 raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc
@@ -239,9 +295,12 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                 # the claim was committed on its own. Put back the status it replaced (a
                 # lease-aware no-op if another attempt owns the job by then), so a request
                 # waiting for its retry shows what it showed before the claim (§6.2 Q-2).
-                restore = admission.restore_writer(now=ctx.now)
-                if restore is not None:
-                    ctx.after_rollback.append(restore)
+                for writer in (
+                    admission.restore_writer(now=ctx.now),
+                    admission.release_owner_writer(),
+                ):
+                    if writer is not None:
+                        ctx.after_rollback.append(writer)
                 raise
     # Attempt end: whatever this job still holds reserved could not be settled by the
     # process that reserved it; charge it its worst case in the run's transaction.
@@ -429,10 +488,12 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
     run_fence = ctx.payload.get("run_fence", 0)
     if isinstance(run_fence, int) and not isinstance(run_fence, bool):
         predicates.append(ScoutRequest.run_fence == run_fence)
+    # Execution controls (PROPOSED): never over another attempt's ownership.
+    predicates.extend(_owned_by(ctx.job_id))
     settled = ctx.db.execute(
         update(ScoutRequest)
         .where(*predicates)
-        .values(status=ScoutRequestStatus.FAILED.value)
+        .values(status=ScoutRequestStatus.FAILED.value, **_NO_OWNER)
         .execution_options(synchronize_session=False)
     )
     ctx.db.refresh(request, attribute_names=["status"])

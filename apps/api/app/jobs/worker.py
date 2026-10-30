@@ -292,6 +292,7 @@ class JobRunner:
                 job_id=job_id,
                 attempt=job.attempt_count,
                 worker_id=worker_id,
+                lease_token=lease_token,
                 is_cancelled=self._cancel_checker(job_id),
                 now=now,
                 after_rollback=after_rollback,

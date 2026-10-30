@@ -44,6 +44,9 @@ class HandlerContext:
     job_id: str
     attempt: int
     worker_id: str | None = None
+    #: The lease token captured at this attempt's claim (D-25 O1, PROPOSED): part of the
+    #: identity every admission compares against; never re-read from the job row.
+    lease_token: str | None = None
     #: Cooperative cancellation probe. Returns ``True`` once the operator has
     #: requested cancellation; a long-running handler should poll it and raise
     #: :class:`~app.jobs.status.JobExecutionError` with ``JobErrorCode.CANCELLED``.

@@ -320,6 +320,10 @@ def test_the_status_restore_is_a_no_op_once_another_attempt_owns_the_job(s):
         now=_NOW,
     )
     job.status, job.worker_id, job.attempt_count = JobStatus.RUNNING.value, "w-new", 2
+    # Execution controls (PROPOSED): the owning attempt's full claimed identity (token, lease,
+    # O2 owner) is what the restore compares against.
+    job.lease_token, job.lease_expires_at = "tok-new", _NOW + timedelta(minutes=5)
+    req.owner_job_id, req.owner_attempt, req.owner_lease_token = job.id, 2, "tok-new"
     s.flush()
     stale = RunAdmission(
         scout_request_id=req.id,
@@ -330,8 +334,10 @@ def test_the_status_restore_is_a_no_op_once_another_attempt_owns_the_job(s):
         job_id=job.id,
         worker_id="w-old",
         attempt=1,
+        lease_token="tok-old",
         claimed=True,
         pre_claim_status=QUEUED,
+        process_now=_NOW,
     )
     stale.restore_writer(now=_NOW)(s)
     s.refresh(req)
@@ -346,8 +352,10 @@ def test_the_status_restore_is_a_no_op_once_another_attempt_owns_the_job(s):
         job_id=job.id,
         worker_id="w-new",
         attempt=2,
+        lease_token="tok-new",
         claimed=True,
         pre_claim_status=QUEUED,
+        process_now=_NOW,
     )
     owner.restore_writer(now=_NOW)(s)
     s.refresh(req)
