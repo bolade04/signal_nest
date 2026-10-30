@@ -282,6 +282,9 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                     ) from None
                 # Owner superseded, lease lost (token rotated), fence moved, request gone: a stop
                 # with no write over the request (the owner is cleared only if still this one).
+                # This commits with the worker's ``complete``: the job row is locked first
+                # (job -> request, recovery contract §10.1, PROPOSED).
+                admission.lock_job(ctx.db)
                 ctx.db.execute(admission.release_owner_statement())
                 meter.flush(ctx.db)
                 result = {"scout_request_id": scout_request_id, "outcome": stop.outcome}

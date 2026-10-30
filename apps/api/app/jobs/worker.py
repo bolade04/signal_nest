@@ -437,9 +437,10 @@ class JobRunner:
         the request row, and the transition then updates the job row. Taken in that order
         (request -> job) the transaction deadlocks against a stale attempt's admission check,
         which locks job -> request (lane W15 probe L1: ``40P01``). So the job row is locked
-        first (``FOR NO KEY UPDATE``, fenced by this attempt's worker and lease token),
-        restoring the single order job -> request -> ledger -> period -> reservation. Only
-        the order of lock acquisition changes; no write and no end state does.
+        first (``FOR NO KEY UPDATE``, fenced by this attempt's worker and lease token): job ->
+        request, the order every transaction that writes both rows now takes (the run's
+        success commit does the same in ``RunAdmission.lock_job``, §10.1). Only the order of
+        lock acquisition changes; no write and no end state does.
         """
         if not writers:
             return

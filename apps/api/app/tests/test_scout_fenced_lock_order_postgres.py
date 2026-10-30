@@ -11,6 +11,14 @@ the single order job -> request -> ledger -> period -> reservation holds; no end
 This module uses only names that exist at 430f7f2f, so it runs unchanged against it (where it
 reproduces the deadlock) and against the fix (where the stale check simply waits).
 
+The run's SUCCESS commit had the same inversion (recovery contract §10.1, review r1 F1/C1):
+``RunAdmission.finish`` updated the request in the run's transaction before the worker's
+``complete`` updated the job. ``test_rev_r8_...`` is the independent reviewer's probe R8 (lane
+W15-REV-RECOVERY, ``scripts/test_rev_recovery_r1b_postgres.py``, sha256 22fb4afc...395a),
+adopted with credit. Two adaptations, no assertion changed: its helpers are inlined; and the
+wait for the worker's position is "it reached ``complete`` OR it waits on the job row lock",
+because with the fix the run blocks on the stale check's lock before reaching ``complete``.
+
 Gate: ``require_postgres`` (fails, never skips, under ``CI=true``).
 """
 
@@ -117,3 +125,101 @@ def test_a_stale_admission_check_never_deadlocks_the_fenced_failure(world, monke
     end = _end_state(w)
     assert (end.job_status, end.status) == ("failed", "failed")
     assert end.stats.get("refused")
+
+
+# --------------------------------------------------------------------------- #
+# The success commit (contract §10.1): the reviewer's R8, adopted
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("deadlock_timeout_ms", "gap"),
+    [(1000, 0.3), (100, 0.05)],
+    ids=["commit_victim", "stale_victim"],
+)
+def test_rev_r8_a_stale_admission_check_against_the_success_commit(
+    world, monkeypatch, deadlock_timeout_ms, gap
+):
+    """Review r1 F1 (reviewer's probe R8). A stale admission check holds the job row FOR SHARE
+    and then asks for the request row FOR SHARE while the run's success commit is under way.
+    ``commit_victim``: the stale side waits longer than the run's deadlock timeout, so before the
+    fix the SUCCESS commit was rolled back (job ``retry_wait``, request ``running``).
+    ``stale_victim``: the stale side detects the cycle first. With the job row locked first, the
+    stale check simply waits and the run completes (mutant M1's killer)."""
+    from app.jobs.models import Job
+
+    w = world
+    with w.factory() as s:  # the reviewer's ``rec._manual_prior(w, "completed")``
+        job = s.get(Job, w.job_id)
+        job.payload = {**job.payload, "prior_status": "completed"}
+        s.commit()
+    sources = Sources(gate=True)
+    monkeypatch.setattr(pipeline, "fetch_signals", sources)
+    monkeypatch.setattr(  # the reviewer's ``rec._mock_llm(monkeypatch)``
+        pipeline,
+        "llm_service",
+        LLMService(
+            MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
+            settings=offline_settings(),
+        ),
+    )
+    at_complete, stale_waiting = threading.Event(), threading.Event()
+    real_complete = DurableJobStore.complete
+
+    def held_complete(self, db, job, **kw):
+        at_complete.set()  # ``finish`` has already run in this transaction
+        stale_waiting.wait(10)
+        return real_complete(self, db, job, **kw)
+
+    monkeypatch.setattr(DurableJobStore, "complete", held_complete)
+    worker = _start_worker(w)
+    assert sources.started.wait(JOIN_SECONDS)
+    stale = w.engine.connect()
+    stale.begin()
+    stale_pid = stale.execute(text("select pg_backend_pid()")).scalar_one()
+    stale.execute(text(f"set local deadlock_timeout = '{deadlock_timeout_ms}ms'"))
+    stale.execute(text("select status from jobs where id = :j for share"), {"j": w.job_id}).all()
+    sources.release.set()
+    # Adapted wait (see the module docstring): the run reached ``complete`` (before the fix) or
+    # waits on the job row lock its terminal write now takes first (after it).
+    deadline = time.monotonic() + JOIN_SECONDS
+    while not (at_complete.is_set() or _lock_waiter(w, stale_pid)):
+        assert time.monotonic() < deadline, "the success commit never started"
+        time.sleep(0.02)
+    errors: list[str] = []
+
+    def second_half() -> None:
+        try:
+            stale.execute(
+                text("select status from scout_requests where id = :r for share"), {"r": w.rid}
+            ).all()
+            stale.commit()
+        except Exception as exc:  # noqa: BLE001 - recorded and asserted below
+            errors.append(type(getattr(exc, "orig", exc)).__name__)
+            stale.rollback()
+
+    t = threading.Thread(target=second_half, daemon=True)
+    t.start()
+    time.sleep(gap)  # the stale check now waits on the request row (before the fix)
+    stale_waiting.set()  # ``complete`` now asks for the job row the stale check holds FOR SHARE
+    t.join(30)
+    stale.close()
+    worker_error = None
+    try:
+        worker.join_ok()
+    except Exception as exc:  # noqa: BLE001 - recorded and asserted below
+        worker_error = type(getattr(exc, "orig", exc)).__name__
+    end = _end_state(w)
+    with w.factory() as s:
+        job = s.execute(
+            text(
+                "select status, last_error_code, last_error_summary, attempt_count"
+                " from jobs where id=:j"
+            ),
+            {"j": w.job_id},
+        ).first()
+    print(
+        f"REVR8 stale_deadlock_timeout={deadlock_timeout_ms}ms gap={gap}s stale_errors={errors}"
+        f" worker_error={worker_error} job={tuple(job)} request={end.status}"
+    )
+    assert errors == [] and worker_error is None, (errors, worker_error, tuple(job), end.status)
+    # No end state changes: the run completed, the request is completed.
+    assert (job[0], end.status) == ("succeeded", "completed"), (tuple(job), end.status)

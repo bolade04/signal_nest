@@ -162,8 +162,11 @@ def deadline_basis(operation: str) -> tuple[float, float]:
 
 
 def admission_deadline_seconds(operation: str) -> float:
-    """``client + lease`` seconds from this process's settings (see :func:`deadline_basis`):
-    the value the admitting INSERT persists; a legacy row's waiter uses its own."""
+    """``client + lease`` seconds from this process's settings (see :func:`deadline_basis`).
+
+    No application code reads it since the deadline is persisted (R-D): the admitting INSERT
+    and a legacy row's waiter use :func:`deadline_basis` directly. Kept for tests that need
+    the default deadline's length (the W14 reconciliation-gate tests)."""
     client, lease = deadline_basis(operation)
     return client + lease
 
@@ -690,12 +693,39 @@ class RunAdmission:
             savepoint.commit()
 
     # -- the commit boundary ----------------------------------------------------------
+    def lock_job(self, db: Session) -> None:
+        """Lock this attempt's job row (``FOR NO KEY UPDATE``, fenced by its worker and lease
+        token) in the run's own transaction, BEFORE any request write that commits with the
+        worker's ``complete`` (D-25 recovery contract §10.1, PROPOSED; review r1 F1).
+
+        The run's terminal transaction writes the request and then the worker's token-fenced
+        ``complete`` updates the job row. Taken in that order (request -> job) it deadlocks
+        against a stale attempt's admission check, which locks job -> request; when the
+        success commit is the victim, a completed run is rolled back and retried. Locking the
+        job row first gives the order job -> request, as in every other transaction that writes
+        both. A row this attempt no longer holds matches nothing and locks nothing; the
+        guarded write that follows then refuses as before. Only lock acquisition changes."""
+        if not self.identity_complete():
+            return
+        from app.jobs.models import Job
+
+        db.execute(
+            select(Job.id)
+            .where(
+                Job.id == self.job_id,
+                Job.worker_id == self.worker_id,
+                Job.lease_token == self.lease_token,
+            )
+            .with_for_update(key_share=True)
+        ).all()
+
     def finish(self, db: Session, *, stats: dict, now: datetime) -> None:
         """The guarded terminal write, in the run's own transaction: ``completed``, stats and
         ``last_run_at`` in ONE statement, only while the request is ``running`` with this
         fence, this attempt is its owner and still holds its job (O1); the owner is cleared.
         Anything else is a stop at the commit boundary (findings discarded with the
-        savepoint, PROPOSED §6.2 Q-1)."""
+        savepoint, PROPOSED §6.2 Q-1). The job row is locked first (:meth:`lock_job`)."""
+        self.lock_job(db)
         model = self._model()
         result = db.execute(
             update(model)
