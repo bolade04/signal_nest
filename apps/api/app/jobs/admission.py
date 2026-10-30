@@ -117,6 +117,9 @@ _LIVE_JOB = ("claimed", "running")
 _CONFLICT_ATTEMPTS = 3
 #: The unique index that enforces K = 1.
 _K_INDEX = "uq_scout_admission_unresolved"
+#: A K = 1 refusal whose blocking admission is already resolved when read is retried at once,
+#: at most this many times in a row (more would mean the index refuses with nothing unresolved).
+_RESOLVED_MEANWHILE_RETRIES = 3
 
 
 class RunStopped(Exception):  # noqa: N818 - a control-flow signal, not an error class
@@ -448,13 +451,14 @@ class RunAdmission:
                 worker_id=self.worker_id,
                 operation=operation,
                 attempt_key=attempt_key,
-                admitted_at=datetime.now(UTC),
+                admitted_at=self._now(session),  # database time: the deadline's origin
             )
             session.add(row)
             session.flush()
             return row.id, (extra(session) if extra is not None else None)
 
         delay = 0.25
+        resolved_meanwhile = 0
         while True:
             try:
                 admission_id, result = self._in_own_transaction(work)
@@ -463,6 +467,9 @@ class RunAdmission:
                     raise
                 blocking = self._blocking(operation)
                 if blocking is None:
+                    resolved_meanwhile += 1
+                    if resolved_meanwhile > _RESOLVED_MEANWHILE_RETRIES:
+                        raise
                     continue  # resolved meanwhile: try again at once
                 blocking_id, ended, expired = blocking
                 if ended or expired:

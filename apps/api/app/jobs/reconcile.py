@@ -21,7 +21,7 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 #: The reason codes reconciliation accepts (the note adds at most 200 characters).
@@ -48,9 +48,19 @@ def _attempt_valid(db: Session, row) -> bool:
     if job.attempt_count != row.attempt or job.worker_id != row.worker_id:
         return False
     expires = job.lease_expires_at
-    if expires is not None and expires.tzinfo is None:
+    if expires is None:
+        return False
+    if expires.tzinfo is None:
         expires = expires.replace(tzinfo=UTC)
-    return expires is not None and expires > datetime.now(UTC)
+    # Database time on PostgreSQL, like every lease comparison (contract §8.1.6).
+    now = (
+        db.execute(select(func.clock_timestamp())).scalar_one()
+        if db.get_bind().dialect.name == "postgresql"
+        else datetime.now(UTC)
+    )
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return expires > now
 
 
 def list_unresolved(db: Session, scout_request_id: str) -> dict:
