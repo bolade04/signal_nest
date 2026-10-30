@@ -340,7 +340,10 @@ class JobRunner:
             recorded = self._write_after_rollback(db, after_rollback, job_type=job_type)
             if exc.error.code == JobErrorCode.CANCELLED:
                 try:
-                    self._write_fenced(db, on_fenced_failure, job_type=job_type)
+                    self._write_fenced(
+                        db, on_fenced_failure, job_type=job_type,
+                        job_id=job_id, worker_id=worker_id, lease_token=lease_token,
+                    )
                     self._store.finish_cancel(
                         db, job, worker_id=worker_id,
                         lease_token=lease_token, now=self._clock(),
@@ -411,7 +414,14 @@ class JobRunner:
             return False
 
     def _write_fenced(
-        self, db: Session, writers: list[Callable[[Session], None]], *, job_type: str
+        self,
+        db: Session,
+        writers: list[Callable[[Session], None]],
+        *,
+        job_type: str,
+        job_id: str | None = None,
+        worker_id: str | None = None,
+        lease_token: str | None = None,
     ) -> None:
         """Run ``writers`` in the transaction the caller is about to fence and commit.
 
@@ -422,10 +432,28 @@ class JobRunner:
         predicates still see the job row as this attempt holds it. A writer that raises is
         logged by class name and its writes are discarded; the job's transition still
         proceeds (a final failure's terminal hook then settles the request).
+
+        Lock order (D-25 recovery contract §9.1, PROPOSED; a defect fix): the writers update
+        the request row, and the transition then updates the job row. Taken in that order
+        (request -> job) the transaction deadlocks against a stale attempt's admission check,
+        which locks job -> request (lane W15 probe L1: ``40P01``). So the job row is locked
+        first (``FOR NO KEY UPDATE``, fenced by this attempt's worker and lease token),
+        restoring the single order job -> request -> ledger -> period -> reservation. Only
+        the order of lock acquisition changes; no write and no end state does.
         """
         if not writers:
             return
         try:
+            if job_id is not None:
+                db.execute(
+                    select(Job.id)
+                    .where(
+                        Job.id == job_id,
+                        Job.worker_id == worker_id,
+                        Job.lease_token == lease_token,
+                    )
+                    .with_for_update(key_share=True)
+                ).all()
             for write in writers:
                 write(db)
             db.flush()
@@ -508,7 +536,10 @@ class JobRunner:
             ) as span:
                 # The attempt's fenced request writes (contract §9.1) commit with this
                 # transition or not at all.
-                self._write_fenced(db, fenced or [], job_type=job_type)
+                self._write_fenced(
+                    db, fenced or [], job_type=job_type,
+                    job_id=job.id, worker_id=worker_id, lease_token=lease_token,
+                )
                 self._store.fail(
                     db,
                     job,
