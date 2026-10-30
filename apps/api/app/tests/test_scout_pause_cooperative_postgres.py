@@ -732,3 +732,157 @@ def test_the_schedule_chain_survives_pause_resume_and_a_stale_fenced_job(world, 
         executions=runs,
         missed_occurrences=outcomes[:3].count("coalesced"),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Review r1 corrections (W13-REV-PAUSECOOP). The four tests below are adopted, with
+# credit, from the independent reviewer's extra killers
+# (P6-W13-REV-PAUSECOOP-01/scripts/test_rev_pausecoop_extra_postgres.py::test_x1..x4),
+# adapted to this module's helpers. Each pins a race the earlier suite did not pin.
+# --------------------------------------------------------------------------- #
+def test_a_priced_model_admission_and_its_reservation_commit_in_one_transaction(world, monkeypatch):
+    """Review r1 F2 (reviewer test_x1; kills mutant R1). Contract §2: a priced model
+    attempt's admission and its LLM reservation are ONE transaction. Split, a reservation
+    could commit after the cut-off although its admission committed before it."""
+    from app.llm import budget as ledger_mod
+    from app.llm.service import LLMService
+    from app.tests.test_scout_pause_postgres import PricedMock
+
+    w = world
+    monkeypatch.setattr(pipeline, "fetch_signals", Sources())
+    provider = PricedMock()
+    monkeypatch.setattr(
+        pipeline,
+        "llm_service",
+        LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
+    )
+    admission_xids: list[str] = []
+    reserve_xids: list[str] = []
+    real_check, real_reserve = RunAdmission.check, ledger_mod.reserve
+
+    def check(self, session, operation):
+        real_check(self, session, operation)
+        if operation == "model":
+            admission_xids.append(
+                session.execute(text("select pg_current_xact_id()::text")).scalar_one()
+            )
+
+    def reserve(session, **kwargs):
+        reserved = real_reserve(session, **kwargs)
+        reserve_xids.append(session.execute(text("select pg_current_xact_id()::text")).scalar_one())
+        return reserved
+
+    monkeypatch.setattr(RunAdmission, "check", check)
+    monkeypatch.setattr(ledger_mod, "reserve", reserve)
+    assert _start_worker(w).join_ok() is True
+
+    assert provider.calls and len(reserve_xids) == len(provider.calls)
+    assert admission_xids == reserve_xids  # per attempt: one xid for admission + reservation
+
+
+def test_an_old_run_at_its_commit_boundary_never_settles_a_newer_run(world, monkeypatch):
+    """Review r1 C1/F1, MAJOR (reviewer test_x2; kills mutant R2). Every operation of the
+    old run is done and it is parked right before its terminal write; the customer pauses,
+    resumes and runs again, and the newer run holds ``running`` under the new fence. The
+    old run's terminal write must match its own fence, not just ``running``: it stops and
+    settles nothing; the newer run completes."""
+    w = world
+    monkeypatch.setattr(pipeline, "fetch_signals", Sources())
+    ModelCalls(monkeypatch)
+    at_commit, release_old = threading.Event(), threading.Event()
+    real_finish = RunAdmission.finish
+
+    def finish(self, db, *, stats, now):
+        if self.job_id == w.job_id:  # only the old run parks, right before its terminal write
+            at_commit.set()
+            assert release_old.wait(JOIN_SECONDS)
+        return real_finish(self, db, stats=stats, now=now)
+
+    monkeypatch.setattr(RunAdmission, "finish", finish)
+    with offline_llm():
+        old = _start_worker(w)
+        assert at_commit.wait(JOIN_SECONDS)
+        _pause(w)
+        _resume(w)
+        new_job = _run_now(w)
+        sources = Sources(gate=True)  # the newer run parks in its fetch, holding ``running``
+        monkeypatch.setattr(pipeline, "fetch_signals", sources)
+        new = _start_worker(w, _runner(w))
+        assert sources.started.wait(JOIN_SECONDS)
+        with w.factory() as s:
+            assert s.get(ScoutRequest, w.rid).status == "running"
+        release_old.set()
+        assert old.join_ok() is True
+        with w.factory() as s:
+            mid = s.get(ScoutRequest, w.rid)
+            mid_status, mid_last_run = mid.status, mid.last_run_at
+        old_summary = _job(w, w.job_id).result_summary
+        sources.release.set()
+        assert new.join_ok() is True
+
+    assert old_summary == {"scout_request_id": w.rid, "outcome": STOPPED}
+    assert mid_status == "running" and mid_last_run is None  # the old run settled nothing
+    assert _job(w, new_job).result_summary["outcome"] == "completed"
+    assert _end_state(w).status == "completed"
+
+
+def test_run_now_racing_pause_resume_queues_the_fence_its_compare_and_set_saw(world, monkeypatch):
+    """Review r1 F3 (reviewer test_x3; kills mutant R3). A Run now whose request is paused
+    and resumed by another tab while it is in flight (resume lands in ``draft``, the state
+    it observed: an ABA) must record the fence its compare-and-set read (RETURNING), so
+    the job runs and the request is never left ``queued`` behind a skipped job."""
+    from app.scouting_requests import routes as routes_mod
+
+    w = world
+    monkeypatch.setattr(pipeline, "fetch_signals", Sources())
+    with w.factory() as s:  # a ``draft`` request with no runnable job
+        s.get(Job, w.job_id).status = JobStatus.SUCCEEDED.value
+        s.get(ScoutRequest, w.rid).status = "draft"
+        s.commit()
+    real_allowed = routes_mod.ensure_run_allowed
+    fired: list[bool] = []
+
+    def allowed_then_race(db, settings, workspace_id):
+        if not fired:  # another tab pauses and resumes while this Run now is in flight
+            fired.append(True)
+            _pause(w)
+            _resume(w)
+        return real_allowed(db, settings, workspace_id)
+
+    monkeypatch.setattr(routes_mod, "ensure_run_allowed", allowed_then_race)
+    job_id = _run_now(w)
+    with offline_llm():
+        assert _start_worker(w, _runner(w)).join_ok() is True
+
+    job = _job(w, job_id)
+    with w.factory() as s:
+        request = s.get(ScoutRequest, w.rid)
+        assert job.payload["run_fence"] == request.run_fence == 1
+        assert request.status == "completed"  # never left ``queued`` behind a skipped job
+    assert job.result_summary["outcome"] == "completed"
+
+
+def test_a_pause_during_the_fetch_stops_the_run_before_the_refusal(world, monkeypatch):
+    """Review r1 optional (reviewer test_x4): with a run that the per-run bound would
+    refuse, a pause committed during the fetch stops it at the post-fetch boundary first:
+    the job is a stop (``succeeded``, ``stopped_request_paused``), not a non-retryable
+    failure, and the refusal writes nothing."""
+    from app.core.config import get_settings
+
+    w = world
+    monkeypatch.setattr(get_settings(), "vector_inprocess_max_signals_per_run", 2)
+    sources = Sources(gate=True, count=5)
+    monkeypatch.setattr(pipeline, "fetch_signals", sources)
+    models = ModelCalls(monkeypatch)
+    with offline_llm():
+        worker = _start_worker(w)
+        assert sources.started.wait(JOIN_SECONDS)
+        _pause(w)
+        sources.release.set()
+        assert worker.join_ok() is True
+
+    end = _end_state(w)
+    assert end.status == PAUSED and models.calls == []
+    assert end.job_status == JobStatus.SUCCEEDED.value
+    assert end.job_summary == {"scout_request_id": w.rid, "outcome": STOPPED}
+    assert not (end.stats or {}).get("refused")
