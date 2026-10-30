@@ -1049,3 +1049,50 @@ def test_cancel_racing_a_concurrent_completion_keeps_the_completed_result(world)
     job = _job(w, w.job_id)
     assert (job.status, job.cancel_requested_at) == ("succeeded", None)
     assert _request(w)[0] == "completed"
+
+
+def test_the_cancel_idle_write_commits_only_with_the_fenced_cancel(world, monkeypatch):
+    """§5.1/§9.5: the idle write runs inside the attempt's fenced ``finish_cancel`` transaction.
+    If the attempt loses its job just before that transaction (a re-claim commits), nothing is
+    written over the replacement: it keeps ``running`` and its ownership (mutant C5's killer)."""
+    from app.jobs.worker import JobRunner
+
+    w = world
+    _manual_prior(w, "completed")
+    provider = Provider(park={1})
+    _use(monkeypatch, provider)
+    real_write_fenced = JobRunner._write_fenced
+
+    def reclaimed_then_fenced(self, db, writers, **kwargs):
+        if writers:
+            with w.factory() as other:
+                other.execute(
+                    update(Job)
+                    .where(Job.id == w.job_id)
+                    .values(
+                        status="running",
+                        attempt_count=Job.attempt_count + 1,
+                        worker_id="w-replacement",
+                        lease_token="tok-replacement",
+                        lease_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+                    )
+                )
+                other.execute(
+                    update(ScoutRequest)
+                    .where(ScoutRequest.id == w.rid)
+                    .values(
+                        owner_job_id=w.job_id, owner_attempt=2, owner_lease_token="tok-replacement"
+                    )
+                )
+                other.commit()
+        return real_write_fenced(self, db, writers, **kwargs)
+
+    monkeypatch.setattr(JobRunner, "_write_fenced", reclaimed_then_fenced)
+    worker = _start_worker(w)
+    assert provider.parked.wait(JOIN_SECONDS)
+    assert _cancel(w, w.job_id) == "cancel_requested"
+    provider.release.set()
+    worker.join_ok()
+    assert _request(w) == ("running", 0, w.job_id)
+    job = _job(w, w.job_id)
+    assert (job.status, job.lease_token) == ("running", "tok-replacement")
