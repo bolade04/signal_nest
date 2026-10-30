@@ -1096,3 +1096,40 @@ def test_the_cancel_idle_write_commits_only_with_the_fenced_cancel(world, monkey
     assert _request(w) == ("running", 0, w.job_id)
     job = _job(w, w.job_id)
     assert (job.status, job.lease_token) == ("running", "tok-replacement")
+
+
+class _Waited(Exception):
+    """Raised by the fake sleep: the admission waited instead of ending."""
+
+
+@pytest.mark.parametrize("persisted", ["passed", "ahead"])
+def test_the_waiting_rule_reads_the_persisted_deadline(world, monkeypatch, persisted):
+    """§3.2 for the waiting rule (mutant D1's killer): a waiter's own settings decide neither
+    way. ``passed``: the blocking row's stored deadline has passed while the waiter's settings
+    would allow an hour: the admission ends at once (``AdmissionUnresolved``). ``ahead``: the
+    stored deadline is a minute away while the waiter's settings allow 3.5 s: it waits."""
+    from app.jobs.admission import AdmissionUnresolved
+
+    w = world
+    first = _attempt(w, attempt=1, token="tok-a", worker="w-a")
+    blocking, _ = first.admit_external("model")  # outstanding, no end
+    _deadline_in(w, blocking, -1 if persisted == "passed" else 60)
+    waiter = _attempt(w, attempt=2, token="tok-b", worker="w-b")
+    settings = get_settings()
+    if persisted == "passed":
+        monkeypatch.setattr(settings, "llm_timeout_seconds", 120)
+        monkeypatch.setattr(settings, "worker_lease_seconds", 3600)
+    else:
+        monkeypatch.setattr(settings, "llm_timeout_seconds", 1)
+        monkeypatch.setattr(settings, "worker_lease_seconds", 0.5)
+
+    def no_sleep(_seconds):
+        raise _Waited()
+
+    if persisted == "passed":
+        with pytest.raises(AdmissionUnresolved):
+            waiter.admit_external("model", sleep=no_sleep)
+    else:
+        with pytest.raises(_Waited):
+            waiter.admit_external("model", sleep=no_sleep)
+    assert _unresolved(w) == 1
