@@ -292,6 +292,11 @@ def pause_scout_request(
         entity_type="scout_request",
         entity_id=request.id,
     )
+    # Commit before answering (as the run route does): ``get_db`` commits only in its
+    # teardown, which FastAPI runs after the response has been sent, so without this the
+    # 200 could reach the client before the pause is durable -- and the pause's commit is
+    # the cut-off after which nothing is admitted (D-25 candidate, PROPOSED).
+    db.commit()
     return request
 
 

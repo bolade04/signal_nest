@@ -28,6 +28,7 @@ from sqlalchemy import func, select, update
 
 from app.core.enums import ScoutRequestStatus
 from app.db import seed as seed_mod
+from app.infra.vector import SignalVolumeAboveBoundError
 from app.jobs import admission as admission_mod
 from app.jobs import handlers, pipeline
 from app.jobs.admission import RunAdmission
@@ -528,3 +529,62 @@ def test_every_live_fetch_attempt_passes_its_own_admission(factory, committed, m
     assert all(events[i - 1] == ("admit", "fetch") for i in sends)
     assert events[sends[-1] + 1] == ("admit", "post_fetch")
     assert _job(factory, job_id).result_summary["outcome"] == "completed"
+
+
+def test_the_refusal_writer_of_an_old_run_leaves_a_newer_run_alone(s):
+    """Pause -> Resume -> Run now: the newer run (fence 1) owns ``running``. The old run's
+    refusal (fence 0) writes neither ``failed`` nor its stats."""
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "nairobi"))
+    req.status, req.run_fence = RUNNING, 1
+    s.flush()
+    stats_before = req.stats
+    context = ExecutionContext.for_scout_request(
+        organization_id=req.organization_id, workspace_id=req.workspace_id
+    )
+    handlers._record_refused_run(
+        req.id, context, SignalVolumeAboveBoundError(scanned=5, bound=3), run_fence=0
+    )(s)
+    s.refresh(req)
+    assert (req.status, req.stats) == (RUNNING, stats_before)
+    handlers._record_refused_run(
+        req.id, context, SignalVolumeAboveBoundError(scanned=5, bound=3), run_fence=1
+    )(s)
+    s.refresh(req)
+    assert req.status == ScoutRequestStatus.FAILED.value and req.stats["refused"] is True
+
+
+def test_the_pause_is_committed_before_it_is_acknowledged(factory, committed):
+    """``get_db`` commits in its teardown, which FastAPI runs after the response is sent.
+    The pause route therefore commits before answering: with a database dependency whose
+    teardown never commits, the acknowledged pause is still durable."""
+    from fastapi.testclient import TestClient
+
+    from app.db.session import get_db
+    from app.main import app
+
+    rid = seed_mod.sid("scout", "dallas")
+    with factory() as session:
+        token = live_bearer(seed_mod.sid("user"), db=session)
+        fence = session.get(ScoutRequest, rid).run_fence
+        session.commit()
+
+    def never_commits():
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.rollback()
+            session.close()
+
+    app.dependency_overrides[get_db] = never_commits
+    try:
+        reply = TestClient(app).post(
+            f"{API}/workspaces/{seed_mod.sid('ws')}/scout-requests/{rid}/pause",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+    assert reply.status_code == 200 and reply.json()["status"] == PAUSED
+    with factory() as session:
+        request = session.get(ScoutRequest, rid)
+        assert (request.status, request.run_fence) == (PAUSED, fence + 1)
