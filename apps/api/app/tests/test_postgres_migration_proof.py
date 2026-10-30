@@ -58,12 +58,15 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (D-25 execution-control candidate, PROPOSED: adds the ``scout_requests``
+#: The code head (D-25 blocked-Scout recovery candidate, PROPOSED: adds the persisted
+#: ``scout_admissions.deadline_at`` and its basis).
+HEAD = "d4a8f2c6b9e1"
+#: One below head (D-25 execution-control candidate, PROPOSED: adds the ``scout_requests``
 #: owner columns and the ``scout_admissions`` ledger).
-HEAD = "c6f1d8e2a4b7"
-#: One below head (D-25 cooperative-pause candidate, PROPOSED: adds
+BELOW_HEAD = "c6f1d8e2a4b7"
+#: Two below head (D-25 cooperative-pause candidate, PROPOSED: adds
 #: ``scout_requests.run_fence``).
-BELOW_HEAD = "b5e0c7a3d2f1"
+FENCE = "b5e0c7a3d2f1"
 #: Two below head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
 #: ``llm_budget_reservations`` tables).
 BUDGET = "8005724d811a"
@@ -269,6 +272,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "run_fence" in _columns(pg_url, "scout_requests")
     assert "owner_job_id" in _columns(pg_url, "scout_requests")
     assert "scout_admissions" in _tables(pg_url)
+    assert {"deadline_at", "deadline_rule"} <= _columns(pg_url, "scout_admissions")
 
     # One guarded step down undoes exactly the head revision; the spent token does not
     # authorize the next step.
@@ -276,9 +280,10 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert "scout_admissions" not in _tables(pg_url)
-    assert "owner_job_id" not in _columns(pg_url, "scout_requests")
-    assert "run_fence" in _columns(pg_url, "scout_requests")  # the revision below: untouched
+    assert not {c for c in _columns(pg_url, "scout_admissions") if c.startswith("deadline")}
+    assert "scout_admissions" in _tables(pg_url)  # the revision below: untouched
+    assert "owner_job_id" in _columns(pg_url, "scout_requests")
+    assert "run_fence" in _columns(pg_url, "scout_requests")
     assert "scout_requests" in _tables(pg_url)
     # The revisions below head are untouched (the ledger tables of the revision below).
     assert "llm_budget_periods" in _tables(pg_url)

@@ -280,7 +280,10 @@ def test_cancel_during_an_admitted_operation_stops_at_the_next_admission(world, 
 
     end = _end_state(w)
     assert end.job_status == JobStatus.CANCELLED.value
-    assert end.status == "queued"  # the pre-claim status (the F-03 shape, tracked separately)
+    # D-25 recovery R-C (PROPOSED, lane W15) replaces the pre-claim ``queued`` (the F-03 shape)
+    # with the status the Scout had before the run was requested; this seeded legacy job
+    # records none, so ``draft``.
+    assert end.status == "draft"
     assert len(provider.calls) == 1  # the in-flight call finished; nothing further admitted
     assert _unresolved(w) == 0  # resolved by its own known end, never by the Cancel
     with w.factory() as s:
@@ -520,7 +523,20 @@ def test_a_wait_behind_an_outstanding_admission_expires_definitely(world, monkey
     zombie = _start_worker(w)
     assert provider.parked.wait(JOIN_SECONDS)
     _expire_lease(w, w.job_id)
-    monkeypatch.setattr("app.jobs.admission.RunAdmission._deadline_seconds", lambda self, op: 0.2)
+    # The zombie's admission is outstanding; its PERSISTED deadline (D-25 recovery R-D, lane
+    # W15) is moved to 0.2 s from now, with ``admitted_at`` kept consistent with its basis (the
+    # waiter's own settings no longer decide it, contract §3.2).
+    with w.observer.connect() as c:
+        c.execute(
+            text(
+                "update scout_admissions a set deadline_at = t.ts + interval '0.2 second',"
+                " admitted_at = t.ts + interval '0.2 second'"
+                " - make_interval(secs => a.deadline_client_seconds + a.deadline_lease_seconds)"
+                " from (select clock_timestamp() as ts) t"
+                " where a.scout_request_id = :r and a.resolved_at is null"
+            ),
+            {"r": w.rid},
+        )
     assert _start_worker(w, _runner(w)).join_ok() is True
     expired = _end_state(w)
     still_unresolved = _unresolved(w)

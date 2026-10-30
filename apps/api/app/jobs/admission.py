@@ -68,12 +68,24 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import DateTime, and_, bindparam, case, exists, func, or_, select, update
+from sqlalchemy import (
+    DateTime,
+    and_,
+    bindparam,
+    case,
+    exists,
+    func,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.enums import ScoutRequestStatus
-from app.core.logging import get_logger
+from app.core.logging import get_logger, log_event
+from app.db.base import new_uuid
 
 logger = get_logger("signalnest.jobs.admission")
 
@@ -122,19 +134,71 @@ _K_INDEX = "uq_scout_admission_unresolved"
 _RESOLVED_MEANWHILE_RETRIES = 3
 
 
-def admission_deadline_seconds(operation: str) -> float:
-    """An admission's own deadline after ``admitted_at``: its client's deadline plus the
-    lease (model: 3 x ``llm_timeout_seconds``; fetch: ``connector_egress_total_timeout_seconds``).
-    The waiting rule and reconciliation's deadline gate use the same value."""
+#: The rule an admission's persisted deadline was computed with (D-25 recovery contract §3,
+#: PROPOSED): ``admitted_at`` + the operation's client deadline + the lease. Rows created
+#: before the deadline was persisted carry ``unrecorded`` and no deadline (never back-filled).
+DEADLINE_RULE = "client_plus_lease"
+DEADLINE_UNRECORDED = "unrecorded"
+
+
+def deadline_basis(operation: str) -> tuple[float, float]:
+    """``(client_seconds, lease_seconds)`` from THIS process's settings: the operation's
+    client deadline (model: 3 x ``llm_timeout_seconds``; fetch:
+    ``connector_egress_total_timeout_seconds``) and ``worker_lease_seconds``.
+
+    Read only by the admitting INSERT, which persists the deadline and its basis on the row
+    (and by a waiter blocked by a legacy row that has none). Every other reader uses the
+    persisted ``deadline_at``, so a reader's settings never shorten or lengthen an existing
+    admission's gate (contract §3.2)."""
     from app.core.config import get_settings
     from app.llm.budget import HTTP_TIMEOUT_PHASES
 
     settings = get_settings()
     if operation == "model":
-        own = HTTP_TIMEOUT_PHASES * float(settings.llm_timeout_seconds)
+        client = HTTP_TIMEOUT_PHASES * float(settings.llm_timeout_seconds)
     else:
-        own = float(settings.connector_egress_total_timeout_seconds)
-    return own + float(settings.worker_lease_seconds)
+        client = float(settings.connector_egress_total_timeout_seconds)
+    return client, float(settings.worker_lease_seconds)
+
+
+def admission_deadline_seconds(operation: str) -> float:
+    """``client + lease`` seconds from this process's settings (see :func:`deadline_basis`):
+    the value the admitting INSERT persists; a legacy row's waiter uses its own."""
+    client, lease = deadline_basis(operation)
+    return client + lease
+
+
+#: The admission INSERT (contract §3.1, §9.2.2): ``admitted_at`` and ``deadline_at`` come from
+#: ONE ``clock_timestamp()`` reading in one statement, so the deadline is exactly
+#: ``admitted_at`` + basis (also pinned by ``ck_scout_admission_deadline_basis``).
+_ADMISSION_INSERT = text(
+    "INSERT INTO scout_admissions (id, scout_request_id, organization_id, workspace_id,"
+    " job_id, attempt, worker_id, operation, attempt_key, admitted_at, deadline_at,"
+    " deadline_rule, deadline_client_seconds, deadline_lease_seconds, created_at, updated_at)"
+    " SELECT :id, :scout_request_id, :organization_id, :workspace_id, :job_id, :attempt,"
+    " :worker_id, :operation, :attempt_key, t.ts,"
+    " t.ts + make_interval(secs => CAST(:client_s AS double precision)"
+    " + CAST(:lease_s AS double precision)),"
+    " :rule, :client_s, :lease_s, t.ts, t.ts"
+    " FROM (SELECT clock_timestamp() AS ts) AS t"
+)
+
+#: Statuses a run settles into, and from which Run now is accepted: the only values a job's
+#: recorded ``prior_status`` may hold (contract §9.5.5).
+SETTLED_STATUSES = (
+    ScoutRequestStatus.DRAFT.value,
+    ScoutRequestStatus.COMPLETED.value,
+    ScoutRequestStatus.FAILED.value,
+)
+
+
+def idle_status(payload: dict | None) -> str:
+    """The usable idle state a Cancel returns the Scout to (contract §9.5.5, PROPOSED): the
+    status it had before this run was requested, recorded once on the job's payload (by Run
+    now at creation; for a scheduled job at its first claim); ``draft`` for a job with no
+    recorded value (legacy). Never ``queued``/``running``, never a result this run produced."""
+    value = (payload or {}).get("prior_status")
+    return value if value in SETTLED_STATUSES else ScoutRequestStatus.DRAFT.value
 
 
 class RunStopped(Exception):  # noqa: N818 - a control-flow signal, not an error class
@@ -379,6 +443,7 @@ class RunAdmission:
                 or not job[4]
             ):
                 raise RunStopped(CAUSE_LEASE_LOST, "claim", CAUSE_LEASE_LOST)
+            self._record_prior_status(session, status)
             result = session.execute(
                 update(model)
                 .where(
@@ -411,9 +476,35 @@ class RunAdmission:
         self.claimed = outcome is None
         return outcome
 
+    def _record_prior_status(self, session: Session, status: str) -> None:
+        """Record, once per job, the status the Scout had before this run (contract §9.5.5):
+        Run now records it when it creates the job; a job without one (a scheduled run: the
+        tick never changes the request's status) records the status its first claim replaces,
+        if it is a settled one. Written on the job row (locked before the request: the order
+        job -> request), fenced by this attempt's claim; every later attempt reads it there.
+        The payload hash is left as enqueued (it guards the enqueue's idempotency only)."""
+        from app.jobs.models import Job
+
+        if status not in SETTLED_STATUSES:
+            return
+        payload = session.execute(select(Job.payload).where(Job.id == self.job_id)).scalar_one()
+        if not isinstance(payload, dict) or "prior_status" in payload:
+            return
+        session.execute(
+            update(Job)
+            .where(
+                Job.id == self.job_id,
+                Job.worker_id == self.worker_id,
+                Job.attempt_count == self.attempt,
+                Job.lease_token == self.lease_token,
+            )
+            .values(payload={**payload, "prior_status": status})
+            .execution_options(synchronize_session=False)
+        )
+
     # -- external operations (K = 1) ---------------------------------------------------
-    def _deadline_seconds(self, operation: str) -> float:
-        return admission_deadline_seconds(operation)
+    def _deadline_basis(self, operation: str) -> tuple[float, float]:
+        return deadline_basis(operation)
 
     def admit_external(
         self,
@@ -431,8 +522,6 @@ class RunAdmission:
         re-checking this attempt's authority on every try; raise :class:`AdmissionUnresolved`
         once it has an unknown end or its deadline has passed. The wait never resolves it.
         """
-        from app.scouting_requests.models import ScoutAdmission
-
         if not self._ledger_enabled():
             # SQLite (development and tests): the run's own connection holds the database
             # write lock during its write phase, so a separate-connection ledger insert cannot
@@ -449,20 +538,29 @@ class RunAdmission:
 
         def work(session: Session) -> tuple[str, Any]:
             self.check(session, operation)
-            row = ScoutAdmission(
-                scout_request_id=self.scout_request_id,
-                organization_id=self.organization_id,
-                workspace_id=self.workspace_id,
-                job_id=self.job_id,
-                attempt=self.attempt,
-                worker_id=self.worker_id,
-                operation=operation,
-                attempt_key=attempt_key,
-                admitted_at=self._now(session),  # database time: the deadline's origin
+            # R-D (contract §3, §9.2, PROPOSED): the deadline and its basis are persisted by
+            # this INSERT, from this process's settings and ONE database-clock reading shared
+            # with ``admitted_at``. Nothing is dispatched before this row commits.
+            client_s, lease_s = self._deadline_basis(operation)
+            admission_id = new_uuid()
+            session.execute(
+                _ADMISSION_INSERT,
+                {
+                    "id": admission_id,
+                    "scout_request_id": self.scout_request_id,
+                    "organization_id": self.organization_id,
+                    "workspace_id": self.workspace_id,
+                    "job_id": self.job_id,
+                    "attempt": self.attempt,
+                    "worker_id": self.worker_id,
+                    "operation": operation,
+                    "attempt_key": attempt_key,
+                    "rule": DEADLINE_RULE,
+                    "client_s": client_s,
+                    "lease_s": lease_s,
+                },
             )
-            session.add(row)
-            session.flush()
-            return row.id, (extra(session) if extra is not None else None)
+            return admission_id, (extra(session) if extra is not None else None)
 
         delay = 0.25
         resolved_meanwhile = 0
@@ -497,7 +595,12 @@ class RunAdmission:
         return self._dialect == "postgresql"
 
     def _blocking(self, operation: str) -> tuple[str, bool, bool] | None:
-        """The Scout's unresolved admission: ``(id, has_ended, deadline_passed)``."""
+        """The Scout's unresolved admission: ``(id, has_ended, deadline_passed)``.
+
+        The deadline is the row's persisted ``deadline_at`` (contract §3.2), compared strictly
+        with the database clock (§9.2.1). A legacy row without one is waited for up to this
+        waiter's own bound (``admitted_at`` + its basis, §3.4): the end of a wait resolves
+        nothing, so that bound only decides when this run gives up."""
         from app.scouting_requests.models import ScoutAdmission
 
         def read(session: Session):
@@ -507,6 +610,7 @@ class RunAdmission:
                     ScoutAdmission.ended_at,
                     ScoutAdmission.operation,
                     ScoutAdmission.admitted_at,
+                    ScoutAdmission.deadline_at,
                 ).where(
                     ScoutAdmission.scout_request_id == self.scout_request_id,
                     ScoutAdmission.resolved_at.is_(None),
@@ -515,7 +619,9 @@ class RunAdmission:
             if row is None:
                 return None
             now = session.execute(select(self._now(session))).scalar_one()
-            deadline = _aware(row[3]) + timedelta(seconds=self._deadline_seconds(row[2]))
+            deadline = _aware(row[4])
+            if deadline is None:  # legacy: the waiter's own bound
+                deadline = _aware(row[3]) + timedelta(seconds=sum(self._deadline_basis(row[2])))
             return row[0], row[1] is not None, _aware(now) > deadline
 
         return self._in_own_transaction(read)
@@ -647,6 +753,34 @@ class RunAdmission:
             .execution_options(synchronize_session=False)
         )
 
+    def cancel_idle_writer(
+        self, *, payload: dict | None, now: datetime
+    ) -> Callable[[Session], None]:
+        """A fenced writer (``HandlerContext.on_fenced_failure``) that returns the Scout to
+        its usable idle state in the worker's ``finish_cancel`` transaction (R-C, PROPOSED).
+        The job's payload is re-read in that transaction, so a ``prior_status`` the first
+        claim recorded is seen by every later attempt."""
+
+        def write(db: Session) -> None:
+            from app.jobs.models import Job
+
+            fresh = db.execute(
+                select(Job.payload).where(Job.id == self.job_id)
+            ).scalar_one_or_none()
+            settle_cancelled_request(
+                db,
+                scout_request_id=self.scout_request_id,
+                organization_id=self.organization_id,
+                workspace_id=self.workspace_id,
+                job_id=self.job_id,
+                fence=self.fence,
+                payload=fresh if isinstance(fresh, dict) else payload,
+                now=now,
+                holder=self,
+            )
+
+        return write
+
     def release_owner_writer(self) -> Callable[[Session], None] | None:
         if not self.claimed:
             return None
@@ -709,6 +843,119 @@ class RunAdmission:
         return write
 
 
+# -- Cancel's usable idle state (R-C, contract §5 / §9.5, PROPOSED) ---------------------
+def settle_cancelled_request(
+    db: Session,
+    *,
+    scout_request_id: str,
+    organization_id: str,
+    workspace_id: str,
+    job_id: str,
+    fence: int,
+    payload: dict | None,
+    now: datetime,
+    holder: RunAdmission | None = None,
+) -> bool:
+    """Return the Scout to a usable idle state when Cancel makes its execute job terminal.
+
+    Runs in the same transaction as the job's terminal write: the worker's fenced
+    ``finish_cancel`` transaction (``holder`` = the attempt holding the job, which
+    ``worker._write_fenced`` has already locked), or the Cancel route's transaction right
+    after its guarded ``CANCELLED`` transition of an enqueued job (no holder). Lock order:
+    own job -> request (``FOR NO KEY UPDATE``) -> rivals read by the UPDATE, a fresh statement
+    (so a concurrent Cancel's committed transition is seen: lane W15 probe L4).
+
+    Compare-and-set; it writes only while:
+
+    * the request is still ``queued``/``running`` (what a run sets) with this job's fence, so
+      a newer pause, resume or completed result is never overwritten;
+    * its owner is empty or an attempt of THIS job (no attempt of a terminal job holds
+      authority, §9.5.2); another job's owner is preserved;
+    * with a holder, the job row still carries the holder's claim, ``cancel_requested``;
+    * no other execute job of the Scout is live and not fenced out by a pause (§9.5.3): a
+      live rival will settle the request itself; a fenced one can neither claim nor finish it.
+
+    The target is :func:`idle_status` of the job's payload. Cancel never resolves an
+    admission: nothing here touches ``scout_admissions`` or any accounting row. Returns
+    whether the request was written.
+    """
+    from app.jobs.models import Job
+    from app.jobs.status import JobType
+    from app.scouting_requests.models import ScoutRequest
+
+    # ``FOR NO KEY UPDATE``, not ``FOR UPDATE``: a live run's foreign-key inserts hold ``FOR
+    # KEY SHARE`` on this row for the whole run (as the pause relies on), which ``FOR UPDATE``
+    # would wait behind; the request's key is never changed here.
+    db.execute(
+        select(ScoutRequest.id)
+        .where(
+            ScoutRequest.id == scout_request_id,
+            ScoutRequest.organization_id == organization_id,
+            ScoutRequest.workspace_id == workspace_id,
+        )
+        .with_for_update(key_share=True)
+    ).all()
+    rival = exists().where(
+        Job.scout_request_id == ScoutRequest.id,
+        Job.id != job_id,
+        Job.job_type == JobType.SCOUT_REQUEST_EXECUTE.value,
+        Job.status.in_(LIVE_JOB_STATUSES),
+        func.coalesce(Job.payload["run_fence"].as_integer(), 0) == ScoutRequest.run_fence,
+    )
+    predicates = [
+        ScoutRequest.id == scout_request_id,
+        ScoutRequest.organization_id == organization_id,
+        ScoutRequest.workspace_id == workspace_id,
+        ScoutRequest.status.in_((ScoutRequestStatus.QUEUED.value, _RUNNING)),
+        ScoutRequest.run_fence == fence,
+        or_(ScoutRequest.owner_job_id.is_(None), ScoutRequest.owner_job_id == job_id),
+        ~rival,
+    ]
+    if holder is not None:
+        predicates.append(
+            exists().where(
+                Job.id == job_id,
+                Job.worker_id == holder.worker_id,
+                Job.attempt_count == holder.attempt,
+                Job.lease_token == holder.lease_token,
+                Job.status == "cancel_requested",
+            )
+        )
+    result = db.execute(
+        update(ScoutRequest)
+        .where(*predicates)
+        .values(
+            status=idle_status(payload),
+            updated_at=now,
+            owner_job_id=None,
+            owner_attempt=None,
+            owner_lease_token=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    written = result.rowcount == 1
+    log_event(
+        logger,
+        "scout_request.cancel_settled",
+        component="jobs",
+        outcome="idle" if written else "unchanged",
+        via="worker" if holder is not None else "route",
+    )
+    return written
+
+
+#: Execute-job statuses that can still drive a Scout (a rival of a Cancel's idle write, and
+#: the "live job" of the derived execution state, contract §9.4 A6).
+LIVE_JOB_STATUSES = (
+    "pending",
+    "scheduled",
+    "retry_wait",
+    "claimed",
+    "running",
+    "cancel_requested",
+)
+
+
 #: The admission of the run the durable handler is executing (see :func:`admitted_run`).
 _current: ContextVar[RunAdmission | None] = ContextVar("scout_run_admission", default=None)
 
@@ -752,7 +999,11 @@ def record_external_end(admission_id: str | None, *, known: bool) -> None:
 
 
 __all__ = [
+    "DEADLINE_RULE",
+    "DEADLINE_UNRECORDED",
+    "LIVE_JOB_STATUSES",
     "REQUEST_GONE",
+    "SETTLED_STATUSES",
     "SKIPPED_OWNER_ACTIVE",
     "SKIPPED_REQUEST_PAUSED",
     "STATUS_CHANGED_DURING_RUN",
@@ -766,5 +1017,8 @@ __all__ = [
     "admit_operation",
     "admitted_run",
     "current_admission",
+    "deadline_basis",
+    "idle_status",
     "record_external_end",
+    "settle_cancelled_request",
 ]

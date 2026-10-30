@@ -30,6 +30,7 @@ from app.connectors import live as live_mod
 from app.connectors.feedcache import FeedCache
 from app.connectors.live import LiveRssConnector
 from app.core.config import get_settings
+from app.core.errors import ValidationDomainError
 from app.infra.vector import SignalVolumeAboveBoundError
 from app.jobs import pipeline
 from app.jobs.admission import RunAdmission, RunStopped, admission_deadline_seconds, admitted_run
@@ -45,7 +46,6 @@ from app.jobs.reconcile import (
     resolve,
 )
 from app.jobs.status import JobStatus
-from app.jobs.store import DurableJobStore
 from app.llm.base import LLMError, LLMRequest, LLMUnavailableError, LLMUsage
 from app.llm.metering import LLMMeter
 from app.llm.mock import MockLLMProvider
@@ -146,12 +146,16 @@ def _rows(w) -> list:
 
 
 def _backdate(w, admission_id: str, *, hours: float = 1.0) -> None:
-    """The passage of time: the admission's deadline (minutes) lies an hour in the past."""
+    """The passage of time: the admission's deadline (minutes) lies an hour in the past. Its
+    persisted ``deadline_at`` (D-25 recovery R-D, lane W15) moves with ``admitted_at``."""
     with w.factory() as s:
         s.execute(
             update(ScoutAdmission)
             .where(ScoutAdmission.id == admission_id)
-            .values(admitted_at=ScoutAdmission.admitted_at - timedelta(hours=hours))
+            .values(
+                admitted_at=ScoutAdmission.admitted_at - timedelta(hours=hours),
+                deadline_at=ScoutAdmission.deadline_at - timedelta(hours=hours),
+            )
         )
         s.commit()
 
@@ -253,10 +257,16 @@ def test_the_refusal_commits_only_together_with_the_fenced_failure(world, monkey
     survive the lost fence: the request keeps ``running`` and its stats."""
     w = world
     _bound_refusal(w, monkeypatch)
-    real_fail = DurableJobStore.fail
+    from app.jobs.worker import JobRunner
 
-    def reclaimed_then_fail(self, db, job, **kwargs):
-        with w.factory() as other:  # a re-claim of the job row commits at this instant
+    real_write_fenced = JobRunner._write_fenced
+
+    def reclaimed_then_fenced(self, db, writers, **kwargs):
+        # D-25 recovery §9.1 (lane W15): the fenced transaction now locks the job row before
+        # its writers run, so a re-claim can no longer commit between the writer and ``fail``
+        # (it would wait for the fenced transaction). The re-claim therefore commits at the
+        # last instant it still can: just before the fenced transaction begins.
+        with w.factory() as other:
             other.execute(
                 update(Job)
                 .where(Job.id == w.job_id)
@@ -268,9 +278,9 @@ def test_the_refusal_commits_only_together_with_the_fenced_failure(world, monkey
                 )
             )
             other.commit()
-        return real_fail(self, db, job, **kwargs)
+        return real_write_fenced(self, db, writers, **kwargs)
 
-    monkeypatch.setattr(DurableJobStore, "fail", reclaimed_then_fail)
+    monkeypatch.setattr(JobRunner, "_write_fenced", reclaimed_then_fenced)
     assert _start_worker(w).join_ok() is not None
     status, _owner, _attempt, _token, stats = _req(w)
     assert status == "running" and not (stats or {}).get("refused"), (status, stats)
@@ -395,13 +405,14 @@ def test_a_model_5xx_blocks_the_scout_until_reconciliation(world, monkeypatch, s
     assert end.job_error == ("non_retryable", "admission_unresolved")
     assert end.status == "failed" and provider.calls == 1
     assert _rows(w) == [("model", "unknown", False)]
+    # D-25 recovery §9.5.6 (PROPOSED, lane W15): a second Run now on the blocked Scout is now
+    # refused at the route (``scout_needs_attention``) and creates no job; before, it was
+    # accepted and its run failed ``admission_unresolved`` without admitting anything.
     with w.factory() as s:
-        blocked = run_scout_request_endpoint(workspace_id=w.ws, request_id=w.rid, db=s, ctx=w.ctx)
-    assert _start_worker(w, _runner(w)).join_ok() is True
-    with w.factory() as s:
-        second = s.get(Job, blocked.stats["job_id"])
-        assert (second.status, second.last_error_summary) == ("failed", "admission_unresolved")
-    assert provider.calls == 1  # the blocked run admitted nothing
+        with pytest.raises(ValidationDomainError) as refused:
+            run_scout_request_endpoint(workspace_id=w.ws, request_id=w.rid, db=s, ctx=w.ctx)
+    assert refused.value.code == "scout_needs_attention"
+    assert provider.calls == 1  # the blocked Scout admitted nothing
     with w.factory() as s:
         [row] = list_unresolved(s, w.rid)[UNKNOWN_END]
         assert resolve(
@@ -502,6 +513,12 @@ def test_an_unknown_end_is_reconcilable_before_its_deadline(world):
     adm = _adm(w, attempt=1, token="tok-a", worker="w-a")
     row, _ = adm.admit_external("model")
     adm.record_end(row, known=False)
+    # D-25 recovery §9.3 A2 (PROPOSED, lane W15): reconciliation also refuses an unknown end
+    # while its attempt still holds valid authority; the run then ends (as its retry is refused,
+    # the job fails ``admission_unresolved``), and the end is reconcilable before its deadline.
+    with w.factory() as s:
+        s.execute(update(Job).where(Job.id == w.job_id).values(status="failed"))
+        s.commit()
     with w.factory() as s:
         [item] = list_unresolved(s, w.rid)[UNKNOWN_END]
         assert item["deadline_passed"] is False and item["end_kind"] == "unknown"
@@ -510,12 +527,16 @@ def test_an_unknown_end_is_reconcilable_before_its_deadline(world):
 
 
 def _admitted_ago(w, admission_id: str, seconds: float) -> None:
-    """The reviewer's helper: ``admitted_at`` set ``seconds`` before the database clock."""
+    """The reviewer's helper: ``admitted_at`` set ``seconds`` before the database clock. Its
+    persisted ``deadline_at`` (D-25 recovery R-D, lane W15) follows from its basis, from the
+    same clock reading."""
     with w.observer.connect() as c:
         c.execute(
             text(
-                "update scout_admissions set admitted_at = clock_timestamp()"
-                " - make_interval(secs => :s) where id = :i"
+                "update scout_admissions a set admitted_at = t.ts - make_interval(secs => :s),"
+                " deadline_at = t.ts - make_interval(secs => :s)"
+                " + make_interval(secs => a.deadline_client_seconds + a.deadline_lease_seconds)"
+                " from (select clock_timestamp() as ts) t where a.id = :i"
             ),
             {"s": seconds, "i": admission_id},
         )

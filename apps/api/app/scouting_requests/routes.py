@@ -28,6 +28,7 @@ from app.llm.metering import ensure_run_allowed
 from app.locations.models import BusinessLocation
 from app.locations.service import ensure_location_active
 from app.scouting_requests import schedules as schedule_service
+from app.scouting_requests.execution import derive_execution, needs_attention
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.scouting_requests.run_history import (
     DEFAULT_LIMIT,
@@ -50,6 +51,15 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["scout-requests"])
 
 EDITORS = require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)
+
+
+def _with_execution(db: Session, request: ScoutRequest) -> ScoutRequestOut:
+    """A single-Scout response with its derived execution state (D-25 recovery contract §4,
+    PROPOSED): read-only, scoped by the Scout's own tenancy, computed after the route has
+    authorized the Scout. The list read does not compute it (``execution`` is null there)."""
+    out = ScoutRequestOut.model_validate(request)
+    out.execution = derive_execution(db, request)
+    return out
 
 
 def _get_scoped(db: Session, workspace_id: str, request_id: str) -> ScoutRequest:
@@ -178,7 +188,7 @@ def create_scout_request(
     body: ScoutRequestCreate,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
-) -> ScoutRequest:
+) -> ScoutRequestOut:
     brand = get_primary_brand(db, workspace_id)
     if not brand:
         raise ValidationDomainError("Complete onboarding before creating scout requests.")
@@ -218,7 +228,7 @@ def create_scout_request(
         entity_type="scout_request",
         entity_id=request.id,
     )
-    return request
+    return _with_execution(db, request)
 
 
 @router.get(
@@ -230,8 +240,8 @@ def get_scout_request(
     request_id: str,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(get_tenant_context),
-) -> ScoutRequest:
-    return _get_scoped(db, workspace_id, request_id)
+) -> ScoutRequestOut:
+    return _with_execution(db, _get_scoped(db, workspace_id, request_id))
 
 
 @router.put(
@@ -244,7 +254,7 @@ def update_scout_request(
     body: ScoutRequestUpdate,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
-) -> ScoutRequest:
+) -> ScoutRequestOut:
     request = _get_scoped(db, workspace_id, request_id)
     if request.status == ScoutRequestStatus.RUNNING.value:
         raise ValidationDomainError("Cannot edit a request while it is running.")
@@ -252,7 +262,7 @@ def update_scout_request(
         setattr(request, key, value)
     db.add(request)
     db.flush()
-    return request
+    return _with_execution(db, request)
 
 
 @router.post(
@@ -264,7 +274,7 @@ def pause_scout_request(
     request_id: str,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
-) -> ScoutRequest:
+) -> ScoutRequestOut:
     request = _get_scoped(db, workspace_id, request_id)
     # D-25 cooperative pause (PROPOSED, ``app.jobs.admission``): ``paused`` and a new run
     # fence in ONE statement. Every run claimed under the old fence is refused at its next
@@ -302,7 +312,7 @@ def pause_scout_request(
     # 200 could reach the client before the pause is durable -- and the pause's commit is
     # the cut-off after which nothing is admitted (D-25 candidate, PROPOSED).
     db.commit()
-    return request
+    return _with_execution(db, request)
 
 
 @router.post(
@@ -314,7 +324,7 @@ def resume_scout_request(
     request_id: str,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
-) -> ScoutRequest:
+) -> ScoutRequestOut:
     request = _get_scoped(db, workspace_id, request_id)
     if request.status != ScoutRequestStatus.PAUSED.value:
         raise ValidationDomainError("Only paused requests can be resumed.")
@@ -330,7 +340,7 @@ def resume_scout_request(
         entity_type="scout_request",
         entity_id=request.id,
     )
-    return request
+    return _with_execution(db, request)
 
 
 @router.post(
@@ -350,6 +360,9 @@ def run_scout_request_endpoint(
     is accepted only from a settled state (draft / completed / failed), and the
     ``draft/... -> queued`` flip is an atomic compare-and-set so two concurrent
     submissions cannot enqueue duplicate work for the same request.
+
+    PROPOSED (D-25 recovery): a Scout in ``needs_attention`` (an earlier operation did not
+    report an outcome) is refused with 422 ``scout_needs_attention`` and no job is created.
     """
     request = _get_scoped(db, workspace_id, request_id)
     observed = request.status
@@ -357,6 +370,17 @@ def run_scout_request_endpoint(
         raise ValidationDomainError("Request is already queued or running.")
     if observed == ScoutRequestStatus.PAUSED.value:
         raise ValidationDomainError("Resume the request before running it.")
+    # D-25 recovery contract §4.2 / §9.5.6 (PROPOSED): a Scout whose earlier operation did
+    # not report an outcome (``needs_attention``) admits nothing until an operator reconciles
+    # it, so Run now is refused here, creating no job, like "already queued or running". A
+    # usability gate only: K = 1 is what bounds the work (a run accepted just before a
+    # deadline passes waits, then fails ``admission_unresolved``, as before).
+    if needs_attention(db, request):
+        raise ValidationDomainError(
+            "This scout cannot run until SignalNest confirms that an earlier operation has "
+            "ended. Resume and Run now will not restore service until then.",
+            code="scout_needs_attention",
+        )
     ensure_location_active(db, request.location_id)
     # P6-LLM-4: a workspace whose monthly AI budget is spent is refused here (HTTP 429,
     # ``llm_budget_exhausted``) before any state changes or work is enqueued.
@@ -385,6 +409,9 @@ def run_scout_request_endpoint(
         request_id=request.id,
         trace_id=trace_id_ctx.get(),
         run_fence=run_fence,
+        # D-25 recovery contract §9.5.5 (PROPOSED): the status this run replaced, so a
+        # Cancel can return the Scout to it.
+        prior_status=observed,
     )
     record_audit(
         db,

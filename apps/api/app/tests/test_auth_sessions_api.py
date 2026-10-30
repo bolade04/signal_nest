@@ -88,7 +88,8 @@ USAGE = "47028898175f"
 TAKEDOWNS = "da25533622b2"
 BUDGET = "8005724d811a"
 FENCE = "b5e0c7a3d2f1"
-CODE_HEAD = "c6f1d8e2a4b7"
+EXECCTL = "c6f1d8e2a4b7"
+CODE_HEAD = "d4a8f2c6b9e1"
 UNAUTHORIZED = (401, "unauthorized", "Invalid or expired token.")
 ORGANIZATIONS = f"{API}/organizations"
 LIFETIME = timedelta(minutes=720)
@@ -650,7 +651,8 @@ class TestMigration:
 
         script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
         assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-        assert script.get_revision(CODE_HEAD).down_revision == FENCE
+        assert script.get_revision(CODE_HEAD).down_revision == EXECCTL
+        assert script.get_revision(EXECCTL).down_revision == FENCE
         assert script.get_revision(FENCE).down_revision == BUDGET
         assert script.get_revision(BUDGET).down_revision == TAKEDOWNS
         assert script.get_revision(TAKEDOWNS).down_revision == USAGE

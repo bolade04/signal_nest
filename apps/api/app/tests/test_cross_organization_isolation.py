@@ -978,6 +978,78 @@ class TestScoutRequests:
         job = world.row(Job, ran.json()["stats"]["job_id"])
         assert (job["organization_id"], job["workspace_id"]) == (a.org_id, a.ws_id)
 
+    def test_execution_state_and_run_refusal_stay_within_the_tenant(self, world: World, pov: Pov):
+        """D-25 recovery (PROPOSED, lane W15): the derived ``execution`` field reads only the
+        Scout's own tenancy, is visible to the roles that read the Scout, and the Run-now
+        refusal of a needs-attention Scout is reachable only inside its workspace (a foreign
+        organization gets the existing 404 / membership 403, never the 422)."""
+        import uuid
+        from datetime import UTC, datetime
+
+        from app.scouting_requests.models import ScoutAdmission
+
+        a, b = pov.a, pov.b
+        made: dict[str, str] = {}
+        for t in (a, b):
+            r = world.send(
+                "POST",
+                API + _ws_path(world, t, "/scout-requests"),
+                t.owner_token,
+                {"name": f"Recovery {t.key}"},
+            )
+            assert r.status_code == 201, r.text
+            made[t.key] = r.json()["id"]
+        admission = ScoutAdmission.__table__
+        row_id = uuid.uuid4().hex
+        now = datetime.now(UTC)
+        with world.witness.begin() as conn:  # B's Scout: an unknown end, no live attempt
+            conn.execute(
+                admission.insert().values(
+                    id=row_id,
+                    scout_request_id=made[b.key],
+                    organization_id=b.org_id,
+                    workspace_id=b.ws_id,
+                    attempt=1,
+                    worker_id="w-gone",
+                    operation="model",
+                    admitted_at=now,
+                    ended_at=now,
+                    end_kind="unknown",
+                    deadline_rule="unrecorded",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        try:
+            mine = _ws_path(world, a, f"/scout-requests/{made[a.key]}")
+            theirs = f"/scout-requests/{made[b.key]}"
+            own = pov.send("GET", mine)
+            assert own.status_code == 200 and own.json()["execution"]["state"] == "idle"
+            seen = world.send("GET", API + _ws_path(world, b, theirs), b.marketer_token)
+            assert seen.status_code == 200
+            assert seen.json()["execution"]["state"] == "needs_attention"
+            _assert_404(
+                pov.send("GET", _ws_path(world, a, theirs)),
+                "Scout request not found in this workspace.",
+            )
+            _assert_membership_403(pov.send("GET", _ws_path(world, b, theirs)))
+            jobs_before = world.count(Job, workspace_id=b.ws_id)
+            _assert_404(
+                pov.send("POST", _ws_path(world, a, theirs + "/run")),
+                "Scout request not found in this workspace.",
+            )
+            _assert_membership_403(pov.send("POST", _ws_path(world, b, theirs + "/run")))
+            refused = world.send("POST", API + _ws_path(world, b, theirs + "/run"), b.owner_token)
+            assert _error(refused)[:2] == (422, "scout_needs_attention"), refused.text
+            assert world.count(Job, workspace_id=b.ws_id) == jobs_before
+            listed = pov.send("GET", _ws_path(world, a, "/scout-requests"))
+            assert {x["execution"] for x in listed.json()} == {None}
+        finally:
+            with world.witness.begin() as conn:
+                conn.execute(admission.delete().where(admission.c.id == row_id))
+                requests = ScoutRequest.__table__
+                conn.execute(requests.delete().where(requests.c.id.in_(list(made.values()))))
+
     def test_runs_history_with_foreign_request_id_404(self, world: World, pov: Pov):
         a, b = pov.a, pov.b
         _assert_404(

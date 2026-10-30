@@ -150,6 +150,35 @@ def resolve_terminal_failure_hook(job_type: str) -> JobTerminalFailureHook | Non
     return _TERMINAL_FAILURE_HOOKS.get(job_type)
 
 
+#: A cancel hook settles the domain state an *enqueued* job was driving when the job is
+#: cancelled before any worker claimed it (D-25 recovery contract §5/§9.5, PROPOSED). It
+#: runs in the Cancel route's transaction, right after the job's guarded ``CANCELLED``
+#: transition and before the commit, and must not commit or roll back. Arguments: the
+#: session, the job (its row as just written) and the transition's timestamp.
+JobCancelledHook = Callable[[Session, Any, datetime], None]
+
+_CANCEL_HOOKS: dict[str, JobCancelledHook] = {}
+
+
+def register_cancel_hook(
+    job_type: str | JobType,
+) -> Callable[[JobCancelledHook], JobCancelledHook]:
+    """Register ``fn`` as the cancel hook for ``job_type`` (optional, like the
+    terminal-failure hook)."""
+    key = job_type.value if isinstance(job_type, JobType) else job_type
+
+    def _wrap(fn: JobCancelledHook) -> JobCancelledHook:
+        _CANCEL_HOOKS[key] = fn
+        return fn
+
+    return _wrap
+
+
+def resolve_cancel_hook(job_type: str) -> JobCancelledHook | None:
+    """Return the cancel hook for ``job_type``, or ``None``."""
+    return _CANCEL_HOOKS.get(job_type)
+
+
 def register_builtin_handlers() -> tuple[str, ...]:
     """Import and register every built-in handler; return what is registered.
 
@@ -208,6 +237,7 @@ def resolve_handler(job_type: str) -> JobHandler:
 
 __all__ = [
     "HandlerContext",
+    "JobCancelledHook",
     "JobHandler",
     "JobTerminalFailureHook",
     "TerminalFailureContext",
@@ -216,8 +246,10 @@ __all__ = [
     "is_known_job_type",
     "known_job_types",
     "register_builtin_handlers",
+    "register_cancel_hook",
     "register_handler",
     "register_terminal_failure_hook",
+    "resolve_cancel_hook",
     "resolve_handler",
     "resolve_terminal_failure_hook",
 ]

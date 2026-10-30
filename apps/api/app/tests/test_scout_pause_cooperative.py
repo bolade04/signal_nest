@@ -222,7 +222,13 @@ def test_the_run_route_records_the_request_fence_on_its_job(client, factory):
     job_id = client.post(base + "/run", headers=auth).json()["stats"]["job_id"]
     with factory() as session:
         fence = session.get(ScoutRequest, rid).run_fence
-        assert session.get(Job, job_id).payload == {"scout_request_id": rid, "run_fence": fence}
+        # D-25 recovery §9.5.5 (PROPOSED, lane W15): the payload also records the status the
+        # run replaced (``draft`` after Resume), which a Cancel returns the Scout to.
+        assert session.get(Job, job_id).payload == {
+            "scout_request_id": rid,
+            "run_fence": fence,
+            "prior_status": "draft",
+        }
     assert fence >= 1
 
 

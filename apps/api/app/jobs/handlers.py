@@ -33,12 +33,14 @@ from app.jobs.admission import (
     RunAdmission,
     RunStopped,
     admitted_run,
+    settle_cancelled_request,
 )
 from app.jobs.context import ExecutionContext
 from app.jobs.pipeline import _run, metered_run, refused_run_stats
 from app.jobs.registry import (
     HandlerContext,
     TerminalFailureContext,
+    register_cancel_hook,
     register_handler,
     register_terminal_failure_hook,
 )
@@ -192,23 +194,6 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
             "scout_request.execute payload 'run_fence' must be a non-negative integer",
         )
 
-    # Honour cancellation requested before the attempt starts. The pipeline runs
-    # as a single unit, so this is the safe interruption point.
-    if ctx.is_cancelled():
-        raise JobExecutionError(JobErrorCode.CANCELLED, "cancelled before execution")
-
-    # The run is this job: the call cap counts its earlier attempts' recorded rows.
-    # The session factory is the seam for the shared ledger's own short transactions;
-    # it is built from this attempt's bind, never from the process-wide engine, so a
-    # test's or a worker's engine is the one the ledger writes to.
-    meter = LLMMeter(
-        get_settings(),
-        job_id=ctx.job_id,
-        attempt=ctx.attempt,
-        session_factory=sessionmaker(
-            bind=ctx.db.get_bind(), autoflush=False, expire_on_commit=False, future=True
-        ),
-    )
     # D-25 cooperative pause (PROPOSED, ``app.jobs.admission``): the run's committed
     # claim and its admissions, on short transactions from the same bind, scoped by the
     # durable job row's tenant context.
@@ -225,6 +210,27 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
         attempt=ctx.attempt,
         lease_token=ctx.lease_token,
         process_now=ctx.now,
+    )
+
+    # Honour cancellation requested before the attempt starts. The pipeline runs
+    # as a single unit, so this is the safe interruption point. Recovery contract §9.5
+    # (PROPOSED): the Scout returns to its usable idle state in the same fenced transaction
+    # as the job's ``finish_cancel`` (Cancel landed after the job claim, before the run's).
+    if ctx.is_cancelled():
+        ctx.on_fenced_failure.append(admission.cancel_idle_writer(payload=ctx.payload, now=ctx.now))
+        raise JobExecutionError(JobErrorCode.CANCELLED, "cancelled before execution")
+
+    # The run is this job: the call cap counts its earlier attempts' recorded rows.
+    # The session factory is the seam for the shared ledger's own short transactions;
+    # it is built from this attempt's bind, never from the process-wide engine, so a
+    # test's or a worker's engine is the one the ledger writes to.
+    meter = LLMMeter(
+        get_settings(),
+        job_id=ctx.job_id,
+        attempt=ctx.attempt,
+        session_factory=sessionmaker(
+            bind=ctx.db.get_bind(), autoflush=False, expire_on_commit=False, future=True
+        ),
     )
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
@@ -246,17 +252,29 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                 # its own end state. Cancel: acknowledged ``cancelled``, the request back to its
                 # pre-claim status. A lapsed lease alone: a retryable failure, so the run is not
                 # lost and recovery is not blocked. Missing claim identity: refused for good.
-                if stop.cause in (CAUSE_CANCEL_REQUESTED, CAUSE_LEASE_LAPSED):
+                if stop.cause == CAUSE_CANCEL_REQUESTED:
+                    # Recovery contract §5/§9.5 (PROPOSED): the Scout returns to the status it
+                    # had before this run was requested, in the SAME fenced transaction as the
+                    # job's ``finish_cancel`` (never the pre-claim ``queued``/``running`` a
+                    # Cancel used to leave behind); the owner is cleared with it. Nothing is
+                    # written if this attempt no longer holds its job. Cancel resolves no
+                    # admission.
+                    ctx.on_fenced_failure.append(
+                        admission.cancel_idle_writer(payload=ctx.payload, now=ctx.now)
+                    )
+                    ctx.on_fenced_failure.append(
+                        lambda db: db.execute(admission.release_owner_statement())
+                    )
+                    raise JobExecutionError(
+                        JobErrorCode.CANCELLED, "cancel requested during the run"
+                    ) from None
+                if stop.cause == CAUSE_LEASE_LAPSED:
                     for writer in (
                         admission.restore_writer(now=ctx.now),
                         admission.release_owner_writer(),
                     ):
                         if writer is not None:
                             ctx.after_rollback.append(writer)
-                    if stop.cause == CAUSE_CANCEL_REQUESTED:
-                        raise JobExecutionError(
-                            JobErrorCode.CANCELLED, "cancel requested during the run"
-                        ) from None
                     raise JobExecutionError(JobErrorCode.TRANSIENT, "authority_lapsed") from None
                 if stop.cause == CAUSE_IDENTITY_INCOMPLETE:
                     raise JobExecutionError(
@@ -449,6 +467,35 @@ def recover_failed_schedule_tick(ctx: TerminalFailureContext) -> None:
     )
 
 
+@register_cancel_hook(JobType.SCOUT_REQUEST_EXECUTE)
+def settle_cancelled_scout_request(db: Session, job: Any, now: datetime) -> None:
+    """An enqueued scout run was cancelled before any worker claimed it (recovery contract
+    §5/§9.5, PROPOSED): return the Scout to its usable idle state in the Cancel route's
+    transaction, right after the job's guarded ``CANCELLED`` transition.
+
+    The tenant scope is the job row's, never the payload's. A request that is not
+    ``queued``/``running`` with this job's fence (a scheduled run before its claim, a paused
+    or resumed Scout), owned by another job, or driven by another live job is left as it is.
+    """
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    scout_request_id = payload.get("scout_request_id")
+    if not isinstance(scout_request_id, str) or not scout_request_id:
+        return
+    fence = payload.get("run_fence", 0)
+    if isinstance(fence, bool) or not isinstance(fence, int):
+        return
+    settle_cancelled_request(
+        db,
+        scout_request_id=scout_request_id,
+        organization_id=job.organization_id,
+        workspace_id=job.workspace_id,
+        job_id=job.id,
+        fence=fence,
+        payload=payload,
+        now=now,
+    )
+
+
 #: The in-flight states a scout request occupies only while a run is expected to
 #: make progress. A final job failure means no run is coming, so a request left in
 #: one of these is stranded: ``POST .../run`` rejects it with "already queued or
@@ -531,5 +578,6 @@ __all__ = [
     "execute_schedule_tick",
     "execute_scout_request",
     "recover_failed_schedule_tick",
+    "settle_cancelled_scout_request",
     "settle_failed_scout_request",
 ]

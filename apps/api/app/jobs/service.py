@@ -220,6 +220,7 @@ def enqueue_scout_request(
     idempotency_key: str | None = None,
     trigger: str | None = None,
     run_fence: int | None = None,
+    prior_status: str | None = None,
     now: datetime | None = None,
 ) -> Job:
     """Enqueue a durable ``scout_request.execute`` job for one scout request.
@@ -236,6 +237,11 @@ def enqueue_scout_request(
     only while the request still has that fence, so a pause after this enqueue fences the
     job even once the request is resumed. A payload without it (legacy jobs, the demo
     seed) is fence 0.
+
+    ``prior_status`` (D-25 recovery contract §9.5.5, PROPOSED) is the settled status the
+    Scout had before this run was requested (Run now passes the status it replaced with
+    ``queued``). A Cancel returns the Scout to it. A job without one (a scheduled run)
+    records it at its first claim.
     """
     context = ExecutionContext.for_scout_request(
         organization_id=organization_id,
@@ -250,6 +256,8 @@ def enqueue_scout_request(
         payload["trigger"] = trigger
     if run_fence is not None:
         payload["run_fence"] = run_fence
+    if prior_status is not None:
+        payload["prior_status"] = prior_status
     return enqueue_job(
         db,
         job_type=JobType.SCOUT_REQUEST_EXECUTE,

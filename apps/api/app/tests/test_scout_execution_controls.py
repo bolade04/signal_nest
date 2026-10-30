@@ -126,6 +126,16 @@ def _row(req, **values) -> ScoutAdmission:
         admitted_at=_NOW,
     )
     base.update(values)
+    if "deadline_rule" not in values:
+        # D-25 recovery (R-D, PROPOSED): a row the admission path writes carries its persisted
+        # deadline and basis (here the defaults: model 3 x 30 s + a 30 s lease). A row without
+        # one is a legacy row (``unrecorded``), which only the legacy tests build.
+        base.update(
+            deadline_rule="client_plus_lease",
+            deadline_client_seconds=90.0,
+            deadline_lease_seconds=30.0,
+            deadline_at=base["admitted_at"] + timedelta(seconds=120),
+        )
     return ScoutAdmission(**base)
 
 
