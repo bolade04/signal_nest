@@ -20,13 +20,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from sqlalchemy import select, text, update
 
+from app.connectors import live as live_mod
+from app.connectors.feedcache import FeedCache
+from app.connectors.live import LiveRssConnector
 from app.core.config import get_settings
 from app.infra.vector import SignalVolumeAboveBoundError
 from app.jobs import pipeline
-from app.jobs.admission import RunAdmission
+from app.jobs.admission import RunAdmission, RunStopped, admitted_run
 from app.jobs.context import ExecutionContext
 from app.jobs.handlers import _record_refused_run
 from app.jobs.models import Job
@@ -40,10 +44,19 @@ from app.jobs.reconcile import (
 )
 from app.jobs.status import JobStatus
 from app.jobs.store import DurableJobStore
+from app.llm.base import LLMError, LLMRequest, LLMUnavailableError, LLMUsage
+from app.llm.metering import LLMMeter
+from app.llm.mock import MockLLMProvider
+from app.llm.providers_real import AnthropicProvider
+from app.llm.service import LLMService
 from app.scouting_requests.models import ScoutAdmission, ScoutRequest
+from app.scouting_requests.routes import run_scout_request_endpoint
 from app.tests import test_scout_pause_postgres as harness
 from app.tests._auth2_support import require_postgres
-from app.tests.test_scout_pause_postgres import Sources, _end_state, _start_worker
+from app.tests._llm_offline import offline_settings
+from app.tests._llm_reserve_child import KEY, MODEL, wire_payload
+from app.tests.test_live_rss_connector import Clock, Wire, connector, record, target
+from app.tests.test_scout_pause_postgres import MARKET, Sources, _end_state, _runner, _start_worker
 
 template_url = harness.template_url
 world = harness.world
@@ -276,6 +289,155 @@ def test_the_valid_attempts_refusal_settles_the_request_failed_with_its_stats(wo
 
 
 # --------------------------------------------------------------------------- #
+# §9.2 (r1 F2): how a model reply is classified; a model 5xx blocks the Scout
+# --------------------------------------------------------------------------- #
+def _real_provider(outcome) -> AnthropicProvider:
+    """The real adapter, answered offline by ``outcome``: an HTTP status, or a transport error
+    (``connect_error`` before dispatch, ``read_error`` after it)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if outcome == "connect_error":
+            raise httpx.ConnectError("refused", request=request)
+        if outcome == "read_error":
+            raise httpx.ReadError("reset after the request was sent", request=request)
+        return httpx.Response(outcome, json={"error": {"type": "overloaded_error"}})
+
+    return AnthropicProvider(
+        KEY, MODEL, 5, client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+
+
+def _provider_error(outcome) -> LLMError:
+    request = LLMRequest(task="classify_signal", inputs={"content": "x"})
+    with pytest.raises(LLMError) as raised:
+        _real_provider(outcome).generate(request, "classify_signal", "v1")
+    return raised.value
+
+
+@pytest.mark.parametrize(
+    ("outcome", "end_kind"),
+    [
+        (500, "unknown"),
+        (502, "unknown"),
+        (503, "unknown"),
+        (529, "unknown"),
+        (400, "known"),
+        (404, "known"),
+        (408, "known"),
+        (422, "known"),
+        (429, "known"),
+        ("connect_error", "known"),
+        ("read_error", "unknown"),
+    ],
+)
+def test_a_model_reply_is_classified_as_built(world, outcome, end_kind):
+    """The conservative rule kept by §9.2: the real adapter's error, through the meter, to the
+    admission's recorded end."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    adm = _adm(w, attempt=1, token="tok-a", worker="w-a")
+    meter = LLMMeter(offline_settings(), session_factory=w.factory, job_id=w.job_id, attempt=1)
+    with w.factory() as s:
+        meter.bind(s, organization_id=w.org, workspace_id=w.ws, scout_request_id=w.rid)
+    error = _provider_error(outcome)
+    with admitted_run(adm):
+        meter.before_attempt("anthropic", MODEL, wire_payload())
+        meter.after_attempt(task="classify_signal", provider="anthropic", model=MODEL, error=error)
+    assert _rows(w) == [("model", end_kind, end_kind == "known")]
+
+
+class _FiveXX:
+    """A priced fake whose first call is answered by the real adapter with ``status`` (so the
+    real classification applies) and whose other calls are the deterministic mock's."""
+
+    name = "anthropic"
+    model = MODEL
+
+    def __init__(self, status: int):
+        self.status, self.calls = status, 0
+        self._mock = MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed)
+
+    def prepare(self, request):
+        return AnthropicProvider(KEY, MODEL, 5).prepare(request)
+
+    def generate(self, request, prompt_name, prompt_version):
+        self.calls += 1
+        if self.calls == 1:
+            return _real_provider(self.status).generate(request, prompt_name, prompt_version)
+        out = self._mock.generate(request, prompt_name, prompt_version)
+        return out.model_copy(
+            update={
+                "provider": self.name,
+                "model": self.model,
+                "usage": LLMUsage(input_tokens=100, output_tokens=50),
+            }
+        )
+
+
+@pytest.mark.parametrize("status", [500, 529])
+def test_a_model_5xx_blocks_the_scout_until_reconciliation(world, monkeypatch, status):
+    """A model 5xx (529: overloaded) is an unknown end: the run's retry is refused at once, the
+    job ends ``failed`` ``admission_unresolved``, the Scout is blocked (a second run admits
+    nothing); reconciliation lets the next run complete."""
+    w = world
+    provider = _FiveXX(status)
+    monkeypatch.setattr(pipeline, "fetch_signals", Sources())
+    monkeypatch.setattr(
+        pipeline,
+        "llm_service",
+        LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
+    )
+    assert _start_worker(w).join_ok() is True
+    end = _end_state(w)
+    assert end.job_status == JobStatus.FAILED.value
+    assert end.job_error == ("non_retryable", "admission_unresolved")
+    assert end.status == "failed" and provider.calls == 1
+    assert _rows(w) == [("model", "unknown", False)]
+    with w.factory() as s:
+        blocked = run_scout_request_endpoint(workspace_id=w.ws, request_id=w.rid, db=s, ctx=w.ctx)
+    assert _start_worker(w, _runner(w)).join_ok() is True
+    with w.factory() as s:
+        second = s.get(Job, blocked.stats["job_id"])
+        assert (second.status, second.last_error_summary) == ("failed", "admission_unresolved")
+    assert provider.calls == 1  # the blocked run admitted nothing
+    with w.factory() as s:
+        [row] = list_unresolved(s, w.rid)[UNKNOWN_END]
+        assert resolve(
+            s, admission_id=row["admission_id"], operator="ops", reason="provider_confirmed"
+        )
+        s.commit()
+    with w.factory() as s:
+        third = run_scout_request_endpoint(workspace_id=w.ws, request_id=w.rid, db=s, ctx=w.ctx)
+    assert _start_worker(w, _runner(w)).join_ok() is True
+    with w.factory() as s:
+        assert s.get(Job, third.stats["job_id"]).result_summary["outcome"] == "completed"
+
+
+def test_a_fetch_5xx_reply_is_a_known_end(world, monkeypatch):
+    """§9.2: for the fetch seam a received reply of any status, 5xx included, is known (an
+    unbilled read-only GET under a 20 s deadline): the egress's UPSTREAM_ERROR resolves the
+    attempt's admission, its retry is admitted, and the Scout is not blocked."""
+    w = world
+    src = record("src-5xx", markets=(MARKET,))
+    wire = Wire({src.host: [httpx.Response(503), httpx.Response(503)]})
+    conn = connector([target(src)], wire, Clock(), max_attempts=2)
+    monkeypatch.setattr(live_mod, "live_connector_for", lambda **_kw: conn)
+    monkeypatch.setattr(
+        pipeline,
+        "llm_service",
+        LLMService(
+            MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
+            settings=offline_settings(),
+        ),
+    )
+    _start_worker(w).join_ok()
+    assert len(wire.requests) == 2
+    assert [r for r in _rows(w) if r[0] == "fetch"] == [("fetch", "known", True)] * 2
+    assert _unresolved(w) == 0
+    assert _end_state(w).job_error[1] != "admission_unresolved"
+
+
+# --------------------------------------------------------------------------- #
 # §9.3 (r1 F3): reconciliation's deadline gate and the listing
 # --------------------------------------------------------------------------- #
 def test_reconciliation_waits_for_the_deadline_of_an_admission_with_no_recorded_end(world):
@@ -343,3 +505,82 @@ def test_an_unknown_end_is_reconcilable_before_its_deadline(world):
         assert item["deadline_passed"] is False and item["end_kind"] == "unknown"
         assert resolve(s, admission_id=row, operator="ops", reason="provider_confirmed") is True
         s.commit()
+
+
+# --------------------------------------------------------------------------- #
+# r1 F4: the reviewer's Y11, Y12 and Y13 killers (adopted)
+# --------------------------------------------------------------------------- #
+def test_a_paused_waiter_admits_nothing_after_the_blocking_admission_ends(world):
+    """Y11: the wait re-checks authority on every try. A waiter paused during its wait admits
+    nothing once the blocking admission has ended."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    old = _adm(w, attempt=1, token="tok-a", worker="w-a")
+    blocking, _ = old.admit_external("fetch")  # outstanding (its call is "in flight")
+    _set_attempt(w, attempt=2, token="tok-b", worker="w-b")
+    waiter = _adm(w, attempt=2, token="tok-b", worker="w-b", pre="running")
+    calls: list = []
+
+    def sleep(delay):
+        calls.append(delay)
+        if len(calls) == 1:
+            with w.factory() as s:  # the pause route's single UPDATE, committed
+                s.execute(
+                    update(ScoutRequest)
+                    .where(ScoutRequest.id == w.rid)
+                    .values(
+                        status="paused",
+                        run_fence=ScoutRequest.run_fence + 1,
+                        owner_job_id=None,
+                        owner_attempt=None,
+                        owner_lease_token=None,
+                    )
+                )
+                s.commit()
+            old.record_end(blocking, known=True)  # the blocking operation ends: resolved
+
+    with pytest.raises(RunStopped) as stopped:
+        waiter.admit_external("fetch", sleep=sleep)
+    assert stopped.value.cause == "request_paused"
+    assert calls and _unresolved(w) == 0
+    with w.factory() as s:
+        assert s.scalar(select(ScoutAdmission.id).where(ScoutAdmission.attempt == 2)) is None
+
+
+def test_a_raw_exception_from_the_fetcher_records_an_unknown_end(world, monkeypatch):
+    """Y12: an exception that is not a ``ConnectorFetchError`` (here a raw read timeout after
+    dispatch) records an unknown end."""
+    w = world
+
+    class RawTimeout:
+        def fetch(self, url, *, allowed_hosts, validators=None):
+            raise httpx.ReadTimeout("body read timed out after the request was sent")
+
+    conn = LiveRssConnector(
+        [target(record("rev-raw", markets=(MARKET,)))],
+        fetcher=RawTimeout(),
+        cache=FeedCache(),
+        sleep=lambda _s: None,
+        max_attempts=1,
+    )
+    monkeypatch.setattr(live_mod, "live_connector_for", lambda **_kw: conn)
+    _start_worker(w).join_ok()
+    rows = _rows(w)
+    assert rows and rows[0] == ("fetch", "unknown", False)
+
+
+def test_a_model_error_with_an_unknown_outcome_records_an_unknown_end(world):
+    """Y13: a model error carrying ``outcome_unknown`` (a connection reset after the request
+    was sent) records an unknown end."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    adm = _adm(w, attempt=1, token="tok-a", worker="w-a")
+    meter = LLMMeter(offline_settings(), session_factory=w.factory, job_id=w.job_id, attempt=1)
+    with w.factory() as s:
+        meter.bind(s, organization_id=w.org, workspace_id=w.ws, scout_request_id=w.rid)
+    err = LLMUnavailableError("connection reset after the request was sent")
+    err.outcome_unknown = True
+    with admitted_run(adm):
+        meter.before_attempt("mock", "mock-1", None)
+        meter.after_attempt(task="classify_signal", provider="mock", model="mock-1", error=err)
+    assert _rows(w) == [("model", "unknown", False)]
