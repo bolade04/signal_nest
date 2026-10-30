@@ -632,6 +632,10 @@ def record_settled(
             updated_at=now,
         )
         .on_conflict_do_nothing(index_elements=["attempt_key"])
+        # SQLAlchemy keeps ``rowcount`` only for UPDATE/DELETE by default; for this INSERT
+        # psycopg would report -1 (the cursor is closed first), for a new key and a
+        # duplicate alike (FU-269-R7). Keep the driver's count: 1 inserted, 0 on conflict.
+        .execution_options(preserve_rowcount=True)
     )
     if inserted.rowcount != 1:
         return False

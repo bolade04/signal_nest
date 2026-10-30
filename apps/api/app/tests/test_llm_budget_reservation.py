@@ -474,6 +474,29 @@ def test_record_settled_is_idempotent_per_attempt_key(factory):
         assert _reservation(db, "r:0:0").state == "settled"
 
 
+def test_record_settled_rolled_back_with_its_transaction_leaves_nothing(factory):
+    """The same-session record commits nothing itself: rolled back with the caller's
+    transaction it leaves no period, reservation or usage row, and the key is free again."""
+    kwargs = dict(
+        workspace_id=WS,
+        organization_id=ORG,
+        job_id=None,
+        attempt_key="r:0:0",
+        settled_usd=CALL_COST,
+        now=T0,
+        usage=_usage(CALL_COST),
+    )
+    with factory() as db:
+        assert ledger.record_settled(db, **kwargs)
+        assert _row_counts(db) == (1, 1, 1)
+        db.rollback()
+        assert _row_counts(db) == (0, 0, 0)
+        assert ledger.record_settled(db, **kwargs)
+        db.commit()
+        assert _row_counts(db) == (1, 1, 1)
+        assert (_period(db).reserved_usd, _period(db).settled_usd) == (CALL_COST, CALL_COST)
+
+
 # --------------------------------------------------------------------------- #
 # Late callbacks after the tenant was deleted (privacy: never resurrect a tenant row)
 # --------------------------------------------------------------------------- #
