@@ -122,6 +122,21 @@ _K_INDEX = "uq_scout_admission_unresolved"
 _RESOLVED_MEANWHILE_RETRIES = 3
 
 
+def admission_deadline_seconds(operation: str) -> float:
+    """An admission's own deadline after ``admitted_at``: its client's deadline plus the
+    lease (model: 3 x ``llm_timeout_seconds``; fetch: ``connector_egress_total_timeout_seconds``).
+    The waiting rule and reconciliation's deadline gate use the same value."""
+    from app.core.config import get_settings
+    from app.llm.budget import HTTP_TIMEOUT_PHASES
+
+    settings = get_settings()
+    if operation == "model":
+        own = HTTP_TIMEOUT_PHASES * float(settings.llm_timeout_seconds)
+    else:
+        own = float(settings.connector_egress_total_timeout_seconds)
+    return own + float(settings.worker_lease_seconds)
+
+
 class RunStopped(Exception):  # noqa: N818 - a control-flow signal, not an error class
     """An admission was refused: the run must stop at this boundary.
 
@@ -398,15 +413,7 @@ class RunAdmission:
 
     # -- external operations (K = 1) ---------------------------------------------------
     def _deadline_seconds(self, operation: str) -> float:
-        from app.core.config import get_settings
-        from app.llm.budget import HTTP_TIMEOUT_PHASES
-
-        settings = get_settings()
-        if operation == "model":
-            own = HTTP_TIMEOUT_PHASES * float(settings.llm_timeout_seconds)
-        else:
-            own = float(settings.connector_egress_total_timeout_seconds)
-        return own + float(settings.worker_lease_seconds)
+        return admission_deadline_seconds(operation)
 
     def admit_external(
         self,

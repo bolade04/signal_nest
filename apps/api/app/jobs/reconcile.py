@@ -11,7 +11,16 @@ outside SignalNest, that the external operation is over. It changes no accountin
         --reason <code> [--note <text, at most 200 characters>]
 
 Refused over a valid in-flight admission (its attempt still holds authority and has recorded no
-end). Idempotent. Audited (``scout_admission.reconciled``). No API or contract change.
+end), and (contract §9.3) over any admission with no recorded end until its own deadline
+(``admitted_at`` + the operation's client deadline + the lease, the waiting rule's) has passed
+by the database clock: until then SignalNest's own client may still be in the call. After the
+deadline only the external party's side is unknown; reconciling is the operator's declaration
+that it is not still working. Idempotent. Audited (``scout_admission.reconciled``). No API or
+contract change.
+
+The listing separates exactly three categories: the current owner's admissions, earlier owners'
+outstanding admissions, and admissions with an unknown end; each with its job's status and
+``lease_expires_at``, its deadline and whether the deadline has passed.
 """
 
 from __future__ import annotations
@@ -19,7 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -50,54 +59,95 @@ def _attempt_valid(db: Session, row) -> bool:
     expires = job.lease_expires_at
     if expires is None:
         return False
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=UTC)
-    # Database time on PostgreSQL, like every lease comparison (contract §8.1.6).
-    now = (
-        db.execute(select(func.clock_timestamp())).scalar_one()
-        if db.get_bind().dialect.name == "postgresql"
-        else datetime.now(UTC)
-    )
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-    return expires > now
+    return _aware(expires) > _db_now(db)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _db_now(db: Session) -> datetime:
+    """Database time on PostgreSQL, like every lease and deadline comparison (contract
+    §8.1.6); the process clock on SQLite."""
+    if db.get_bind().dialect.name == "postgresql":
+        return _aware(db.execute(select(func.clock_timestamp())).scalar_one())
+    return datetime.now(UTC)
+
+
+def _deadline(row) -> datetime:
+    """The admission's own deadline: the waiting rule's (``admission_deadline_seconds``)."""
+    from app.jobs.admission import admission_deadline_seconds
+
+    return _aware(row.admitted_at) + timedelta(seconds=admission_deadline_seconds(row.operation))
+
+
+#: The listing's three categories (contract §8.1.11, §9.3).
+CURRENT_OWNER = "current_owner"
+EARLIER_OWNERS_OUTSTANDING = "earlier_owners_outstanding"
+UNKNOWN_END = "unknown_end"
 
 
 def list_unresolved(db: Session, scout_request_id: str) -> dict:
-    """The Scout's unresolved admissions, in the three categories (contract §8.1.11)."""
+    """The Scout's unresolved admissions in exactly three categories (contract §9.3): the
+    current owner's (no recorded end), earlier owners' outstanding ones (no recorded end) and
+    those with an unknown end; each with its job's status and lease expiry, its deadline and
+    whether that deadline has passed by the database clock."""
+    from app.jobs.models import Job
     from app.scouting_requests.models import ScoutAdmission, ScoutRequest
 
     request = db.get(ScoutRequest, scout_request_id)
     owner = (
-        {
-            "job_id": request.owner_job_id,
-            "attempt": request.owner_attempt,
-        }
+        (request.owner_job_id, request.owner_attempt)
         if request is not None and request.owner_job_id
         else None
     )
-    out = {
+    now = _db_now(db)
+    out: dict = {
         "scout_request_id": scout_request_id,
-        "current_owner": owner,
-        "outstanding": [],
-        "unknown_outcome": [],
+        "owner": {"job_id": owner[0], "attempt": owner[1]} if owner else None,
+        CURRENT_OWNER: [],
+        EARLIER_OWNERS_OUTSTANDING: [],
+        UNKNOWN_END: [],
     }
     rows = db.scalars(
-        select(ScoutAdmission).where(
+        select(ScoutAdmission)
+        .where(
             ScoutAdmission.scout_request_id == scout_request_id,
             ScoutAdmission.resolved_at.is_(None),
         )
+        .order_by(ScoutAdmission.admitted_at)
     ).all()
     for row in rows:
+        job = db.execute(
+            select(Job.status, Job.lease_expires_at).where(Job.id == row.job_id)
+        ).first()
+        deadline = _deadline(row)
         item = {
             "admission_id": row.id,
             "operation": row.operation,
             "job_id": row.job_id,
             "attempt": row.attempt,
-            "admitted_at": row.admitted_at.isoformat(),
+            "worker_id": row.worker_id,
+            "admitted_at": _aware(row.admitted_at).isoformat(),
+            "ended_at": _aware(row.ended_at).isoformat() if row.ended_at else None,
+            "end_kind": row.end_kind,
+            "job_status": job.status if job else None,
+            "lease_expires_at": (
+                _aware(job.lease_expires_at).isoformat() if job and job.lease_expires_at else None
+            ),
+            "deadline": deadline.isoformat(),
+            "deadline_passed": now > deadline,
             "attempt_holds_authority": _attempt_valid(db, row),
         }
-        out["unknown_outcome" if row.end_kind == "unknown" else "outstanding"].append(item)
+        if row.end_kind == "unknown":
+            category = UNKNOWN_END
+        elif owner is not None and (row.job_id, row.attempt) == owner:
+            category = CURRENT_OWNER
+        else:
+            category = EARLIER_OWNERS_OUTSTANDING
+        out[category].append(item)
     return out
 
 
@@ -128,6 +178,12 @@ def resolve(
     if row.end_kind != "unknown" and _attempt_valid(db, row):
         raise ReconciliationRefused(
             "refused: the admitting attempt still holds valid authority and has recorded no end"
+        )
+    if row.ended_at is None and not _db_now(db) > _deadline(row):
+        raise ReconciliationRefused(
+            "refused: the admission has no recorded end and its deadline "
+            f"({_deadline(row).isoformat()}) has not passed (database clock); "
+            "SignalNest's client may still be in the call"
         )
     now = datetime.now(UTC)
     result = db.execute(

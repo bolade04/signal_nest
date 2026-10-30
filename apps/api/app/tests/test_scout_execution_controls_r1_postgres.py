@@ -30,6 +30,14 @@ from app.jobs.admission import RunAdmission
 from app.jobs.context import ExecutionContext
 from app.jobs.handlers import _record_refused_run
 from app.jobs.models import Job
+from app.jobs.reconcile import (
+    CURRENT_OWNER,
+    EARLIER_OWNERS_OUTSTANDING,
+    UNKNOWN_END,
+    ReconciliationRefused,
+    list_unresolved,
+    resolve,
+)
 from app.jobs.status import JobStatus
 from app.jobs.store import DurableJobStore
 from app.scouting_requests.models import ScoutAdmission, ScoutRequest
@@ -265,3 +273,73 @@ def test_the_valid_attempts_refusal_settles_the_request_failed_with_its_stats(wo
     status, owner_job, _attempt, _token, stats = _req(w)
     assert end.job_status == JobStatus.FAILED.value and end.job_error[0] == "non_retryable"
     assert (status, owner_job, stats["refused"]) == ("failed", None, True)
+
+
+# --------------------------------------------------------------------------- #
+# §9.3 (r1 F3): reconciliation's deadline gate and the listing
+# --------------------------------------------------------------------------- #
+def test_reconciliation_waits_for_the_deadline_of_an_admission_with_no_recorded_end(world):
+    """The reviewer's case: the attempt's call is in flight (no recorded end) and Cancel has
+    been requested, so the attempt no longer holds valid authority. Reconciliation is refused
+    until the admission's own deadline has passed by the database clock, then permitted."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    inflight, _ = _adm(w, attempt=1, token="tok-a", worker="w-a").admit_external("model")
+    with w.factory() as s:
+        s.execute(update(Job).where(Job.id == w.job_id).values(status="cancel_requested"))
+        s.commit()
+    with w.factory() as s:
+        [item] = list_unresolved(s, w.rid)[CURRENT_OWNER]
+        assert (item["job_status"], item["deadline_passed"]) == ("cancel_requested", False)
+        assert item["attempt_holds_authority"] is False and item["lease_expires_at"]
+        with pytest.raises(ReconciliationRefused, match="deadline"):
+            resolve(s, admission_id=inflight, operator="ops", reason="operator_decision")
+    assert _unresolved(w) == 1
+    _backdate(w, inflight)
+    with w.factory() as s:
+        assert list_unresolved(s, w.rid)[CURRENT_OWNER][0]["deadline_passed"] is True
+        assert resolve(s, admission_id=inflight, operator="ops", reason="operator_decision")
+        s.commit()
+    assert _unresolved(w) == 0
+
+
+def test_an_earlier_attempts_admission_is_reconcilable_by_its_own_identity_and_deadline(world):
+    """The Y8 killer: attempt 1 admitted a fetch and recorded no end; the job was re-claimed
+    by attempt 2 (running, a live lease, the owner). Attempt 1's row is listed as an earlier
+    owner's, refused before its own deadline and reconcilable after it, whatever attempt 2
+    (which holds the job) is doing."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    row, _ = _adm(w, attempt=1, token="tok-a", worker="w-a").admit_external("fetch")
+    _set_attempt(w, attempt=2, token="tok-b", worker="w-b")
+    with w.factory() as s:
+        listing = list_unresolved(s, w.rid)
+        assert listing[CURRENT_OWNER] == [] and listing[UNKNOWN_END] == []
+        [item] = listing[EARLIER_OWNERS_OUTSTANDING]
+        assert (item["attempt"], item["job_status"], item["attempt_holds_authority"]) == (
+            1,
+            "running",
+            False,
+        )
+        with pytest.raises(ReconciliationRefused, match="deadline"):
+            resolve(s, admission_id=row, operator="ops", reason="worker_crashed")
+    _backdate(w, row)
+    with w.factory() as s:
+        assert resolve(s, admission_id=row, operator="ops", reason="worker_crashed") is True
+        s.commit()
+    assert _unresolved(w) == 0
+
+
+def test_an_unknown_end_is_reconcilable_before_its_deadline(world):
+    """An admission whose end is recorded unknown: SignalNest's client is no longer in the
+    call, so only the external party's side is unknown; reconciliation does not wait."""
+    w = world
+    _set_attempt(w, attempt=1, token="tok-a", worker="w-a")
+    adm = _adm(w, attempt=1, token="tok-a", worker="w-a")
+    row, _ = adm.admit_external("model")
+    adm.record_end(row, known=False)
+    with w.factory() as s:
+        [item] = list_unresolved(s, w.rid)[UNKNOWN_END]
+        assert item["deadline_passed"] is False and item["end_kind"] == "unknown"
+        assert resolve(s, admission_id=row, operator="ops", reason="provider_confirmed") is True
+        s.commit()

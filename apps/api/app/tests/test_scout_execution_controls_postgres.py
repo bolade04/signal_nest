@@ -25,7 +25,7 @@ from app.connectors.live import LiveRssConnector
 from app.connectors.retry import ConnectorFetchError
 from app.jobs import pipeline
 from app.jobs.models import Job
-from app.jobs.reconcile import list_unresolved, resolve
+from app.jobs.reconcile import UNKNOWN_END, list_unresolved, resolve
 from app.jobs.status import JobStatus
 from app.jobs.store import DurableJobStore
 from app.llm.base import LLMTimeoutError, LLMUsage
@@ -343,11 +343,11 @@ def test_a_model_timeout_blocks_the_scout_until_reconciliation(world, monkeypatc
     assert _unresolved(w) == 1
     with w.factory() as s:
         listing = list_unresolved(s, w.rid)
-        assert [a["operation"] for a in listing["unknown_outcome"]] == ["model"]
+        assert [a["operation"] for a in listing[UNKNOWN_END]] == ["model"]
         assert (
             resolve(
                 s,
-                admission_id=listing["unknown_outcome"][0]["admission_id"],
+                admission_id=listing[UNKNOWN_END][0]["admission_id"],
                 operator="ops",
                 reason="outcome_confirmed_ended",
             )
@@ -356,7 +356,7 @@ def test_a_model_timeout_blocks_the_scout_until_reconciliation(world, monkeypatc
         assert (
             resolve(
                 s,
-                admission_id=listing["unknown_outcome"][0]["admission_id"],
+                admission_id=listing[UNKNOWN_END][0]["admission_id"],
                 operator="ops",
                 reason="outcome_confirmed_ended",
             )

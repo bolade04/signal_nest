@@ -29,7 +29,14 @@ from app.db import seed as seed_mod
 from app.jobs.admission import SKIPPED_OWNER_ACTIVE, RunAdmission, RunStopped
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
-from app.jobs.reconcile import ReconciliationRefused, list_unresolved, resolve
+from app.jobs.reconcile import (
+    CURRENT_OWNER,
+    EARLIER_OWNERS_OUTSTANDING,
+    UNKNOWN_END,
+    ReconciliationRefused,
+    list_unresolved,
+    resolve,
+)
 from app.jobs.service import enqueue_job
 from app.jobs.status import JobStatus, JobType
 from app.scouting_requests import schedules as sched
@@ -163,11 +170,12 @@ def test_reconciliation_refuses_over_a_valid_in_flight_admission(s):
 
     req = s.get(ScoutRequest, seed_mod.sid("scout", "lagos"))
     job = _job(s, req, lease=datetime.now(UTC) + timedelta(minutes=5))
+    req.owner_job_id, req.owner_attempt, req.owner_lease_token = job.id, 1, "tok"
     row = _row(req, job_id=job.id)
     s.add(row)
     s.flush()
     listing = list_unresolved(s, req.id)
-    assert [a["attempt_holds_authority"] for a in listing["outstanding"]] == [True]
+    assert [a["attempt_holds_authority"] for a in listing[CURRENT_OWNER]] == [True]
     with pytest.raises(ReconciliationRefused):
         resolve(s, admission_id=row.id, operator="ops", reason="worker_crashed")
 
@@ -355,7 +363,7 @@ def test_the_reconcile_command_runs_in_a_fresh_process(factory):
     try:
         listing = cli("list", "--scout", rid)
         assert listing.returncode == 0, listing.stderr[-2000:]
-        outstanding = json.loads(listing.stdout)["outstanding"]
+        outstanding = json.loads(listing.stdout)[EARLIER_OWNERS_OUTSTANDING]
         assert [a["admission_id"] for a in outstanding] == [admission_id]
         assert cli(*resolve_args, "--reason", "not-a-code").returncode == 2
         done = cli(*resolve_args, "--reason", "worker_crashed", "--note", "pod restarted")
@@ -404,6 +412,47 @@ def test_the_terminal_write_checks_status_and_fence_on_their_own(s, state):
         admission.finish(s, stats={"scanned": 1}, now=_NOW)
     assert stopped.value.cause == "request_paused"
     assert _request(s, req)[0] == state
+
+
+@pytest.mark.parametrize(
+    ("case", "category"),
+    [
+        ("current_owner", CURRENT_OWNER),
+        ("earlier_owner", EARLIER_OWNERS_OUTSTANDING),
+        ("unknown_end", UNKNOWN_END),
+    ],
+)
+def test_the_listing_has_exactly_three_categories_with_job_and_deadline_facts(s, case, category):
+    """Contract §9.3: the current owner's admissions, earlier owners' outstanding ones and
+    unknown ends; each with its job's status and lease expiry, its deadline and whether that
+    deadline has passed (K = 1: one unresolved row per Scout, so one category at a time)."""
+    from datetime import UTC, datetime
+
+    req, job, _admission = _owned_run(s, "dallas")
+    values = {"job_id": job.id, "admitted_at": datetime.now(UTC)}
+    if case == "earlier_owner":
+        values["attempt"] = 0  # an earlier attempt of the job; the owner is attempt 1
+    if case == "unknown_end":
+        values.update(ended_at=datetime.now(UTC), end_kind="unknown")
+    s.add(_row(req, **values))
+    s.flush()
+    listing = list_unresolved(s, req.id)
+    assert set(listing) == {
+        "scout_request_id",
+        "owner",
+        CURRENT_OWNER,
+        EARLIER_OWNERS_OUTSTANDING,
+        UNKNOWN_END,
+    }
+    assert listing["owner"] == {"job_id": job.id, "attempt": 1}
+    [item] = listing[category]
+    assert all(
+        listing[c] == []
+        for c in (CURRENT_OWNER, EARLIER_OWNERS_OUTSTANDING, UNKNOWN_END)
+        if c != category
+    )
+    assert item["job_status"] == "running" and item["lease_expires_at"]
+    assert item["deadline"] > item["admitted_at"] and item["deadline_passed"] is False
 
 
 def test_a_stale_attempt_releases_no_owner_once_its_job_has_moved_on(s):
