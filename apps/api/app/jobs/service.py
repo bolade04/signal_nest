@@ -226,11 +226,15 @@ def enqueue_scout_request(
     """Enqueue a durable ``scout_request.execute`` job for one scout request.
 
     ``trigger`` is an optional, server-written provenance marker recorded on the
-    payload (e.g. ``"scheduled"`` for a recurrence-driven run). The manual-run path
-    passes nothing, so its payload — and therefore its payload hash and every
-    existing behaviour — is unchanged. The marker is read only by the customer-safe
-    run-history projection to label how a run was enqueued; it never alters
-    execution, idempotency or isolation.
+    payload (e.g. ``"scheduled"`` for a recurrence-driven run); the manual-run path
+    passes none. The marker is read only by the customer-safe run-history projection
+    to label how a run was enqueued; it never alters execution, idempotency or
+    isolation.
+
+    The payload hash is computed here, from the payload as enqueued, and is what the
+    enqueue's idempotency comparison uses. It is not recomputed later: a scheduled job's
+    first claim adds ``prior_status`` to the stored payload (below) while the hash, as
+    shown in the operator view too, stays that of the payload as enqueued.
 
     ``run_fence`` (D-25 cooperative pause, PROPOSED; ``app.jobs.admission``) is the
     request's fence at enqueue time, recorded on the payload. The worker claims the run
@@ -240,8 +244,8 @@ def enqueue_scout_request(
 
     ``prior_status`` (D-25 recovery contract §9.5.5, PROPOSED) is the settled status the
     Scout had before this run was requested (Run now passes the status it replaced with
-    ``queued``). A Cancel returns the Scout to it. A job without one (a scheduled run)
-    records it at its first claim.
+    ``queued``, so a manual run's payload now carries it). A Cancel returns the Scout to
+    it. A job without one (a scheduled run) records it at its first claim.
     """
     context = ExecutionContext.for_scout_request(
         organization_id=organization_id,

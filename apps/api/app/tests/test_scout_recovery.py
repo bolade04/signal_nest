@@ -747,3 +747,41 @@ def test_every_customer_action_leaves_an_unresolved_admission_unresolved(
     with factory() as session:
         rows = session.scalars(select(ScoutAdmission)).all()
         assert [r.resolved_at for r in rows] == [None]
+
+
+@pytest.mark.parametrize("kind", ["overdue_no_end", "legacy_no_end"])
+def test_rev_s3_run_now_is_refused_for_every_needs_attention_class(
+    client, factory, committed, kind
+):
+    """Review r1 F2: the independent reviewer's S3 (lane W15-REV-RECOVERY,
+    ``scripts/test_rev_recovery_r1b_sqlite.py``, sha256 ee78376e...390e), adopted with credit;
+    adapted only to this module's helpers (no ``rec.`` prefix). Run now is refused for EVERY
+    needs_attention class, not only a recorded unknown end: an overdue admission with no
+    recorded end (its stored deadline passed, its attempt holds no authority) and a legacy
+    admission with no recorded end and no recorded deadline. Kills the reviewer's mutant YR5
+    (refusal only for unknown ends)."""
+    from sqlalchemy import func
+
+    rid = seed_mod.sid("scout", "dallas")
+    with factory() as session:
+        req = session.get(ScoutRequest, rid)
+        job = _job(session, req, status="failed", worker="w-1", attempt=1)
+        job_id = job.id
+        if kind == "overdue_no_end":
+            _adm(session, req, job=job, deadline_in=-5)
+        else:
+            _adm(session, req, job=job, legacy=True)
+        session.commit()
+        jobs_before = session.scalar(select(func.count()).select_from(Job))
+    try:
+        got = client.get(_base(), headers=_auth(seed_mod.sid("user")))
+        assert got.json()["execution"]["state"] == "needs_attention", got.json()["execution"]
+        r = client.post(_base() + "/run", headers=_auth(seed_mod.sid("user")))
+        assert r.status_code == 422 and r.json()["error"]["code"] == "scout_needs_attention", r.text
+        with factory() as session:
+            assert session.scalar(select(func.count()).select_from(Job)) == jobs_before
+    finally:
+        with factory() as session:
+            session.execute(delete(ScoutAdmission))
+            session.execute(delete(Job).where(Job.id == job_id))
+            session.commit()

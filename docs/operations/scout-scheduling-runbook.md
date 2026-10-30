@@ -283,10 +283,12 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     read-only GET under a 20 s deadline). Operator alternatives, none adopted: R3 (a fetch's
     unknown outcome resolves), R5 (a provider-originated 5xx counts as known: it blocks less),
     R6 (a fetch 5xx counts as unknown: the bound is strict).
-  - **Recovery state (D-25 recovery, PROPOSED).** Every single-Scout API response carries a
-    derived, read-only `execution` field `{state, reason, next_action, since}` (the list
-    returns `null`: not computed there), computed on each read from committed rows and the
-    database clock; nothing is stored. `needs_attention` when an unresolved admission is
+  - **Recovery state (D-25 recovery, PROPOSED).** Every response that returns the Scout
+    itself (`ScoutRequestOut`: create, read, update, pause and resume) carries a derived,
+    read-only `execution` field `{state, reason, next_action, since}`; the list returns
+    `null` (not computed there), and Run now's and the schedule routes' responses do not
+    carry it. It is computed on each read from committed rows and the database clock;
+    nothing is stored. `needs_attention` when an unresolved admission is
     eligible for reconciliation (its attempt holds no valid authority, and its end is unknown,
     or it has no end and its deadline has passed, or it is a legacy row with no end), whatever
     the request status; else `paused`; else `in_progress` while a live job not fenced out by a
@@ -340,11 +342,18 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     an operation is still unresolved is idle but `in_progress`/`needs_attention`, and its
     next admission is still refused (K = 1). Requests left `queued`/`running` by an earlier
     candidate's Cancel are not repaired; they show `stopped` / `run_interrupted`.
-  - **Lock order of the fenced terminal transaction (a defect fix, PROPOSED).** The worker's
-    fenced failure / Cancel transaction now locks the job row before its writers update the
-    request, restoring the single order job -> request -> ledger -> period -> reservation.
-    The previous order (request -> job) could deadlock (`40P01`) against a stale attempt's
-    admission check. No end state changed.
+  - **Lock order of the terminal transactions (defect fixes, PROPOSED).** Every transaction
+    that writes both a scout job row and its request row now locks the job row first: the
+    worker's fenced failure / Cancel transaction (before its writers update the request), the
+    run's success commit (before `finish` updates the request; the worker's `complete` then
+    updates the job), the run's stop path, lease recovery's dead-letter, and the Cancel route.
+    Before these fixes the fenced transaction and the success commit took request -> job and
+    could deadlock (`40P01`) against a stale attempt's admission check (job -> request); when
+    the success commit lost, a completed run was rolled back and retried. No end state
+    changed. Other orders, which cannot form that cycle: the admission takes job -> request
+    -> ledger -> period -> reservation, while a settlement takes period -> reservation ->
+    its own admission row (other rows; no cycle); Run now updates the request and then
+    inserts a new job row.
   - **Stale-stop end states.** Lease lapsed (not yet recovered): a retryable failure, so the
     run is retried, never lost; the request stays `running` with the owner cleared until the
     retry claims it. Token rotated or owner superseded: the attempt stops and writes nothing

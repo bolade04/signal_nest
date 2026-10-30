@@ -1008,7 +1008,7 @@ def _scheduled_job_beside(w) -> str:
 def test_cancel_racing_a_concurrent_completion_keeps_the_completed_result(world):
     """§9.5.4: the Cancel route's job UPDATE is a compare-and-set on the status it read. The
     completion commits while the Cancel's UPDATE waits on the row; the Cancel then matches no
-    row, re-reads ``succeeded`` and writes nothing (mutant C11's killer)."""
+    row, re-reads ``succeeded`` and writes nothing (mutant C12's killer)."""
     w = world
     _attempt(w)
     with w.factory() as s:
