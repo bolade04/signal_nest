@@ -253,8 +253,8 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   - **Unknown outcomes block the Scout (the availability cost).** A model call that times
     out, or a feed read that times out after the request may have been sent, leaves an
     unknown, unresolved admission: its retry is not admitted, the run fails, and the Scout
-    admits nothing - and its schedule fans out no run (`admission_unresolved`) - until an
-    operator reconciles it. Other Scouts and tenants are unaffected. Treating a fetch's
+    admits nothing - and its schedule fans out no run (`admission_unresolved` while nothing
+    is in flight; `coalesced`, as before, while a run is) - until an operator reconciles it. Other Scouts and tenants are unaffected. Treating a fetch's
     unknown outcome as resolved (R3) is an operator choice, not adopted.
   - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
     the current owner, outstanding admissions and unknown-outcome admissions;
@@ -266,7 +266,9 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
     the run at its next admission (including while it waits): the job ends `cancelled`, the
     request returns to its pre-claim status (`queued` for a manual run: the F-03 shape,
-    unresolved). Cancel never resolves an admission.
+    unresolved). A recovered attempt's pre-claim status is `running`, so Cancelling it leaves
+    the request `running` with no job (the same shape; Pause -> Resume clears it). Cancel
+    never resolves an admission.
   - **Stale-stop end states.** Lease lapsed (not yet recovered): a retryable failure, so the
     run is retried, never lost. Token rotated or owner superseded: the attempt stops and
     writes nothing over the newer owner. Fence moved: `stopped_request_paused`. Request gone:
@@ -274,7 +276,8 @@ Source: `apps/api/app/scouting_requests/routes.py`.
   - **Missed scheduled occurrences (the earlier "at most one" is withdrawn).** An
     occurrence is missed for every tick while an admission stays unresolved, for each lost
     overlap race (`skipped_owner_active`), and after Pause -> Resume while a fenced job is
-    pending. No catch-up.
+    pending; as before, also while a run is in flight (`coalesced`) or the request is paused
+    (`request_paused`). No catch-up.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete
