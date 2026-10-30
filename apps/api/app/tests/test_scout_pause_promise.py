@@ -166,11 +166,12 @@ def counted(monkeypatch):
 @pytest.fixture
 def committed(factory):
     """For tests that must commit (HTTP, worker): restore the seed afterwards --
-    every request back to its seeded status, stats and run timestamp, and no jobs --
-    so the rollback-only tests and the next committing test start from the same state."""
+    every request back to its seeded status, stats, run timestamp and run fence (D-25,
+    which every pause advances), and no jobs -- so the rollback-only tests and the next
+    committing test start from the same state."""
     with factory() as session:
         seeded = {
-            m: (r.status, r.stats, r.last_run_at)
+            m: (r.status, r.stats, r.last_run_at, r.run_fence)
             for m in _MARKETS
             for r in [session.get(ScoutRequest, seed_mod.sid("scout", m))]
         }
@@ -179,7 +180,7 @@ def committed(factory):
         for market in _MARKETS:
             req = session.get(ScoutRequest, seed_mod.sid("scout", market))
             req.status = DRAFT
-            _status, req.stats, req.last_run_at = seeded[market]
+            _status, req.stats, req.last_run_at, req.run_fence = seeded[market]
         session.query(ScoutSchedule).delete(synchronize_session=False)
         session.commit()
     clear_seeded_runs(factory)
@@ -325,6 +326,8 @@ def _queue(factory, rid: str, *, max_attempts: int | None = None) -> str:
             scout_request_id=rid,
             location_id=req.location_id,
             request_id=rid,
+            # As ``POST .../run`` does: the job carries the request's run fence (D-25).
+            run_fence=req.run_fence,
             now=_NOW,
         )
         if max_attempts is not None:
@@ -345,7 +348,10 @@ def _pause_after_the_attempt_rolls_back(factory, monkeypatch, rid: str) -> None:
 
     def pause_then_write(self, db, writers, *, job_type):
         with factory() as other:
-            other.get(ScoutRequest, rid).status = PAUSED
+            # What the pause route writes (D-25 candidate): ``paused`` and a new fence.
+            req = other.get(ScoutRequest, rid)
+            req.status = PAUSED
+            req.run_fence = req.run_fence + 1
             other.commit()
         return real(self, db, writers, job_type=job_type)
 
@@ -577,7 +583,13 @@ def test_clause_queued_run_for_a_paused_request_finishes_skipped_in_its_job_reco
 def test_clause_pause_landing_mid_run_is_not_flipped_to_completed(s, monkeypatch):
     """The run had already set ``running`` when the customer paused. The run may
     finish and keep its findings and stats, but its terminal write must not overwrite
-    the pause: the request ends ``paused``, not ``completed``."""
+    the pause: the request ends ``paused``, not ``completed``.
+
+    This calls ``pipeline._run`` directly, i.e. the LEGACY path (no ``admitted_run``: the
+    replay demo seed and direct test calls), whose behaviour is unchanged. The durable
+    worker path discards such a run's findings instead (D-25 candidate, contract §6.2
+    Q-1): pinned on PostgreSQL by
+    ``test_scout_pause_cooperative_postgres.py::test_pause_before_the_terminal_write_discards_the_runs_findings``."""
     req = _request(s)
     real_build = pipeline._build_opportunities
 
@@ -624,6 +636,14 @@ def test_outcome_literals_are_the_documented_contract():
     assert pipeline.SKIPPED_REQUEST_PAUSED == "skipped_request_paused"
     assert pipeline.PAUSED_DURING_RUN == "paused_during_run"
     assert pipeline.RUN_COMPLETED == "completed"
+    # D-25 cooperative-pause candidate (PROPOSED, contract §6.2 Q-5).
+    from app.jobs import admission
+
+    assert admission.STOPPED_REQUEST_PAUSED == "stopped_request_paused"
+    assert admission.SKIPPED_REQUEST_PAUSED == pipeline.SKIPPED_REQUEST_PAUSED
+    assert admission.STATUS_CHANGED_DURING_RUN == "status_changed_during_run"
+    assert pipeline.STATUS_CHANGED_DURING_RUN == admission.STATUS_CHANGED_DURING_RUN
+    assert admission.REQUEST_GONE == "request_gone"
 
 
 # --------------------------------------------------------------------------- #
@@ -720,11 +740,18 @@ def test_clause_refused_run_keeps_a_pause_that_landed_while_it_ran(
     factory, committed, counted, monkeypatch
 ):
     """#268 refusal path through the real worker. The run is refused at the per-run
-    bound; the customer's pause lands while it runs (committed as soon as the attempt
-    rolls back, the PostgreSQL ordering). The refusal's after-rollback writer must not
-    overwrite it: the request stays ``paused`` and carries the refusal's stats, the
-    job fails non-retryably with the stable reason code, and no model was called (the
-    refusal precedes every model call)."""
+    bound; the customer's pause lands between the attempt's rollback and its
+    after-rollback writes. The refusal's writer must not overwrite it: the request stays
+    ``paused``, the job fails non-retryably with the stable reason code, and no model was
+    called (the refusal precedes every model call).
+
+    D-25 candidate (PROPOSED, contract §6.2 Q-1; replaces the option-(1) assertion that
+    the paused request "carries the refusal's stats", review R6): the refusal writer is a
+    compare-and-set on the run's fence, which the pause advanced, so a run's outcome is
+    written only if it lands before the pause -- the refusal's stats are NOT stored on the
+    paused request; its earlier stats stand."""
+    with factory() as session:
+        stats_before = session.get(ScoutRequest, seed_mod.sid("scout", "london")).stats
     rid = seed_mod.sid("scout", "london")
     monkeypatch.setattr(get_settings(), "vector_inprocess_max_signals_per_run", 2)
     monkeypatch.setattr(pipeline, "fetch_signals", _fixture_fetch(count=3))
@@ -744,9 +771,8 @@ def test_clause_refused_run_keeps_a_pause_that_landed_while_it_ran(
         assert job.last_error_summary == SIGNAL_VOLUME_ABOVE_BOUND
         req = s.get(ScoutRequest, rid)
         assert req.status == PAUSED
-        assert req.stats["refused"] is True
-        assert req.stats["refusal_reason"] == SIGNAL_VOLUME_ABOVE_BOUND
-        assert (req.stats["scanned"], req.stats["bound"]) == (3, 2)
+        assert req.stats == stats_before
+        assert "refused" not in (req.stats or {})
 
 
 def test_clause_failed_run_keeps_a_pause_that_landed_while_it_ran(factory, committed, monkeypatch):
@@ -900,13 +926,13 @@ def test_clause_http_pause_and_resume_keep_completed_findings_and_resume_lands_i
     assert client.post(base + "/run", headers=auth).status_code == 200
 
 
-def test_clause_pause_then_resume_while_queued_lets_the_queued_run_execute(
-    client, factory, counted
-):
-    """Pinned current behaviour (review r1 F8; D-25-a, not decided here): a pause
-    followed by a resume while the run is still queued leaves the job in place, and the
-    worker then executes it normally -- resume puts the request in ``draft`` and the
-    entry guard only skips ``paused``."""
+def test_clause_pause_then_resume_while_queued_fences_the_queued_run(client, factory, counted):
+    """D-25 §1.7 (PROPOSED; replaces the option-(1) pin of review r1 F8, which let the
+    queued run execute): a pause followed by a resume while the run is still queued
+    does not let the old job run. The job carries the fence it was queued under, the
+    pause advanced the request's fence, so the worker's committed claim refuses it: the
+    job is skipped with no fetch and no model call, and the request stays in ``draft``
+    where resume put it (D-25-b unchanged)."""
     rid = seed_mod.sid("scout", "nairobi")
     ws = seed_mod.sid("ws")
     auth = {"Authorization": f"Bearer {live_bearer(seed_mod.sid('user'))}"}
@@ -918,9 +944,9 @@ def test_clause_pause_then_resume_while_queued_lets_the_queued_run_execute(
     with offline_llm():
         assert _runner(factory).poll_once(worker_id="w-resumed") is True
 
-    assert counted["fetch"] == 1 and counted["model"] > 0
+    assert counted["fetch"] == 0 and counted["model"] == 0
     with factory() as s:
         job = s.get(Job, job_id)
         assert job.status == JobStatus.SUCCEEDED.value
-        assert job.result_summary["outcome"] == "completed"
-        assert s.get(ScoutRequest, rid).status == COMPLETED
+        assert job.result_summary["outcome"] == "skipped_request_paused"
+        assert s.get(ScoutRequest, rid).status == DRAFT

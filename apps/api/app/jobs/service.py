@@ -219,6 +219,7 @@ def enqueue_scout_request(
     trace_id: str | None = None,
     idempotency_key: str | None = None,
     trigger: str | None = None,
+    run_fence: int | None = None,
     now: datetime | None = None,
 ) -> Job:
     """Enqueue a durable ``scout_request.execute`` job for one scout request.
@@ -229,6 +230,12 @@ def enqueue_scout_request(
     existing behaviour — is unchanged. The marker is read only by the customer-safe
     run-history projection to label how a run was enqueued; it never alters
     execution, idempotency or isolation.
+
+    ``run_fence`` (D-25 cooperative pause, PROPOSED; ``app.jobs.admission``) is the
+    request's fence at enqueue time, recorded on the payload. The worker claims the run
+    only while the request still has that fence, so a pause after this enqueue fences the
+    job even once the request is resumed. A payload without it (legacy jobs, the demo
+    seed) is fence 0.
     """
     context = ExecutionContext.for_scout_request(
         organization_id=organization_id,
@@ -241,6 +248,8 @@ def enqueue_scout_request(
     payload: dict = {"scout_request_id": scout_request_id}
     if trigger is not None:
         payload["trigger"] = trigger
+    if run_fence is not None:
+        payload["run_fence"] = run_fence
     return enqueue_job(
         db,
         job_type=JobType.SCOUT_REQUEST_EXECUTE,

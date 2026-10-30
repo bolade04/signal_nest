@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "8005724d811a"
+HEAD = "b5e0c7a3d2f1"
 TABLE = "workspace_capability_overrides"
 
 

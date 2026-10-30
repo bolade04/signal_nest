@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -42,6 +42,11 @@ class ScoutRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stats: Mapped[dict] = mapped_column(JSON, default=dict)  # scanned/filtered/opportunities
+    #: D-25 run fence (PROPOSED, ``app.jobs.admission``): advanced by every pause; a run
+    #: may continue only while it still equals the value its job was enqueued under.
+    run_fence: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
 
 class ScoutSchedule(Base, UUIDPrimaryKeyMixin, TimestampMixin):

@@ -58,11 +58,14 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
+#: The code head (D-25 cooperative-pause candidate, PROPOSED: adds
+#: ``scout_requests.run_fence``).
+HEAD = "b5e0c7a3d2f1"
+#: One below head (D-LLM-1 option B: adds the ``llm_budget_periods`` and
 #: ``llm_budget_reservations`` tables).
-HEAD = "8005724d811a"
-#: One below head (P6-DATA-1/PRIV-4: adds ``source_takedowns``).
-BELOW_HEAD = "da25533622b2"
+BELOW_HEAD = "8005724d811a"
+#: Two below head (P6-DATA-1/PRIV-4: adds ``source_takedowns``).
+TAKEDOWNS = "da25533622b2"
 #: Two below head (P6-LLM-4: adds the ``llm_usage_events`` table).
 USAGE = "47028898175f"
 #: Three below head (P6-LLM-5: adds ``opportunities.explanation_source``).
@@ -260,6 +263,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     }
     assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
+    assert "run_fence" in _columns(pg_url, "scout_requests")
 
     # One guarded step down undoes exactly the head revision; the spent token does not
     # authorize the next step.
@@ -267,8 +271,11 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert "llm_budget_periods" not in _tables(pg_url)
-    assert "llm_budget_reservations" not in _tables(pg_url)
+    assert "run_fence" not in _columns(pg_url, "scout_requests")
+    assert "scout_requests" in _tables(pg_url)
+    # The revisions below head are untouched (the ledger tables of the revision below).
+    assert "llm_budget_periods" in _tables(pg_url)
+    assert "llm_budget_reservations" in _tables(pg_url)
     assert "source_takedowns" in _tables(pg_url)
     assert "source_takedown_cases" in _tables(pg_url)
     # The revisions below head are untouched.

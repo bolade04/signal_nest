@@ -12,16 +12,16 @@ real Alembic chain produced, and records what PostgreSQL actually does:
   any fetch or model call and the #269 ledger gains nothing;
 * a claim issued while a pause is uncommitted WAITS for the pause, then re-checks the
   row and skips;
-* a pause issued while a run is in flight WAITS for the run's transaction (the claim's
-  row lock on ``scout_requests``): it is serialised after the run's commit, not an
-  interruption. The run finishes with ``outcome=completed``; the request then ends
-  ``paused``. On the #268 refusal path and the failure path the pause lands as soon as
-  the attempt rolls back, and neither the refusal's ``failed`` write nor the
-  terminal-failure hook overwrites it;
-* work the in-flight run dispatches after the pause was issued still happens: its
-  fetch, its model calls, and (with a priced fake provider on the shared ledger) every
-  call's reservation and charge, each committed in a transaction of its own. A pause
-  does not undo them, and neither does the run's own rollback.
+* D-25 cooperative-pause candidate (PROPOSED, contract §6; these replace the option-(1)
+  pins of the refresh): the claim is committed in a transaction of its own, so a pause
+  issued while a run is in flight COMMITS WITHOUT WAITING for the run; the run stops at
+  its next admission (``stopped_request_paused``), its findings are discarded and the
+  request stays ``paused``. On the #268 refusal path and the failure path neither the
+  refusal's writer nor the terminal-failure hook (nor the status restore) overwrites it;
+* work admitted before the pause commits may finish: with a priced fake provider on the
+  shared ledger, the in-flight call's reservation, settlement and usage row stand (one
+  of each) and nothing undoes them, not even the run's own rollback; no further attempt
+  is admitted.
 
 Everything is offline: the sources are fakes of ``pipeline.fetch_signals`` serving the
 demo fixture library, the model is the deterministic mock (or the mock's output priced
@@ -642,7 +642,9 @@ def test_claim_issued_while_a_pause_is_uncommitted_waits_for_it_then_skips(world
 
     end = _end_state(w)
     assert waiter["wait_event_type"] == "Lock" and waiter["blockers"] == [pause_pid]
-    assert waiter["statement"].startswith("UPDATE scout_requests SET status")
+    # The committed claim (D-25 candidate) reads the row FOR NO KEY UPDATE before its
+    # compare-and-set; that read is what waits for the uncommitted pause.
+    assert waiter["statement"].startswith("SELECT scout_requests.status, scout_req")
     assert (sources.calls, models.calls) == ([], [])
     assert end.status == PAUSED
     assert end.job_summary == {"scout_request_id": w.rid, "outcome": "skipped_request_paused"}
@@ -656,116 +658,106 @@ def test_claim_issued_while_a_pause_is_uncommitted_waits_for_it_then_skips(world
 
 
 # --------------------------------------------------------------------------- #
-# A pause issued while a run is in flight
+# A pause issued while a run is in flight (D-25 cooperative-pause candidate, PROPOSED)
 # --------------------------------------------------------------------------- #
-def _pause_mid_run(w: World, sources: Sources, worker: Background) -> tuple[Background, dict]:
-    """Park the run at its fetch (after its claim), issue the pause from another session,
-    observe it waiting on the run's row lock, hold, then release the run."""
+def _pause_mid_run(w: World, sources: Sources, worker: Background) -> tuple[float, list]:
+    """Park the run at its fetch (after its committed claim), pause it from another
+    session and require the pause to COMMIT while the run is still parked, i.e. without
+    waiting for the run (contract §1.1). Returns the pause latency and every lock wait
+    seen on the pause's backend (expected: none blocked by the worker). Then releases the
+    run."""
     assert sources.started.wait(JOIN_SECONDS)
+    seen: list = []
     pause = _start_pause(w)
-    wait = _await(lambda: _lock_wait(w, w.pause_pid), "the pause to wait on a lock")
-    time.sleep(HOLD_SECONDS)
-    still = _lock_wait(w, w.pause_pid)
-    assert pause.is_alive() and still is not None, "the pause stopped waiting while the run held"
-    assert "pause_committed" not in w.marks
+    deadline = time.monotonic() + JOIN_SECONDS
+    while pause.is_alive() and time.monotonic() < deadline:
+        wait = _lock_wait(w, w.pause_pid)
+        if wait is not None:
+            seen.append(wait)
+        time.sleep(0.002)
+    pause_s = pause.join_ok()
+    assert worker.is_alive(), "the run finished before the pause; the scenario did not hold"
+    assert "pause_committed" in w.marks  # committed while the run was still parked
     sources.release.set()
-    return pause, wait
+    return pause_s, seen
 
 
-def test_pause_issued_mid_run_waits_for_the_run_commit_and_then_lands(world, monkeypatch):
-    """The pause is serialised after the run, not an interruption: it waits on the
-    ``scout_requests`` row lock the run's claim took, for as long as the run holds it.
-    The run finishes with every fetch and model call it had left, records
-    ``outcome=completed`` (its final re-read still saw ``running``), and the request
-    ends ``paused`` once the pause commits after the run."""
+def test_pause_mid_run_commits_without_waiting_because_the_claim_is_not_in_the_run_transaction(
+    world, monkeypatch
+):
+    """Replaces the option-(1) pin "the pause waits for the run's commit" (contract §6.2
+    Q-7). The hard constraint of the candidate: the claim is committed in a transaction of
+    its own, so the run's long transaction holds no update lock on the request row while
+    it fetches. A pause issued during the parked fetch therefore commits without waiting on
+    the run's transaction id (it never shows a lock wait blocked by the worker), the run
+    stops at its next admission (the post-fetch boundary) and makes no model call; nothing
+    of the run is stored and nothing is reserved. The request stays ``paused``."""
     w = world
     sources = Sources(gate=True)
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
     models = ModelCalls(monkeypatch)
     with offline_llm():
         worker = _start_worker(w)
-        pause, wait = _pause_mid_run(w, sources, worker)
+        pause_s, waits = _pause_mid_run(w, sources, worker)
         assert worker.join_ok() is True
-        pause_ms = _ms(pause.join_ok())
 
     end = _end_state(w)
-    assert wait["blockers"] == [w.worker_pid]
+    assert [x for x in waits if w.worker_pid in (x["blockers"] or [])] == []
     assert end.status == PAUSED and end.paused_audits == 1
     assert end.job_status == JobStatus.SUCCEEDED.value
-    assert end.job_summary["outcome"] == "completed"  # not paused_during_run
-    assert end.opportunities > 0 and end.last_run_at is not None
-    # Everything the run did after its fetch happened after the pause was issued.
-    assert len(sources.calls) == 1 and models.calls
-    assert all(t > w.marks["pause_issued"] for t in models.calls)
-    # Each mock call is recorded on the ledger with the run (a settled reservation row of
-    # zero cost); the pause undid none of them. (The mock's usage rows are not asserted:
-    # on PostgreSQL the same-session ``record_settled`` stops after the reservation row,
-    # a #269 path the mock alone takes; reported in the lane evidence, not changed here.)
-    ledger = _ledger(w)
-    assert ledger["reservations"] == len(models.calls)
-    order = _commit_order(w)
-    if order is not None:
-        assert order["request_after_job_ms"] >= 0
+    assert end.job_summary == {"scout_request_id": w.rid, "outcome": "stopped_request_paused"}
+    assert len(sources.calls) == 1 and models.calls == []
+    assert end.opportunities == 0 and end.raw_signals == 0 and end.last_run_at is None
+    assert _ledger(w)["reservations"] == _ledger(w)["usage_events"] == 0
     _measure(
-        "pause_mid_run_completed",
-        wait_event=f"{wait['wait_event_type']}/{wait['wait_event']}",
-        waiting_for=wait["waiting_for"],
-        blocked_by_worker=True,
-        pause_latency_ms=pause_ms,
-        hold_ms=_ms(HOLD_SECONDS),
-        client_pause_commit_after_worker_last_commit_ms=_ms(
-            w.marks["pause_committed"] - w.worker_commits[-1]
-        ),
-        model_calls_after_pause_issued=len(models.calls),
-        ledger_end=ledger,
+        "pause_mid_run_cooperative",
+        pause_latency_ms=_ms(pause_s),
+        lock_waits_seen=len(waits),
         job=end.job_status,
         job_outcome=end.job_summary["outcome"],
         end_status=end.status,
-        server_commit_order=order,
     )
 
 
-def test_pause_issued_mid_run_is_not_overwritten_by_the_refusal(world, monkeypatch):
-    """#268 refusal path: the run is refused at the per-run bound after its fetch. The
-    attempt rolls back, which releases the row, and the waiting pause commits; the
-    refusal's after-rollback writer then finds the request paused and leaves it so (its
-    ``failed`` write is a compare-and-set excluding ``paused``). The job fails
-    non-retryably with the stable reason; no model call was made; nothing reserved."""
+def test_pause_landing_after_the_fetch_boundary_is_not_overwritten_by_the_refusal(
+    world, monkeypatch
+):
+    """#268 refusal path with the pause committing after the post-fetch admission and
+    before the bound check (injected in the takedown re-check, from another session). The
+    attempt is refused and rolls back; the refusal's writer is a compare-and-set on the
+    run's fence, which the pause advanced, so the request stays ``paused`` with its
+    earlier stats (a run's outcome lands only if it commits before the pause, §6.2 Q-1;
+    replaces "the paused request carries the refusal's stats"). The job fails
+    non-retryably with the stable reason; no model call; nothing reserved."""
     w = world
     monkeypatch.setattr(get_settings(), "vector_inprocess_max_signals_per_run", 3)
-    sources = Sources(gate=True, count=5)
+    sources = Sources(count=5)
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
     models = ModelCalls(monkeypatch)
+    real_recheck = pipeline.without_taken_down
+
+    def pause_then_recheck(db, signals):
+        _pause(w)
+        return real_recheck(db, signals)
+
+    monkeypatch.setattr(pipeline, "without_taken_down", pause_then_recheck)
     with offline_llm():
-        worker = _start_worker(w)
-        pause, wait = _pause_mid_run(w, sources, worker)
-        assert worker.join_ok() is True
-        pause_ms = _ms(pause.join_ok())
+        assert _start_worker(w).join_ok() is True
 
     end = _end_state(w)
-    assert wait["blockers"] == [w.worker_pid]
     assert end.status == PAUSED
-    assert end.stats["refused"] is True and end.stats["refusal_reason"] == SIGNAL_VOLUME_ABOVE_BOUND
-    assert (end.stats["scanned"], end.stats["bound"]) == (5, 3)
+    assert not (end.stats or {}).get("refused")
     assert end.job_status == JobStatus.FAILED.value
     assert end.job_error == (JobErrorCode.NON_RETRYABLE.value, SIGNAL_VOLUME_ABOVE_BOUND)
     assert models.calls == [] and end.raw_signals == 0
     assert _ledger(w)["reservations"] == 0
-    _measure(
-        "pause_mid_run_refused",
-        wait_event=f"{wait['wait_event_type']}/{wait['wait_event']}",
-        pause_latency_ms=pause_ms,
-        job=end.job_status,
-        job_error=end.job_error,
-        end_status=end.status,
-        stats_refused=end.stats["refused"],
-    )
+    _measure("pause_then_refusal", job=end.job_status, end_status=end.status)
 
 
 def test_pause_issued_mid_run_is_not_overwritten_by_the_failure_hook(world, monkeypatch):
-    """Failure path, final attempt: the run fails after its fetch, the attempt rolls
-    back, the waiting pause commits, and ``settle_failed_scout_request`` (in the job's
-    failure transaction) leaves the paused request alone."""
+    """Failure path, final attempt: the pause commits while the fetch is parked (without
+    waiting), the fetch then fails, the attempt rolls back, and neither the lease-aware
+    status restore nor ``settle_failed_scout_request`` overwrites the pause."""
     w = world
     sources = Sources(gate=True, fail=RuntimeError("fake source failure"))
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
@@ -774,27 +766,25 @@ def test_pause_issued_mid_run_is_not_overwritten_by_the_failure_hook(world, monk
         s.commit()
     with offline_llm():
         worker = _start_worker(w)
-        pause, wait = _pause_mid_run(w, sources, worker)
+        pause_s, _waits = _pause_mid_run(w, sources, worker)
         assert worker.join_ok() is True
-        pause_ms = _ms(pause.join_ok())
 
     end = _end_state(w)
-    assert wait["blockers"] == [w.worker_pid]
     assert end.status == PAUSED
     assert end.job_status == JobStatus.DEAD_LETTERED.value
     assert end.job_error[0] == JobErrorCode.TRANSIENT.value
     _measure(
         "pause_mid_run_failed_final",
-        pause_latency_ms=pause_ms,
+        pause_latency_ms=_ms(pause_s),
         job=end.job_status,
         end_status=end.status,
     )
 
 
 def test_pause_issued_mid_run_is_honoured_by_the_retry(world, monkeypatch):
-    """Failure path, attempts left: the attempt fails and rolls back (the request is
-    ``queued`` again), the waiting pause commits, the job waits to retry -- and the retry
-    meets a paused request at its entry guard and skips."""
+    """Failure path, attempts left: the pause commits while the fetch is parked, the
+    attempt fails and rolls back, the job waits to retry -- and the retry's committed
+    claim meets a paused request with a moved fence and skips (no fetch)."""
     w = world
     sources = Sources(gate=True, fail=RuntimeError("fake source failure"))
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
@@ -802,9 +792,8 @@ def test_pause_issued_mid_run_is_honoured_by_the_retry(world, monkeypatch):
     runner = _runner(w, clock=lambda: datetime.now(UTC) + shift[0])
     with offline_llm():
         worker = _start_worker(w, runner)
-        pause, _wait = _pause_mid_run(w, sources, worker)
+        _pause_mid_run(w, sources, worker)
         assert worker.join_ok() is True
-        pause.join_ok()
         assert _end_state(w).job_status == JobStatus.RETRY_WAIT.value
         assert _end_state(w).status == PAUSED
         sources.fail, sources.gate = None, False
@@ -820,7 +809,8 @@ def test_pause_issued_mid_run_is_honoured_by_the_retry(world, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Already-dispatched work: it happens, it is reserved and charged, nothing undoes it
+# Work already admitted: it may finish, it is reserved and charged, nothing undoes it;
+# nothing new is admitted after the pause commits
 # --------------------------------------------------------------------------- #
 def _priced(monkeypatch) -> PricedMock:
     provider = PricedMock(park_first=True)
@@ -832,47 +822,53 @@ def _priced(monkeypatch) -> PricedMock:
     return provider
 
 
-def _pause_at_first_model_call(w: World, provider: PricedMock) -> tuple[Background, dict, dict]:
+def _pause_at_first_model_call(w: World, provider: PricedMock) -> tuple[float, dict]:
+    """Pause while the first (admitted, reserved) model call is in flight; the pause must
+    commit before the call is released. Returns the pause latency and the ledger seen from
+    a third session while the call was in flight."""
     assert provider.first_call.wait(JOIN_SECONDS)
-    pause = _start_pause(w)
-    wait = _await(lambda: _lock_wait(w, w.pause_pid), "the pause to wait on a lock")
-    # Seen from a third session while the run is still in flight: the first call's
-    # reservation is already committed, outside the run's transaction.
     during = _ledger(w)
-    time.sleep(HOLD_SECONDS)
-    assert pause.is_alive() and _lock_wait(w, w.pause_pid) is not None
+    pause_s = _pause(w)  # synchronous: returns only once committed
+    assert not provider.release.is_set()
     provider.release.set()
-    return pause, wait, during
+    return pause_s, during
 
 
-def test_model_calls_dispatched_after_a_mid_run_pause_are_reserved_and_charged(world, monkeypatch):
+def test_a_mid_run_pause_lets_the_admitted_call_finish_and_admits_no_further_attempt(
+    world, monkeypatch
+):
+    """Replaces the option-(1) pin "model calls dispatched after a mid-run pause are
+    reserved and charged" (contract §6.2 Q-7), on the shared-ledger path (a priced fake
+    provider; nothing is sent). The pause commits while the first call is in flight. That
+    call was admitted before the cut-off: its reservation, settlement and usage row stand,
+    exactly one of each. No further model attempt is admitted (the next one is refused in
+    its reservation transaction, which reserves nothing). The run stops, its findings are
+    discarded, and the request stays ``paused``."""
     w = world
     sources = Sources()
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
     provider = _priced(monkeypatch)
     worker = _start_worker(w)
-    pause, wait, during = _pause_at_first_model_call(w, provider)
+    pause_s, during = _pause_at_first_model_call(w, provider)
     assert worker.join_ok() is True
-    pause_ms = _ms(pause.join_ok())
 
     end, ledger = _end_state(w), _ledger(w)
-    calls = len(provider.calls)
-    after_pause = sum(1 for t in provider.calls if t > w.marks["pause_issued"])
     per_call = Decimal(str(cost_usd(get_settings(), "anthropic", MODEL, *FAKE_USAGE)))
-    assert wait["blockers"] == [w.worker_pid]
     assert during["reservations"] == during["reservations_reserved"] == 1
     assert during["usage_events"] == 0 and during["reserved_usd"] > 0
-    assert calls >= 2 and after_pause == calls - 1
-    assert ledger["reservations"] == ledger["usage_events"] == calls
-    assert ledger["reservations_reserved"] == 0  # every call settled
-    assert ledger["settled_usd"] == per_call * calls
-    assert ledger["reserved_usd"] >= ledger["settled_usd"] > 0
-    assert end.status == PAUSED and end.job_summary["outcome"] == "completed"
+    assert len(provider.calls) == 1  # nothing admitted after the cut-off
+    assert ledger["reservations"] == ledger["usage_events"] == 1
+    assert ledger["reservations_reserved"] == 0  # the in-flight call settled
+    assert ledger["settled_usd"] == per_call
+    assert ledger["reserved_usd"] == during["reserved_usd"]  # the refused attempt: nothing
+    assert end.status == PAUSED
+    assert end.job_status == JobStatus.SUCCEEDED.value
+    assert end.job_summary == {"scout_request_id": w.rid, "outcome": "stopped_request_paused"}
+    assert end.opportunities == 0 and end.raw_signals == 0  # findings discarded
     _measure(
-        "dispatched_work_after_pause",
-        pause_latency_ms=pause_ms,
-        model_calls=calls,
-        model_calls_after_pause_issued=after_pause,
+        "admitted_call_after_pause",
+        pause_latency_ms=_ms(pause_s),
+        model_calls=len(provider.calls),
         ledger_seen_mid_run=during,
         ledger_end=ledger,
         per_call_usd=per_call,
@@ -882,39 +878,38 @@ def test_model_calls_dispatched_after_a_mid_run_pause_are_reserved_and_charged(w
 
 
 def test_charges_of_a_paused_run_are_not_undone_when_the_run_rolls_back(world, monkeypatch):
-    """The run is paused mid-run and then fails after its model calls (final attempt).
-    The run's own writes roll back -- no signal of it is stored -- but every model call
-    it made stays reserved and charged: each reservation and settlement was committed in
-    a transaction of its own. The request ends paused."""
+    """The run is paused while its first call is in flight and then fails right after
+    that call (final attempt), before its next admission. The run's own writes roll back
+    -- no signal of it is stored -- but the call it made stays reserved and charged: its
+    reservation and settlement were committed in transactions of their own. The request
+    ends paused."""
     w = world
     sources = Sources()
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
     provider = _priced(monkeypatch)
 
-    def fail_after_the_calls(*args, **kwargs):
-        raise RuntimeError("fake failure after the model calls")
+    def fail_after_the_call(*args, **kwargs):
+        raise RuntimeError("fake failure after the model call")
 
-    monkeypatch.setattr(pipeline, "_build_opportunities", fail_after_the_calls)
+    monkeypatch.setattr(pipeline, "screen_classification", fail_after_the_call)
     with w.factory() as s:
         s.get(Job, w.job_id).max_attempts = 1
         s.commit()
     worker = _start_worker(w)
-    pause, _wait, during = _pause_at_first_model_call(w, provider)
+    _pause_s, during = _pause_at_first_model_call(w, provider)
     assert worker.join_ok() is True
-    pause.join_ok()
 
     end, ledger = _end_state(w), _ledger(w)
-    calls = len(provider.calls)
     per_call = Decimal(str(cost_usd(get_settings(), "anthropic", MODEL, *FAKE_USAGE)))
     assert end.job_status == JobStatus.DEAD_LETTERED.value
     assert end.status == PAUSED
     assert end.raw_signals == 0 and end.opportunities == 0  # the run's writes rolled back
-    assert calls >= 2
-    assert ledger["reservations"] == ledger["usage_events"] == calls  # the charges did not
-    assert ledger["settled_usd"] == per_call * calls
+    assert len(provider.calls) == 1
+    assert ledger["reservations"] == ledger["usage_events"] == 1  # the charge did not
+    assert ledger["settled_usd"] == per_call
     _measure(
         "charges_survive_rollback",
-        model_calls=calls,
+        model_calls=len(provider.calls),
         ledger_seen_mid_run=during,
         ledger_end=ledger,
         raw_signals=end.raw_signals,

@@ -266,9 +266,23 @@ def pause_scout_request(
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutRequest:
     request = _get_scoped(db, workspace_id, request_id)
-    request.status = ScoutRequestStatus.PAUSED.value
-    db.add(request)
-    db.flush()
+    # D-25 cooperative pause (PROPOSED, ``app.jobs.admission``): ``paused`` and a new run
+    # fence in ONE statement. Every run claimed under the old fence is refused at its next
+    # admission, even after a resume. The response is the recorded pause (the request,
+    # ``paused``); whether its active work has stopped is the job's state, not this
+    # response. Idempotent: every call advances the fence and returns 200. No job row is
+    # touched (Cancel stays separate). This waits only for short transactions that make
+    # no external call (an admission, a claim, a run's terminal write).
+    db.execute(
+        update(ScoutRequest)
+        .where(ScoutRequest.id == request.id, ScoutRequest.workspace_id == workspace_id)
+        .values(
+            status=ScoutRequestStatus.PAUSED.value,
+            run_fence=ScoutRequest.run_fence + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    db.refresh(request)
     record_audit(
         db,
         organization_id=ctx.organization.id,
@@ -339,13 +353,16 @@ def run_scout_request_endpoint(
     ensure_run_allowed(db, get_settings(), request.workspace_id)
 
     # Atomic claim of the run: only the caller that flips the observed status to
-    # QUEUED proceeds to enqueue; a lost race is reported rather than duplicated.
-    claimed = db.execute(
+    # QUEUED proceeds to enqueue; a lost race is reported rather than duplicated. The
+    # run fence (D-25, PROPOSED) is read by the same statement, so the job carries the
+    # fence of exactly the state it was queued from (no ABA across Pause -> Resume).
+    run_fence = db.execute(
         update(ScoutRequest)
         .where(ScoutRequest.id == request.id, ScoutRequest.status == observed)
         .values(status=ScoutRequestStatus.QUEUED.value)
-    )
-    if claimed.rowcount != 1:
+        .returning(ScoutRequest.run_fence)
+    ).scalar_one_or_none()
+    if run_fence is None:
         raise ValidationDomainError("Request state changed; refresh and try again.")
 
     job = enqueue_scout_request(
@@ -357,6 +374,7 @@ def run_scout_request_endpoint(
         campaign_id=request.campaign_id,
         request_id=request.id,
         trace_id=trace_id_ctx.get(),
+        run_fence=run_fence,
     )
     record_audit(
         db,

@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
 from app.infra.vector import SignalVolumeAboveBoundError
+from app.jobs.admission import RunAdmission, RunStopped, admitted_run
 from app.jobs.context import ExecutionContext
 from app.jobs.pipeline import _run, metered_run, refused_run_stats
 from app.jobs.registry import (
@@ -42,7 +43,10 @@ logger = get_logger("signalnest.jobs.handlers")
 
 
 def _record_refused_run(
-    scout_request_id: str, context: ExecutionContext, exc: SignalVolumeAboveBoundError
+    scout_request_id: str,
+    context: ExecutionContext,
+    exc: SignalVolumeAboveBoundError,
+    run_fence: int | None = None,
 ) -> Callable[[Session], None]:
     """An after-rollback writer that settles a run refused at the in-process bound.
 
@@ -59,6 +63,12 @@ def _record_refused_run(
     and a pause committing between the load below and the write is not overwritten
     either. A paused request keeps its status; the refusal's ``stats`` are stored as
     for any other run (the run's terminal guard keeps a paused run's stats too).
+
+    With ``run_fence`` (the durable worker path, D-25 cooperative pause, PROPOSED) the
+    stats and ``failed`` are written in ONE compare-and-set that also requires the run's
+    fence: a request paused (or paused and resumed, and run again) since this run claimed
+    it is left exactly as it is, stats included, so an old run can never settle a newer
+    one. Without it (legacy callers) the behaviour above is unchanged.
     """
 
     def write(db: Session) -> None:
@@ -70,20 +80,33 @@ def _record_refused_run(
             or request.workspace_id != context.workspace_id
         ):
             return
-        request.stats = refused_run_stats(
+        stats = refused_run_stats(
             scanned=exc.scanned, bound=exc.bound, fetch_limits=exc.fetch_limits
         )
-        db.flush()
-        settled = db.execute(
-            update(ScoutRequest)
-            .where(
-                ScoutRequest.id == request.id,
-                ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+        if run_fence is None:
+            request.stats = stats
+            db.flush()
+            settled = db.execute(
+                update(ScoutRequest)
+                .where(
+                    ScoutRequest.id == request.id,
+                    ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+                )
+                .values(status=ScoutRequestStatus.FAILED.value)
+                .execution_options(synchronize_session=False)
             )
-            .values(status=ScoutRequestStatus.FAILED.value)
-            .execution_options(synchronize_session=False)
-        )
-        db.refresh(request, attribute_names=["status"])
+        else:
+            settled = db.execute(
+                update(ScoutRequest)
+                .where(
+                    ScoutRequest.id == request.id,
+                    ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+                    ScoutRequest.run_fence == run_fence,
+                )
+                .values(status=ScoutRequestStatus.FAILED.value, stats=stats)
+                .execution_options(synchronize_session=False)
+            )
+        db.refresh(request, attribute_names=["status", "stats"])
         log_event(
             logger,
             "scout_request.refused_at_bound",
@@ -92,7 +115,7 @@ def _record_refused_run(
             reason=exc.reason,
             scanned=exc.scanned,
             bound=exc.bound,
-            partial_fetch=request.stats.get("partial_fetch"),
+            partial_fetch=stats.get("partial_fetch"),
             request_paused=settled.rowcount != 1,
         )
 
@@ -127,6 +150,15 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
             "scout_request.execute payload requires a string 'scout_request_id'",
         )
 
+    # D-25 run fence (PROPOSED): the value this job was enqueued under; a job enqueued
+    # before the fence existed carries none and is treated as fence 0.
+    run_fence = ctx.payload.get("run_fence", 0)
+    if isinstance(run_fence, bool) or not isinstance(run_fence, int) or run_fence < 0:
+        raise JobExecutionError(
+            JobErrorCode.VALIDATION,
+            "scout_request.execute payload 'run_fence' must be a non-negative integer",
+        )
+
     # Honour cancellation requested before the attempt starts. The pipeline runs
     # as a single unit, so this is the safe interruption point.
     if ctx.is_cancelled():
@@ -144,30 +176,84 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
             bind=ctx.db.get_bind(), autoflush=False, expire_on_commit=False, future=True
         ),
     )
+    # D-25 cooperative pause (PROPOSED, ``app.jobs.admission``): the run's committed
+    # claim and its admissions, on short transactions from the same bind, scoped by the
+    # durable job row's tenant context.
+    admission = RunAdmission(
+        scout_request_id=scout_request_id,
+        organization_id=ctx.context.organization_id,
+        workspace_id=ctx.context.workspace_id,
+        fence=run_fence,
+        session_factory=sessionmaker(
+            bind=ctx.db.get_bind(), autoflush=False, expire_on_commit=False, future=True
+        ),
+        job_id=ctx.job_id,
+        worker_id=ctx.worker_id,
+        attempt=ctx.attempt,
+    )
     ctx.after_rollback.append(meter.flush)
     with metered_run(meter):
-        try:
-            result = _run(ctx.db, scout_request_id, ctx.context)
-        except SignalVolumeAboveBoundError as exc:
-            # P6-PLAT-1 (strategy B): the run would index more signals than the
-            # per-run in-process bound. Non-retryable - the condition is a property
-            # of the request's source volume, not of this attempt - and recorded as
-            # the run's visible outcome after the rollback (nothing was written).
-            # The refusal precedes every model call of the run, so it reserved and
-            # spent nothing (P6-LLM-4); the terminal-failure hook below still
-            # releases anything this job holds, as for every final failure.
-            ctx.after_rollback.append(_record_refused_run(scout_request_id, ctx.context, exc))
-            raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc
+        with admitted_run(admission):
+            try:
+                result = _run(ctx.db, scout_request_id, ctx.context)
+                # The run's write phase ran in a savepoint (``admission.begin_writes``).
+                admission.keep_writes()
+            except RunStopped as stop:
+                # A refused admission (the request was paused, or paused and resumed, since
+                # this run claimed it). Roll back the run's savepoint: its findings are
+                # discarded, never the job's bookkeeping around it. Its accounting stays: the
+                # shared ledger committed every reservation, settlement and usage row in its
+                # own transactions, and the same-session usage rows are written again here.
+                # Not a failure: the job ends ``succeeded`` with the stop as its outcome, and
+                # is not retried.
+                admission.discard_writes()
+                meter.flush(ctx.db)
+                result = {"scout_request_id": scout_request_id, "outcome": stop.outcome}
+                log_event(
+                    logger,
+                    "scout_request.run_stopped",
+                    component="jobs",
+                    outcome=stop.outcome,
+                    stopped_at=stop.operation,
+                    admitted=dict(admission.admitted),
+                )
+            except SignalVolumeAboveBoundError as exc:
+                # P6-PLAT-1 (strategy B): the run would index more signals than the
+                # per-run in-process bound. Non-retryable - the condition is a property
+                # of the request's source volume, not of this attempt - and recorded as
+                # the run's visible outcome after the rollback (nothing was written).
+                # The refusal precedes every model call of the run, so it reserved and
+                # spent nothing (P6-LLM-4); the terminal-failure hook below still
+                # releases anything this job holds, as for every final failure.
+                ctx.after_rollback.append(
+                    _record_refused_run(
+                        scout_request_id,
+                        ctx.context,
+                        exc,
+                        run_fence=admission.fence if admission.claimed else None,
+                    )
+                )
+                raise JobExecutionError(JobErrorCode.NON_RETRYABLE, exc.reason) from exc
+            except Exception:
+                # Any other failure of a claimed run: the worker rolls the attempt back, but
+                # the claim was committed on its own. Put back the status it replaced (a
+                # lease-aware no-op if another attempt owns the job by then), so a request
+                # waiting for its retry shows what it showed before the claim (§6.2 Q-2).
+                restore = admission.restore_writer(now=ctx.now)
+                if restore is not None:
+                    ctx.after_rollback.append(restore)
+                raise
     # Attempt end: whatever this job still holds reserved could not be settled by the
     # process that reserved it; charge it its worst case in the run's transaction.
     release_for_job(ctx.db, job_id=ctx.job_id, now=ctx.now, outcome="attempt_end")
 
-    # ``_run`` returns only safe aggregates: the run ``outcome`` (D-25: ``completed``,
-    # ``skipped_request_paused`` when the request was paused before the job reached it,
-    # ``paused_during_run`` when the run's final re-read found it paused) and, for a run
-    # that executed, the four counts, the coverage outcome (P6-DATA-2) and the per-source
-    # fetch facts (``fetch_limits`` / ``partial_fetch`` / ``partial_fetch_reasons``,
-    # #268), which is exactly the shape we persist.
+    # ``_run`` returns only safe aggregates: the run ``outcome`` (D-25: ``completed``;
+    # ``skipped_request_paused`` when the request was paused, or its fence moved, before
+    # the claim; ``request_gone``; and from a cooperative stop above
+    # ``stopped_request_paused`` / ``status_changed_during_run`` / ``request_gone``) and,
+    # for a run that completed, the four counts, the coverage outcome (P6-DATA-2) and the
+    # per-source fetch facts (``fetch_limits`` / ``partial_fetch`` /
+    # ``partial_fetch_reasons``, #268), which is exactly the shape we persist.
     return dict(result)
 
 
@@ -332,13 +418,20 @@ def settle_failed_scout_request(ctx: TerminalFailureContext) -> None:
         return
 
     # D-25: a compare-and-set on the in-flight states, so a pause that commits after
-    # the read above is not overwritten either (the read alone leaves that window).
+    # the read above is not overwritten either (the read alone leaves that window). The
+    # cooperative-pause candidate (PROPOSED) also requires this job's run fence (a legacy
+    # payload without one is fence 0): after Pause -> Resume -> Run now the request's
+    # ``queued``/``running`` belongs to the newer job, which this failure must not settle.
+    predicates = [
+        ScoutRequest.id == request.id,
+        ScoutRequest.status.in_(sorted(_IN_FLIGHT_SCOUT_STATUSES)),
+    ]
+    run_fence = ctx.payload.get("run_fence", 0)
+    if isinstance(run_fence, int) and not isinstance(run_fence, bool):
+        predicates.append(ScoutRequest.run_fence == run_fence)
     settled = ctx.db.execute(
         update(ScoutRequest)
-        .where(
-            ScoutRequest.id == request.id,
-            ScoutRequest.status.in_(sorted(_IN_FLIGHT_SCOUT_STATUSES)),
-        )
+        .where(*predicates)
         .values(status=ScoutRequestStatus.FAILED.value)
         .execution_options(synchronize_session=False)
     )

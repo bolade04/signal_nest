@@ -71,6 +71,7 @@ from app.connectors.rss import (
 from app.connectors.sources import APPROVED_SOURCES, SourceRecord
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.jobs.admission import RunStopped, admit_operation
 
 logger = get_logger("signalnest.connectors.live")
 
@@ -194,6 +195,10 @@ class LiveRssConnector(SourceConnector):
             try:
                 feed, parsed = self._feed(target, max_entries)
                 signals, fetched, clipped = self._signals(target, feed, parsed, scope)
+            except RunStopped:
+                # D-25 (PROPOSED): a refused admission stops the whole run; it is not a
+                # failure of this source and must not be recorded as one.
+                raise
             except ConnectorFetchError as exc:
                 self._record_failure(result, scope, key, exc.failure.kind, exc.failure.detail)
                 continue
@@ -293,6 +298,10 @@ class LiveRssConnector(SourceConnector):
         validators = self._cache.validators(key)
         last: ConnectorFetchError | None = None
         for attempt in range(1, self._attempts + 1):
+            # D-25 (PROPOSED): every fetch attempt (first try and each retry) is admitted
+            # immediately before its request is dispatched; a no-op off the durable path.
+            # The redirect hops of one attempt belong to that admitted attempt.
+            admit_operation("fetch")
             try:
                 response = self._fetcher.fetch(
                     target.fetch_url, allowed_hosts=target.allowed_hosts, validators=validators

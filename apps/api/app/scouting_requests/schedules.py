@@ -444,6 +444,9 @@ def run_schedule_tick(
             request_id=schedule.scout_request_id,
             idempotency_key=f"schedule:{schedule.id}:{occurrence_at.isoformat()}",
             trigger=SCHEDULED_TRIGGER,
+            # D-25 (PROPOSED): the run carries the fence it was fanned out under, so a
+            # pause after this tick fences it even if the request is resumed first.
+            run_fence=request.run_fence if request is not None else None,
             now=now,
         )
         run_enqueued = True

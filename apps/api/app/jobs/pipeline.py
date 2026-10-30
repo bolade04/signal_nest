@@ -48,6 +48,12 @@ from app.intelligence.analyze import analyze_signal
 from app.intelligence.enrichment import get_enricher
 from app.intelligence.models import AnalysisInput, OpportunityCandidate
 from app.intelligence.persistence import attach_opportunity, persist_intelligence
+from app.jobs.admission import (
+    REQUEST_GONE,
+    STATUS_CHANGED_DURING_RUN,
+    admit_operation,
+    current_admission,
+)
 from app.jobs.context import ExecutionContext, JobContextError, scope_matches
 from app.llm.base import LLMError
 from app.llm.metering import LLMBudgetExceededError, LLMMeter
@@ -88,14 +94,15 @@ DEDUPE_THRESHOLD = 0.92
 RUN_COMPLETED = "completed"
 # The request was paused when the job reached it: no fetch, no model call, status kept.
 SKIPPED_REQUEST_PAUSED = "skipped_request_paused"
-# The request was paused while this run was in flight: findings and stats are kept, the
-# pause wins over the run's terminal status write.
+# Legacy path only (``_run`` called without ``admitted_run``: the replay demo seed and
+# direct test calls): the request was paused while this run was in flight; findings and
+# stats are kept, the pause wins over the run's terminal status write. The durable worker
+# path stops such a run instead (``app.jobs.admission``: ``stopped_request_paused``).
 PAUSED_DURING_RUN = "paused_during_run"
-# The request left ``running`` for a status other than ``paused`` while the run was in
-# flight (only possible when the status is written without the row lock the run holds,
-# e.g. a pause followed by a resume inside the run's transaction); no producer in the
-# shipped routes today. The run is not settled; what it produced is kept.
-STATUS_CHANGED_DURING_RUN = "status_changed_during_run"
+# STATUS_CHANGED_DURING_RUN (imported from ``app.jobs.admission``): the request left
+# ``running`` for a status other than ``paused`` with this run's fence unchanged.
+# On the durable path the cooperative-pause outcomes ``stopped_request_paused`` and
+# ``request_gone`` are defined in ``app.jobs.admission`` (D-25, PROPOSED).
 
 
 def _signal_is_simulated(signal) -> bool:
@@ -238,22 +245,36 @@ def _run(
     if request.status == ScoutRequestStatus.PAUSED.value:
         return _skip_paused(request)
 
-    # Claim the run with a compare-and-set, the same idiom as the manual-run route:
-    # ``running`` is written only if the row is still not paused, so a pause committed
-    # between the load above and this write is not overwritten -- it wins, and the run
-    # is skipped exactly as if the pause had been seen on load.
-    claimed = db.execute(
-        update(ScoutRequest)
-        .where(
-            ScoutRequest.id == request.id,
-            ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+    # D-25 cooperative pause (PROPOSED): on the durable worker path the claim is committed
+    # in a transaction of its own, guarded by the job's run fence, so this run's long
+    # transaction never holds the request row's update lock across a fetch or a model
+    # call, and a pause (which advances the fence) is never blocked by it.
+    admission = current_admission()
+    if admission is not None:
+        skipped = admission.claim(now=datetime.now(UTC))
+        if skipped == REQUEST_GONE:
+            return {"scout_request_id": request.id, "outcome": REQUEST_GONE}
+        if skipped is not None:
+            return _skip_paused(request)
+        db.refresh(request, attribute_names=["status"])
+    else:
+        # Legacy path (no admission: the replay demo seed, direct test calls). Claim the
+        # run with a compare-and-set, the same idiom as the manual-run route: ``running``
+        # is written only if the row is still not paused, so a pause committed between
+        # the load above and this write is not overwritten -- it wins, and the run is
+        # skipped exactly as if the pause had been seen on load.
+        claimed = db.execute(
+            update(ScoutRequest)
+            .where(
+                ScoutRequest.id == request.id,
+                ScoutRequest.status != ScoutRequestStatus.PAUSED.value,
+            )
+            .values(status=ScoutRequestStatus.RUNNING.value)
+            .execution_options(synchronize_session=False)
         )
-        .values(status=ScoutRequestStatus.RUNNING.value)
-        .execution_options(synchronize_session=False)
-    )
-    db.refresh(request, attribute_names=["status"])
-    if claimed.rowcount != 1:
-        return _skip_paused(request)
+        db.refresh(request, attribute_names=["status"])
+        if claimed.rowcount != 1:
+            return _skip_paused(request)
 
     settings = get_settings()
     # P6-LLM-4: one meter per run - call cap, workspace budget, usage records and the
@@ -293,6 +314,10 @@ def _run(
         ),
         takedowns=active_takedowns(db),
     )
+    # D-25: the post-fetch boundary. A pause that committed while the sources were read
+    # stops the run here, before anything is written or refused (a no-op off the durable
+    # path).
+    admit_operation("post_fetch")
     # A takedown may have committed while the sources were read: re-check under each
     # source's lock before anything is written (P6-PRIV-4; see app.connectors.takedown).
     fixtures = without_taken_down(db, batch.signals)
@@ -324,6 +349,9 @@ def _run(
         )
         exc.fetch_limits = fetch["fetch_limits"]
         raise
+    if admission is not None:
+        # D-25: the run's writes begin here; a cooperative stop discards exactly them.
+        admission.begin_writes(db)
     normalized: list[NormalizedSignal] = []
     # Kept (non-noise, non-duplicate) signals of this run, for the dedupe step. The
     # index is the configured vector backend (P6-PLAT-1); there is no fallback.
@@ -486,8 +514,7 @@ def _run(
     opportunities = _build_opportunities(db, request, ctx, coverage, market, normalized, meter)
     meter.flush(db)
 
-    request.last_run_at = datetime.now(UTC)
-    request.stats = {
+    stats = {
         "scanned": scanned,
         "noise_filtered": noise_filtered,
         "signals_analyzed": len(normalized),
@@ -495,37 +522,43 @@ def _run(
         "coverage": batch.coverage.as_stats(),
         **fetch,
     }
-    db.flush()
-
-    # D-25: settle the request as ``completed`` only if it is still in the ``running``
-    # state this run set. The status is re-read from the row, so a pause that landed
-    # while the run was in flight wins: what the run produced (findings, stats,
-    # ``last_run_at``) is kept, the request stays paused. (On PostgreSQL the row lock
-    # taken by the claim above serialises an HTTP pause after this transaction's
-    # commit; the re-read then still sees ``running`` and the pause lands afterwards.
-    # ``paused_during_run`` is observed only when the pause is written without that
-    # lock.)
-    db.refresh(request, attribute_names=["status"])
-    if request.status == ScoutRequestStatus.RUNNING.value:
-        request.status = ScoutRequestStatus.COMPLETED.value
+    if admission is not None:
+        # D-25 commit boundary: ``completed``, the stats and ``last_run_at`` in one
+        # guarded statement, only while the request is still ``running`` with this run's
+        # fence. A pause that committed first makes it match nothing: ``RunStopped``, and
+        # the handler discards this run's writes with its savepoint.
+        admission.finish(db, stats=stats, now=datetime.now(UTC))
+        db.refresh(request, attribute_names=["status", "stats", "last_run_at"])
         outcome = RUN_COMPLETED
-    elif request.status == ScoutRequestStatus.PAUSED.value:
-        outcome = PAUSED_DURING_RUN
     else:
-        outcome = STATUS_CHANGED_DURING_RUN
-    db.flush()
+        request.last_run_at = datetime.now(UTC)
+        request.stats = stats
+        db.flush()
+        # Legacy path: settle the request as ``completed`` only if it is still in the
+        # ``running`` state this run set. The status is re-read from the row, so a pause
+        # that landed while the run was in flight wins: what the run produced (findings,
+        # stats, ``last_run_at``) is kept, the request stays paused.
+        db.refresh(request, attribute_names=["status"])
+        if request.status == ScoutRequestStatus.RUNNING.value:
+            request.status = ScoutRequestStatus.COMPLETED.value
+            outcome = RUN_COMPLETED
+        elif request.status == ScoutRequestStatus.PAUSED.value:
+            outcome = PAUSED_DURING_RUN
+        else:
+            outcome = STATUS_CHANGED_DURING_RUN
+        db.flush()
     logger.info(
         "scout.completed",
         extra={
             "extra_fields": {
                 "request": request.id,
                 "outcome": outcome,
-                **request.stats,
+                **stats,
                 **meter.summary(),
             }
         },
     )
-    return {"scout_request_id": request.id, "outcome": outcome, **request.stats}
+    return {"scout_request_id": request.id, "outcome": outcome, **stats}
 
 
 def _build_opportunities(
