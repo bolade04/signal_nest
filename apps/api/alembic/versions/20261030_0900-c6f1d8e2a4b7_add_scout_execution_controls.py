@@ -11,9 +11,11 @@ D-25 execution-control candidate (PROPOSED, contract D-25-EXECUTION-CONTROL-CONT
   attempt), committed before the operation is dispatched. ``resolved_at`` is set only by a
   known recorded end or by reconciliation. The partial unique index
   ``uq_scout_admission_unresolved`` allows at most ONE unresolved admission per Scout (K = 1).
-  Counts, keys, states and timestamps only - no content; ``resolution_note`` is a reason code
-  plus at most 200 characters (CHECK). Rows go with the tenant (CASCADE); pruning is a
-  follow-up.
+  Counts, keys, states and timestamps only - no content; ``resolution_note`` is a reason code,
+  optionally followed by a note of at most 200 characters: the bound is the column's
+  ``String(240)`` plus the reconcile command's 200-character note limit, not a CHECK
+  constraint (the CHECKs cover ``operation`` and ``end_kind``). Rows go with the tenant
+  (CASCADE); pruning is a follow-up.
 
 Additive: three nullable columns and one new table; no backfill (owners start NULL, the ledger
 empty). Rollback drops the table, its index and the columns.

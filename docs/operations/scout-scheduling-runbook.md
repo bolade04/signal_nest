@@ -242,27 +242,47 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     pause clears the owner.
   - **K = 1.** Every connector fetch attempt and every model attempt commits a ledger row
     (`scout_admissions`) before it is sent; at most ONE unresolved row per Scout, enforced by
-    the database. So at most one external operation of a Scout can be in progress, across
-    attempts, workers, recoveries and zombies. A row is resolved only by a known recorded
-    end or by reconciliation - never by lease expiry, recovery, Cancel, Pause -> Resume or
-    elapsed time. PostgreSQL only (on SQLite the ledger is not written).
+    the database. A row is resolved only by a known recorded end or by reconciliation -
+    never by lease expiry, recovery, Cancel, Pause -> Resume or elapsed time. So at most one
+    external operation of a Scout can be in progress or of unknown outcome, across attempts,
+    workers, recoveries and zombies, **under four assumptions** (contract §9.4): one
+    admission per client call, with no transport retries (a fetch attempt's redirect chain
+    of at most 4 requests is one operation); a known end only after a reply or a proven
+    non-transmission (classified as below); no external call outside the fetch and model
+    seams; and reconciliation is an operator's declaration about the external party, made
+    after the client-side deadline. PostgreSQL only (on SQLite the ledger is not written).
   - **Waiting.** An admission refused behind an outstanding row waits, holding no lock, up
     to that row's own deadline (fetch: 20 s + lease; model: 3 x 30 s + lease). It never
     waits for a row with an unknown end. **Wait expiry:** the job fails (`NON_RETRYABLE`,
     `admission_unresolved`), the request ends `failed`, the admission stays unresolved.
-  - **Unknown outcomes block the Scout (the availability cost).** A model call that times
-    out, or a feed read that times out after the request may have been sent, leaves an
-    unknown, unresolved admission: its retry is not admitted, the run fails, and the Scout
-    admits nothing - and its schedule fans out no run (`admission_unresolved` while nothing
-    is in flight; `coalesced`, as before, while a run is) - until an operator reconciles it. Other Scouts and tenants are unaffected. Treating a fetch's
-    unknown outcome as resolved (R3) is an operator choice, not adopted.
+  - **Unknown outcomes block the Scout (the availability cost).** An unknown end leaves an
+    unresolved admission: its retry is not admitted, the run fails (`admission_unresolved`),
+    and the Scout admits nothing - and its schedule fans out no run (`admission_unresolved`
+    while nothing is in flight; `coalesced`, as before, while a run is) - until an operator
+    reconciles it. Other Scouts and tenants are unaffected. **Unknown ends (contract
+    §9.2):** for a model call, every timeout, every transport error after dispatch, and
+    every reply with status >= 500 - **including a provider 5xx / 529 "overloaded"** - or any
+    other non-2xx that is not a 4xx (a gateway 5xx does not prove the origin stopped; the
+    call is charged its worst case); for a feed fetch, a timeout or a connection lost after
+    dispatch. **Known ends:** a model 2xx, 4xx or 429 reply, or `httpx.ConnectError` (before
+    dispatch); for a feed fetch, a received reply of any status, 5xx included (an unbilled
+    read-only GET under a 20 s deadline). Operator alternatives, none adopted: R3 (a fetch's
+    unknown outcome resolves), R5 (a provider-originated 5xx counts as known: it blocks less),
+    R6 (a fetch 5xx counts as unknown: the bound is strict).
   - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
-    the current owner, outstanding admissions and unknown-outcome admissions;
+    exactly three categories - the current owner's admissions, earlier owners' outstanding
+    admissions, admissions with an unknown end - each with its job's status and
+    `lease_expires_at`, its deadline and whether that deadline has passed;
     `python -m app.jobs.reconcile resolve --admission <id> --operator <name> --reason <code>
     [--note <= 200 chars]` resolves one after the operator has ascertained the operation is
-    over. Refused over a valid in-flight admission; idempotent; audited; accounting
-    unchanged. There is no signal yet (log or metric) for a blocked Scout: operators must
-    look. This operational burden is a stated limitation.
+    over. Refused over a valid in-flight admission, and refused for any admission with no
+    recorded end until its own deadline (`admitted_at` + the operation's client deadline +
+    the lease, by the database clock) has passed; idempotent; audited; accounting unchanged.
+    **Caveat:** the deadline guard covers SignalNest's client side only. After the deadline
+    the external party (the provider or the feed's server) may still be working;
+    reconciling is the operator's declaration that it is not, and the bound then rests on
+    that declaration. There is no signal yet (log or metric) for a blocked Scout: operators
+    must look. This operational burden is a stated limitation.
   - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
     the run at its next admission (including while it waits): the job ends `cancelled`, the
     request returns to its pre-claim status (`queued` for a manual run: the F-03 shape,
@@ -270,9 +290,14 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     the request `running` with no job (the same shape; Pause -> Resume clears it). Cancel
     never resolves an admission.
   - **Stale-stop end states.** Lease lapsed (not yet recovered): a retryable failure, so the
-    run is retried, never lost. Token rotated or owner superseded: the attempt stops and
-    writes nothing over the newer owner. Fence moved: `stopped_request_paused`. Request gone:
-    `request_gone`. Missing claim identity: refused (`claim_identity_incomplete`).
+    run is retried, never lost; the request stays `running` with the owner cleared until the
+    retry claims it. Token rotated or owner superseded: the attempt stops and writes nothing
+    over the newer owner - every request write of an attempt that can commit outside its
+    token-fenced job transaction carries its full identity, and the settlement of a run
+    refused at the in-process bound commits only inside that fenced failure transaction
+    (contract §9.1), so a stale attempt's refusal is discarded with its lost lease. Fence
+    moved: `stopped_request_paused`. Request gone: `request_gone`. Missing claim identity:
+    refused (`claim_identity_incomplete`).
   - **Missed scheduled occurrences (the earlier "at most one" is withdrawn).** An
     occurrence is missed for every tick while an admission stays unresolved, for each lost
     overlap race (`skipped_owner_active`), and after Pause -> Resume while a fenced job is
