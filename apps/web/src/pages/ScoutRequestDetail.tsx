@@ -16,6 +16,7 @@ import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
+import { isExecutionInProgress } from '@/lib/scout-execution';
 import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
 import { moveFocusTo } from '@/lib/focus';
 import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
@@ -25,6 +26,7 @@ import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { jobFilters } from './scouts/jobFilters';
 import { JobsPanel } from './scouts/JobsPanel';
 import { RunNowButton } from './scouts/RunNowButton';
+import { ScoutExecutionNotice } from './scouts/ScoutExecutionNotice';
 import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
 
@@ -63,8 +65,13 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
     queryFn: ({ signal }) => api.getScoutRequest(workspaceId, requestId, signal),
     // Re-read only while the run is in flight, on the bounded, backed-off schedule of
     // lib/status-polling.ts (review F-02), shared with the jobs panel below.
+    // D-25 recovery (PROPOSED): also while the API reports the run's execution `in_progress`
+    // under a settled status (an earlier operation still finishing), so the page reaches
+    // `needs_attention` or `stopped` without a reload.
     ...pollingOptions<ScoutRequestOut>(schedule, 'request', (r) =>
-      r && IN_FLIGHT.has(r.status) ? `${r.id}:${r.status}` : null,
+      r && (IN_FLIGHT.has(r.status) || isExecutionInProgress(r))
+        ? `${r.id}:${r.status}:${r.execution?.state ?? ''}`
+        : null,
     ),
   });
   const refreshStatus = () => {
@@ -148,6 +155,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
           ) : null}
         </div>
       </div>
+
+      <ScoutExecutionNotice execution={r.execution} status={r.status} />
 
       {statusInFlight ? (
         <StatusRefresh

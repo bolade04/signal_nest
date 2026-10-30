@@ -57,7 +57,12 @@ export function JobsPanel({
   const cancel = useMutation({
     mutationFn: (jobId: string) => api.cancelJob(workspaceId, jobId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'jobs'] });
+      // D-25 recovery (PROPOSED): a Cancel returns the Scout to a usable idle state, so the
+      // Scout itself is re-read too.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'jobs'] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.scoutRequest(workspaceId, scoutRequestId) }),
+      ]);
       toast({ title: 'Cancellation requested', intent: 'success' });
     },
     onError: (err) =>
