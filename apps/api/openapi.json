@@ -6616,6 +6616,80 @@
         "title": "ScoutCoverage",
         "type": "object"
       },
+      "ScoutExecutionNextAction": {
+        "description": "What can move the Scout on: wait, resume it, run it, or contact support (a customer\ncan never clear an unresolved operation).",
+        "enum": [
+          "wait",
+          "resume",
+          "run_now",
+          "contact_support"
+        ],
+        "title": "ScoutExecutionNextAction",
+        "type": "string"
+      },
+      "ScoutExecutionOut": {
+        "additionalProperties": false,
+        "description": "Derived, read-only execution state of one Scout (D-25 recovery contract \u00a74,\nPROPOSED): computed from committed rows and the database clock on each read; never\nstored. ``needs_attention`` means an earlier operation did not report an outcome and\nSignalNest must confirm it has ended before the Scout can run again. ``since`` is set\nonly where a stable timestamp exists.",
+        "properties": {
+          "next_action": {
+            "$ref": "#/components/schemas/ScoutExecutionNextAction"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ScoutExecutionReason"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScoutExecutionState"
+          }
+        },
+        "required": [
+          "state",
+          "reason",
+          "next_action"
+        ],
+        "title": "ScoutExecutionOut",
+        "type": "object"
+      },
+      "ScoutExecutionReason": {
+        "description": "Why the Scout is in its execution state (a closed, customer-safe code).",
+        "enum": [
+          "operation_outcome_unknown",
+          "operation_overdue",
+          "paused_by_user",
+          "run_active",
+          "operation_finishing",
+          "run_cancelled",
+          "run_failed",
+          "admission_unresolved",
+          "run_interrupted",
+          "none"
+        ],
+        "title": "ScoutExecutionReason",
+        "type": "string"
+      },
+      "ScoutExecutionState": {
+        "description": "A Scout's derived execution state (D-25 recovery contract \u00a74, PROPOSED).",
+        "enum": [
+          "idle",
+          "in_progress",
+          "paused",
+          "stopped",
+          "needs_attention"
+        ],
+        "title": "ScoutExecutionState",
+        "type": "string"
+      },
       "ScoutRequestCreate": {
         "properties": {
           "campaign_id": {
@@ -6731,6 +6805,17 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutExecutionOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Derived execution state (PROPOSED). Computed on single-Scout responses; null means it was not computed on this read (the list)."
           },
           "id": {
             "title": "Id",
@@ -15939,7 +16024,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/scout-requests/{request_id}/run": {
       "post": {
-        "description": "Enqueue a durable scout-execute job and return immediately (non-blocking).\n\nThe pipeline no longer runs inside the request: a worker claims and executes\nthe queued job. The caller polls the request/job status for progress. A run\nis accepted only from a settled state (draft / completed / failed), and the\n``draft/... -> queued`` flip is an atomic compare-and-set so two concurrent\nsubmissions cannot enqueue duplicate work for the same request.",
+        "description": "Enqueue a durable scout-execute job and return immediately (non-blocking).\n\nThe pipeline no longer runs inside the request: a worker claims and executes\nthe queued job. The caller polls the request/job status for progress. A run\nis accepted only from a settled state (draft / completed / failed), and the\n``draft/... -> queued`` flip is an atomic compare-and-set so two concurrent\nsubmissions cannot enqueue duplicate work for the same request.\n\nPROPOSED (D-25 recovery): a Scout in ``needs_attention`` (an earlier operation did not\nreport an outcome) is refused with 422 ``scout_needs_attention`` and no job is created.",
         "operationId": "run_scout_request_endpoint_api_v1_workspaces__workspace_id__scout_requests__request_id__run_post",
         "parameters": [
           {

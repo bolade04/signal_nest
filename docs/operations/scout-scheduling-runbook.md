@@ -148,9 +148,226 @@ Source: `apps/api/app/scouting_requests/routes.py`.
 - **Structured log events** (via `log_event`, see [observability.md](./observability.md)):
   `scout_schedule_created`, `scout_schedule_paused`, `scout_schedule_resumed`,
   `scout_schedule_deleted`, and per-fire `scout_schedule_tick`
-  (`outcome`, `run_enqueued`, `coalesced`). A healthy live schedule emits one
-  `scout_schedule_tick` per interval with `run_enqueued=true` (or
-  `coalesced=true` when a run was already in flight).
+  (`outcome`, `run_enqueued`, `coalesced`, `request_paused`). A healthy live schedule
+  emits one `scout_schedule_tick` per interval with `run_enqueued=true` (or
+  `coalesced=true` when a run was already in flight, or `outcome=request_paused`
+  while the customer has paused the scout request itself: no run is fanned out, the
+  schedule stays enabled and the chain reseeds, so resuming the request restores
+  scheduled scouting at the next boundary). A paused request's already-queued run is
+  skipped by the worker (`result_summary.outcome=skipped_request_paused`) rather
+  than executed: no source fetch, no model call, no new LLM budget reservation and
+  no usage row. (The skip's attempt-end release may still settle an earlier attempt
+  of the same job whose reservation was left in flight, at its worst case; that is
+  the ledger's normal recovery, not new spend.)
+
+  **A pause during a run: cooperative stop (PROPOSED pending D-25; not
+  operator-accepted).** Candidate of `D-25-COOPERATIVE-PAUSE-CONTRACT-01` §6, measured on
+  PostgreSQL 16 in lane evidence `P6-W13-PAUSECOOP-01`:
+  - **Pause recorded is not work stopped.** The pause response (`200`, the request
+    `paused`) means the pause is recorded: the route commits `paused` and a new run
+    fence before it answers. It does not mean the active work has stopped. Work has
+    stopped when the run's job reaches a terminal state: `succeeded` with
+    `result_summary.outcome` `stopped_request_paused` (or `skipped_request_paused` for
+    a run that had not been claimed yet), or any other terminal state.
+  - **What the pause waits for.** Only short database transactions that make no
+    external call: an admission, a claim, or a run's terminal write. The run's claim is
+    committed in a transaction of its own, so the pause no longer waits for the rest of
+    a run (the previous option-(1) behaviour). No latency bound is promised; the lane's
+    measurements are observations.
+  - **Nothing is admitted after the pause commits.** Every live fetch attempt (first
+    try and each retry), every model attempt (each retry included), a post-fetch
+    boundary and the run's terminal write pass an admission that reads the request row
+    `FOR SHARE` and requires `running` with the run's fence. It is not "nothing is sent"
+    and not "stops immediately": an operation admitted before the pause commits may
+    still be transmitted and completed after it, and its charge stands (reservation,
+    settlement and usage row as the #269 ledger defines them; nothing is undone).
+  - **The bound.** Per run, after the cut-off at most one admitted operation can still
+    complete: one model attempt (charge at most its reserved worst case), or one fetch
+    attempt (at most 4 HTTP requests in one redirect chain, at most 20 s total
+    deadline). This is per run, not per Scout: several attempts of one Scout can be
+    active at once (a manual run racing a schedule tick; Pause -> Resume -> Run now
+    while the old run is still in flight; a lease that expired while the old worker is
+    alive and a re-claim by another worker), and each can have one admitted operation
+    in flight when the pause commits. Retries and lease recovery do not add operations
+    to one attempt; a re-claim adds an attempt (at most the job's attempts in all).
+  - **No escape through Pause -> Resume.** Every pause advances the request's run fence;
+    every execute job carries the fence it was queued under. A job queued, claimed,
+    retried or recovered before a pause skips or stops even after a resume. Resume is
+    unchanged (`draft`).
+  - **The stopped run's own uncommitted findings are discarded (PROPOSED, §6.2 Q-1):**
+    a run's findings become visible only if its terminal write commits before the pause.
+    Everything committed before (earlier runs' findings, configuration, run history,
+    job records) stays.
+  - **Status after a failed attempt (PROPOSED, §6.2 Q-2):** the claim is committed on
+    its own, so a failed attempt puts back the pre-claim status for its retry (never
+    over a newer pause, resume, claim or terminal result). Visible change: a worker
+    crash mid-run now leaves `running` committed until lease recovery retries or
+    dead-letters the job; before, the rollback left the pre-claim status.
+  - **`running` is committed for the whole run (PROPOSED).** Because the claim commits
+    on its own, a `GET` of the request during a run shows `running`, and an edit
+    (`PUT`) is refused with `422` ("Cannot edit a request while it is running") for the
+    whole run. Before, on PostgreSQL the pre-claim status (for example `queued`) stayed
+    visible until the run's transaction committed.
+  - **After a crash or a lost lease, a customer cancel can leave `running` (PROPOSED;
+    existing F-03 class, not resolved here).** If the worker crashes or loses its lease
+    and the customer then cancels the re-queued job, the request stays `running` (before:
+    `queued`, the F-03 shape) until Pause -> Resume; Run now answers `422` meanwhile.
+    Cancel semantics are unchanged and the stuck state is the existing F-03 defect class.
+    If the old attempt is still alive, it keeps passing its admissions (the request is
+    still `running` with its fence) and can run its remaining operations to completion;
+    every call it makes is charged, and its writes are rolled back when it loses its lease
+    at completion. A Pause stops it at its next admission. That behaviour predates this
+    change (a lease check in the admission, option O1, is proposed, not implemented).
+  - **A scheduled occurrence can be lost after Pause -> Resume (PROPOSED, §6.2 Q-6):**
+    if the next tick fires while the fenced job of the previous occurrence is still
+    pending, the tick coalesces against it and that occurrence is skipped, not caught
+    up. The chain itself survives; the following occurrence runs normally.
+  - **Refusal and failure after a pause** leave the request `paused`; a refusal's stats
+    are no longer stored on a request paused since the run claimed it.
+  - **SQLite (development and tests only):** the logic is the same, but from a run's
+    first write until its commit the run holds the database write lock, so a pause
+    then waits up to `busy_timeout` (5 s) and may fail. The prompt pause is a
+    PostgreSQL property.
+
+  **Execution controls O1/O2 (PROPOSED pending D-25; not operator-accepted).** Candidate of
+  `D-25-EXECUTION-CONTROL-CONTRACT-01` §3/§8:
+  - **O1, ownership at every admission.** Each admission, terminal write and status
+    restore re-checks the attempt's identity captured at its claim (job, attempt, worker,
+    lease token, fence) against fresh rows, with the lease still running by database time.
+    A stale attempt (lease lost or lapsed, Cancel, owner superseded, fence moved) admits
+    nothing further; the operation it already admitted may finish and is charged.
+  - **O2, one owner per Scout.** A claim against a valid owner is refused
+    (`skipped_owner_active`): a manual run and a scheduled run of one Scout no longer run
+    together. A new attempt takes over only from an owner whose authority has lapsed. The
+    pause clears the owner.
+  - **K = 1.** Every connector fetch attempt and every model attempt commits a ledger row
+    (`scout_admissions`) before it is sent; at most ONE unresolved row per Scout, enforced by
+    the database. A row is resolved only by a known recorded end or by reconciliation -
+    never by lease expiry, recovery, Cancel, Pause -> Resume or elapsed time. So at most one
+    external operation of a Scout can be in progress or of unknown outcome, across attempts,
+    workers, recoveries and zombies, **under four assumptions** (contract §9.4): one
+    admission per client call, with no transport retries (a fetch attempt's redirect chain
+    of at most 4 requests is one operation); a known end only after a reply or a proven
+    non-transmission (classified as below); no external call outside the fetch and model
+    seams; and reconciliation is an operator's declaration about the external party, made
+    after the client-side deadline. PostgreSQL only (on SQLite the ledger is not written).
+  - **Waiting.** An admission refused behind an outstanding row waits, holding no lock, up
+    to that row's own deadline (fetch: 20 s + lease; model: 3 x 30 s + lease). It never
+    waits for a row with an unknown end. **Wait expiry:** the job fails (`NON_RETRYABLE`,
+    `admission_unresolved`), the request ends `failed`, the admission stays unresolved.
+  - **Persisted deadlines (D-25 recovery, PROPOSED).** Each admission stores its deadline
+    (`deadline_at`) and the basis it was computed from (`deadline_rule = client_plus_lease`,
+    the admitting worker's client deadline for the operation and its lease, in seconds),
+    written by the admitting INSERT from one database-clock reading shared with
+    `admitted_at`. The waiting rule, reconciliation's gate, the listings and the Scout's
+    derived state all read that stored value and compare it strictly with the database clock
+    (eligible once `clock_timestamp() > deadline_at`): a worker, CLI or later settings change
+    can neither shorten nor lengthen an existing admission's gate. The deadline is a
+    procedural gate, not evidence that the external party stopped. **Legacy rows** (created
+    before the deadline was stored) were not back-filled: `deadline_rule = unrecorded`, no
+    deadline, listed as "not recorded". One with a recorded unknown end is reconcilable as
+    before; one with no recorded end is never made eligible by time (see Reconciliation); a
+    run blocked by one waits up to its own computed bound (the end of a wait resolves
+    nothing).
+  - **Unknown outcomes block the Scout (the availability cost).** An unknown end leaves an
+    unresolved admission: its retry is not admitted, the run fails (`admission_unresolved`),
+    and the Scout admits nothing - and its schedule fans out no run (`admission_unresolved`
+    while nothing is in flight; `coalesced`, as before, while a run is) - until an operator
+    reconciles it. Other Scouts and tenants are unaffected. **Unknown ends (contract
+    §9.2):** for a model call, every timeout, every transport error after dispatch, and
+    every reply with status >= 500 - **including a provider 5xx / 529 "overloaded"** - or any
+    other non-2xx that is not a 4xx (a gateway 5xx does not prove the origin stopped; the
+    call is charged its worst case); for a feed fetch, a timeout or a connection lost after
+    dispatch. **Known ends:** a model 2xx, 4xx or 429 reply, or `httpx.ConnectError` (before
+    dispatch); for a feed fetch, a received reply of any status, 5xx included (an unbilled
+    read-only GET under a 20 s deadline). Operator alternatives, none adopted: R3 (a fetch's
+    unknown outcome resolves), R5 (a provider-originated 5xx counts as known: it blocks less),
+    R6 (a fetch 5xx counts as unknown: the bound is strict).
+  - **Recovery state (D-25 recovery, PROPOSED).** Every response that returns the Scout
+    itself (`ScoutRequestOut`: create, read, update, pause and resume) carries a derived,
+    read-only `execution` field `{state, reason, next_action, since}`; the list returns
+    `null` (not computed there), and Run now's and the schedule routes' responses do not
+    carry it. It is computed on each read from committed rows and the database clock;
+    nothing is stored. `needs_attention` when an unresolved admission is
+    eligible for reconciliation (its attempt holds no valid authority, and its end is unknown,
+    or it has no end and its deadline has passed, or it is a legacy row with no end), whatever
+    the request status; else `paused`; else `in_progress` while a live job not fenced out by a
+    pause exists or an admission is still finishing (a healthy in-flight one is never
+    `needs_attention`); else `stopped` (`queued`/`running` with no live job is
+    `run_interrupted`, contact support: Run now refuses those statuses; or a failed or
+    cancelled last run); else `idle`. Reasons and next actions are closed codes; no id,
+    worker, token, attempt, payload, URL or setting is exposed; visible to every role that
+    can read the Scout, scoped to its tenancy. The Scout page shows a notice for
+    `needs_attention`, `paused` and `stopped`, and keeps polling while `in_progress`.
+    **Run now on a `needs_attention` Scout is refused** (HTTP 422, `scout_needs_attention`)
+    and creates no job; Resume returns the Scout to `draft` but the state stays
+    `needs_attention`. Customers cannot clear an unresolved operation: no customer route
+    resolves, reconciles or hides one. **Operator view:**
+    `python -m app.jobs.reconcile blocked [--organization <id>] [--workspace <id>]` lists every
+    Scout in `needs_attention` with its tenancy, the operation, `admitted_at`, the stored
+    deadline (or "not recorded") and its basis, whether it has passed, the end kind (or "no
+    recorded end"), the job's status and the exact `resolve` command to run.
+  - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
+    exactly three categories - the current owner's admissions, earlier owners' outstanding
+    admissions, admissions with an unknown end - each with its job's status and
+    `lease_expires_at`, its deadline and whether that deadline has passed;
+    `python -m app.jobs.reconcile resolve --admission <id> --operator <name> --reason <code>
+    [--note <= 200 chars]` resolves one after the operator has ascertained the operation is
+    over. Refused while the admitting attempt still holds valid authority (**whatever the end
+    kind**, an unknown end included: D-25 recovery A2, PROPOSED), and refused for any
+    admission with no recorded end until its own **stored** deadline has passed by the
+    database clock; a legacy admission with no recorded end and no stored deadline requires
+    `--acknowledge-unrecorded-deadline` (recorded in the audit row; refused where it does not
+    apply). Idempotent; audited; accounting unchanged.
+    **Caveat:** the deadline guard covers SignalNest's client side only. After the deadline
+    the external party (the provider or the feed's server) may still be working;
+    reconciling is the operator's declaration that it is not, and the bound then rests on
+    that declaration. A blocked Scout is now visible (the `blocked` listing and the customer
+    indication above), but there is still no alert or metric: operators must look. This
+    operational burden is a stated limitation.
+  - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
+    the run at its next admission (including while it waits): the job ends `cancelled`.
+    **Cancel recovery (D-25 recovery, PROPOSED):** whenever Cancel makes an execute job
+    terminal (before its claim, after the job claim but before the run's, during the run,
+    while it waits, after a lease recovery), the request returns, in the same transaction as
+    the job's terminal write, to the status it had before the run was requested, recorded
+    once on the job (Run now records it when it creates the job; a scheduled job at its first
+    claim), or `draft` for a job with none recorded (legacy, or a scheduled job never
+    claimed): never `queued`/`running`, never a result the run did not produce. A
+    compare-and-set preserves a newer pause, resume, claim, owner, fence or completed result,
+    and another live job of the Scout not fenced out by a pause; it may clear an owner that is
+    an attempt of the cancelled job. The Cancel route's job transition is itself a
+    compare-and-set on the status it read, so a job that completed meanwhile keeps its result.
+    Cancel never resolves an admission and writes no accounting row: a Scout cancelled while
+    an operation is still unresolved is idle but `in_progress`/`needs_attention`, and its
+    next admission is still refused (K = 1). Requests left `queued`/`running` by an earlier
+    candidate's Cancel are not repaired; they show `stopped` / `run_interrupted`.
+  - **Lock order of the terminal transactions (defect fixes, PROPOSED).** Every transaction
+    that writes both a scout job row and its request row now locks the job row first: the
+    worker's fenced failure / Cancel transaction (before its writers update the request), the
+    run's success commit (before `finish` updates the request; the worker's `complete` then
+    updates the job), the run's stop path, lease recovery's dead-letter, and the Cancel route.
+    Before these fixes the fenced transaction and the success commit took request -> job and
+    could deadlock (`40P01`) against a stale attempt's admission check (job -> request); when
+    the success commit lost, a completed run was rolled back and retried. No end state
+    changed. Other orders, which cannot form that cycle: the admission takes job -> request
+    -> ledger -> period -> reservation, while a settlement takes period -> reservation ->
+    its own admission row (other rows; no cycle); Run now updates the request and then
+    inserts a new job row.
+  - **Stale-stop end states.** Lease lapsed (not yet recovered): a retryable failure, so the
+    run is retried, never lost; the request stays `running` with the owner cleared until the
+    retry claims it. Token rotated or owner superseded: the attempt stops and writes nothing
+    over the newer owner - every request write of an attempt that can commit outside its
+    token-fenced job transaction carries its full identity, and the settlement of a run
+    refused at the in-process bound commits only inside that fenced failure transaction
+    (contract §9.1), so a stale attempt's refusal is discarded with its lost lease. Fence
+    moved: `stopped_request_paused`. Request gone: `request_gone`. Missing claim identity:
+    refused (`claim_identity_incomplete`).
+  - **Missed scheduled occurrences (the earlier "at most one" is withdrawn).** An
+    occurrence is missed for every tick while an admission stays unresolved, for each lost
+    overlap race (`skipped_owner_active`), and after Pause -> Resume while a fenced job is
+    pending; as before, also while a run is in flight (`coalesced`) or the request is paused
+    (`request_paused`). No catch-up.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete
@@ -177,7 +394,7 @@ Source: `apps/api/app/scouting_requests/routes.py`.
 | Schedule in `stalled` | A tick failed and its re-seed could not run (scheduling unavailable for the workspace at the time, or the hook itself failed — see `worker.terminal_failure_hook_failed`) | Fix the cause, then resume/activate the schedule; it seeds one fresh tick. |
 | Ticks pile up in `SCHEDULED`, never fire | No healthy worker, or flag off on the worker | Check worker fleet; confirm the worker env carries the flag. |
 | A run failed | Pipeline error for that request | The failure is **market-isolated** — other schedules are unaffected. Inspect the failed `scout_request.execute` job; the chain continues. |
-| Duplicate runs feared | — | Cannot occur: idempotency keys collapse duplicate ticks/runs to one row. |
+| Duplicate runs feared | — | Ticks and their fanned-out runs cannot duplicate: idempotency keys collapse them to one row. Two attempts of one Scout can still run at once (a manual run racing a tick, or a re-claim after a lease expired while the old worker was alive); a pause stops each at its next admission (PROPOSED pending D-25, see above). |
 
 ## Retained design observations
 

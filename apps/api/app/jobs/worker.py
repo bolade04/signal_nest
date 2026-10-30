@@ -278,6 +278,9 @@ class JobRunner:
         started = time.perf_counter()
         # Writes the handler needs kept even if this attempt is rolled back.
         after_rollback: list[Callable[[Session], None]] = []
+        # Writes that commit only together with this attempt's token-fenced failure
+        # transition (contract §9.1, PROPOSED): dropped if the lease was lost.
+        on_fenced_failure: list[Callable[[Session], None]] = []
         try:
             handler = resolve_handler(job.job_type)
             # Capture one execution-boundary timestamp from the worker's clock and
@@ -292,9 +295,11 @@ class JobRunner:
                 job_id=job_id,
                 attempt=job.attempt_count,
                 worker_id=worker_id,
+                lease_token=lease_token,
                 is_cancelled=self._cancel_checker(job_id),
                 now=now,
                 after_rollback=after_rollback,
+                on_fenced_failure=on_fenced_failure,
             )
             result = handler(ctx)
             # A child span over just the terminal transition (not the handler, which
@@ -335,6 +340,10 @@ class JobRunner:
             recorded = self._write_after_rollback(db, after_rollback, job_type=job_type)
             if exc.error.code == JobErrorCode.CANCELLED:
                 try:
+                    self._write_fenced(
+                        db, on_fenced_failure, job_type=job_type,
+                        job_id=job_id, worker_id=worker_id, lease_token=lease_token,
+                    )
                     self._store.finish_cancel(
                         db, job, worker_id=worker_id,
                         lease_token=lease_token, now=self._clock(),
@@ -351,7 +360,7 @@ class JobRunner:
             return self._fail(
                 db, job, exc.error if recorded else _UNRECORDED_WRITES,
                 worker_id=worker_id, lease_token=lease_token,
-                started=started, job_type=job_type,
+                started=started, job_type=job_type, fenced=on_fenced_failure,
             )
         except Exception as exc:  # unclassified escape -> conservative retryable
             db.rollback()
@@ -363,7 +372,7 @@ class JobRunner:
                 JobError(JobErrorCode.TRANSIENT, type(exc).__name__)
                 if recorded else _UNRECORDED_WRITES,
                 worker_id=worker_id, lease_token=lease_token,
-                started=started, job_type=job_type,
+                started=started, job_type=job_type, fenced=on_fenced_failure,
             )
         finally:
             stop_hb.set()
@@ -403,6 +412,63 @@ class JobRunner:
                 error_class=type(exc).__name__,
             )
             return False
+
+    def _write_fenced(
+        self,
+        db: Session,
+        writers: list[Callable[[Session], None]],
+        *,
+        job_type: str,
+        job_id: str | None = None,
+        worker_id: str | None = None,
+        lease_token: str | None = None,
+    ) -> None:
+        """Run ``writers`` in the transaction the caller is about to fence and commit.
+
+        Called right before the attempt's token-fenced job transition (``fail`` /
+        ``finish_cancel``), in the same transaction, so they commit if and only if that
+        transition matches this attempt's lease (contract §9.1, PROPOSED); on a lost lease
+        the caller rolls both back. They run before the transition so that their own
+        predicates still see the job row as this attempt holds it. A writer that raises is
+        logged by class name and its writes are discarded; the job's transition still
+        proceeds (a final failure's terminal hook then settles the request).
+
+        Lock order (D-25 recovery contract §9.1, PROPOSED; a defect fix): the writers update
+        the request row, and the transition then updates the job row. Taken in that order
+        (request -> job) the transaction deadlocks against a stale attempt's admission check,
+        which locks job -> request (lane W15 probe L1: ``40P01``). So the job row is locked
+        first (``FOR NO KEY UPDATE``, fenced by this attempt's worker and lease token): job ->
+        request, the order every transaction that writes both rows now takes (the run's
+        success commit does the same in ``RunAdmission.lock_job``, §10.1). Only the order of
+        lock acquisition changes; no write and no end state does.
+        """
+        if not writers:
+            return
+        try:
+            if job_id is not None:
+                db.execute(
+                    select(Job.id)
+                    .where(
+                        Job.id == job_id,
+                        Job.worker_id == worker_id,
+                        Job.lease_token == lease_token,
+                    )
+                    .with_for_update(key_share=True)
+                ).all()
+            for write in writers:
+                write(db)
+            db.flush()
+        except Exception as exc:  # noqa: BLE001 - never mask the attempt's own failure
+            db.rollback()
+            log_event(
+                logger,
+                "worker.fenced_write_failed",
+                level=WARNING,
+                component="jobs",
+                outcome="degraded",
+                job_type=job_type,
+                error_class=type(exc).__name__,
+            )
 
     #: Terminal statuses that mean "this job will never run again and it failed".
     #: ``retry_wait`` is deliberately absent: the attempt failed, the job did not.
@@ -457,7 +523,7 @@ class JobRunner:
 
     def _fail(
         self, db: Session, job: Job, error: JobError, *, worker_id: str, lease_token: str,
-        started: float, job_type: str,
+        started: float, job_type: str, fenced: list[Callable[[Session], None]] | None = None,
     ) -> str:
         try:
             # A child span over the failure transition. The concrete terminal outcome
@@ -469,6 +535,12 @@ class JobRunner:
                 kind="internal",
                 attributes={"component": "jobs", "job.type": job_type},
             ) as span:
+                # The attempt's fenced request writes (contract §9.1) commit with this
+                # transition or not at all.
+                self._write_fenced(
+                    db, fenced or [], job_type=job_type,
+                    job_id=job.id, worker_id=worker_id, lease_token=lease_token,
+                )
                 self._store.fail(
                     db,
                     job,

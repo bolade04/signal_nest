@@ -101,7 +101,10 @@ SESSIONS = "87198ab57b59"
 EXPLANATION = "6ad2ff77f691"
 USAGE = "47028898175f"
 TAKEDOWNS = "da25533622b2"
-CODE_HEAD = "8005724d811a"
+BUDGET = "8005724d811a"
+FENCE = "b5e0c7a3d2f1"
+EXECCTL = "c6f1d8e2a4b7"
+CODE_HEAD = "d4a8f2c6b9e1"
 
 
 # --------------------------------------------------------------------------- #
@@ -253,7 +256,10 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == TAKEDOWNS
+    assert script.get_revision(CODE_HEAD).down_revision == EXECCTL
+    assert script.get_revision(EXECCTL).down_revision == FENCE
+    assert script.get_revision(FENCE).down_revision == BUDGET
+    assert script.get_revision(BUDGET).down_revision == TAKEDOWNS
     assert script.get_revision(TAKEDOWNS).down_revision == USAGE
     assert script.get_revision(USAGE).down_revision == EXPLANATION
     assert script.get_revision(EXPLANATION).down_revision == SESSIONS

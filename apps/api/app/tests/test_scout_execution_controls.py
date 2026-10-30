@@ -1,0 +1,482 @@
+"""D-25 execution controls (PROPOSED) on SQLite: units and SQLite-safe paths.
+
+The ledger and K = 1 are PostgreSQL-only at run time (``test_scout_execution_controls_postgres``);
+here: missing identity fails closed, the fetch-end classification, the K = 1 index itself,
+reconciliation's refusals and idempotency (and the command in a fresh process), the tick
+outcome, the owner takeover rule, each authority component on its own.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import uuid
+from datetime import timedelta
+from pathlib import Path
+
+import httpx
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+
+from app.audit.models import AuditLog
+from app.connectors.base import FailureKind
+from app.connectors.live import fetch_end_known
+from app.connectors.retry import ConnectorFetchError
+from app.db import seed as seed_mod
+from app.jobs.admission import SKIPPED_OWNER_ACTIVE, RunAdmission, RunStopped
+from app.jobs.context import ExecutionContext
+from app.jobs.models import Job
+from app.jobs.reconcile import (
+    CURRENT_OWNER,
+    EARLIER_OWNERS_OUTSTANDING,
+    UNKNOWN_END,
+    ReconciliationRefused,
+    list_unresolved,
+    resolve,
+)
+from app.jobs.service import enqueue_job
+from app.jobs.status import JobStatus, JobType
+from app.scouting_requests import schedules as sched
+from app.scouting_requests.models import ScoutAdmission, ScoutRequest
+from app.tests import test_scout_pause_promise as promise
+from app.tests.test_scout_pause_promise import _NOW, _scheduled_request, _tick
+
+factory = promise.factory
+s = promise.s
+flag_on = promise.flag_on
+
+
+def _error(kind: FailureKind, cause: BaseException | None = None) -> ConnectorFetchError:
+    try:
+        if cause is not None:
+            raise cause
+        raise ConnectorFetchError(kind, "x")
+    except ConnectorFetchError as exc:
+        return exc
+    except BaseException as exc:  # noqa: BLE001 - build the chain egress builds
+        try:
+            raise ConnectorFetchError(kind, "x") from exc
+        except ConnectorFetchError as chained:
+            return chained
+
+
+@pytest.mark.parametrize(
+    ("kind", "cause", "known"),
+    [
+        (FailureKind.EGRESS_BLOCKED, None, True),
+        (FailureKind.HTTP_CLIENT_ERROR, None, True),
+        (FailureKind.UPSTREAM_ERROR, None, True),
+        (FailureKind.RATE_LIMITED, None, True),
+        (FailureKind.UNSAFE_CONTENT, None, True),
+        (FailureKind.NETWORK, httpx.ConnectError("refused"), True),
+        (FailureKind.NETWORK, OSError("dns"), True),
+        (FailureKind.NETWORK, None, True),
+        (FailureKind.NETWORK, httpx.ReadError("reset"), False),
+        (FailureKind.NETWORK, httpx.RemoteProtocolError("bad"), False),
+        (FailureKind.TIMEOUT, httpx.ReadTimeout("slow"), False),
+        (FailureKind.TIMEOUT, httpx.ConnectTimeout("slow"), False),
+        (FailureKind.TIMEOUT, None, False),
+    ],
+)
+def test_the_fetch_end_is_classified_from_the_egress_exception_chain(kind, cause, known):
+    assert fetch_end_known(_error(kind, cause)) is known
+
+
+def _admission(req, **overrides) -> RunAdmission:
+    values = dict(
+        scout_request_id=req.id,
+        organization_id=req.organization_id,
+        workspace_id=req.workspace_id,
+        fence=req.run_fence,
+        session_factory=None,
+        job_id="job-x",
+        worker_id="w-1",
+        attempt=1,
+        lease_token="tok",
+        process_now=_NOW,
+    )
+    values.update(overrides)
+    return RunAdmission(**values)
+
+
+@pytest.mark.parametrize("missing", ["lease_token", "worker_id", "job_id", "attempt"])
+def test_a_missing_claim_identity_fails_closed(s, missing):
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "dallas"))
+    admission = _admission(req, **{missing: 0 if missing == "attempt" else None})
+    with pytest.raises(RunStopped) as stopped:
+        admission.check(s, "model")
+    assert stopped.value.cause == "identity_incomplete"
+    with pytest.raises(RunStopped):
+        admission.claim(now=_NOW)
+
+
+def _row(req, **values) -> ScoutAdmission:
+    base = dict(
+        id=uuid.uuid4().hex,
+        scout_request_id=req.id,
+        organization_id=req.organization_id,
+        workspace_id=req.workspace_id,
+        job_id=None,
+        attempt=1,
+        worker_id="w-1",
+        operation="model",
+        admitted_at=_NOW,
+    )
+    base.update(values)
+    if "deadline_rule" not in values:
+        # D-25 recovery (R-D, PROPOSED): a row the admission path writes carries its persisted
+        # deadline and basis (here the defaults: model 3 x 30 s + a 30 s lease). A row without
+        # one is a legacy row (``unrecorded``), which only the legacy tests build.
+        base.update(
+            deadline_rule="client_plus_lease",
+            deadline_client_seconds=90.0,
+            deadline_lease_seconds=30.0,
+            deadline_at=base["admitted_at"] + timedelta(seconds=120),
+        )
+    return ScoutAdmission(**base)
+
+
+def test_k1_is_enforced_by_the_partial_unique_index(s):
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "dallas"))
+    s.add(_row(req, resolved_at=_NOW, end_kind="known", ended_at=_NOW))
+    s.add(_row(req))
+    s.flush()  # one resolved plus one unresolved: allowed
+    s.add(_row(req))
+    with pytest.raises(IntegrityError):
+        s.flush()
+
+
+def test_the_ledger_rejects_an_unknown_operation_or_end_kind(s):
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "dallas"))
+    s.add(_row(req, operation="chunk"))
+    with pytest.raises(IntegrityError):
+        s.flush()
+
+
+def _job(s, req, *, worker="w-1", attempt=1, status=JobStatus.RUNNING.value, lease=None) -> Job:
+    job = enqueue_job(
+        s,
+        job_type=JobType.SCOUT_REQUEST_EXECUTE,
+        context=ExecutionContext.for_scout_request(
+            organization_id=req.organization_id, workspace_id=req.workspace_id
+        ),
+        payload={"scout_request_id": req.id, "run_fence": req.run_fence},
+        scout_request_id=req.id,
+        idempotency_key=uuid.uuid4().hex,
+        now=_NOW,
+    )
+    job.status, job.worker_id, job.attempt_count = status, worker, attempt
+    job.lease_token = "tok"
+    job.lease_expires_at = lease
+    s.flush()
+    return job
+
+
+def test_reconciliation_refuses_over_a_valid_in_flight_admission(s):
+    from datetime import UTC, datetime
+
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "lagos"))
+    job = _job(s, req, lease=datetime.now(UTC) + timedelta(minutes=5))
+    req.owner_job_id, req.owner_attempt, req.owner_lease_token = job.id, 1, "tok"
+    row = _row(req, job_id=job.id)
+    s.add(row)
+    s.flush()
+    listing = list_unresolved(s, req.id)
+    assert [a["attempt_holds_authority"] for a in listing[CURRENT_OWNER]] == [True]
+    with pytest.raises(ReconciliationRefused):
+        resolve(s, admission_id=row.id, operator="ops", reason="worker_crashed")
+
+
+def test_reconciliation_resolves_an_orphaned_or_unknown_admission_idempotently(s):
+    req = s.get(ScoutRequest, seed_mod.sid("scout", "london"))
+    job = _job(s, req, status=JobStatus.DEAD_LETTERED.value)
+    orphan = _row(req, job_id=job.id)
+    s.add(orphan)
+    s.flush()
+    with pytest.raises(ReconciliationRefused):
+        resolve(s, admission_id=orphan.id, operator="ops", reason="not-a-code")
+    with pytest.raises(ReconciliationRefused):
+        resolve(s, admission_id=orphan.id, operator="ops", reason="worker_crashed", note="x" * 201)
+    assert (
+        resolve(
+            s, admission_id=orphan.id, operator="ops", reason="worker_crashed", note="pod restarted"
+        )
+        is True
+    )
+    assert resolve(s, admission_id=orphan.id, operator="ops", reason="worker_crashed") is False
+    s.refresh(orphan)
+    assert orphan.resolved_by == "ops" and orphan.resolution_note == "worker_crashed: pod restarted"
+
+
+def test_a_tick_fans_out_no_run_while_an_admission_is_unresolved(s):
+    req, schedule, first = _scheduled_request(s, "dallas")
+    s.add(_row(req, end_kind="unknown", ended_at=_NOW))
+    s.flush()
+    out = _tick(s, schedule, first)
+    assert out["outcome"] == sched.ADMISSION_UNRESOLVED_OUTCOME
+    assert out["run_enqueued"] is False and out["chained"] is True
+    assert (
+        s.scalar(
+            select(Job.id).where(
+                Job.scout_request_id == req.id, Job.job_type == JobType.SCOUT_REQUEST_EXECUTE.value
+            )
+        )
+        is None
+    )
+
+
+def test_a_tick_during_an_in_flight_run_reports_the_overlap_not_a_blocked_scout(s):
+    """An in-flight run's own admission is unresolved until its call ends: the tick reports the
+    overlap (``coalesced``); ``admission_unresolved`` is for a Scout with nothing in flight."""
+    req, schedule, first = _scheduled_request(s, "lagos")
+    _job(s, req, lease=_NOW + timedelta(minutes=5))
+    s.add(_row(req))
+    s.flush()
+    out = _tick(s, schedule, first)
+    assert out["outcome"] == "coalesced"
+    assert out["run_enqueued"] is False and out["chained"] is True
+
+
+def test_a_claim_is_refused_over_a_valid_owner_and_takes_over_a_lapsed_one(factory):
+    """O2 on the committed claim (separate connections, file-backed SQLite)."""
+    with factory() as setup:
+        req = setup.get(ScoutRequest, seed_mod.sid("scout", "nairobi"))
+        owner = _job(setup, req, worker="w-owner", lease=_NOW + timedelta(minutes=5))
+        me = _job(setup, req, worker="w-me", lease=_NOW + timedelta(minutes=5))
+        req.status, req.owner_job_id, req.owner_attempt, req.owner_lease_token = (
+            "queued",
+            owner.id,
+            1,
+            "tok",
+        )
+        setup.commit()
+        ids = (req.id, req.organization_id, req.workspace_id, req.run_fence, owner.id, me.id)
+    rid, org, ws, fence, owner_id, me_id = ids
+    admission = RunAdmission(
+        scout_request_id=rid,
+        organization_id=org,
+        workspace_id=ws,
+        fence=fence,
+        session_factory=factory,
+        job_id=me_id,
+        worker_id="w-me",
+        attempt=1,
+        lease_token="tok",
+        process_now=_NOW,
+    )
+    assert admission.claim(now=_NOW) == SKIPPED_OWNER_ACTIVE
+    with factory() as lapse:
+        lapse.get(Job, owner_id).lease_expires_at = _NOW - timedelta(minutes=1)
+        lapse.commit()
+    assert admission.claim(now=_NOW) is None
+    with factory() as check:
+        req = check.get(ScoutRequest, rid)
+        assert (req.owner_job_id, req.status) == (me_id, "running")
+        req.status, req.owner_job_id, req.owner_attempt, req.owner_lease_token = (
+            "draft",
+            None,
+            None,
+            None,
+        )
+        check.query(Job).filter(Job.id.in_([owner_id, me_id])).delete(synchronize_session=False)
+        check.commit()
+
+
+def _owned_run(s, city: str):
+    """A run holding its claim (what the committed claim leaves): the job running with a live
+    lease and token ``tok``, the request ``running`` with this attempt as its O2 owner."""
+    req = s.get(ScoutRequest, seed_mod.sid("scout", city))
+    job = _job(s, req, lease=_NOW + timedelta(minutes=5))
+    req.status = "running"
+    req.owner_job_id, req.owner_attempt, req.owner_lease_token = job.id, 1, "tok"
+    s.flush()
+    admission = _admission(req, job_id=job.id)
+    admission.claimed, admission.pre_claim_status = True, "queued"
+    return req, job, admission
+
+
+def _request(s, req) -> tuple:
+    return s.execute(
+        select(ScoutRequest.status, ScoutRequest.owner_job_id).where(ScoutRequest.id == req.id)
+    ).one()
+
+
+@pytest.mark.parametrize(
+    ("change", "cause"),
+    [("token_rotated", "lease_lost"), ("owner_superseded", "owner_superseded")],
+)
+def test_each_authority_component_alone_stops_admission_terminal_write_and_restore(
+    s, change, cause
+):
+    """G2: a rotated lease token alone (same worker, same attempt, the owner columns still
+    naming this attempt), or a changed owner alone (the job's authority intact), is enough.
+    The admission, the guarded terminal write and the status restore all refuse, and nothing is
+    written over the request."""
+    req, job, admission = _owned_run(s, "dallas")
+    admission.check(s, "model")  # control: the claimed identity is admitted
+    if change == "token_rotated":
+        job.lease_token = "tok-rotated"
+    else:
+        rival = _job(s, req, worker="w-2", lease=_NOW + timedelta(minutes=5))
+        req.owner_job_id = rival.id
+    s.flush()
+    with pytest.raises(RunStopped) as at_admission:
+        admission.check(s, "model")
+    assert at_admission.value.cause == cause
+    with pytest.raises(RunStopped) as at_commit:
+        admission.finish(s, stats={"scanned": 1}, now=_NOW)
+    assert at_commit.value.cause == cause
+    admission.restore_writer(now=_NOW)(s)
+    s.flush()
+    assert _request(s, req)[0] == "running"
+
+
+@pytest.mark.parametrize(("write", "status"), [("terminal", "completed"), ("restore", "queued")])
+def test_the_owning_attempt_writes_when_nothing_changed(s, write, status):
+    """Control for the test above: the same attempt, nothing changed, writes (and clears the
+    owner)."""
+    req, _job_row, admission = _owned_run(s, "dallas")
+    if write == "terminal":
+        admission.finish(s, stats={"scanned": 1}, now=_NOW)
+    else:
+        admission.restore_writer(now=_NOW)(s)
+    s.flush()
+    assert _request(s, req) == (status, None)
+
+
+def test_the_reconcile_command_runs_in_a_fresh_process(factory):
+    """The management command as an operator runs it: a fresh interpreter with only the
+    command's own imports. List, a refused reason code, resolve (audited), idempotent re-run."""
+    with factory() as setup:
+        req = setup.get(ScoutRequest, seed_mod.sid("scout", "nairobi"))
+        job = _job(setup, req, status=JobStatus.DEAD_LETTERED.value)
+        row = _row(req, job_id=job.id)
+        setup.add(row)
+        setup.commit()
+        rid, admission_id, job_id = req.id, row.id, job.id
+    env = dict(os.environ, DATABASE_URL=str(factory.kw["bind"].url))
+
+    def cli(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "app.jobs.reconcile", *args],
+            cwd=Path(__file__).resolve().parents[2],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    resolve_args = ("resolve", "--admission", admission_id, "--operator", "ops")
+    try:
+        listing = cli("list", "--scout", rid)
+        assert listing.returncode == 0, listing.stderr[-2000:]
+        outstanding = json.loads(listing.stdout)[EARLIER_OWNERS_OUTSTANDING]
+        assert [a["admission_id"] for a in outstanding] == [admission_id]
+        assert cli(*resolve_args, "--reason", "not-a-code").returncode == 2
+        done = cli(*resolve_args, "--reason", "worker_crashed", "--note", "pod restarted")
+        assert (done.returncode, done.stdout.strip()) == (0, "reconciled"), done.stderr[-2000:]
+        again = cli(*resolve_args, "--reason", "worker_crashed")
+        assert (again.returncode, again.stdout.strip()) == (0, "already resolved")
+        with factory() as check:
+            assert check.get(ScoutAdmission, admission_id).resolved_by == "ops"
+            audited = (
+                select(func.count())
+                .select_from(AuditLog)
+                .where(
+                    AuditLog.entity_id == admission_id,
+                    AuditLog.action == "scout_admission.reconciled",
+                )
+            )
+            assert check.scalar(audited) == 1
+    finally:
+        with factory() as cleanup:
+            cleanup.query(ScoutAdmission).filter(ScoutAdmission.id == admission_id).delete()
+            cleanup.query(Job).filter(Job.id == job_id).delete()
+            cleanup.commit()
+
+
+def test_the_restore_writes_nothing_once_the_attempts_lease_has_lapsed(s):
+    """The restore's own lease condition (W13: "the lease still running") holds by itself:
+    with the owner columns still naming this attempt, a lapsed lease (a recovery may be under
+    way) means the restore writes nothing."""
+    req, job, admission = _owned_run(s, "dallas")
+    job.lease_expires_at = _NOW - timedelta(minutes=1)
+    s.flush()
+    admission.restore_writer(now=_NOW)(s)
+    s.flush()
+    assert _request(s, req) == ("running", job.id)
+
+
+@pytest.mark.parametrize("state", ["paused", "running"])
+def test_the_terminal_write_checks_status_and_fence_on_their_own(s, state):
+    """Defense in depth: every writer that moves the fence or leaves ``running`` also clears
+    the owner, so this state (owner still this attempt, fence moved) is not reachable; the
+    guarded terminal write refuses it on its own status and fence predicates all the same."""
+    req, _job_row, admission = _owned_run(s, "dallas")
+    req.status, req.run_fence = state, req.run_fence + 1
+    s.flush()
+    with pytest.raises(RunStopped) as stopped:
+        admission.finish(s, stats={"scanned": 1}, now=_NOW)
+    assert stopped.value.cause == "request_paused"
+    assert _request(s, req)[0] == state
+
+
+@pytest.mark.parametrize(
+    ("case", "category"),
+    [
+        ("current_owner", CURRENT_OWNER),
+        ("earlier_owner", EARLIER_OWNERS_OUTSTANDING),
+        ("unknown_end", UNKNOWN_END),
+    ],
+)
+def test_the_listing_has_exactly_three_categories_with_job_and_deadline_facts(s, case, category):
+    """Contract §9.3: the current owner's admissions, earlier owners' outstanding ones and
+    unknown ends; each with its job's status and lease expiry, its deadline and whether that
+    deadline has passed (K = 1: one unresolved row per Scout, so one category at a time)."""
+    from datetime import UTC, datetime
+
+    req, job, _admission = _owned_run(s, "dallas")
+    values = {"job_id": job.id, "admitted_at": datetime.now(UTC)}
+    if case == "earlier_owner":
+        values["attempt"] = 0  # an earlier attempt of the job; the owner is attempt 1
+    if case == "unknown_end":
+        values.update(ended_at=datetime.now(UTC), end_kind="unknown")
+    s.add(_row(req, **values))
+    s.flush()
+    listing = list_unresolved(s, req.id)
+    assert set(listing) == {
+        "scout_request_id",
+        "owner",
+        CURRENT_OWNER,
+        EARLIER_OWNERS_OUTSTANDING,
+        UNKNOWN_END,
+    }
+    assert listing["owner"] == {"job_id": job.id, "attempt": 1}
+    [item] = listing[category]
+    assert all(
+        listing[c] == []
+        for c in (CURRENT_OWNER, EARLIER_OWNERS_OUTSTANDING, UNKNOWN_END)
+        if c != category
+    )
+    assert item["job_status"] == "running" and item["lease_expires_at"]
+    assert item["deadline"] > item["admitted_at"] and item["deadline_passed"] is False
+
+
+def test_a_stale_attempt_releases_no_owner_once_its_job_has_moved_on(s):
+    """Contract §9.1: the owner release can commit outside the fenced job transaction, so it
+    carries the full identity. The job was re-claimed (a new token) before the request's
+    claim moved: the stale attempt's release leaves the owner as it is."""
+    req, job, admission = _owned_run(s, "dallas")
+    job.lease_token = "tok-replacement"
+    s.flush()
+    s.execute(admission.release_owner_statement())
+    s.flush()
+    assert _request(s, req) == ("running", job.id)
+    job.lease_token = "tok"  # control: the attempt holding its job releases its owner
+    s.flush()
+    s.execute(admission.release_owner_statement())
+    s.flush()
+    assert _request(s, req) == ("running", None)

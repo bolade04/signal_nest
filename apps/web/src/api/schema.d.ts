@@ -1923,6 +1923,9 @@ export interface paths {
          *     is accepted only from a settled state (draft / completed / failed), and the
          *     ``draft/... -> queued`` flip is an atomic compare-and-set so two concurrent
          *     submissions cannot enqueue duplicate work for the same request.
+         *
+         *     PROPOSED (D-25 recovery): a Scout in ``needs_attention`` (an earlier operation did not
+         *     report an outcome) is refused with 422 ``scout_needs_attention`` and no job is created.
          */
         post: operations["run_scout_request_endpoint_api_v1_workspaces__workspace_id__scout_requests__request_id__run_post"];
         delete?: never;
@@ -4539,6 +4542,40 @@ export interface components {
             sources_failed: number;
             status: components["schemas"]["CoverageStatus"];
         };
+        /**
+         * ScoutExecutionNextAction
+         * @description What can move the Scout on: wait, resume it, run it, or contact support (a customer
+         *     can never clear an unresolved operation).
+         * @enum {string}
+         */
+        ScoutExecutionNextAction: "wait" | "resume" | "run_now" | "contact_support";
+        /**
+         * ScoutExecutionOut
+         * @description Derived, read-only execution state of one Scout (D-25 recovery contract §4,
+         *     PROPOSED): computed from committed rows and the database clock on each read; never
+         *     stored. ``needs_attention`` means an earlier operation did not report an outcome and
+         *     SignalNest must confirm it has ended before the Scout can run again. ``since`` is set
+         *     only where a stable timestamp exists.
+         */
+        ScoutExecutionOut: {
+            next_action: components["schemas"]["ScoutExecutionNextAction"];
+            reason: components["schemas"]["ScoutExecutionReason"];
+            /** Since */
+            since?: string | null;
+            state: components["schemas"]["ScoutExecutionState"];
+        };
+        /**
+         * ScoutExecutionReason
+         * @description Why the Scout is in its execution state (a closed, customer-safe code).
+         * @enum {string}
+         */
+        ScoutExecutionReason: "operation_outcome_unknown" | "operation_overdue" | "paused_by_user" | "run_active" | "operation_finishing" | "run_cancelled" | "run_failed" | "admission_unresolved" | "run_interrupted" | "none";
+        /**
+         * ScoutExecutionState
+         * @description A Scout's derived execution state (D-25 recovery contract §4, PROPOSED).
+         * @enum {string}
+         */
+        ScoutExecutionState: "idle" | "in_progress" | "paused" | "stopped" | "needs_attention";
         /** ScoutRequestCreate */
         ScoutRequestCreate: {
             /** Campaign Id */
@@ -4570,6 +4607,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** @description Derived execution state (PROPOSED). Computed on single-Scout responses; null means it was not computed on this read (the list). */
+            execution?: components["schemas"]["ScoutExecutionOut"] | null;
             /** Id */
             id: string;
             /** Keywords */

@@ -57,6 +57,56 @@ def coverage_from_stats(stats: object) -> ScoutCoverage | None:
         return None
 
 
+class ScoutExecutionState(StrEnum):
+    """A Scout's derived execution state (D-25 recovery contract §4, PROPOSED)."""
+
+    IDLE = "idle"
+    IN_PROGRESS = "in_progress"
+    PAUSED = "paused"
+    STOPPED = "stopped"
+    NEEDS_ATTENTION = "needs_attention"
+
+
+class ScoutExecutionReason(StrEnum):
+    """Why the Scout is in its execution state (a closed, customer-safe code)."""
+
+    OPERATION_OUTCOME_UNKNOWN = "operation_outcome_unknown"
+    OPERATION_OVERDUE = "operation_overdue"
+    PAUSED_BY_USER = "paused_by_user"
+    RUN_ACTIVE = "run_active"
+    OPERATION_FINISHING = "operation_finishing"
+    RUN_CANCELLED = "run_cancelled"
+    RUN_FAILED = "run_failed"
+    ADMISSION_UNRESOLVED = "admission_unresolved"
+    RUN_INTERRUPTED = "run_interrupted"
+    NONE = "none"
+
+
+class ScoutExecutionNextAction(StrEnum):
+    """What can move the Scout on: wait, resume it, run it, or contact support (a customer
+    can never clear an unresolved operation)."""
+
+    WAIT = "wait"
+    RESUME = "resume"
+    RUN_NOW = "run_now"
+    CONTACT_SUPPORT = "contact_support"
+
+
+class ScoutExecutionOut(BaseModel):
+    """Derived, read-only execution state of one Scout (D-25 recovery contract §4,
+    PROPOSED): computed from committed rows and the database clock on each read; never
+    stored. ``needs_attention`` means an earlier operation did not report an outcome and
+    SignalNest must confirm it has ended before the Scout can run again. ``since`` is set
+    only where a stable timestamp exists."""
+
+    state: ScoutExecutionState
+    reason: ScoutExecutionReason
+    next_action: ScoutExecutionNextAction
+    since: datetime | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 class ScoutRequestOut(BaseModel):
     id: str
     organization_id: str
@@ -75,6 +125,14 @@ class ScoutRequestOut(BaseModel):
     stats: dict
     #: The latest completed run's coverage outcome, lifted from ``stats``.
     coverage: ScoutCoverage | None = None
+    #: D-25 recovery (PROPOSED): the derived execution state, on single-Scout reads.
+    execution: ScoutExecutionOut | None = Field(
+        default=None,
+        description=(
+            "Derived execution state (PROPOSED). Computed on single-Scout responses; null "
+            "means it was not computed on this read (the list)."
+        ),
+    )
     created_at: datetime
     updated_at: datetime
 
