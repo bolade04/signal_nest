@@ -362,8 +362,15 @@ export const upsertGeoCoverage = (
     body,
   });
 
-export const geocode = (body: GeocodeRequest) =>
-  apiRequest<GeocodeResponse>('/geocode', { method: 'POST', body });
+// Workspace-scoped like every other tenant call: the route resolves its tenant through
+// get_tenant_context, so `workspace_id` is a REQUIRED query parameter (openapi.json);
+// without it the API answers 422 before the lookup runs (UI-AUDIT F2).
+export const geocode = (workspaceId: string, body: GeocodeRequest) =>
+  apiRequest<GeocodeResponse>('/geocode', {
+    method: 'POST',
+    body,
+    query: { workspace_id: workspaceId },
+  });
 
 // ---- Scout requests ----
 export const listScoutRequests = (workspaceId: string, signal?: AbortSignal) =>

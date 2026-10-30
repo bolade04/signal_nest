@@ -184,9 +184,30 @@ export const scoreHelp = {
   priority_score: 'Suggested ordering priority (0–100) derived from score, urgency and risk.',
 } as const;
 
-export function scoreBand(value: number): { label: string; intent: Intent } {
+export interface ScoreBand {
+  label: string;
+  intent: Intent;
+}
+
+/**
+ * The band word for a 0–100 score that has no band of its own from the API: opportunity
+ * and relevance. NOT for confidence, whose band the API defines (see `confidenceBand`).
+ */
+export function scoreBand(value: number): ScoreBand {
   if (value >= 75) return { label: 'Strong', intent: 'success' };
   if (value >= 50) return { label: 'Moderate', intent: 'info' };
   if (value >= 40) return { label: 'Fair', intent: 'warning' };
   return { label: 'Low', intent: 'muted' };
+}
+
+/**
+ * The confidence band, read from the API's own `confidence_level`, never re-derived from
+ * the score: apps/api/app/scoring/opportunity.py `confidence_level` defines it (< 40 low,
+ * < 70 medium, otherwise high). The confidence pill, the confidence meter and the
+ * "<Level> confidence" badge all read this one value, so they cannot disagree
+ * (UI-AUDIT F7: "71 Moderate" beside "High confidence"). Null when the level is absent.
+ */
+export function confidenceBand(level: string | null | undefined): ScoreBand | null {
+  if (!level) return null;
+  return { label: label({}, level), intent: confidenceIntent[level] ?? 'neutral' };
 }

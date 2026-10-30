@@ -1070,11 +1070,12 @@ describe('scout controls send what they say, and show a run in flight (editor)',
     const release = holdRun();
     const [firstRun] = buttons(screen, /run now/i);
     await screen.user.click(firstRun!);
-    await waitFor(() => expect(firstRun).toBeDisabled());
+    // Busy is aria-disabled (focusable), not native disabled (W11 A1, review F-01).
+    await waitFor(() => expect(firstRun).toHaveAttribute('aria-disabled', 'true'));
     // Only the row being run is busy.
-    expect(buttons(screen, /run now/i)[1]).toBeEnabled();
+    expect(buttons(screen, /run now/i)[1]).not.toHaveAttribute('aria-disabled');
     release();
-    await waitFor(() => expect(firstRun).toBeEnabled());
+    await waitFor(() => expect(firstRun).not.toHaveAttribute('aria-disabled'));
   });
 
   it('empty list: "New scout request" in the empty state opens the dialog', async () => {
@@ -1095,7 +1096,7 @@ describe('scout controls send what they say, and show a run in flight (editor)',
     const release = holdRun();
     const runs = buttons(screen, /run now/i);
     await screen.user.click(runs[1]!); // the empty-state button
-    await waitFor(() => expect(runs[1]).toBeDisabled());
+    await waitFor(() => expect(runs[1]).toHaveAttribute('aria-disabled', 'true'));
     release();
     await waitFor(() => expect(posted('/scout-requests/scout-loc-dallas/run')).toBe(1));
   });
@@ -1237,19 +1238,24 @@ describe('a finished run hands its Run buttons back (scout request detail)', () 
     const screen = await renderAs('owner', '/scout-requests/scout-loc-dallas');
     await screen.findByText(/no opportunities yet/i);
     const [header, emptyState] = buttons(screen, /run now/i);
-    expect(header).toBeEnabled();
-    expect(emptyState).toBeEnabled();
+    // Busy is aria-disabled (focusable), not native disabled (W11 A1, review F-01).
+    const usable = (el: HTMLElement | undefined) => {
+      expect(el).toBeEnabled();
+      expect(el).not.toHaveAttribute('aria-disabled');
+    };
+    usable(header);
+    usable(emptyState);
     await screen.user.click(header!);
-    await waitFor(() => expect(header).toBeDisabled());
-    expect(emptyState).toBeDisabled();
+    await waitFor(() => expect(header).toHaveAttribute('aria-disabled', 'true'));
+    expect(emptyState).toHaveAttribute('aria-disabled', 'true');
     act(() => release());
-    await waitFor(() => expect(header).toBeEnabled());
-    expect(emptyState).toBeEnabled();
+    await waitFor(() => usable(header));
+    usable(emptyState);
     // A second, instant run leaves them usable too.
     await screen.user.click(emptyState!);
     await waitFor(() => expect(runs).toBe(2));
-    await waitFor(() => expect(emptyState).toBeEnabled());
-    expect(header).toBeEnabled();
+    await waitFor(() => usable(emptyState));
+    usable(header);
   });
 });
 

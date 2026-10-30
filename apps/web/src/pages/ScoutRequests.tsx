@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { ListChecks, Pause, Play, Plus, Radar, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ListChecks, Pause, Play, Plus, Search } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
 import type { ScoutRequestOut } from '@/api/types';
 import { ScoutStatusBadge } from '@/components/common/badges';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
+import { StatusRefresh } from '@/components/common/status-refresh';
 import { PageHeader } from '@/components/layout/page-header';
 import { RequireWorkspace } from '@/components/layout/require-workspace';
 import { Badge } from '@/components/ui/badge';
@@ -23,8 +24,12 @@ import {
 import { scoutStatusLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
+import { isScoutInFlight } from '@/lib/scout-status';
+import { moveFocusTo } from '@/lib/focus';
+import { inFlightSignature, pollingOptions, useStatusPolling } from '@/lib/status-polling';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { RunNowButton } from './scouts/RunNowButton';
 import { ScoutRequestDialog } from './scouts/ScoutRequestDialog';
 import { useScoutActions } from './scouts/useScoutActions';
 
@@ -44,10 +49,39 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
   // cannot spring back open by itself if the gate later reopens.
   if (!canEdit && dialogOpen) setDialogOpen(false);
 
+  const { schedule, active: statusInFlight, stopped: statusUpdatesStopped } = useStatusPolling();
   const query = useQuery({
     queryKey: queryKeys.scoutRequests(workspaceId),
     queryFn: ({ signal }) => api.listScoutRequests(workspaceId, signal),
+    // Re-read while any run is queued or running, so each row's status (and its Run now
+    // button) follows the worker without a reload (UI-AUDIT F8 / P8), on the bounded,
+    // backed-off schedule of lib/status-polling.ts (review F-02).
+    ...pollingOptions<ScoutRequestOut[]>(schedule, 'requests', (rows) => inFlightSignature(rows, isScoutInFlight)),
   });
+  const refreshStatus = () => {
+    schedule.restart(Date.now());
+    void query.refetch();
+  };
+
+  // R2-01: if "Refresh status" is removed (nothing in flight any more) while it has keyboard
+  // focus, return focus to the Run now of the row that was in flight, else to the page
+  // heading. Never otherwise.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const lastInFlight = useRef<string[]>([]);
+  const refocusAfterSettle = useRef(false);
+  const inFlightIds = (query.data ?? []).filter((r) => isScoutInFlight(r.status)).map((r) => r.id).join(',');
+  useEffect(() => {
+    if (inFlightIds) lastInFlight.current = inFlightIds.split(',');
+  }, [inFlightIds]);
+  useEffect(() => {
+    if (statusInFlight || !refocusAfterSettle.current) return;
+    refocusAfterSettle.current = false;
+    const root = pageRef.current;
+    moveFocusTo(
+      ...lastInFlight.current.map((id) => root?.querySelector<HTMLElement>(`[data-scout-row="${id}"] [data-run-now]`)),
+      root?.querySelector<HTMLElement>('h1'),
+    );
+  }, [statusInFlight]);
 
   const locName = (id: string | null) => locations.find((l) => l.id === id)?.name;
 
@@ -68,7 +102,7 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
   }, [query.data, locationId, statusFilter, search]);
 
   return (
-    <div>
+    <div ref={pageRef}>
       <PageHeader
         title="Scout requests"
         description="Create, run, pause and review market scouts. Each request stays isolated to its market and campaign."
@@ -101,6 +135,17 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
         </Select>
       </div>
 
+      {statusInFlight ? (
+        <StatusRefresh
+          stopped={statusUpdatesStopped}
+          onRefresh={refreshStatus}
+          onRemovedWhileFocused={() => {
+            refocusAfterSettle.current = true;
+          }}
+          className="mb-4"
+        />
+      ) : null}
+
       {query.isLoading ? (
         <LoadingRows rows={3} />
       ) : query.isError ? (
@@ -111,7 +156,7 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
             const canPause = ['running', 'queued', 'draft', 'completed'].includes(r.status);
             const isPaused = r.status === 'paused';
             return (
-              <Card key={r.id}>
+              <Card key={r.id} data-scout-row={r.id}>
                 <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -130,13 +175,7 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
                   </div>
                   {canEdit ? (
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => actions.run.mutate(r.id)}
-                        disabled={actions.run.isPending && actions.run.variables === r.id}
-                      >
-                        <Radar className="size-4" /> Run now
-                      </Button>
+                      <RunNowButton request={r} actions={actions} size="sm" />
                       {isPaused ? (
                         <Button size="sm" variant="outline" onClick={() => actions.resume.mutate(r.id)}>
                           <Play className="size-4" /> Resume

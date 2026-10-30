@@ -202,7 +202,10 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
           }
         />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
+        // grid-cols-1 (one minmax(0, 1fr) track) rather than the implicit auto column: the
+        // chart's measured width otherwise sets the column's minimum and pushes the page
+        // 92 px past a 390 px phone screen (UI-AUDIT F4).
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Opportunities by classification</CardTitle>
