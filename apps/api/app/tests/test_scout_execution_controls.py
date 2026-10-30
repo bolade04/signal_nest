@@ -378,3 +378,29 @@ def test_the_reconcile_command_runs_in_a_fresh_process(factory):
             cleanup.query(ScoutAdmission).filter(ScoutAdmission.id == admission_id).delete()
             cleanup.query(Job).filter(Job.id == job_id).delete()
             cleanup.commit()
+
+
+def test_the_restore_writes_nothing_once_the_attempts_lease_has_lapsed(s):
+    """The restore's own lease condition (W13: "the lease still running") holds by itself:
+    with the owner columns still naming this attempt, a lapsed lease (a recovery may be under
+    way) means the restore writes nothing."""
+    req, job, admission = _owned_run(s, "dallas")
+    job.lease_expires_at = _NOW - timedelta(minutes=1)
+    s.flush()
+    admission.restore_writer(now=_NOW)(s)
+    s.flush()
+    assert _request(s, req) == ("running", job.id)
+
+
+@pytest.mark.parametrize("state", ["paused", "running"])
+def test_the_terminal_write_checks_status_and_fence_on_their_own(s, state):
+    """Defense in depth: every writer that moves the fence or leaves ``running`` also clears
+    the owner, so this state (owner still this attempt, fence moved) is not reachable; the
+    guarded terminal write refuses it on its own status and fence predicates all the same."""
+    req, _job_row, admission = _owned_run(s, "dallas")
+    req.status, req.run_fence = state, req.run_fence + 1
+    s.flush()
+    with pytest.raises(RunStopped) as stopped:
+        admission.finish(s, stats={"scanned": 1}, now=_NOW)
+    assert stopped.value.cause == "request_paused"
+    assert _request(s, req)[0] == state
