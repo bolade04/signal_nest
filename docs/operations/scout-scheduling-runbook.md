@@ -228,6 +228,53 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     first write until its commit the run holds the database write lock, so a pause
     then waits up to `busy_timeout` (5 s) and may fail. The prompt pause is a
     PostgreSQL property.
+
+  **Execution controls O1/O2 (PROPOSED pending D-25; not operator-accepted).** Candidate of
+  `D-25-EXECUTION-CONTROL-CONTRACT-01` §3/§8:
+  - **O1, ownership at every admission.** Each admission, terminal write and status
+    restore re-checks the attempt's identity captured at its claim (job, attempt, worker,
+    lease token, fence) against fresh rows, with the lease still running by database time.
+    A stale attempt (lease lost or lapsed, Cancel, owner superseded, fence moved) admits
+    nothing further; the operation it already admitted may finish and is charged.
+  - **O2, one owner per Scout.** A claim against a valid owner is refused
+    (`skipped_owner_active`): a manual run and a scheduled run of one Scout no longer run
+    together. A new attempt takes over only from an owner whose authority has lapsed. The
+    pause clears the owner.
+  - **K = 1.** Every connector fetch attempt and every model attempt commits a ledger row
+    (`scout_admissions`) before it is sent; at most ONE unresolved row per Scout, enforced by
+    the database. So at most one external operation of a Scout can be in progress, across
+    attempts, workers, recoveries and zombies. A row is resolved only by a known recorded
+    end or by reconciliation - never by lease expiry, recovery, Cancel, Pause -> Resume or
+    elapsed time. PostgreSQL only (on SQLite the ledger is not written).
+  - **Waiting.** An admission refused behind an outstanding row waits, holding no lock, up
+    to that row's own deadline (fetch: 20 s + lease; model: 3 x 30 s + lease). It never
+    waits for a row with an unknown end. **Wait expiry:** the job fails (`NON_RETRYABLE`,
+    `admission_unresolved`), the request ends `failed`, the admission stays unresolved.
+  - **Unknown outcomes block the Scout (the availability cost).** A model call that times
+    out, or a feed read that times out after the request may have been sent, leaves an
+    unknown, unresolved admission: its retry is not admitted, the run fails, and the Scout
+    admits nothing - and its schedule fans out no run (`admission_unresolved`) - until an
+    operator reconciles it. Other Scouts and tenants are unaffected. Treating a fetch's
+    unknown outcome as resolved (R3) is an operator choice, not adopted.
+  - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
+    the current owner, outstanding admissions and unknown-outcome admissions;
+    `python -m app.jobs.reconcile resolve --admission <id> --operator <name> --reason <code>
+    [--note <= 200 chars]` resolves one after the operator has ascertained the operation is
+    over. Refused over a valid in-flight admission; idempotent; audited; accounting
+    unchanged. There is no signal yet (log or metric) for a blocked Scout: operators must
+    look. This operational burden is a stated limitation.
+  - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
+    the run at its next admission (including while it waits): the job ends `cancelled`, the
+    request returns to its pre-claim status (`queued` for a manual run: the F-03 shape,
+    unresolved). Cancel never resolves an admission.
+  - **Stale-stop end states.** Lease lapsed (not yet recovered): a retryable failure, so the
+    run is retried, never lost. Token rotated or owner superseded: the attempt stops and
+    writes nothing over the newer owner. Fence moved: `stopped_request_paused`. Request gone:
+    `request_gone`. Missing claim identity: refused (`claim_identity_incomplete`).
+  - **Missed scheduled occurrences (the earlier "at most one" is withdrawn).** An
+    occurrence is missed for every tick while an admission stays unresolved, for each lost
+    overlap race (`skipped_owner_active`), and after Pause -> Resume while a fenced job is
+    pending. No catch-up.
 - **Audit trail** (`record_audit`): every lifecycle mutation writes a
   `scout_schedule.{created,paused,resumed,deleted}` audit record with the acting
   user — the deletion record is written *before* the row is removed so the delete
