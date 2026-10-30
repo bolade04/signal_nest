@@ -445,16 +445,21 @@ def run_schedule_tick(
 
     request = db.get(ScoutRequest, schedule.scout_request_id)
     request_paused = request is not None and request.status == ScoutRequestStatus.PAUSED.value
-    # Execution controls (PROPOSED): while the Scout has an unresolved admission (K = 1) no
-    # run is fanned out (it could admit nothing); the chain continues, nothing is caught up.
-    admission_unresolved = (
-        not request_paused and request is not None and _has_unresolved_admission(db, request.id)
-    )
-    coalesced = not request_paused and not admission_unresolved and has_active_execution(
+    coalesced = not request_paused and has_active_execution(
         db,
         organization_id=schedule.organization_id,
         workspace_id=schedule.workspace_id,
         scout_request_id=schedule.scout_request_id,
+    )
+    # Execution controls (PROPOSED): with no execution in flight, a Scout that still has an
+    # unresolved admission (K = 1: an orphaned or unknown-outcome one) fans out no run (it
+    # could admit nothing); the chain continues, nothing is caught up. An in-flight run's own
+    # admission is reported as the overlap it is (``coalesced``).
+    admission_unresolved = (
+        not request_paused
+        and not coalesced
+        and request is not None
+        and _has_unresolved_admission(db, request.id)
     )
     run_enqueued = False
     if not request_paused and not coalesced and not admission_unresolved:

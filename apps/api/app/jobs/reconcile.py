@@ -157,6 +157,7 @@ def resolve(
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI shell
+    import app.db.models  # noqa: F401 - completes Base.metadata for this process (the audit row)
     from app.db.session import SessionLocal
 
     parser = argparse.ArgumentParser(prog="python -m app.jobs.reconcile")

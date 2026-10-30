@@ -2,19 +2,26 @@
 
 The ledger and K = 1 are PostgreSQL-only at run time (``test_scout_execution_controls_postgres``);
 here: missing identity fails closed, the fetch-end classification, the K = 1 index itself,
-reconciliation's refusals and idempotency, the tick outcome, the owner takeover rule.
+reconciliation's refusals and idempotency (and the command in a fresh process), the tick
+outcome, the owner takeover rule, each authority component on its own.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from app.audit.models import AuditLog
 from app.connectors.base import FailureKind
 from app.connectors.live import fetch_end_known
 from app.connectors.retry import ConnectorFetchError
@@ -203,6 +210,18 @@ def test_a_tick_fans_out_no_run_while_an_admission_is_unresolved(s):
     )
 
 
+def test_a_tick_during_an_in_flight_run_reports_the_overlap_not_a_blocked_scout(s):
+    """An in-flight run's own admission is unresolved until its call ends: the tick reports the
+    overlap (``coalesced``); ``admission_unresolved`` is for a Scout with nothing in flight."""
+    req, schedule, first = _scheduled_request(s, "lagos")
+    _job(s, req, lease=_NOW + timedelta(minutes=5))
+    s.add(_row(req))
+    s.flush()
+    out = _tick(s, schedule, first)
+    assert out["outcome"] == "coalesced"
+    assert out["run_enqueued"] is False and out["chained"] is True
+
+
 def test_a_claim_is_refused_over_a_valid_owner_and_takes_over_a_lapsed_one(factory):
     """O2 on the committed claim (separate connections, file-backed SQLite)."""
     with factory() as setup:
@@ -308,3 +327,54 @@ def test_the_owning_attempt_writes_when_nothing_changed(s, write, status):
         admission.restore_writer(now=_NOW)(s)
     s.flush()
     assert _request(s, req) == (status, None)
+
+
+def test_the_reconcile_command_runs_in_a_fresh_process(factory):
+    """The management command as an operator runs it: a fresh interpreter with only the
+    command's own imports. List, a refused reason code, resolve (audited), idempotent re-run."""
+    with factory() as setup:
+        req = setup.get(ScoutRequest, seed_mod.sid("scout", "nairobi"))
+        job = _job(setup, req, status=JobStatus.DEAD_LETTERED.value)
+        row = _row(req, job_id=job.id)
+        setup.add(row)
+        setup.commit()
+        rid, admission_id, job_id = req.id, row.id, job.id
+    env = dict(os.environ, DATABASE_URL=str(factory.kw["bind"].url))
+
+    def cli(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "app.jobs.reconcile", *args],
+            cwd=Path(__file__).resolve().parents[2],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    resolve_args = ("resolve", "--admission", admission_id, "--operator", "ops")
+    try:
+        listing = cli("list", "--scout", rid)
+        assert listing.returncode == 0, listing.stderr[-2000:]
+        outstanding = json.loads(listing.stdout)["outstanding"]
+        assert [a["admission_id"] for a in outstanding] == [admission_id]
+        assert cli(*resolve_args, "--reason", "not-a-code").returncode == 2
+        done = cli(*resolve_args, "--reason", "worker_crashed", "--note", "pod restarted")
+        assert (done.returncode, done.stdout.strip()) == (0, "reconciled"), done.stderr[-2000:]
+        again = cli(*resolve_args, "--reason", "worker_crashed")
+        assert (again.returncode, again.stdout.strip()) == (0, "already resolved")
+        with factory() as check:
+            assert check.get(ScoutAdmission, admission_id).resolved_by == "ops"
+            audited = (
+                select(func.count())
+                .select_from(AuditLog)
+                .where(
+                    AuditLog.entity_id == admission_id,
+                    AuditLog.action == "scout_admission.reconciled",
+                )
+            )
+            assert check.scalar(audited) == 1
+    finally:
+        with factory() as cleanup:
+            cleanup.query(ScoutAdmission).filter(ScoutAdmission.id == admission_id).delete()
+            cleanup.query(Job).filter(Job.id == job_id).delete()
+            cleanup.commit()
