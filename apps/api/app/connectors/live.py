@@ -73,7 +73,12 @@ from app.connectors.rss import (
 from app.connectors.sources import APPROVED_SOURCES, SourceRecord
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.jobs.admission import RunStopped, admit_external_operation, record_external_end
+from app.jobs.admission import (
+    AdmissionUnresolved,
+    RunStopped,
+    admit_external_operation,
+    record_external_end,
+)
 
 logger = get_logger("signalnest.connectors.live")
 
@@ -220,7 +225,7 @@ class LiveRssConnector(SourceConnector):
             try:
                 feed, parsed = self._feed(target, max_entries)
                 signals, fetched, clipped = self._signals(target, feed, parsed, scope)
-            except RunStopped:
+            except (RunStopped, AdmissionUnresolved):
                 # D-25 (PROPOSED): a refused admission stops the whole run; it is not a
                 # failure of this source and must not be recorded as one.
                 raise
