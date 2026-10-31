@@ -15,6 +15,7 @@ from app.auth.dependencies import TenantContext, get_tenant_context, require_rol
 from app.core.enums import Role
 from app.core.errors import ConflictError, NotFoundError
 from app.db.session import get_db
+from app.jobs.registry import resolve_cancel_hook
 from app.jobs.schemas import JobEventOut, JobListOut, JobOut
 from app.jobs.status import CUSTOMER_UNCANCELLABLE_JOB_TYPES
 from app.jobs.store import job_store
@@ -105,6 +106,16 @@ def cancel_job(
             "This job applies the data-retention policy and cannot be cancelled.",
             code="job_not_cancellable",
         )
-    job_store.request_cancel(db, job)
+    # D-25 recovery contract §9.5 (PROPOSED): an enqueued job is cancelled at once by a
+    # guarded transition, and its job type's cancel hook settles the state it was driving
+    # in this same transaction (a scout request returns to a usable idle state).
+    hook = resolve_cancel_hook(job.job_type)
+    job_store.request_cancel(
+        db,
+        job,
+        on_cancelled=(lambda cancelled: hook(db, cancelled, cancelled.cancelled_at))
+        if hook is not None
+        else None,
+    )
     db.commit()
     return JobOut.model_validate(job)

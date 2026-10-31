@@ -147,6 +147,17 @@ TABLES: dict[str, TableEntry] = {
             retention_class=RetentionClass.JOB_HISTORY,
         ),
         TableEntry("job_events", Category.OPERATIONAL, exported=False),
+        # The Scout admission ledger (D-25 execution controls, PROPOSED; ``app.jobs.admission``):
+        # one row per admitted external operation - keys, operation kind, attempt, worker id,
+        # instants, end kind and an operator's bounded reconciliation note (a reason code plus
+        # at most 200 characters, never content). Operational control state like
+        # ``job_events``: not exported (it carries worker ids); deleted with its Scout,
+        # workspace and organization; no time-based retention class (pruning is a follow-up).
+        # D-25 recovery (PROPOSED) adds each admission's persisted deadline and its basis
+        # (``deadline_at``, ``deadline_rule``, ``deadline_client_seconds``,
+        # ``deadline_lease_seconds``): an instant and configuration seconds, no content; same
+        # category, export and retention.
+        TableEntry("scout_admissions", Category.OPERATIONAL, exported=False),
         # The LLM usage ledger (P6-LLM-4): tenant-linked usage metadata, one row per
         # provider attempt. Operator decisions of 2026-10-27 (D-9a/D-9b/D-9c, packet
         # D9-DECISIONS-01): OPERATIONAL; included in the organization export with every

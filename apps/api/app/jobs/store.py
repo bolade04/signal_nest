@@ -596,48 +596,78 @@ class DurableJobStore:
         return job
 
     # --- Cancellation -------------------------------------------------------
-    def request_cancel(self, db: Session, job: Job, *, now: datetime | None = None) -> Job:
+    def request_cancel(
+        self,
+        db: Session,
+        job: Job,
+        *,
+        now: datetime | None = None,
+        on_cancelled: Callable[[Job], None] | None = None,
+    ) -> Job:
         """Request cancellation.
 
         A not-yet-running job is cancelled immediately; a running/claimed job is
         marked ``cancel_requested`` and stopped cooperatively by the worker. A
         terminal job is left untouched.
+
+        The transition is a compare-and-set on the status this call read (D-25 recovery
+        contract §9.5.4, PROPOSED): a job a worker claimed, completed or failed meanwhile
+        is never overwritten. The UPDATE then matches no row, the job is re-read and the
+        decision is made again from what it is now (a job that completed keeps its result;
+        one that was claimed is marked ``cancel_requested``), at most three times.
+
+        ``on_cancelled`` runs once, in this transaction, right after an enqueued job was
+        cancelled immediately (it is never called for ``cancel_requested``): the job type's
+        cancel hook settles the domain state the job was driving in the same transaction as
+        the job's terminal write (a scout request returns to a usable idle state, §5).
         """
         now = now or utcnow()
-        current = JobStatus(job.status)
-        if is_terminal(current):
-            return job
-        # Idempotent: a running job whose cancellation was already requested stays
-        # cancel_requested. Re-requesting must not attempt an illegal
-        # cancel_requested -> cancel_requested transition (which would surface as a
-        # 500), so the endpoint can be safely retried/double-clicked.
-        if current == JobStatus.CANCEL_REQUESTED:
-            return job
-        job.cancel_requested_at = now
-
-        if current in ENQUEUED_STATUSES:
-            # Not yet owned by a worker: cancel immediately and clear any residual
-            # ownership fields so no stale token can ever match this row again.
-            self._transition(job, JobStatus.CANCELLED)
-            job.cancelled_at = now
-            job.worker_id = None
-            job.lease_token = None
-            job.lease_expires_at = None
-            db.flush()
-            self._record_event(
-                db, job, event_type="cancelled", previous_status=current,
-                new_status=JobStatus.CANCELLED,
+        for _ in range(3):
+            current = JobStatus(job.status)
+            if is_terminal(current):
+                return job
+            # Idempotent: a running job whose cancellation was already requested stays
+            # cancel_requested. Re-requesting must not attempt an illegal
+            # cancel_requested -> cancel_requested transition (which would surface as a
+            # 500), so the endpoint can be safely retried/double-clicked.
+            if current == JobStatus.CANCEL_REQUESTED:
+                return job
+            if current in ENQUEUED_STATUSES:
+                # Not yet owned by a worker: cancel immediately and clear any residual
+                # ownership fields so no stale token can ever match this row again.
+                target = JobStatus.CANCELLED
+                values: dict[str, Any] = {
+                    "status": JobStatus.CANCELLED.value,
+                    "cancel_requested_at": now,
+                    "cancelled_at": now,
+                    "worker_id": None,
+                    "lease_token": None,
+                    "lease_expires_at": None,
+                }
+            else:
+                # A worker owns it: record the request but leave worker_id/lease_token
+                # intact so only that owner may acknowledge the cancellation.
+                target = JobStatus.CANCEL_REQUESTED
+                values = {
+                    "status": JobStatus.CANCEL_REQUESTED.value,
+                    "cancel_requested_at": now,
+                }
+            ensure_transition(current, target)
+            result = db.execute(
+                update(Job)
+                .where(Job.id == job.id, Job.status == current.value)
+                .values(**values)
+                .execution_options(synchronize_session=False)
             )
+            db.refresh(job)
+            if result.rowcount != 1:
+                continue  # changed concurrently: decide again from the row as it is now
+            self._record_event(
+                db, job, event_type=target.value, previous_status=current, new_status=target,
+            )
+            if target is JobStatus.CANCELLED and on_cancelled is not None:
+                on_cancelled(job)
             return job
-
-        # A worker owns it: record the request but leave worker_id/lease_token
-        # intact so only that owner may acknowledge the cancellation.
-        self._transition(job, JobStatus.CANCEL_REQUESTED)
-        db.flush()
-        self._record_event(
-            db, job, event_type="cancel_requested", previous_status=current,
-            new_status=JobStatus.CANCEL_REQUESTED,
-        )
         return job
 
     def finish_cancel(

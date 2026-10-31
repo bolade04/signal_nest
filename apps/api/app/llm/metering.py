@@ -192,6 +192,10 @@ class LLMBudgetExceededError(LLMError):
         self.detail: str | None = None
 
 
+class _BudgetRefused(Exception):  # noqa: N818 - internal: roll the admission back
+    """A priced attempt's reservation was refused inside its admission transaction."""
+
+
 class LLMMeterBindingError(RuntimeError):
     """A meter was bound a second time, or after it had recorded an attempt.
 
@@ -329,6 +333,8 @@ class LLMMeter:
         self.spent = 0.0
         self.refusals: dict[str, int] = {}
         self._records: list[dict[str, Any]] = []
+        #: The admission of the attempt in flight: ``(RunAdmission, admission id)`` (D-25).
+        self._admitted: tuple[Any, str] | None = None
         #: The bound of each record, in step (same-session path).
         self._bounds: list[Decimal] = []
 
@@ -475,6 +481,10 @@ class LLMMeter:
         call's worst case is reserved, and committed, before this returns.
         """
         self._worst = None
+        # D-25 cooperative pause (PROPOSED, ``app.jobs.admission``): on the durable path
+        # every attempt is admitted first. A refused admission raises ``RunStopped``
+        # (not an ``LLMError``) and no attempt is made, counted, reserved or charged.
+        admission = self._admission()
         if provider != "mock":
             if self.attempts >= self.settings.llm_max_calls_per_run:
                 self._refuse("run_call_cap")
@@ -483,18 +493,35 @@ class LLMMeter:
                 self._refuse("cost_unbounded", detail=worst.reason)
             budget = self.settings.llm_workspace_monthly_budget_usd
             if self._shared:
-                self._reserve(worst, ledger.usd(budget))
-            elif self.month_to_date + self.spent + float(worst) > budget:
-                self._refuse("workspace_budget")
+                # The admission runs inside the reservation's own transaction.
+                self._reserve(worst, ledger.usd(budget), admission)
+            else:
+                if self.month_to_date + self.spent + float(worst) > budget:
+                    self._refuse("workspace_budget")
+                if admission is not None:
+                    self._admitted = (admission, admission.admit_external("model")[0])
             self._worst = worst
+        elif admission is not None:
+            # The mock is never reserved: its admission is a short transaction of its own.
+            self._admitted = (admission, admission.admit_external("model")[0])
         self.attempts += 1
 
-    def _reserve(self, worst: Decimal, budget: Decimal) -> None:
+    def _admission(self):
+        """The current run's admission, if it governs this meter's scout request."""
+        from app.jobs.admission import current_admission
+
+        admission = current_admission()
+        if admission is None or admission.scout_request_id != self._scout_request_id:
+            return None
+        return admission
+
+    def _reserve(self, worst: Decimal, budget: Decimal, admission=None) -> None:
         assert self._workspace_id is not None and self._organization_id is not None
         key = self.attempt_key(self.attempts - self.prior_attempts)
         now = datetime.now(UTC)
-        reserved = self._in_own_transaction(
-            lambda s: ledger.reserve(
+
+        def reserve(s: Session) -> bool:
+            return ledger.reserve(
                 s,
                 workspace_id=self._workspace_id,
                 organization_id=self._organization_id,
@@ -505,7 +532,26 @@ class LLMMeter:
                 expires_at=ledger.reservation_expiry(self.settings, now),
                 now=now,
             )
-        )
+
+        if admission is None:
+            reserved = self._in_own_transaction(reserve)
+        else:
+            # Lock order: job, request (the admission's FOR SHARE), ledger row, then the
+            # period row (``ledger.reserve``). Admission, ledger row and reservation commit
+            # together; a budget refusal rolls all three back.
+            def admitted_reservation(s: Session) -> bool:
+                if not reserve(s):
+                    raise _BudgetRefused
+                return True
+
+            try:
+                admission_id, reserved = admission.admit_external(
+                    "model", attempt_key=key, extra=admitted_reservation
+                )
+            except _BudgetRefused:
+                reserved = False
+            else:
+                self._admitted = (admission, admission_id)
         if not reserved:
             self._refuse("workspace_budget")
         self._pending = (key, worst)
@@ -569,21 +615,31 @@ class LLMMeter:
             "cost_usd": cost,
             "outcome": "ok" if error is None else type(error).__name__,
         }
+        admitted, self._admitted = self._admitted, None
+        known = error is None or not (
+            isinstance(error, LLMTimeoutError) or getattr(error, "outcome_unknown", False)
+        )
         if self._shared and self._pending is not None:
             key, _worst = self._pending
             self._pending = None
-            self._in_own_transaction(
-                lambda s: ledger.settle(
+
+            def settle(s: Session) -> None:
+                ledger.settle(
                     s,
                     attempt_key=key,
                     settled_usd=ledger.usd(cost),
                     now=datetime.now(UTC),
                     usage={"scout_request_id": self._scout_request_id, **record},
                 )
-            )
+                if admitted is not None and admitted[1] is not None:  # end with settlement
+                    s.execute(admitted[0].end_statement(admitted[1], known=known))
+
+            self._in_own_transaction(settle)
         else:
             self._records.append(record)
             self._bounds.append(worst)
+            if admitted is not None:
+                admitted[0].record_end(admitted[1], known=known)
         return cost
 
     def summary(self) -> dict[str, Any]:

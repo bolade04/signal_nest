@@ -44,6 +44,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import httpx
+
 from app.connectors.base import (
     ConnectorResult,
     FailureKind,
@@ -71,8 +73,37 @@ from app.connectors.rss import (
 from app.connectors.sources import APPROVED_SOURCES, SourceRecord
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.jobs.admission import (
+    AdmissionUnresolved,
+    RunStopped,
+    admit_external_operation,
+    record_external_end,
+)
 
 logger = get_logger("signalnest.connectors.live")
+
+#: D-25 execution controls (PROPOSED): fetch failures whose outcome is KNOWN - the egress
+#: guard refused before connecting, or a response was received. Everything else (any timeout,
+#: a transport error after connecting, anything doubtful) is UNKNOWN (contract §8.2.2).
+_KNOWN_KINDS = frozenset(
+    {
+        FailureKind.EGRESS_BLOCKED,
+        FailureKind.UPSTREAM_ERROR,
+        FailureKind.RATE_LIMITED,
+        FailureKind.HTTP_CLIENT_ERROR,
+        FailureKind.UNSAFE_CONTENT,
+    }
+)
+
+
+def fetch_end_known(exc: ConnectorFetchError) -> bool:
+    """Whether a failed fetch attempt's outcome is known, from the egress exception chain."""
+    cause = exc.__cause__
+    if exc.failure.kind in _KNOWN_KINDS or isinstance(cause, httpx.ConnectError):
+        return True
+    # DNS failures happen before any connection; they carry no httpx cause.
+    return exc.failure.kind == FailureKind.NETWORK and not isinstance(cause, httpx.HTTPError)
+
 
 #: Transient kinds a live fetch retries (a 429 never is: it starts a cool-down).
 _RETRYABLE = frozenset({FailureKind.TIMEOUT, FailureKind.NETWORK, FailureKind.UPSTREAM_ERROR})
@@ -194,6 +225,10 @@ class LiveRssConnector(SourceConnector):
             try:
                 feed, parsed = self._feed(target, max_entries)
                 signals, fetched, clipped = self._signals(target, feed, parsed, scope)
+            except (RunStopped, AdmissionUnresolved):
+                # D-25 (PROPOSED): a refused admission stops the whole run; it is not a
+                # failure of this source and must not be recorded as one.
+                raise
             except ConnectorFetchError as exc:
                 self._record_failure(result, scope, key, exc.failure.kind, exc.failure.detail)
                 continue
@@ -293,11 +328,18 @@ class LiveRssConnector(SourceConnector):
         validators = self._cache.validators(key)
         last: ConnectorFetchError | None = None
         for attempt in range(1, self._attempts + 1):
+            # D-25 (PROPOSED): every fetch attempt (first try and each retry) is admitted
+            # immediately before its request is dispatched; a no-op off the durable path.
+            # The redirect hops of one attempt belong to that admitted attempt.
+            # Execution controls (PROPOSED): the admission commits a ledger row (K = 1); its
+            # end is recorded as known or unknown once the client call returns or raises.
+            admission_id = admit_external_operation("fetch")
             try:
                 response = self._fetcher.fetch(
                     target.fetch_url, allowed_hosts=target.allowed_hosts, validators=validators
                 )
             except ConnectorFetchError as exc:
+                record_external_end(admission_id, known=fetch_end_known(exc))
                 last = exc
                 if exc.retry_after_seconds is not None:
                     self._cache.cool_down(key, exc.retry_after_seconds)
@@ -306,6 +348,10 @@ class LiveRssConnector(SourceConnector):
                 if attempt < self._attempts:
                     self._sleep(0.5 * attempt)
                 continue
+            except BaseException:
+                record_external_end(admission_id, known=False)
+                raise
+            record_external_end(admission_id, known=True)
             if response.not_modified:
                 held = self._cache.revalidated(key, response)
                 if held is None:  # validators are only sent while a body is held
