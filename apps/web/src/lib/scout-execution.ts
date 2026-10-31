@@ -36,7 +36,8 @@ export function executionNotice(
         body:
           'An earlier operation did not report an outcome. SignalNest must confirm it has ended ' +
           'before this scout can run again. Resume and Run now will not restore service until ' +
-          'then. Previous findings and run history stay available. If this persists, contact support.',
+          'then: resuming does not clear the unresolved operation, only SignalNest support can. ' +
+          'Previous findings and run history stay available. If this persists, contact support.',
       };
     case 'paused':
       return { tone: 'info', title: 'Paused', body: 'This scout is paused. Resume it to run again.' };
@@ -67,7 +68,8 @@ export function executionNotice(
         return {
           tone: 'info',
           title: 'An earlier operation is still finishing',
-          body: 'This scout can run again once it ends.',
+          // W16 §C (PROPOSED; FU-267-R2): Run now is accepted now; the run waits for it.
+          body: 'You can run this scout now; the run waits until the earlier operation ends.',
         };
       }
       return null;

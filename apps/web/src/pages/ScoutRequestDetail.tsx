@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pause, Play, Radar, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { ArrowLeft, Info, Pause, Pencil, Play, Radar, Sparkles } from 'lucide-react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
@@ -17,6 +17,8 @@ import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
 import { isExecutionInProgress } from '@/lib/scout-execution';
+import { editAvailability } from '@/lib/scout-actions';
+import { partialFetchNote, zeroResult } from '@/lib/zero-result';
 import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
 import { moveFocusTo } from '@/lib/focus';
 import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
@@ -26,6 +28,7 @@ import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { jobFilters } from './scouts/jobFilters';
 import { JobsPanel } from './scouts/JobsPanel';
 import { RunNowButton } from './scouts/RunNowButton';
+import { ScoutEditDialog } from './scouts/ScoutEditDialog';
 import { ScoutExecutionNotice } from './scouts/ScoutExecutionNotice';
 import { SchedulePanel } from './scouts/SchedulePanel';
 import { useScoutActions } from './scouts/useScoutActions';
@@ -46,6 +49,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const canEdit = canEditWorkspace(useActorRole(organizationId).role);
   const actions = useScoutActions(workspaceId);
   const queryClient = useQueryClient();
+  const [editOpen, setEditOpen] = useState(false);
+  const editReasonId = useId();
   const { schedule, active: statusInFlight, stopped: statusUpdatesStopped } = useStatusPolling();
   // R2-01: if "Refresh status" is removed (nothing in flight any more) while it has keyboard
   // focus, return focus to this request's Run now, else to the page heading. Never otherwise.
@@ -118,6 +123,10 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const canPause = ['running', 'queued', 'draft', 'completed'].includes(r.status);
   const isPaused = r.status === 'paused';
   const opportunities = oppQuery.data ?? [];
+  const edit = editAvailability(r);
+  // W16 §E (PROPOSED): why the latest completed run produced no new card, from what it recorded.
+  const empty = zeroResult(r);
+  const partial = partialFetchNote(r.stats);
 
   return (
     <div className="space-y-6">
@@ -140,7 +149,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             </p>
           </div>
           {canEdit ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-start gap-2">
               <RunNowButton request={r} actions={actions} />
               {isPaused ? (
                 <Button variant="outline" onClick={() => actions.resume.mutate(r.id)}>
@@ -151,12 +160,39 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
                   <Pause className="size-4" /> Pause
                 </Button>
               )}
+              <span className="inline-flex max-w-xs flex-col items-start gap-1">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (!edit.available) return;
+                    setEditOpen(true);
+                  }}
+                  aria-disabled={edit.available ? undefined : true}
+                  aria-describedby={edit.reason ? editReasonId : undefined}
+                  className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                >
+                  <Pencil className="size-4" /> Edit
+                </Button>
+                <span id={editReasonId} aria-live="polite" className="text-xs text-muted-foreground">
+                  {edit.reason}
+                </span>
+              </span>
             </div>
           ) : null}
         </div>
       </div>
 
       <ScoutExecutionNotice execution={r.execution} status={r.status} />
+
+      {empty ? (
+        <div role="status" data-zero-result={empty.code} className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm">
+          <p className="flex items-center gap-1.5 font-medium">
+            <Info className="size-4 shrink-0" aria-hidden="true" /> {empty.title}
+          </p>
+          <p className="mt-1 text-muted-foreground">{empty.body}</p>
+          {partial ? <p className="mt-1 text-muted-foreground">{partial}</p> : null}
+        </div>
+      ) : null}
 
       {statusInFlight ? (
         <StatusRefresh
@@ -263,9 +299,11 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
               icon={Radar}
               title="No opportunities yet"
               description={
-                canEdit
-                  ? 'Run this scout to process fixture signals into scored, explainable opportunities.'
-                  : 'This scout has not produced any opportunities yet.'
+                empty
+                  ? empty.body
+                  : canEdit
+                    ? 'Run this scout to process fixture signals into scored, explainable opportunities.'
+                    : 'This scout has not produced any opportunities yet.'
               }
               action={
                 canEdit ? <RunNowButton request={r} actions={actions} /> : undefined
@@ -274,6 +312,15 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
           )}
         </div>
       </div>
+      {canEdit ? (
+        <ScoutEditDialog
+          workspaceId={workspaceId}
+          request={r}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          locationName={locName}
+        />
+      ) : null}
     </div>
   );
 }
