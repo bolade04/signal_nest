@@ -310,7 +310,8 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     recorded end"), the job's status and the exact `resolve` command to run.
   - **Customer workflow repairs (W16, PROPOSED; not operator-accepted).**
     - *One card per finding.* A finding is identified within its Scout by its evidence
-      (each member item's source type, source identity and content digest), never by its
+      (each member item's source type, source identity, content digest and the market it was
+      collected for, as its stored row records it), never by its
       title, label, scores or model text: `opportunities.finding_key`, unique per Scout where
       set. A run whose finding already has a card adds a `seen_again` row to
       `opportunity_observations` and creates no card; the card keeps its status, feedback,
@@ -349,7 +350,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
       location's country ("Lagos, Lagos" of a Lagos, NG location → "Lagos, Lagos, NG", served
       by the "Lagos, NG" sample market). Text that names a country is unchanged (an explicit
       market wins); a Scout without a location gets no country; nothing is broadened. The
-      stored text is not rewritten. Live sources still match their market labels exactly.
+      stored text is not rewritten. When an approved live source serves the stored text, the
+      sources get exactly that text, as before; only otherwise is the qualified text used (for
+      the sample library and coverage). Because the market is part of a finding's identity, an
+      edit of a Scout's market starts new cards for the new market; the old market's cards stay
+      as history.
     - *Empty results.* The Scout page says why the latest run made no new card, from its
       recorded coverage and stats, stating only what that run recorded, in the past tense: no
       source covered the market in the last run; the live sources failed in it; its sources
