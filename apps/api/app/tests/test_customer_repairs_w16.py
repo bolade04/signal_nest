@@ -128,7 +128,7 @@ def clean_findings(factory, committed):
 def test_a_rerun_records_seen_again_and_creates_no_card(factory, clean_findings):
     first_job = _run(factory, _rid())
     cards = _cards(factory, _rid())
-    assert len(cards) == 3 and all(c.finding_key and c.finding_key.startswith("f1:") for c in cards)
+    assert len(cards) == 3 and all(c.finding_key and c.finding_key.startswith("f2:") for c in cards)
     assert len({c.finding_key for c in cards}) == 3
     first = _sightings(factory, _rid())
     assert {o.kind for o in first} == {"first_seen"} and len(first) == 3
@@ -334,6 +334,14 @@ def test_a_legacy_duplicates_the_oldest_is_adopted_the_younger_untouched(
     assert {(o.opportunity_id, o.kind, o.job_id) for o in seen} == {
         (cid, "seen_again", job) for cid in oldest
     }
+    # Review r1 F4 (RM18): an adopted card's creation counts as its first sighting, so after one
+    # run at the candidate it reads "seen in 2 runs"; a younger copy has no sighting (seen once).
+    from app.opportunities.identity import sightings
+
+    with factory() as session:
+        counts = sightings(session, workspace_id=_ws(), opportunity_ids=oldest + younger)
+    assert {cid: counts[cid][0] for cid in oldest} == {cid: 2 for cid in oldest}
+    assert not set(younger) & set(counts)
 
 
 def test_a_a_legacy_card_without_members_is_not_adopted(factory, clean_findings):
@@ -388,6 +396,32 @@ def test_a_identity_is_the_evidence_never_the_title_or_the_url_alone():
     )
     assert guid == ("rss_news", "guid:g-1", "c" * 64)
     assert finding_key([]) is None
+
+
+def test_a_identity_includes_the_market_the_item_was_collected_for():
+    """Contract §J.1 (review r1 F1): the same item text collected for another market is other
+    evidence; only whitespace and case are normalized; a row with no market keeps the triple."""
+    base = dict(
+        source_type="competitor_scan",
+        source_key=None,
+        source_url="https://example.com/simulated",
+        content_hash="d" * 64,
+    )
+    dallas = item_identity(**base, ingest_metadata={"market": "Dallas, TX"})
+    lagos = item_identity(**base, ingest_metadata={"market": "Lagos, NG"})
+    assert dallas != lagos
+    assert dallas == item_identity(**base, ingest_metadata={"market": "  dallas,   TX "})
+    assert item_identity(**base, ingest_metadata={"market": None}) == (
+        "competitor_scan",
+        "url:https://example.com/simulated",
+        "d" * 64,
+    )
+    assert item_identity(**base, ingest_metadata={}) == item_identity(**base, ingest_metadata=None)
+    rows = [
+        SimpleNamespace(**base, ingest_metadata={"market": m}) for m in ("Dallas, TX", "Lagos, NG")
+    ]
+    assert finding_key(rows[:1]) != finding_key(rows[1:])
+    assert finding_key(rows[:1]).startswith("f2:")
 
 
 def test_a_opportunity_reads_carry_the_sightings(factory, clean_findings, client):
@@ -840,6 +874,66 @@ def test_e_a_location_scout_is_served_in_its_country(
         assert (stats["scanned"] > 0) is covered
         if covered:
             assert session.get(ScoutRequest, rid).resolved_market == f"{city}, {state}"
+    finally:
+        with factory() as session:
+            session.execute(
+                delete(OpportunityObservation).where(OpportunityObservation.scout_request_id == rid)
+            )
+            session.execute(delete(Opportunity).where(Opportunity.scout_request_id == rid))
+            session.execute(delete(Job).where(Job.scout_request_id == rid))
+            session.execute(delete(ScoutRequest).where(ScoutRequest.id == rid))
+            session.execute(delete(BusinessLocation).where(BusinessLocation.id == loc_id))
+            session.commit()
+
+
+@pytest.mark.parametrize("live_serves_stored", [True, False])
+def test_e_the_live_path_keeps_the_stored_market_text(
+    factory, client, committed, monkeypatch, live_serves_stored
+):
+    """Contract §J.4 (review r1 F5): when an approved live source serves the Scout's stored market
+    text, the sources get exactly that text, as at 9279c1d2; otherwise the location's country
+    qualifies it for the sample library and coverage."""
+    import app.connectors.live as live_mod
+
+    with factory() as session:
+        loc = BusinessLocation(
+            organization_id=seed_mod.sid("org"),
+            workspace_id=_ws(),
+            brand_id=seed_mod.sid("brand"),
+            name=f"Lagos live {uuid.uuid4().hex[:4]}",
+            city="Lagos",
+            state_province="Lagos",
+            country="NG",
+            is_active=True,
+        )
+        session.add(loc)
+        session.commit()
+        loc_id = loc.id
+    made = client.post(
+        f"{API}/workspaces/{_ws()}/scout-requests",
+        json={"name": "Lagos live scout", "location_id": loc_id, "keywords": ["coffee"]},
+        headers=_owner(),
+    )
+    rid = made.json()["id"]
+    asked: list = []
+    real_fetch = pipeline.fetch_signals
+
+    def recording_fetch(**kwargs):
+        asked.append(kwargs["market"])
+        return real_fetch(**{**kwargs, "rss_enabled": False})
+
+    monkeypatch.setattr(pipeline, "_rss_enabled_for", lambda db, **_k: True)
+    monkeypatch.setattr(
+        live_mod,
+        "live_targets_for",
+        lambda *, market, **_k: (
+            ["approved"] if live_serves_stored and market == "Lagos, Lagos" else []
+        ),
+    )
+    monkeypatch.setattr(pipeline, "fetch_signals", recording_fetch)
+    try:
+        _run(factory, rid)
+        assert asked == (["Lagos, Lagos"] if live_serves_stored else ["Lagos, Lagos, NG"])
     finally:
         with factory() as session:
             session.execute(

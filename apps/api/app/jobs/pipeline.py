@@ -205,6 +205,25 @@ def _coverage_rule_for(
     return cov, market, source_market
 
 
+def _live_serves(
+    market: str | None, request: ScoutRequest, rss_enabled: bool, takedowns: frozenset[str]
+) -> bool:
+    """Whether an approved live source serves the Scout's STORED market text (the selection
+    ``fetch_signals`` makes first, read without fetching anything)."""
+    if not rss_enabled:
+        return False
+    from app.connectors.live import live_targets_for
+
+    return bool(
+        live_targets_for(
+            market=market,
+            source_types=tuple(request.source_types or ()),
+            takedowns=takedowns,
+            settings=get_settings(),
+        )
+    )
+
+
 #: The meter of the run the durable handler is executing (P6-LLM-4), supplied with
 #: :func:`metered_run`. A context variable rather than an argument keeps the handler's
 #: call ``_run(db, scout_request_id, context)`` - a seam job tests stub - unchanged.
@@ -323,16 +342,23 @@ def _run(
     # #268: the fetch limit applies first, per source - each source reads at most
     # ``max_items`` entries (looking one past it) and reports what it delivered, clipped
     # or failed, in ``batch.reports``.
+    rss_enabled = _rss_enabled_for(
+        db,
+        organization_id=request.organization_id,
+        workspace_id=request.workspace_id,
+    )
+    takedowns = active_takedowns(db)
+    if source_market != market and _live_serves(market, request, rss_enabled, takedowns):
+        # Contract §J.4 (W16, PROPOSED): a live source serves the stored market text, so the
+        # sources get that text exactly as before the market reading; the location's country
+        # qualifies the text only for the sample library and coverage.
+        source_market = market
     batch = fetch_signals(
         market=source_market,
         keywords=request.keywords or ctx.keywords,
         source_types=request.source_types or [],
-        rss_enabled=_rss_enabled_for(
-            db,
-            organization_id=request.organization_id,
-            workspace_id=request.workspace_id,
-        ),
-        takedowns=active_takedowns(db),
+        rss_enabled=rss_enabled,
+        takedowns=takedowns,
     )
     # D-25: the post-fetch boundary. A pause that committed while the sources were read
     # stops the run here, before anything is written or refused (a no-op off the durable

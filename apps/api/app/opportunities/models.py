@@ -23,8 +23,10 @@ from app.core.enums import OpportunityStatus
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 #: The finding-identity rule's version prefix (W16 customer repairs, PROPOSED): a key is
-#: ``f1:`` + SHA-256 over the sorted identities of the card's member evidence items.
-FINDING_KEY_PREFIX = "f1:"
+#: ``f2:`` + SHA-256 over the sorted identities of the card's member evidence items, each
+#: including the market it was collected for (contract §J.1). ``f1`` (the rule without the
+#: market) was never released.
+FINDING_KEY_PREFIX = "f2:"
 
 
 class Opportunity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -98,9 +100,9 @@ class Opportunity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     status: Mapped[str] = mapped_column(String(40), default=OpportunityStatus.NEW.value)
     is_simulated: Mapped[bool] = mapped_column(Boolean, default=True)
-    #: The finding's identity within its Scout (W16 customer repairs, PROPOSED): ``f1:`` +
-    #: SHA-256 over the sorted ``(source_type, source identity, content_hash)`` of its member
-    #: evidence items, computed from their stored rows (``app.opportunities.identity``). NULL
+    #: The finding's identity within its Scout (W16 customer repairs, PROPOSED): ``f2:`` +
+    #: SHA-256 over the sorted ``(source_type, source identity, content_hash, market)`` of its
+    #: member evidence items, computed from their stored rows (``app.opportunities.identity``). NULL
     #: on a card created before the identity existed and not (yet) adopted by a later run.
     finding_key: Mapped[str | None] = mapped_column(String(72))
 

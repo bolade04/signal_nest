@@ -440,3 +440,123 @@ def test_a_run_now_between_the_edits_check_and_write_cannot_slip_through(world, 
         assert req.name == "Edited during a Run now"
     else:
         assert refused == "scout_in_progress" and req.name != "Edited during a Run now"
+
+
+# --------------------------------------------------------------------------- #
+# A: the market is part of the identity (contract §J.1; the reviewer's RV-A1b, review r1 F1)
+# --------------------------------------------------------------------------- #
+class _MarketSources:
+    """``pipeline.fetch_signals`` stand-in serving the demo library FOR THE MARKET THE RUN ASKS
+    FOR (the harness's ``Sources`` always serves Dallas), through the real fixture connector, so
+    a market edit is visible. Adopted from the reviewer's probe (helpers only)."""
+
+    def __call__(
+        self, *, market, keywords, source_types, rss_enabled, takedowns=frozenset(), settings=None
+    ):
+        from app.connectors.coverage import Coverage, CoverageReason
+        from app.scouting_requests.connectors import FixtureConnector, SignalBatch
+
+        out = FixtureConnector().fetch_reported(
+            market=market, keywords=list(keywords), source_types=list(source_types)
+        )
+        return SignalBatch(
+            signals=out.signals,
+            coverage=Coverage(CoverageReason.FIXTURE_LIBRARY, is_simulated=True),
+            reports=out.reports,
+        )
+
+
+def _market_scout(w, *, market, name, source_types, keywords) -> str:
+    from app.brands.models import Brand
+
+    with w.factory() as s:
+        brand = s.scalar(select(Brand).where(Brand.workspace_id == w.ws))
+        req = ScoutRequest(
+            organization_id=w.org,
+            workspace_id=w.ws,
+            brand_id=brand.id,
+            location_id=None,
+            name=name,
+            status="draft",
+            source_types=list(source_types),
+            keywords=list(keywords),
+            resolved_market=market,
+        )
+        s.add(req)
+        s.commit()
+        return req.id
+
+
+def _run_market(w, monkeypatch, rid: str) -> str:
+    monkeypatch.setattr(pipeline, "fetch_signals", _MarketSources())
+    with w.factory() as s:
+        req = s.get(ScoutRequest, rid)
+        req.status = "queued"
+        job = enqueue_scout_request(
+            s,
+            organization_id=req.organization_id,
+            workspace_id=req.workspace_id,
+            scout_request_id=rid,
+            location_id=req.location_id,
+            request_id=rid,
+            run_fence=req.run_fence,
+            idempotency_key=f"w16-market-{uuid.uuid4().hex}",
+        )
+        s.commit()
+        job_id = job.id
+    with offline_llm():
+        assert _start_worker(w).join_ok() is True
+    with w.factory() as s:
+        job = s.get(Job, job_id)
+        assert job.status == "succeeded", (job.status, job.last_error_summary)
+    return job_id
+
+
+def test_rv_a1b_a_market_edit_with_market_neutral_evidence(world, monkeypatch):
+    """The reviewer's RV-A1b: the demo library's competitor item has the same text and the shared
+    simulated URL in every market. A Scout reading only competitor scans, edited from Dallas to
+    Lagos, then re-run: the Lagos findings must not be recorded as sightings of Dallas cards; a
+    new Lagos card appears and the Dallas card stays as history."""
+    from app.signals.models import NormalizedSignal as _Norm
+
+    w = world
+    _settle(w)
+    rid = _market_scout(
+        w,
+        market="Dallas, TX",
+        name="competitor-watch",
+        source_types=["competitor_scan"],
+        keywords=["cafe"],
+    )
+    _run_market(w, monkeypatch, rid)
+    with w.factory() as s:
+        dallas = [
+            (c.id, c.resolved_market)
+            for c in s.scalars(select(Opportunity).where(Opportunity.scout_request_id == rid))
+        ]
+        update_scout_request(
+            workspace_id=w.ws,
+            request_id=rid,
+            body=ScoutRequestUpdate(resolved_market="Lagos, NG"),
+            db=s,
+            ctx=w.ctx,
+        )
+        s.commit()
+    second = _run_market(w, monkeypatch, rid)
+    seen = []
+    with w.factory() as s:
+        for o in s.scalars(
+            select(OpportunityObservation).where(OpportunityObservation.job_id == second)
+        ):
+            markets = {
+                (row.ingest_metadata or {}).get("market")
+                for row in s.scalars(select(_Norm).where(_Norm.cluster_id == o.cluster_id))
+            }
+            card = s.get(Opportunity, o.opportunity_id)
+            seen.append((o.kind, card.resolved_market, markets))
+        after = list(s.scalars(select(Opportunity).where(Opportunity.scout_request_id == rid)))
+    crossed = [x for x in seen if x[0] == "seen_again" and x[1] not in x[2]]
+    assert crossed == [], f"Lagos-run findings recorded as sightings of Dallas cards: {crossed}"
+    assert dallas and all(market == "Dallas, TX" for _, market in dallas)
+    assert {c.id for c in after} >= {cid for cid, _ in dallas}  # the Dallas cards stay as history
+    assert any(c.resolved_market == "Lagos, NG" for c in after)  # a new Lagos card

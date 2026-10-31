@@ -4,14 +4,21 @@ Contract W16-CUSTOMER-REPAIR-CONTRACT-01 §A / §I.1-§I.4. A card is identified
 (``organization_id``, ``workspace_id``, ``scout_request_id``), by the set of evidence items it was
 built from - never by its title, cluster label, scores or any model-generated text.
 
-* **Item identity** ``(source_type, source identity, content digest)``, computed from the stored
-  ``normalized_signals`` row (so a run and a later reading of an older card agree). The source
-  identity is the item's provenance key where one is recorded: ``source_key`` plus the item's own
-  id (its feed guid, else its link); else its feed guid; else its URL. A URL alone is never the
-  whole identity: the content digest (``content_hash``, SHA-256 of the normalized text) is always
-  part of it, because most simulated items share one URL.
-* **Finding key** ``f1:`` + SHA-256 over the sorted item identities. The prefix versions the rule:
-  a later rule gives different keys (a new card), never a false match.
+* **Item identity** ``(source_type, source identity, content digest, market)``, computed from the
+  stored ``normalized_signals`` row (so a run and a later reading of an older card agree). The
+  source identity is the item's provenance key where one is recorded: ``source_key`` plus the
+  item's own id (its feed guid, else its link); else its feed guid; else its URL. A URL alone is
+  never the whole identity: the content digest (``content_hash``, SHA-256 of the normalized text)
+  is always part of it, because most simulated items share one URL.
+* **Market** (contract §J.1, review r1 F1): the market the item was collected for, as recorded on
+  its stored row (``ingest_metadata["market"]``), compared after whitespace collapsing and case
+  folding only, so no two different markets merge. The same text collected for another market is
+  other evidence: after an edit of a Scout's market, the new market's findings start new cards
+  and the old market's cards stay as history. A row with no recorded market (``None``; the key
+  has been written by every ingest since Phase 1-2) keeps the three-part identity.
+* **Finding key** ``f2:`` + SHA-256 over the sorted item identities. The prefix versions the rule:
+  ``f2`` is the rule with the market (``f1``, the rule without it, was never released); a rule
+  change gives different keys (a new card), never a false match.
 
 Nothing here writes; :mod:`app.jobs.pipeline` stores the key and the sightings.
 """
@@ -38,8 +45,10 @@ def item_identity(
     source_url: str | None,
     content_hash: str,
     ingest_metadata: dict | None,
-) -> tuple[str, str, str]:
-    """The identity of one evidence item, from the fields its ``normalized_signals`` row stores."""
+) -> tuple[str, ...]:
+    """The identity of one evidence item, from the fields its ``normalized_signals`` row stores:
+    ``(source_type, source identity, content digest, "m:<market>")``, or the first three only
+    when the row records no market."""
     provenance = (ingest_metadata or {}).get("provenance") or {}
     guid = provenance.get("item_guid")
     if source_key:
@@ -49,10 +58,24 @@ def item_identity(
         source_identity = f"guid:{guid}"
     else:
         source_identity = f"url:{source_url or ''}"
-    return (source_type, source_identity, content_hash)
+    market = recorded_market(ingest_metadata)
+    if market is None:
+        return (source_type, source_identity, content_hash)
+    return (source_type, source_identity, content_hash, f"m:{market}")
 
 
-def identity_of(signal: Any) -> tuple[str, str, str]:
+def recorded_market(ingest_metadata: dict | None) -> str | None:
+    """The market an item was collected for, as its row records it, whitespace-collapsed and
+    case-folded (and nothing else, so two different markets never compare equal); ``None`` when
+    the row records none."""
+    value = (ingest_metadata or {}).get("market")
+    if not isinstance(value, str):
+        return None
+    folded = " ".join(value.split()).casefold()
+    return folded or None
+
+
+def identity_of(signal: Any) -> tuple[str, ...]:
     """:func:`item_identity` of a ``NormalizedSignal`` (or a row with the same attributes)."""
     return item_identity(
         source_type=signal.source_type,
@@ -160,6 +183,7 @@ def with_sightings(db: Session, workspace_id: str, cards: list[Opportunity], mod
 
 __all__ = [
     "finding_key",
+    "recorded_market",
     "identity_of",
     "item_identity",
     "legacy_cards_by_key",

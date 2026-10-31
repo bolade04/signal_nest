@@ -3,9 +3,9 @@
 W16 customer-workflow repairs (PROPOSED, contract W16-CUSTOMER-REPAIR-CONTRACT-01 §A/§I.1): one
 current card per finding across a Scout's repeated runs.
 
-* ``opportunities.finding_key`` - the finding's identity within its Scout: ``f1:`` + SHA-256 over
-  the sorted ``(source_type, source identity, content_hash)`` of the card's member evidence items,
-  computed from their stored rows. NULL on every card that exists before this revision.
+* ``opportunities.finding_key`` - the finding's identity within its Scout: ``f2:`` + SHA-256 over
+  the sorted ``(source_type, source identity, content_hash, market)`` of the card's member evidence
+  items, computed from their stored rows. NULL on every card that exists before this revision.
 * ``uq_opportunities_finding`` - unique ``(organization_id, workspace_id, scout_request_id,
   finding_key)`` where the key is set, on PostgreSQL and SQLite: two keyed cards of one finding
   cannot exist; NULL (a card created before the identity) never conflicts.
