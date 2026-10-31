@@ -34,6 +34,8 @@ function num(stats: Stats, key: string): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+const items = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;
+
 function fetchedAny(stats: Stats): boolean {
   const limits = stats?.['fetch_limits'];
   return Array.isArray(limits) && limits.some((f) => typeof f?.fetched === 'number' && f.fetched > 0);
@@ -88,7 +90,7 @@ export function zeroResult(
     return {
       code: 'all_filtered',
       title: 'The last run filtered everything it collected',
-      body: `The last run collected ${scanned} items, but all were filtered:${split || ' as noise or duplicates.'}`,
+      body: `The last run collected ${items(scanned)}, but ${scanned === 1 ? 'it was' : 'all were'} filtered:${split || ' as noise or duplicates.'}`,
     };
   }
   if (analysed !== null && analysed > 0 && opportunities === 0) {
@@ -103,7 +105,10 @@ export function zeroResult(
     return {
       code: 'all_seen_again',
       title: 'No new findings in the last run',
-      body: `All ${opportunities} findings of the last run were already known; that run recorded them as seen again.`,
+      body:
+        opportunities === 1
+          ? 'The finding of the last run was already known; that run recorded it as seen again.'
+          : `All ${opportunities} findings of the last run were already known; that run recorded them as seen again.`,
     };
   }
   return {

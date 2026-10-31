@@ -98,6 +98,11 @@ describe('zero-result explanations say only what the run recorded (W16 §E)', ()
     expect(zeroResult({ ...base, stats: { scanned: 8, signals_analyzed: 6, opportunities: 3 }, coverage: covered2 })).toBeNull();
   });
 
+  it('counts in the singular when the last run collected one item (round 1a)', () => {
+    const got = zeroResult({ ...base, stats: { scanned: 1, noise_filtered: 1, signals_analyzed: 0, opportunities: 0 }, coverage: covered as ScoutRequestOut['coverage'] });
+    expect(got?.body).toBe('The last run collected 1 item, but it was filtered: 1 as noise and 0 as duplicates.');
+  });
+
   it('names the duplicates it can derive', () => {
     const got = zeroResult({ ...base, stats: { scanned: 3, noise_filtered: 1, signals_analyzed: 0, opportunities: 0 }, coverage: covered as ScoutRequestOut['coverage'] });
     expect(got?.body).toMatch(/The last run collected 3 items, but all were filtered: 1 as noise and 2 as duplicates/);
