@@ -98,7 +98,8 @@ intelligence records, and feedback given on those records).
 | `signal_location_evidence` | `evidence`, `resolved_market` | dependent of `normalized_signals` |
 | `signal_clusters` | `label`, `centroid` (derived) | `signal_evidence` (by `created_at`) |
 | `signal_intelligence_records` | `facts`, `inference`, `provenance`, `rationale` | dependent of `normalized_signals` |
-| `opportunities` | `title`, `observed_evidence`, `source_summary`, `why_it_matters`, `who_cares`, `ai_inference`, `recommended_action`, … | `opportunities` (by `created_at`) |
+| `opportunities` | `title`, `observed_evidence`, `source_summary`, `why_it_matters`, `who_cares`, `ai_inference`, `recommended_action`, …; `finding_key` (W16 customer repairs, PROPOSED: the finding's identity within its Scout, a SHA-256 digest over its member items' source types, source identities and content digests; no content of its own; NULL on cards created before it existed, never back-filled) | `opportunities` (by `created_at`) |
+| `opportunity_observations` | **none** (W16 customer repairs, PROPOSED): one row per sighting of a finding by a run (`first_seen` / `seen_again`), with the card, the Scout, the run's job and cluster (`job_id` / `cluster_id` set null when those rows go), `observed_at` and timestamps; ids, a kind and instants only, no content; exported with the organization | dependent of `opportunities` |
 | `opportunity_scores` | score breakdown only | dependent of `opportunities` |
 | `validation_evidence` | `detail`, `source_url` | dependent of `opportunities` |
 

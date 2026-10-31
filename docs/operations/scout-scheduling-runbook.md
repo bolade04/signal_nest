@@ -285,9 +285,10 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     R6 (a fetch 5xx counts as unknown: the bound is strict).
   - **Recovery state (D-25 recovery, PROPOSED).** Every response that returns the Scout
     itself (`ScoutRequestOut`: create, read, update, pause and resume) carries a derived,
-    read-only `execution` field `{state, reason, next_action, since}`; the list returns
-    `null` (not computed there), and Run now's and the schedule routes' responses do not
-    carry it. It is computed on each read from committed rows and the database clock;
+    read-only `execution` field `{state, reason, next_action, since}`; since W16 (PROPOSED)
+    the list carries it too, computed for the whole page in a bounded number of statements
+    (four on PostgreSQL, whatever the page size) with the same classification as the
+    single-Scout read; Run now's and the schedule routes' responses do not carry it. It is computed on each read from committed rows and the database clock;
     nothing is stored. `needs_attention` when an unresolved admission is
     eligible for reconciliation (its attempt holds no valid authority, and its end is unknown,
     or it has no end and its deadline has passed, or it is a legacy row with no end), whatever
@@ -307,6 +308,53 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     Scout in `needs_attention` with its tenancy, the operation, `admitted_at`, the stored
     deadline (or "not recorded") and its basis, whether it has passed, the end kind (or "no
     recorded end"), the job's status and the exact `resolve` command to run.
+  - **Customer workflow repairs (W16, PROPOSED; not operator-accepted).**
+    - *One card per finding.* A finding is identified within its Scout by its evidence
+      (each member item's source type, source identity and content digest), never by its
+      title, label, scores or model text: `opportunities.finding_key`, unique per Scout where
+      set. A run whose finding already has a card adds a `seen_again` row to
+      `opportunity_observations` and creates no card; the card keeps its status, feedback,
+      scores, text and intelligence link. All identity writes happen after the run's last
+      model call, inside its write savepoint, in ascending key order (opposite orders were
+      measured to deadlock), each new card in a savepoint of its own; a unique conflict
+      re-uses the winner. A stopped run records no card and no sighting. Cards created before
+      the identity have no key; a later run adopts the oldest whose own stored members give
+      the same key, and younger copies stay as they are. A re-run makes and is charged for the
+      same model calls. Run stats add `opportunities_new` and `opportunities_seen_again`
+      (`opportunities` is still the findings the run produced).
+    - *Edit.* `PUT .../scout-requests/{id}` locks the Scout row, then refuses with 422
+      `scout_in_progress` while the request is queued or running or a run it has not been
+      paused out of is live, and writes only the sent fields under a compare-and-set on the
+      status and run fence it read; Run now waits for it. Allowed while paused, stopped, idle
+      or needing attention; never writes status, fence, owner or execution state. Edit-only
+      validation (create is unchanged, FU-W16-1); a `scout_request.updated` audit record names
+      the changed fields, never their values.
+    - *Run now in the UI* mirrors the API's refusals exactly (queued or running, paused, needs
+      attention), with a visible reason tied to the button; it stays available while an
+      earlier operation is finishing (the run waits). The list shows "Needs attention".
+    - *Run outcomes (a proposed Q1 presentation, not a Q1 ruling).* `JobOut` and `RunItem`
+      carry a read-only `outcome` / `outcome_reason` derived from the job's status, its
+      result's outcome, its error code and an allow-list of error-summary codes (never the
+      summary itself): `completed` (also a run recorded before outcomes existed, and the
+      legacy `paused_during_run` with a note); `stopped_paused` (`stopped_request_paused`);
+      `skipped_paused` (`skipped_request_paused`); `skipped` (`skipped_owner_active`: another
+      run of the Scout was in progress); `stopped` (`stopped_owner_superseded`,
+      `stopped_lease_lost`, `status_changed_during_run`, `request_gone`, or an unknown
+      outcome); `cancelled`; `failed` with `earlier_operation_timed_out`
+      (`admission_unresolved`), `too_many_signals`, `retries_exhausted` (dead-lettered
+      transient), `worker_stopped_responding` (dead-lettered timeout) or `internal`. A
+      succeeded job whose run stopped or was skipped is never shown as Completed; job
+      lifecycle states are unchanged and the raw codes stay visible as secondary text.
+    - *Markets.* For a Scout tied to a location, the sources see its market text read in the
+      location's country ("Lagos, Lagos" of a Lagos, NG location → "Lagos, Lagos, NG", served
+      by the "Lagos, NG" sample market). Text that names a country is unchanged (an explicit
+      market wins); a Scout without a location gets no country; nothing is broadened. The
+      stored text is not rewritten. Live sources still match their market labels exactly.
+    - *Empty results.* The Scout page says why the latest run made no new card, from its
+      recorded coverage and stats: no coverage for the market; live sources unavailable; no
+      items for the source types and keywords; items collected but all filtered (noise or
+      duplicates, derived); all findings already known (seen again); otherwise only that
+      nothing new was found.
   - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
     exactly three categories - the current owner's admissions, earlier owners' outstanding
     admissions, admissions with an unknown end - each with its job's status and
