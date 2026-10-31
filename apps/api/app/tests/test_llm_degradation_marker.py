@@ -47,6 +47,7 @@ from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal
 from app.tests._auth2_support import live_bearer
 from app.tests._llm_offline import offline_llm, offline_settings
+from app.tests._seed_support import forget_findings
 
 API = get_settings().api_prefix
 EXPLANATION = {
@@ -192,6 +193,7 @@ def _rerun(factory, monkeypatch, service: LLMService) -> tuple[list[Opportunity]
     monkeypatch.setattr(pipeline, "get_settings", offline_settings)
     with factory() as db:
         request_id = db.scalars(select(ScoutRequest.id).order_by(ScoutRequest.id)).first()
+        forget_findings(db, request_id)
         before_opps = set(db.scalars(select(Opportunity.id)))
         before_signals = set(db.scalars(select(NormalizedSignal.id)))
         pipeline._run(db, request_id)

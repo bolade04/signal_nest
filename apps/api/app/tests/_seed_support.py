@@ -19,3 +19,22 @@ def clear_seeded_runs(factory) -> None:
         s.execute(delete(JobEvent))
         s.execute(delete(Job))
         s.commit()
+
+
+def forget_findings(db, scout_request_id: str) -> None:
+    """Remove a Scout's earlier cards and their sightings, committed, so the next run creates
+    its own cards.
+
+    W16 customer repairs (PROPOSED): a re-run of the same evidence re-uses the finding's card
+    (one card per finding) and creates none. A test that asserts on what a re-run *creates*
+    (its markers, its screening) clears the earlier cards first; its assertions are unchanged.
+    """
+    from app.opportunities.models import Opportunity, OpportunityObservation
+
+    db.execute(
+        delete(OpportunityObservation).where(
+            OpportunityObservation.scout_request_id == scout_request_id
+        )
+    )
+    db.execute(delete(Opportunity).where(Opportunity.scout_request_id == scout_request_id))
+    db.commit()
