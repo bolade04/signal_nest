@@ -28,6 +28,13 @@ export interface ZeroResult {
 
 type Stats = Record<string, unknown> | null | undefined;
 
+/** What a run says when its record cannot tell the cases apart (or found nothing new). */
+const GENERIC: ZeroResult = {
+  code: 'nothing_new',
+  title: 'Nothing new in the last run',
+  body: 'The last run found nothing new.',
+};
+
 function num(stats: Stats, key: string): number | null {
   if (!stats || !Object.prototype.hasOwnProperty.call(stats, key)) return null;
   const value = stats[key];
@@ -70,6 +77,11 @@ export function zeroResult(
   const scanned = num(stats, 'scanned');
   const analysed = num(stats, 'signals_analyzed');
   const noise = num(stats, 'noise_filtered');
+  if (!request.coverage && scanned === 0) {
+    // Contract §J.3 (review r1 F3): a run recorded before coverage was recorded cannot tell "no
+    // items" from "no source for the market"; it gets the generic line.
+    return GENERIC;
+  }
   if (scanned === 0) {
     return fetchedAny(stats)
       ? {
@@ -111,12 +123,9 @@ export function zeroResult(
           : `All ${opportunities} findings of the last run were already known; that run recorded them as seen again.`,
     };
   }
-  return {
-    code: 'nothing_new',
-    title: 'Nothing new in the last run',
-    body: 'The last run found nothing new.',
-  };
+  return GENERIC;
 }
+
 
 /** Supplementary partial-fetch note, when the run recorded one. */
 export function partialFetchNote(stats: Stats): string | null {

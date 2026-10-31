@@ -24,10 +24,17 @@ export function RunNowButton({
   request,
   actions,
   size,
+  announce = true,
 }: {
   request: Pick<ScoutRequestOut, 'id' | 'status' | 'execution'>;
   actions: ReturnType<typeof useScoutActions>;
   size?: ButtonProps['size'];
+  /**
+   * Whether this button's reason is a polite live region. A page that shows a second Run now for
+   * the same Scout (the empty state's) passes `false` for it, so the reason is announced once; the
+   * button still carries it as its accessible description, and it is not shown twice (review r1 F9).
+   */
+  announce?: boolean;
 }) {
   const reasonId = useId();
   const state = runNowAvailability(request, actions.isRunPending(request.id));
@@ -51,9 +58,15 @@ export function RunNowButton({
       >
         <Radar className="size-4" /> {state.label ?? 'Run now'}
       </Button>
-      <span id={reasonId} aria-live="polite" className="text-xs text-muted-foreground" data-run-reason="">
-        {state.reason}
-      </span>
+      {announce ? (
+        <span id={reasonId} aria-live="polite" className="text-xs text-muted-foreground" data-run-reason="">
+          {state.reason}
+        </span>
+      ) : (
+        <span id={reasonId} className="sr-only">
+          {state.reason}
+        </span>
+      )}
     </span>
   );
 }

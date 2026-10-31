@@ -309,7 +309,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
                     : 'This scout has not produced any opportunities yet.'
               }
               action={
-                canEdit ? <RunNowButton request={r} actions={actions} /> : undefined
+                canEdit ? <RunNowButton request={r} actions={actions} announce={false} /> : undefined
               }
             />
           )}

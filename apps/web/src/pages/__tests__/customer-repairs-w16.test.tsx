@@ -68,6 +68,22 @@ describe('the edit form sends only what changed (W16 §B)', () => {
     expect(cleanKeywords([' oat  milk ', '', 'OAT MILK', 'latte'])).toEqual(['oat milk', 'latte']);
   });
 
+  it('P1: an untouched form sends nothing for a Scout created with untrimmed text (review r1 F2)', () => {
+    const untrimmed = {
+      name: 'Dallas  ',
+      resolved_market: 'Dallas, TX ',
+      keywords: ['Coffee', 'coffee', 'cold  brew'],
+      source_types: ['reviews'],
+      notes: 'Watch the queue.\n',
+    } as unknown as ScoutRequestOut;
+    expect(changedFields(untrimmed, formOf(untrimmed))).toEqual({});
+    // A real change is still sent, and only that one.
+    expect(changedFields(untrimmed, { ...formOf(untrimmed), notes: 'Watch the line.' })).toEqual({ notes: 'Watch the line.' });
+    expect(changedFields(untrimmed, { ...formOf(untrimmed), source_types: ['reviews', 'reddit'] })).toEqual({
+      source_types: ['reviews', 'reddit'],
+    });
+  });
+
   it('sends nothing for an untouched form and only the changed fields otherwise', () => {
     expect(changedFields(original, formOf(original))).toEqual({});
     expect(changedFields(original, { ...formOf(original), name: '  Dallas 2 ' })).toEqual({ name: 'Dallas 2' });
@@ -89,6 +105,12 @@ describe('zero-result explanations say only what the run recorded (W16 §E)', ()
   ] as const)('%s', (code, stats, coverage) => {
     const got = zeroResult({ ...base, stats: stats as Record<string, unknown>, coverage: coverage as ScoutRequestOut['coverage'] });
     expect(got?.code).toBe(code);
+  });
+
+  it('P2: a run recorded before coverage was recorded gets the generic line, not a cause (review r1 F3)', () => {
+    const got = zeroResult({ ...base, coverage: null, stats: { scanned: 0, noise_filtered: 0, signals_analyzed: 0, opportunities: 0 } });
+    expect(got?.code).toBe('nothing_new');
+    expect(got?.body).toBe('The last run found nothing new.');
   });
 
   it('is silent when the run made a new card, before any run, and for older runs that found cards', () => {
@@ -187,6 +209,8 @@ describe('the pages (W16 §A–§E)', () => {
     const run = await within(card).findByRole('button', { name: 'Run now' });
     expect(run).toHaveAttribute('aria-disabled', 'true');
     expect(run).toHaveAccessibleDescription(RUN_REASONS.needsAttention);
+    // Review r1 F4 (WM5): the reason is a polite live region, so it is announced when it appears.
+    expect(document.getElementById(run.getAttribute('aria-describedby')!)).toHaveAttribute('aria-live', 'polite');
   });
 
   it('the jobs panel labels each outcome and keeps the raw codes secondary', async () => {
@@ -276,6 +300,52 @@ describe('the pages (W16 §A–§E)', () => {
     const screen = renderApp(<App />, { route: '/scout-requests/scout-loc-dallas' });
     await screen.findByText(/no opportunities yet/i);
     expect(screen.getAllByText(NOT_COVERED_BODY)).toHaveLength(1);
+  });
+
+  it('with two Run now buttons on the page, the reason is one live region (review r1 F9)', async () => {
+    server.use(
+      SCHEDULE_404,
+      http.get(P('/workspaces/:ws/opportunities'), () => HttpResponse.json([])),
+      http.get(P('/workspaces/:ws/scout-requests/:id'), () =>
+        HttpResponse.json({
+          id: 'scout-loc-dallas', organization_id: 'org-1', workspace_id: 'ws-1', brand_id: 'brand-1',
+          location_id: null, campaign_id: null, name: 'Blocked, no cards', status: 'failed', source_types: [],
+          keywords: [], product_profile_id: null, resolved_market: 'Lagos, NG', notes: null, last_run_at: null,
+          stats: {}, coverage: null,
+          execution: { state: 'needs_attention', reason: 'operation_overdue', next_action: 'contact_support', since: null },
+          created_at: '2026-05-01T00:00:00Z', updated_at: '2026-06-01T12:00:00Z',
+        }),
+      ),
+    );
+    const screen = renderApp(<App />, { route: '/scout-requests/scout-loc-dallas' });
+    await screen.findByText(/no opportunities yet/i);
+    const runs = screen.getAllByRole('button', { name: 'Run now' });
+    expect(runs).toHaveLength(2);
+    for (const run of runs) expect(run).toHaveAccessibleDescription(RUN_REASONS.needsAttention);
+    const live = Array.from(document.querySelectorAll('[aria-live="polite"]')).filter((el) =>
+      el.textContent?.includes(RUN_REASONS.needsAttention),
+    );
+    expect(live).toHaveLength(1);
+  });
+
+  it('an untouched edit form cannot be saved, even for a Scout stored with untrimmed text (review r1 F2)', async () => {
+    server.use(
+      SCHEDULE_404,
+      http.get(P('/workspaces/:ws/scout-requests/:id'), () =>
+        HttpResponse.json({
+          id: 'scout-loc-dallas', organization_id: 'org-1', workspace_id: 'ws-1', brand_id: 'brand-1',
+          location_id: null, campaign_id: null, name: 'R Untouched name  ', status: 'completed',
+          source_types: ['reviews'], keywords: ['Coffee', 'coffee', 'cold  brew'], product_profile_id: null,
+          resolved_market: 'Dallas, TX ', notes: 'Watch the queue.\n', last_run_at: null, stats: {}, coverage: null,
+          execution: { state: 'idle', reason: 'none', next_action: 'run_now', since: null },
+          created_at: '2026-05-01T00:00:00Z', updated_at: '2026-06-01T12:00:00Z',
+        }),
+      ),
+    );
+    const screen = renderApp(<App />, { route: '/scout-requests/scout-loc-dallas' });
+    await screen.user.click(await screen.findByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit scout' });
+    expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeDisabled();
   });
 
   it('a card produced again says so', async () => {
