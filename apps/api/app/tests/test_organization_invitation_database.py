@@ -80,7 +80,9 @@ TAKEDOWNS = "da25533622b2"
 BUDGET = "8005724d811a"
 FENCE = "b5e0c7a3d2f1"
 EXECCTL = "c6f1d8e2a4b7"
-CODE_HEAD = "d4a8f2c6b9e1"
+RECOVERY = "d4a8f2c6b9e1"
+# W16 customer repairs (PROPOSED): opportunities.finding_key and opportunity_observations.
+CODE_HEAD = "e7b3c5a9d1f4"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -283,7 +285,8 @@ def test_revision_chain() -> None:
     assert script.get_revision(EXPLANATION).down_revision == SESSIONS
     assert script.get_revision(USAGE).down_revision == EXPLANATION
     assert script.get_revision(TAKEDOWNS).down_revision == USAGE
-    assert script.get_revision(CODE_HEAD).down_revision == EXECCTL
+    assert script.get_revision(CODE_HEAD).down_revision == RECOVERY
+    assert script.get_revision(RECOVERY).down_revision == EXECCTL
     assert script.get_revision(EXECCTL).down_revision == FENCE
     assert script.get_revision(FENCE).down_revision == BUDGET
     assert script.get_revision(BUDGET).down_revision == TAKEDOWNS

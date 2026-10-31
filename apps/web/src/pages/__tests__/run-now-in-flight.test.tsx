@@ -224,7 +224,7 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     expect(posts).toBe(1);
   });
 
-  it('leaves Pause and Run on a paused request exactly as they were (decisions D-25-a/b are open)', async () => {
+  it('keeps Pause while queued; on a paused request Run now mirrors the API refusal (W16 §C)', async () => {
     installBackend();
     phase = 'queued';
     let screen = await openDetail();
@@ -233,8 +233,12 @@ describe('Run now while a run is queued or running (UI-AUDIT P8)', () => {
     screen.unmount();
     phase = 'paused';
     screen = await openDetail();
-    // Run on a paused request is still offered; the API answers it, as before.
-    expectAvailable(screen.getByRole('button', { name: 'Run now' }));
+    // W16 §C (PROPOSED) replaces "Run on a paused request is still offered": the API refuses a
+    // run on a paused request ("Resume the request before running it."), so Run now is
+    // unavailable, focusable, and says why; Resume stays offered.
+    const run = screen.getByRole('button', { name: 'Run now' });
+    expect(run).toHaveAttribute('aria-disabled', 'true');
+    expect(run).toHaveAccessibleDescription(/paused: resume the scout to run it/i);
     expect(screen.getByRole('button', { name: /resume/i })).toBeEnabled();
   });
 });

@@ -1842,7 +1842,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Scout Requests */
+        /**
+         * List Scout Requests
+         * @description The workspace's Scouts, each with its derived ``execution`` state (W16 §C, PROPOSED):
+         *     the same classification as the single-Scout read, computed for the whole page in a bounded
+         *     number of statements (no per-Scout reads).
+         */
         get: operations["list_scout_requests_api_v1_workspaces__workspace_id__scout_requests_get"];
         put?: never;
         /** Create Scout Request */
@@ -1862,7 +1867,19 @@ export interface paths {
         };
         /** Get Scout Request */
         get: operations["get_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__get"];
-        /** Update Scout Request */
+        /**
+         * Update Scout Request
+         * @description Edit a Scout's name, source types, keywords, market override or notes (W16 §B, PROPOSED).
+         *
+         *     Only the fields sent change; the change applies to future runs. Refused with 422
+         *     ``scout_in_progress`` while the Scout is queued or running, or while a run it has not been
+         *     paused out of is live; allowed while paused, stopped, idle or needing attention (an edit
+         *     restores nothing: Run now's refusals still decide). Decided atomically: the Scout row is
+         *     locked (``FOR NO KEY UPDATE``) before the check, and the write is a compare-and-set on the
+         *     status and run fence read under that lock, so a Run now (or a claim, or a pause) cannot
+         *     slip between the check and the write. Status, run fence, owner and execution state are
+         *     never written here.
+         */
         put: operations["update_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__put"];
         post?: never;
         delete?: never;
@@ -3588,6 +3605,10 @@ export interface components {
             location_id: string | null;
             /** Max Attempts */
             max_attempts: number;
+            /** @description How a finished Scout run ended (PROPOSED, a proposed Q1 presentation): derived read-only from the job's status, its result's outcome and its error code. Null while the run is in flight and for other job types. A succeeded job whose run was stopped or skipped is never 'completed'. */
+            outcome?: components["schemas"]["RunOutcome"] | null;
+            /** @description Why the run ended so, as a closed code (PROPOSED); null where none applies. */
+            outcome_reason?: components["schemas"]["RunOutcomeReason"] | null;
             /** Priority */
             priority: number;
             /** Result Summary */
@@ -3942,6 +3963,11 @@ export interface components {
             inside_scout_area: boolean;
             /** Is Simulated */
             is_simulated: boolean;
+            /**
+             * Last Seen At
+             * @description When a run last produced this finding (PROPOSED); null for a card with no recorded sighting.
+             */
+            last_seen_at?: string | null;
             /** Location Id */
             location_id: string | null;
             /** Opportunity Score */
@@ -3958,6 +3984,12 @@ export interface components {
             risk_level: string;
             /** Scout Request Id */
             scout_request_id: string;
+            /**
+             * Seen Count
+             * @description How many runs produced this finding (PROPOSED). At least 1.
+             * @default 1
+             */
+            seen_count: number;
             /** Source Summary */
             source_summary: string[];
             /** Status */
@@ -4004,6 +4036,11 @@ export interface components {
             inside_scout_area: boolean;
             /** Is Simulated */
             is_simulated: boolean;
+            /**
+             * Last Seen At
+             * @description When a run last produced this finding (PROPOSED); null for a card with no recorded sighting.
+             */
+            last_seen_at?: string | null;
             /** Location Id */
             location_id: string | null;
             /** Observed Evidence */
@@ -4028,6 +4065,12 @@ export interface components {
             scores?: components["schemas"]["ScoreBreakdown"][];
             /** Scout Request Id */
             scout_request_id: string;
+            /**
+             * Seen Count
+             * @description How many runs produced this finding (PROPOSED). At least 1.
+             * @default 1
+             */
+            seen_count: number;
             /** Source Summary */
             source_summary: string[];
             /** Status */
@@ -4348,6 +4391,8 @@ export interface components {
             last_error_code: string | null;
             /** Max Attempts */
             max_attempts: number;
+            outcome?: components["schemas"]["RunOutcome"] | null;
+            outcome_reason?: components["schemas"]["RunOutcomeReason"] | null;
             /** Scheduled For */
             scheduled_for: string | null;
             /** Started At */
@@ -4363,6 +4408,18 @@ export interface components {
             updated_at: string;
         };
         /**
+         * RunOutcome
+         * @description How a finished Scout run ended (null while it is in flight, and for other job types).
+         * @enum {string}
+         */
+        RunOutcome: "completed" | "stopped_paused" | "skipped_paused" | "skipped" | "stopped" | "cancelled" | "failed";
+        /**
+         * RunOutcomeReason
+         * @description Why, in a closed customer-safe code (null where the outcome says it all).
+         * @enum {string}
+         */
+        RunOutcomeReason: "paused_during_run" | "another_run_active" | "another_run_took_over" | "worker_lost" | "scout_changed" | "scout_removed" | "earlier_operation_timed_out" | "too_many_signals" | "retries_exhausted" | "worker_stopped_responding" | "internal";
+        /**
          * RunStats
          * @description Aggregate per-run counts, sourced verbatim from the durable job's
          *     ``result_summary``. Present only once a run has produced a summary; a run that
@@ -4374,6 +4431,10 @@ export interface components {
             noise_filtered: number;
             /** Opportunities */
             opportunities: number;
+            /** Opportunities New */
+            opportunities_new?: number | null;
+            /** Opportunities Seen Again */
+            opportunities_seen_again?: number | null;
             /** Scanned */
             scanned: number;
             /** Signals Analyzed */
@@ -4607,7 +4668,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /** @description Derived execution state (PROPOSED). Computed on single-Scout responses; null means it was not computed on this read (the list). */
+            /** @description Derived execution state (PROPOSED). Computed on every response that returns the Scout itself, the list included (W16, PROPOSED); null only where a response does not compute it. */
             execution?: components["schemas"]["ScoutExecutionOut"] | null;
             /** Id */
             id: string;
@@ -4643,7 +4704,17 @@ export interface components {
             /** Workspace Id */
             workspace_id: string;
         };
-        /** ScoutRequestUpdate */
+        /**
+         * ScoutRequestUpdate
+         * @description An edit of an existing Scout (W16 customer repairs, PROPOSED; create is unchanged).
+         *
+         *     Only the fields sent change. ``name`` is required to be non-blank (1-200 characters after
+         *     trimming); ``source_types`` are the supported source types (repeats dropped); ``keywords`` are
+         *     trimmed, emptied ones dropped and repeats (ignoring case) dropped. ``name``, ``source_types``
+         *     and ``keywords`` cannot be ``null``; ``resolved_market`` and ``notes`` can (clearing them).
+         *     Unknown fields are refused, so status, location, campaign, product profile, run fence and
+         *     owner can never be set here.
+         */
         ScoutRequestUpdate: {
             /** Keywords */
             keywords?: string[] | null;
@@ -4654,7 +4725,7 @@ export interface components {
             /** Resolved Market */
             resolved_market?: string | null;
             /** Source Types */
-            source_types?: string[] | null;
+            source_types?: components["schemas"]["SourceType"][] | null;
         };
         /** ScoutRunResult */
         ScoutRunResult: {
@@ -4755,6 +4826,11 @@ export interface components {
             /** Source Type */
             source_type?: string;
         };
+        /**
+         * SourceType
+         * @enum {string}
+         */
+        SourceType: "manual" | "website_scan" | "competitor_scan" | "rss_news" | "reddit" | "reviews" | "google_trends" | "meta_ad_library" | "tiktok_creative_center";
         /**
          * StuckJobsOut
          * @description Operator stuck-job summary: a live count plus a bounded page.

@@ -64,17 +64,25 @@ class _Closeout:
         )
 
     def one_intel_opp_per_market(self) -> dict[str, str]:
-        """Map resolved_market -> one opportunity id that has a persisted record."""
+        """Map resolved_market -> one opportunity id that has a persisted record with an
+        inferred signal type (the fields the panel contract below reads).
+
+        W16 (PROPOSED) adaptation: a run now inserts its cards in ascending finding-key order
+        (contract §I.2), so "the first card per market in row order" is no longer the first
+        cluster's card; some seeded records legitimately infer no signal type. The choice is
+        made by content, not by row order; the assertions are unchanged."""
         out: dict[str, str] = {}
         with self.factory() as s:
             opps = s.scalars(
-                select(Opportunity).where(Opportunity.workspace_id == self.ws)
+                select(Opportunity)
+                .where(Opportunity.workspace_id == self.ws)
+                .order_by(Opportunity.created_at, Opportunity.id)
             ).all()
             for o in opps:
                 if o.resolved_market in out:
                     continue
                 rec = get_latest_for_opportunity(s, workspace_id=self.ws, opportunity_id=o.id)
-                if rec is not None:
+                if rec is not None and (rec.inference or {}).get("signal_type"):
                     out[o.resolved_market] = o.id
         return out
 

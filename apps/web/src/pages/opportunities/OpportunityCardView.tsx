@@ -91,6 +91,13 @@ export function OpportunityCardView({ opportunity }: { opportunity: OpportunityC
           <span>{o.source_summary.length} source{o.source_summary.length === 1 ? '' : 's'}</span>
           <span className="ml-auto">{formatRelative(o.created_at)}</span>
         </div>
+        {/* W16 §A (PROPOSED): a finding later runs produced again keeps this one card. */}
+        {o.seen_count > 1 ? (
+          <p className="mt-2 text-xs text-muted-foreground" data-seen-again="">
+            Seen in {o.seen_count} runs
+            {o.last_seen_at ? ` · last seen ${formatRelative(o.last_seen_at)}` : ''}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

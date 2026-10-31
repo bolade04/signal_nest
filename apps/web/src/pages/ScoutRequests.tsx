@@ -56,7 +56,17 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
     // Re-read while any run is queued or running, so each row's status (and its Run now
     // button) follows the worker without a reload (UI-AUDIT F8 / P8), on the bounded,
     // backed-off schedule of lib/status-polling.ts (review F-02).
-    ...pollingOptions<ScoutRequestOut[]>(schedule, 'requests', (rows) => inFlightSignature(rows, isScoutInFlight)),
+    // W16 §C (PROPOSED): also while a row's derived execution is `in_progress` under a settled
+    // status, so its badge and Run now follow the worker as on the detail page.
+    ...pollingOptions<ScoutRequestOut[]>(schedule, 'requests', (rows) =>
+      inFlightSignature(
+        rows?.map((r) => ({
+          ...r,
+          status: r.execution?.state === 'in_progress' && !isScoutInFlight(r.status) ? 'running' : r.status,
+        })),
+        isScoutInFlight,
+      ),
+    ),
   });
   const refreshStatus = () => {
     schedule.restart(Date.now());
@@ -164,6 +174,11 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
                         {r.name}
                       </Link>
                       <ScoutStatusBadge value={r.status} />
+                      {r.execution?.state === 'needs_attention' ? (
+                        <Badge intent="danger" data-needs-attention="">
+                          Needs attention
+                        </Badge>
+                      ) : null}
                       {r.resolved_market ? <Badge intent="outline">{r.resolved_market}</Badge> : null}
                       {locName(r.location_id) ? <Badge intent="neutral">{locName(r.location_id)}</Badge> : null}
                     </div>

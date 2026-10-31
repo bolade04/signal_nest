@@ -345,7 +345,9 @@ def _auth(user_id: str) -> dict:
     return {"Authorization": f"Bearer {live_bearer(user_id)}"}
 
 
-def test_single_scout_responses_carry_the_execution_and_the_list_does_not(client, blocked_scout):
+def test_scout_responses_carry_the_execution_and_the_list_carries_the_same(client, blocked_scout):
+    """W16 §C (PROPOSED) replaces W15's "the list does not" (its execution was null there): the
+    list now carries the same derived state as the single-Scout read."""
     owner = _auth(seed_mod.sid("user"))
     got = client.get(_base(), headers=owner)
     assert got.status_code == 200
@@ -356,7 +358,10 @@ def test_single_scout_responses_carry_the_execution_and_the_list_does_not(client
         "since": got.json()["execution"]["since"],
     }
     listed = client.get(f"{API}/workspaces/{seed_mod.sid('ws')}/scout-requests", headers=owner)
-    assert listed.status_code == 200 and {r["execution"] for r in listed.json()} == {None}
+    assert listed.status_code == 200
+    row = next(r for r in listed.json() if r["id"] == got.json()["id"])
+    assert row["execution"] == got.json()["execution"]
+    assert all(r["execution"] is not None for r in listed.json())
     upd = client.put(_base(), json={"notes": "n"}, headers=owner)
     paused = client.post(_base() + "/pause", headers=owner)
     resumed = client.post(_base() + "/resume", headers=owner)

@@ -1042,8 +1042,19 @@ class TestScoutRequests:
             refused = world.send("POST", API + _ws_path(world, b, theirs + "/run"), b.owner_token)
             assert _error(refused)[:2] == (422, "scout_needs_attention"), refused.text
             assert world.count(Job, workspace_id=b.ws_id) == jobs_before
+            # W16 §C (PROPOSED) replaces W15's "the list carries null": the list now carries the
+            # derivation, scoped like the detail - B's unresolved admission never reaches A's list.
             listed = pov.send("GET", _ws_path(world, a, "/scout-requests"))
-            assert {x["execution"] for x in listed.json()} == {None}
+            assert listed.status_code == 200
+            assert {x["execution"]["state"] for x in listed.json()} <= {"idle", "in_progress"}
+            assert made[b.key] not in {x["id"] for x in listed.json()}
+            mine_listed = next(x for x in listed.json() if x["id"] == made[a.key])
+            assert mine_listed["execution"] == own.json()["execution"]
+            b_listed = world.send(
+                "GET", API + _ws_path(world, b, "/scout-requests"), b.marketer_token
+            )
+            theirs_listed = next(x for x in b_listed.json() if x["id"] == made[b.key])
+            assert theirs_listed["execution"] == seen.json()["execution"]
         finally:
             with world.witness.begin() as conn:
                 conn.execute(admission.delete().where(admission.c.id == row_id))
