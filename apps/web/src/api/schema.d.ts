@@ -3965,7 +3965,7 @@ export interface components {
             is_simulated: boolean;
             /**
              * Last Seen At
-             * @description When a run last produced this finding (PROPOSED); null if only at creation.
+             * @description When a run last produced this finding (PROPOSED); null for a card with no recorded sighting.
              */
             last_seen_at?: string | null;
             /** Location Id */
@@ -4038,7 +4038,7 @@ export interface components {
             is_simulated: boolean;
             /**
              * Last Seen At
-             * @description When a run last produced this finding (PROPOSED); null if only at creation.
+             * @description When a run last produced this finding (PROPOSED); null for a card with no recorded sighting.
              */
             last_seen_at?: string | null;
             /** Location Id */
