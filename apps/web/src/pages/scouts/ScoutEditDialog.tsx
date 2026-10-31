@@ -35,12 +35,15 @@ export function ScoutEditDialog({
   open,
   onOpenChange,
   locationName,
+  returnFocusTo,
 }: {
   workspaceId: string;
   request: ScoutRequestOut;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   locationName?: string;
+  /** Where keyboard focus goes when the dialog closes (the Edit button), so it never lands on <body>. */
+  returnFocusTo?: React.RefObject<HTMLElement | null>;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -83,7 +86,16 @@ export function ScoutEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent
+        className="max-w-2xl"
+        onCloseAutoFocus={(event) => {
+          const target = returnFocusTo?.current;
+          if (target) {
+            event.preventDefault();
+            target.focus();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Edit scout</DialogTitle>
           <DialogDescription>

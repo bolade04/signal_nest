@@ -51,6 +51,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const queryClient = useQueryClient();
   const [editOpen, setEditOpen] = useState(false);
   const editReasonId = useId();
+  const editButtonRef = useRef<HTMLButtonElement>(null);
   const { schedule, active: statusInFlight, stopped: statusUpdatesStopped } = useStatusPolling();
   // R2-01: if "Refresh status" is removed (nothing in flight any more) while it has keyboard
   // focus, return focus to this request's Run now, else to the page heading. Never otherwise.
@@ -162,6 +163,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
               )}
               <span className="inline-flex max-w-xs flex-col items-start gap-1">
                 <Button
+                  ref={editButtonRef}
                   variant="outline"
                   onClick={() => {
                     if (!edit.available) return;
@@ -319,6 +321,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
           open={editOpen}
           onOpenChange={setEditOpen}
           locationName={locName}
+          returnFocusTo={editButtonRef}
         />
       ) : null}
     </div>

@@ -214,6 +214,18 @@ describe('the pages (W16 §A–§E)', () => {
     expect(await screen.findByText(/Seen in 3 runs/)).toBeInTheDocument();
   });
 
+  it('closing the edit dialog returns keyboard focus to Edit, never to the page body', async () => {
+    server.use(SCHEDULE_404);
+    const screen = renderApp(<App />, { route: '/scout-requests/scout-loc-dallas' });
+    const edit = await screen.findByRole('button', { name: /^edit$/i });
+    edit.focus();
+    await screen.user.keyboard('{Enter}');
+    const dialog = await screen.findByRole('dialog', { name: 'Edit scout' });
+    await screen.user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit scout' })).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /^edit$/i })));
+  });
+
   it('Edit is offered to an editor, sends only the changed field, and is absent for a viewer', async () => {
     let sent: unknown = null;
     server.use(
