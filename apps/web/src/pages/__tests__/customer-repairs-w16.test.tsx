@@ -100,7 +100,34 @@ describe('zero-result explanations say only what the run recorded (W16 §E)', ()
 
   it('names the duplicates it can derive', () => {
     const got = zeroResult({ ...base, stats: { scanned: 3, noise_filtered: 1, signals_analyzed: 0, opportunities: 0 }, coverage: covered as ScoutRequestOut['coverage'] });
-    expect(got?.body).toMatch(/3 items were collected, but all were filtered: 1 as noise and 2 as duplicates/);
+    expect(got?.body).toMatch(/The last run collected 3 items, but all were filtered: 1 as noise and 2 as duplicates/);
+  });
+
+  it('every line states only what the last run recorded: past tense, no prediction, no current settings (round 1a CF1)', () => {
+    const cases: [Record<string, unknown>, ScoutRequestOut['coverage']][] = [
+      [{ scanned: 0, signals_analyzed: 0, opportunities: 0, fetch_limits: [] }, { ...covered, status: 'not_covered', reason: 'no_source_for_market' }],
+      [{ scanned: 0, signals_analyzed: 0, opportunities: 0, fetch_limits: [] }, { ...covered, status: 'unavailable', reason: 'sources_unavailable' }],
+      [{ scanned: 0, noise_filtered: 0, signals_analyzed: 0, opportunities: 0, fetch_limits: [{ fetched: 0 }] }, covered],
+      [{ scanned: 0, noise_filtered: 0, signals_analyzed: 0, opportunities: 0, fetch_limits: [{ fetched: 2 }] }, covered],
+      [{ scanned: 3, noise_filtered: 1, signals_analyzed: 0, opportunities: 0 }, covered],
+      [{ scanned: 3, noise_filtered: 0, signals_analyzed: 3, opportunities: 0 }, covered],
+      [{ scanned: 8, signals_analyzed: 6, opportunities: 3, opportunities_new: 0 }, covered],
+      [{ opportunities: 0 }, null],
+    ] as never;
+    const seen = new Set<string>();
+    for (const [stats, coverage] of cases) {
+      const got = zeroResult({ ...base, stats, coverage });
+      expect(got).not.toBeNull();
+      seen.add(got!.code);
+      const text = `${got!.title} ${got!.body}`;
+      expect(text).toMatch(/last run/i);
+      // No prediction or advice about a future run (the old not_covered and no_items lines).
+      expect(text).not.toMatch(/\bwill\b|won't|\btry\b|running again|run again|needs a source/i);
+      // Never the Scout's current settings: the run does not record the market text it used.
+      expect(text).not.toContain(base.resolved_market);
+      expect(text).not.toMatch(/this scout's source types/i);
+    }
+    expect(seen.size).toBe(8);
   });
 });
 
@@ -204,8 +231,46 @@ describe('the pages (W16 §A–§E)', () => {
     }
     expect(screen.getByText(runOutcomeReasons.earlier_operation_timed_out)).toBeInTheDocument();
     expect(screen.getByText(runOutcomeReasons.another_run_active)).toBeInTheDocument();
-    expect(screen.getByText(/succeeded · stopped_request_paused/)).toBeInTheDocument();
+    const raw = screen.getByText(/succeeded · stopped_request_paused/);
+    expect(raw).toBeInTheDocument();
+    // Round 1a (CF3): the raw codes wrap instead of being cut off at the panel's width.
+    expect(raw).not.toHaveClass('truncate');
+    expect(raw).toHaveClass('break-words');
     expect(screen.queryByText(/^Succeeded$/)).not.toBeInTheDocument();
+  });
+
+  it('with no cards, the last run is explained once, not twice (round 1a CF2)', async () => {
+    const NOT_COVERED_BODY = "No source covered this scout's market in its last run, so it collected nothing.";
+    server.use(
+      SCHEDULE_404,
+      http.get(P('/workspaces/:ws/opportunities'), () => HttpResponse.json([])),
+      http.get(P('/workspaces/:ws/scout-requests/:id'), () =>
+        HttpResponse.json({
+          id: 'scout-loc-dallas',
+          organization_id: 'org-1',
+          workspace_id: 'ws-1',
+          brand_id: 'brand-1',
+          location_id: null,
+          campaign_id: null,
+          name: 'Uncovered scout',
+          status: 'completed',
+          source_types: [],
+          keywords: [],
+          product_profile_id: null,
+          resolved_market: 'Lagos, Lagos',
+          notes: null,
+          last_run_at: '2026-06-01T12:00:00Z',
+          stats: { scanned: 0, noise_filtered: 0, signals_analyzed: 0, opportunities: 0, fetch_limits: [] },
+          coverage: { status: 'not_covered', reason: 'no_source_for_market', is_simulated: false, sources: 0, sources_failed: 0 },
+          execution: { state: 'idle', reason: 'none', next_action: 'run_now', since: null },
+          created_at: '2026-05-01T00:00:00Z',
+          updated_at: '2026-06-01T12:00:00Z',
+        }),
+      ),
+    );
+    const screen = renderApp(<App />, { route: '/scout-requests/scout-loc-dallas' });
+    await screen.findByText(/no opportunities yet/i);
+    expect(screen.getAllByText(NOT_COVERED_BODY)).toHaveLength(1);
   });
 
   it('a card produced again says so', async () => {

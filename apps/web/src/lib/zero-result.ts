@@ -3,9 +3,14 @@ import type { ScoutRequestOut } from '@/api/types';
 /**
  * Why a Scout's latest completed run produced no new card (W16 customer repairs §E, PROPOSED),
  * from what the run recorded: `stats` (apps/api/app/jobs/pipeline.py) and its coverage outcome.
- * Each branch says only what the recorded numbers support; a run recorded before a statistic
- * existed falls to the generic line. Returns `null` when the latest run produced a new card, or
- * when there is no completed run to explain.
+ *
+ * Every line states only what the LAST RUN recorded, in the past tense, about that run (round 1a,
+ * CF1): never a prediction about a future run ("running again will not help" was false for a
+ * Scout whose last run predates the market-reading fix), and never a statement about the Scout's
+ * CURRENT configuration (an edit may have changed the source types, keywords or market since; the
+ * run does not record the market text it used, so none is quoted). A run recorded before a
+ * statistic existed falls to the generic line. Returns `null` when the latest run produced a new
+ * card, or when there is no completed run to explain.
  */
 export interface ZeroResult {
   code:
@@ -47,18 +52,17 @@ export function zeroResult(
   }
   const status = request.coverage?.status;
   if (status === 'not_covered') {
-    const market = request.resolved_market ? ` (${request.resolved_market})` : '';
     return {
       code: 'not_covered',
-      title: 'No sample coverage for this market',
-      body: `No source covers this scout's market${market}. Running again will not help; this market needs a source.`,
+      title: 'No source covered the last run',
+      body: "No source covered this scout's market in its last run, so it collected nothing.",
     };
   }
   if (status === 'unavailable') {
     return {
       code: 'sources_unavailable',
-      title: 'The sources for this market failed',
-      body: 'Every live source for this market failed during the last run. Try again later.',
+      title: 'The sources failed in the last run',
+      body: 'Every live source the last run read failed, so it collected nothing.',
     };
   }
   const scanned = num(stats, 'scanned');
@@ -68,13 +72,13 @@ export function zeroResult(
     return fetchedAny(stats)
       ? {
           code: 'items_unavailable',
-          title: 'No items were available to analyse',
-          body: 'The sources returned items, but none were available to analyse in the last run.',
+          title: 'Nothing was available to analyse in the last run',
+          body: "The last run's sources returned items, but none were available to analyse.",
         }
       : {
           code: 'no_items',
-          title: 'No matching items',
-          body: "The sources returned no items for this scout's source types and keywords. Try more source types or broader keywords.",
+          title: 'The last run found no matching items',
+          body: "The last run's sources returned no items for the source types and keywords that run used.",
         };
   }
   if (scanned !== null && analysed === 0) {
@@ -83,28 +87,28 @@ export function zeroResult(
       noise !== null && dup !== null ? ` ${noise} as noise and ${dup} as duplicates.` : '';
     return {
       code: 'all_filtered',
-      title: 'Everything collected was filtered',
-      body: `${scanned} items were collected, but all were filtered:${split || ' as noise or duplicates.'}`,
+      title: 'The last run filtered everything it collected',
+      body: `The last run collected ${scanned} items, but all were filtered:${split || ' as noise or duplicates.'}`,
     };
   }
   if (analysed !== null && analysed > 0 && opportunities === 0) {
     // Not reachable at 9279c1d2 (every analysed group becomes a card); kept as a stated branch.
     return {
       code: 'none_qualified',
-      title: 'Nothing qualified',
-      body: 'Signals were analysed, but none qualified as an opportunity.',
+      title: 'Nothing qualified in the last run',
+      body: 'The last run analysed signals, but none qualified as an opportunity.',
     };
   }
   if (fresh === 0 && opportunities > 0) {
     return {
       code: 'all_seen_again',
-      title: 'No new findings',
-      body: `All ${opportunities} findings of the last run were already known; they are marked as seen again.`,
+      title: 'No new findings in the last run',
+      body: `All ${opportunities} findings of the last run were already known; that run recorded them as seen again.`,
     };
   }
   return {
     code: 'nothing_new',
-    title: 'Nothing new',
+    title: 'Nothing new in the last run',
     body: 'The last run found nothing new.',
   };
 }

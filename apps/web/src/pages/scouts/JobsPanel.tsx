@@ -117,7 +117,8 @@ export function JobsPanel({
                   {job.outcome_reason ? (
                     <p className="mt-1 text-xs">{runOutcomeReasons[job.outcome_reason]}</p>
                   ) : null}
-                  <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {/* Round 1a (CF3): the raw codes wrap instead of being cut off; still secondary. */}
+                  <p className="mt-1 break-words text-xs text-muted-foreground" data-raw-codes="">
                     Updated {formatRelative(job.updated_at)}
                     {job.outcome ? ` · ${rawRunCodes(job)}` : job.last_error_code ? ` · ${job.last_error_code}` : ''}
                   </p>

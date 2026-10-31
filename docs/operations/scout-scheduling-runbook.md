@@ -351,10 +351,12 @@ Source: `apps/api/app/scouting_requests/routes.py`.
       market wins); a Scout without a location gets no country; nothing is broadened. The
       stored text is not rewritten. Live sources still match their market labels exactly.
     - *Empty results.* The Scout page says why the latest run made no new card, from its
-      recorded coverage and stats: no coverage for the market; live sources unavailable; no
-      items for the source types and keywords; items collected but all filtered (noise or
-      duplicates, derived); all findings already known (seen again); otherwise only that
-      nothing new was found.
+      recorded coverage and stats, stating only what that run recorded, in the past tense: no
+      source covered the market in the last run; the live sources failed in it; its sources
+      returned no items for the source types and keywords that run used; it collected items but
+      filtered all of them (noise or duplicates, derived); all its findings were already known
+      (seen again); otherwise only that it found nothing new. No line predicts a future run or
+      describes the Scout's current settings (an edit may have changed them since).
   - **Reconciliation (procedure).** `python -m app.jobs.reconcile list --scout <id>` shows
     exactly three categories - the current owner's admissions, earlier owners' outstanding
     admissions, admissions with an unknown end - each with its job's status and

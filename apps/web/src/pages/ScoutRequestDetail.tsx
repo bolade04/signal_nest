@@ -301,8 +301,9 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
               icon={Radar}
               title="No opportunities yet"
               description={
+                // Round 1a (CF2): the last run's explanation is shown once, in the notice above.
                 empty
-                  ? empty.body
+                  ? 'No opportunities from this scout yet; the last run is explained above.'
                   : canEdit
                     ? 'Run this scout to process fixture signals into scored, explainable opportunities.'
                     : 'This scout has not produced any opportunities yet.'
