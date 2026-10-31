@@ -18,9 +18,11 @@ import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.claims.engine import check_claim_safety, translate_competitor_weakness
@@ -36,7 +38,7 @@ from app.core.enums import (
 )
 from app.core.logging import get_logger
 from app.geography.engine import CoverageRule, resolve_geo
-from app.geography.markets import market_from_parts
+from app.geography.markets import market_from_parts, qualify_for_location
 from app.infra.vector import (
     SIGNAL_VOLUME_ABOVE_BOUND,
     SignalVolumeAboveBoundError,
@@ -62,8 +64,10 @@ from app.llm.screening import screen_classification, screen_explanation
 from app.llm.service import llm_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.context import build_business_context
+from app.opportunities.identity import finding_key, legacy_cards_by_key
 from app.opportunities.models import (
     Opportunity,
+    OpportunityObservation,
     OpportunityScore,
     ValidationEvidence,
 )
@@ -90,6 +94,10 @@ from app.signals.models import (
 logger = get_logger("signalnest.pipeline")
 
 DEDUPE_THRESHOLD = 0.92
+
+#: Kinds of a finding's sighting (``opportunity_observations.kind``; W16, PROPOSED).
+OBSERVATION_FIRST_SEEN = "first_seen"
+OBSERVATION_SEEN_AGAIN = "seen_again"
 
 # Run outcomes reported in the ``scout_request.execute`` job's ``result_summary`` (D-25).
 RUN_COMPLETED = "completed"
@@ -143,10 +151,19 @@ def refused_run_stats(*, scanned: int, bound: int, fetch_limits: list[dict] | No
     return stats
 
 
-def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule, str | None]:
+def _coverage_rule_for(
+    db: Session, request: ScoutRequest
+) -> tuple[CoverageRule, str | None, str | None]:
+    """The run's coverage rule, its market text, and the market text its sources see.
+
+    W16 (PROPOSED, contract §E/§I.8): for a Scout tied to a location, the sources see the market
+    text read in the location's country (:func:`qualify_for_location`), so "Lagos, Lagos" of a
+    Lagos, Nigeria location is served by the "Lagos, NG" sample market. The stored text, the
+    titles and the coverage rule are unchanged; a Scout without a location is unchanged."""
     market = request.resolved_market
     rule = None
     home = None
+    source_market = market
     if request.location_id:
         location = db.get(BusinessLocation, request.location_id)
         if location:
@@ -158,6 +175,7 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
                 region=location.state_province,
                 country=location.country,
             )
+            source_market = qualify_for_location(market, country=home.country if home else None)
         rule = db.scalar(
             select(GeoCoverageRule).where(GeoCoverageRule.location_id == request.location_id)
         )
@@ -184,7 +202,7 @@ def _coverage_rule_for(db: Session, request: ScoutRequest) -> tuple[CoverageRule
         # No location and no market: an explicitly unscoped (global/online) request,
         # which the fixture connector serves across every market.
         cov = CoverageRule(coverage_type="online", online_global=True)
-    return cov, market
+    return cov, market, source_market
 
 
 #: The meter of the run the durable handler is executing (P6-LLM-4), supplied with
@@ -297,7 +315,7 @@ def _run(
     )
 
     ctx = build_business_context(db, request.workspace_id)
-    coverage, market = _coverage_rule_for(db, request)
+    coverage, market, source_market = _coverage_rule_for(db, request)
 
     # Source selection records why the run holds what it holds (P6-DATA-2): live
     # feeds, the simulated sandbox/demo library, or an explicit "not covered".
@@ -306,7 +324,7 @@ def _run(
     # ``max_items`` entries (looking one past it) and reports what it delivered, clipped
     # or failed, in ``batch.reports``.
     batch = fetch_signals(
-        market=market,
+        market=source_market,
         keywords=request.keywords or ctx.keywords,
         source_types=request.source_types or [],
         rss_enabled=_rss_enabled_for(
@@ -520,7 +538,10 @@ def _run(
         "scanned": scanned,
         "noise_filtered": noise_filtered,
         "signals_analyzed": len(normalized),
+        # Findings this run produced (new + seen again); the split is additive (W16, PROPOSED).
         "opportunities": len(opportunities),
+        "opportunities_new": getattr(opportunities, "new", len(opportunities)),
+        "opportunities_seen_again": getattr(opportunities, "seen_again", 0),
         "coverage": batch.coverage.as_stats(),
         **fetch,
     }
@@ -563,15 +584,59 @@ def _run(
     return {"scout_request_id": request.id, "outcome": outcome, **stats}
 
 
+class BuiltFindings(list):
+    """The cards of a run's findings (one per cluster, new or seen again), with the split the
+    run's stats record (W16, PROPOSED): ``new`` cards created, ``seen_again`` existing cards
+    re-used. ``len()`` is the run's ``opportunities`` (findings this run produced)."""
+
+    new: int = 0
+    seen_again: int = 0
+
+
+@dataclass
+class _Finding:
+    """One finding computed by step 1, written by step 2."""
+
+    key: str
+    cluster: SignalCluster
+    members: list[NormalizedSignal]
+    card: Opportunity
+    scores: list[OpportunityScore]
+    evidence: list[ValidationEvidence]
+
+
+#: The unique index that keeps one keyed card per finding in a Scout (W16, PROPOSED).
+FINDING_INDEX = "uq_opportunities_finding"
+
+
+def _is_finding_conflict(exc: IntegrityError) -> bool:
+    """The integrity error is the finding index's (PostgreSQL names the constraint; SQLite
+    names the columns). Any other integrity error is not handled here."""
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    if getattr(diag, "constraint_name", None) == FINDING_INDEX:
+        return True
+    return "opportunities.finding_key" in str(getattr(exc, "orig", exc))
+
+
 def _build_opportunities(
     db, request, ctx, coverage, market, normalized, meter: LLMMeter
-) -> list[Opportunity]:
+) -> BuiltFindings:
+    """Cluster the run's kept signals into findings and record them (W16, PROPOSED).
+
+    Step 1 (per group, the same work and model calls as before): the run's cluster, scores,
+    geo, claim safety and the explanation. Step 2 (after the last model call, inside the run's
+    write savepoint): every identity write, in ascending finding-key order - a finding whose card
+    exists gets a ``seen_again`` sighting and no new card; otherwise the oldest identity-less
+    legacy card whose own stored members give the key is adopted; otherwise a new keyed card is
+    inserted in a savepoint of its own, and a unique conflict (a concurrent attempt inserted it
+    first) re-uses the winner. The ascending order is what keeps two attempts of one Scout from
+    deadlocking on the unique index (measured, W16 Phase A raw/007 P5)."""
     groups: dict[str, list[NormalizedSignal]] = {}
     for n in normalized:
         key = n.pain_point_dna or n.signal_type or "general"
         groups.setdefault(key, []).append(n)
 
-    opportunities: list[Opportunity] = []
+    findings: list[_Finding] = []
     for key, members in groups.items():
         primary = members[0]
 
@@ -661,7 +726,7 @@ def _build_opportunities(
         )
 
         priority = int(round(opp_breakdown.total * (conf_breakdown.total / 100.0)))
-        opp = Opportunity(
+        card = Opportunity(
             organization_id=request.organization_id,
             workspace_id=request.workspace_id,
             brand_id=request.brand_id,
@@ -700,63 +765,167 @@ def _build_opportunities(
             status=OpportunityStatus.NEW.value,
             is_simulated=_card_is_simulated(members),
         )
-        db.add(opp)
+        card.__dict__["_relevance_expl"] = rel_expl  # for debugging/tests
+        findings.append(
+            _Finding(
+                key=finding_key(members),
+                cluster=cluster,
+                members=members,
+                card=card,
+                scores=[
+                    OpportunityScore(
+                        workspace_id=request.workspace_id,
+                        kind="opportunity",
+                        breakdown=opp_breakdown.factors,
+                        total=opp_breakdown.total,
+                    ),
+                    OpportunityScore(
+                        workspace_id=request.workspace_id,
+                        kind="confidence",
+                        breakdown=conf_breakdown.factors,
+                        total=conf_breakdown.total,
+                    ),
+                ],
+                evidence=[
+                    ValidationEvidence(
+                        workspace_id=request.workspace_id,
+                        source_type=ev["source_type"],
+                        detail=ev["detail"],
+                        weight=ev["weight"],
+                    )
+                    for ev in validation_ev
+                ],
+            )
+        )
+
+    return _record_findings(db, request, findings)
+
+
+def _record_findings(db, request, findings: list[_Finding]) -> BuiltFindings:
+    """Step 2 of :func:`_build_opportunities`: every identity write, in ascending key order."""
+    admission = current_admission()
+    job_id = admission.job_id if admission is not None else None
+    now = datetime.now(UTC)
+    scope = (
+        Opportunity.organization_id == request.organization_id,
+        Opportunity.workspace_id == request.workspace_id,
+        Opportunity.scout_request_id == request.id,
+    )
+    legacy: dict[str, str] | None = None
+    built = BuiltFindings()
+
+    def keyed(key: str) -> Opportunity | None:
+        return db.scalar(select(Opportunity).where(*scope, Opportunity.finding_key == key))
+
+    def observe(card_id: str, finding: _Finding, kind: str) -> None:
+        db.add(
+            OpportunityObservation(
+                organization_id=request.organization_id,
+                workspace_id=request.workspace_id,
+                scout_request_id=request.id,
+                opportunity_id=card_id,
+                job_id=job_id,
+                cluster_id=finding.cluster.id,
+                kind=kind,
+                observed_at=now,
+            )
+        )
         db.flush()
 
-        # Batch 4A: link this cluster's persisted intelligence rows to the
-        # opportunity, scoped to the workspace so linkage can never cross tenants.
-        try:
-            attach_opportunity(
-                db,
-                workspace_id=request.workspace_id,
-                opportunity_id=opp.id,
-                normalized_signal_ids=[m.id for m in members],
-            )
-        except Exception as exc:  # pragma: no cover - link failure must not break run
-            # Class name only: a driver StatementError's str() carries the full
-            # SQL and bound parameters, which redaction does not strip.
-            logger.warning(
-                "intelligence_record_link_failed",
-                extra={
-                    "extra_fields": {
-                        "error_class": type(exc).__name__,
-                        "opportunity": opp.id,
-                    }
-                },
-            )
-
-        db.add(
-            OpportunityScore(
-                workspace_id=request.workspace_id,
-                opportunity_id=opp.id,
-                kind="opportunity",
-                breakdown=opp_breakdown.factors,
-                total=opp_breakdown.total,
-            )
-        )
-        db.add(
-            OpportunityScore(
-                workspace_id=request.workspace_id,
-                opportunity_id=opp.id,
-                kind="confidence",
-                breakdown=conf_breakdown.factors,
-                total=conf_breakdown.total,
-            )
-        )
-        for ev in validation_ev:
-            db.add(
-                ValidationEvidence(
+    for finding in sorted(findings, key=lambda f: f.key):
+        existing = keyed(finding.key)
+        if existing is None:
+            if legacy is None:
+                legacy = legacy_cards_by_key(
+                    db,
+                    organization_id=request.organization_id,
                     workspace_id=request.workspace_id,
-                    opportunity_id=opp.id,
-                    source_type=ev["source_type"],
-                    detail=ev["detail"],
-                    weight=ev["weight"],
+                    scout_request_id=request.id,
                 )
-            )
-        opp.__dict__["_relevance_expl"] = rel_expl  # for debugging/tests
-        opportunities.append(opp)
+            existing = _adopt_legacy(db, legacy, finding.key, keyed)
+        if existing is not None:
+            observe(existing.id, finding, OBSERVATION_SEEN_AGAIN)
+            built.append(existing)
+            built.seen_again += 1
+            continue
+        card = finding.card
+        card.finding_key = finding.key
+        try:
+            with db.begin_nested():
+                db.add(card)
+                db.flush()
+                _attach_card(db, request, card, finding)
+                observe(card.id, finding, OBSERVATION_FIRST_SEEN)
+        except IntegrityError as exc:
+            if not _is_finding_conflict(exc):
+                raise
+            # A concurrent attempt of this Scout inserted the same finding first: re-use it.
+            winner = keyed(finding.key)
+            if winner is None:
+                raise
+            observe(winner.id, finding, OBSERVATION_SEEN_AGAIN)
+            built.append(winner)
+            built.seen_again += 1
+            continue
+        built.append(card)
+        built.new += 1
+    return built
 
-    return opportunities
+
+def _adopt_legacy(db, legacy: dict[str, str], key: str, keyed) -> Opportunity | None:
+    """Adopt the OLDEST identity-less card whose own stored members give ``key`` (contract
+    §I.3): one column on one card, guarded by ``finding_key IS NULL``. Younger duplicates are
+    left untouched. ``None`` when no such card exists."""
+    card_id = legacy.pop(key, None)
+    if card_id is None:
+        return None
+    try:
+        with db.begin_nested():
+            adopted = db.execute(
+                update(Opportunity)
+                .where(Opportunity.id == card_id, Opportunity.finding_key.is_(None))
+                .values(finding_key=key)
+                .execution_options(synchronize_session=False)
+            ).rowcount
+    except IntegrityError as exc:
+        if not _is_finding_conflict(exc):
+            raise
+        adopted = 0
+    if adopted == 1:
+        card = db.get(Opportunity, card_id)
+        db.refresh(card, attribute_names=["finding_key"])
+        return card
+    # Keyed meanwhile by a concurrent attempt: the keyed card is the finding's card.
+    return keyed(key)
+
+
+def _attach_card(db, request, card: Opportunity, finding: _Finding) -> None:
+    """A new card's dependents: its intelligence links, score breakdowns and validation rows."""
+    # Batch 4A: link this cluster's persisted intelligence rows to the
+    # opportunity, scoped to the workspace so linkage can never cross tenants.
+    try:
+        attach_opportunity(
+            db,
+            workspace_id=request.workspace_id,
+            opportunity_id=card.id,
+            normalized_signal_ids=[m.id for m in finding.members],
+        )
+    except Exception as exc:  # pragma: no cover - link failure must not break run
+        # Class name only: a driver StatementError's str() carries the full
+        # SQL and bound parameters, which redaction does not strip.
+        logger.warning(
+            "intelligence_record_link_failed",
+            extra={
+                "extra_fields": {
+                    "error_class": type(exc).__name__,
+                    "opportunity": card.id,
+                }
+            },
+        )
+    for row in (*finding.scores, *finding.evidence):
+        row.opportunity_id = card.id
+        db.add(row)
+    db.flush()
 
 
 def _analyze_candidate(fx, ctx) -> OpportunityCandidate | None:

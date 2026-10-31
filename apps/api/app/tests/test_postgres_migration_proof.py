@@ -58,12 +58,15 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (D-25 blocked-Scout recovery candidate, PROPOSED: adds the persisted
+#: The code head (W16 customer repairs, PROPOSED: adds ``opportunities.finding_key``, its
+#: partial unique index and the ``opportunity_observations`` table).
+HEAD = "e7b3c5a9d1f4"
+#: One below head (D-25 blocked-Scout recovery candidate, PROPOSED: adds the persisted
 #: ``scout_admissions.deadline_at`` and its basis).
-HEAD = "d4a8f2c6b9e1"
-#: One below head (D-25 execution-control candidate, PROPOSED: adds the ``scout_requests``
+BELOW_HEAD = "d4a8f2c6b9e1"
+#: Two below head (D-25 execution-control candidate, PROPOSED: adds the ``scout_requests``
 #: owner columns and the ``scout_admissions`` ledger).
-BELOW_HEAD = "c6f1d8e2a4b7"
+EXECCTL = "c6f1d8e2a4b7"
 #: Two below head (D-25 cooperative-pause candidate, PROPOSED: adds
 #: ``scout_requests.run_fence``).
 FENCE = "b5e0c7a3d2f1"
@@ -273,6 +276,8 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "owner_job_id" in _columns(pg_url, "scout_requests")
     assert "scout_admissions" in _tables(pg_url)
     assert {"deadline_at", "deadline_rule"} <= _columns(pg_url, "scout_admissions")
+    assert "finding_key" in _columns(pg_url, "opportunities")
+    assert "opportunity_observations" in _tables(pg_url)
 
     # One guarded step down undoes exactly the head revision; the spent token does not
     # authorize the next step.
@@ -280,8 +285,11 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert not {c for c in _columns(pg_url, "scout_admissions") if c.startswith("deadline")}
-    assert "scout_admissions" in _tables(pg_url)  # the revision below: untouched
+    assert "finding_key" not in _columns(pg_url, "opportunities")
+    assert "opportunity_observations" not in _tables(pg_url)
+    # The revision below: untouched.
+    assert {"deadline_at", "deadline_rule"} <= _columns(pg_url, "scout_admissions")
+    assert "scout_admissions" in _tables(pg_url)
     assert "owner_job_id" in _columns(pg_url, "scout_requests")
     assert "run_fence" in _columns(pg_url, "scout_requests")
     assert "scout_requests" in _tables(pg_url)

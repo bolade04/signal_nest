@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from app.connectors.coverage import CoverageReason, CoverageStatus
-from app.core.enums import ScheduleInterval, ScheduleState
+from app.core.enums import ScheduleInterval, ScheduleState, SourceType
+from app.jobs.outcomes import RunOutcome, RunOutcomeReason
 
 
 class ScoutRequestCreate(BaseModel):
@@ -20,12 +21,77 @@ class ScoutRequestCreate(BaseModel):
     notes: str | None = None
 
 
+#: Fields an edit may not set to ``null``: a Scout always has a name, and a null source list or
+#: keyword list would silently change what every later run reads (all source types; the
+#: business context's keywords).
+_NOT_NULLABLE = ("name", "source_types", "keywords")
+
+
 class ScoutRequestUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=200)
-    source_types: list[str] | None = None
+    """An edit of an existing Scout (W16 customer repairs, PROPOSED; create is unchanged).
+
+    Only the fields sent change. ``name`` is required to be non-blank (1-200 characters after
+    trimming); ``source_types`` are the supported source types (repeats dropped); ``keywords`` are
+    trimmed, emptied ones dropped and repeats (ignoring case) dropped. ``name``, ``source_types``
+    and ``keywords`` cannot be ``null``; ``resolved_market`` and ``notes`` can (clearing them).
+    Unknown fields are refused, so status, location, campaign, product profile, run fence and
+    owner can never be set here."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    source_types: list[SourceType] | None = None
     keywords: list[str] | None = None
-    resolved_market: str | None = None
+    resolved_market: str | None = Field(default=None, max_length=200)
     notes: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("Name cannot be blank.")
+        return value
+
+    @field_validator("source_types")
+    @classmethod
+    def _distinct_sources(cls, value: list[SourceType] | None) -> list[SourceType] | None:
+        if value is None:
+            return value
+        return list(dict.fromkeys(value))
+
+    @field_validator("keywords")
+    @classmethod
+    def _clean_keywords(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in value:
+            word = " ".join(raw.split())
+            if word and word.casefold() not in seen:
+                seen.add(word.casefold())
+                out.append(word)
+        return out
+
+    @model_validator(mode="after")
+    def _no_null_where_required(self) -> ScoutRequestUpdate:
+        for field in _NOT_NULLABLE:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null.")
+        return self
+
+    def changes(self) -> dict:
+        """The sent fields as column values (source types as their string values)."""
+        out = {}
+        for field in self.model_fields_set:
+            value = getattr(self, field)
+            if field == "source_types" and value is not None:
+                value = [s.value for s in value]
+            out[field] = value
+        return out
 
 
 class ScoutCoverage(BaseModel):
@@ -125,12 +191,13 @@ class ScoutRequestOut(BaseModel):
     stats: dict
     #: The latest completed run's coverage outcome, lifted from ``stats``.
     coverage: ScoutCoverage | None = None
-    #: D-25 recovery (PROPOSED): the derived execution state, on single-Scout reads.
+    #: D-25 recovery (PROPOSED): the derived execution state; W16 (PROPOSED): on the list too.
     execution: ScoutExecutionOut | None = Field(
         default=None,
         description=(
-            "Derived execution state (PROPOSED). Computed on single-Scout responses; null "
-            "means it was not computed on this read (the list)."
+            "Derived execution state (PROPOSED). Computed on every response that returns the "
+            "Scout itself, the list included (W16, PROPOSED); null only where a response does "
+            "not compute it."
         ),
     )
     created_at: datetime
@@ -175,6 +242,10 @@ class RunStats(BaseModel):
     noise_filtered: int
     signals_analyzed: int
     opportunities: int
+    #: W16 (PROPOSED): of ``opportunities`` (the findings this run produced), how many were new
+    #: cards and how many were already known (seen again). Absent on runs recorded before.
+    opportunities_new: int | None = None
+    opportunities_seen_again: int | None = None
     coverage: ScoutCoverage | None = None
 
 
@@ -199,6 +270,9 @@ class RunItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     stats: RunStats | None
+    #: W16 (PROPOSED): as ``JobOut.outcome`` / ``JobOut.outcome_reason``.
+    outcome: RunOutcome | None = None
+    outcome_reason: RunOutcomeReason | None = None
 
 
 class RunHistoryOut(BaseModel):

@@ -24,6 +24,7 @@ from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
 from app.db.session import get_db
 from app.intelligence.read_service import get_opportunity_intelligence
 from app.intelligence.schemas import OpportunityIntelligenceResponse
+from app.opportunities.identity import with_sightings
 from app.opportunities.models import Opportunity, OpportunityScore, ValidationEvidence
 from app.opportunities.schemas import (
     OpportunityCard,
@@ -73,7 +74,7 @@ def list_opportunities(
     cursor: str | None = Query(default=None, max_length=1024),
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(get_tenant_context),
-) -> list[Opportunity]:
+) -> list[OpportunityCard]:
     stmt = select(Opportunity).where(Opportunity.workspace_id == workspace_id)
 
     if location_id:
@@ -128,7 +129,8 @@ def list_opportunities(
         limit=limit,
     )
     page.apply_headers(response)
-    return page.rows
+    # W16 (PROPOSED): each card's sightings, one statement for the page.
+    return with_sightings(db, workspace_id, list(page.rows), OpportunityCard)
 
 
 def _get_scoped(db: Session, workspace_id: str, opportunity_id: str) -> Opportunity:
@@ -157,7 +159,7 @@ def get_opportunity(
         select(ValidationEvidence).where(ValidationEvidence.opportunity_id == opp.id)
     ).scalars()
 
-    detail = OpportunityDetail.model_validate(opp)
+    detail = with_sightings(db, workspace_id, [opp], OpportunityDetail)[0]
     detail.scores = [
         ScoreBreakdown(kind=s.kind, total=s.total, breakdown=s.breakdown) for s in scores
     ]
@@ -202,7 +204,7 @@ def update_opportunity_status(
     body: OpportunityStatusUpdate,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
-) -> Opportunity:
+) -> OpportunityCard:
     opp = _get_scoped(db, workspace_id, opportunity_id)
     valid = {s.value for s in OpportunityStatus}
     if body.status not in valid:
@@ -219,4 +221,4 @@ def update_opportunity_status(
         entity_type="opportunity",
         entity_id=opp.id,
     )
-    return opp
+    return with_sightings(db, workspace_id, [opp], OpportunityCard)[0]

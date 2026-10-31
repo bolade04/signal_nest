@@ -35,7 +35,8 @@ DOC = REPO_ROOT / "docs" / "operations" / "data-inventory.md"
 
 def test_every_table_has_exactly_one_inventory_entry():
     assert set(TABLES) == set(Base.metadata.tables)
-    assert len(TABLES) == 43
+    # W16 (PROPOSED): + opportunity_observations.
+    assert len(TABLES) == 44
 
 
 def test_the_document_names_every_table():

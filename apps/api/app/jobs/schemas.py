@@ -13,8 +13,27 @@ Two disclosure tiers, mirroring the rest of the platform:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
+
+from app.jobs.outcomes import RunOutcome, RunOutcomeReason, outcome_of
+
+_OUTCOME_DESCRIPTION = (
+    "How a finished Scout run ended (PROPOSED, a proposed Q1 presentation): derived read-only "
+    "from the job's status, its result's outcome and its error code. Null while the run is in "
+    "flight and for other job types. A succeeded job whose run was stopped or skipped is never "
+    "'completed'."
+)
+_REASON_DESCRIPTION = "Why the run ended so, as a closed code (PROPOSED); null where none applies."
+
+
+def _with_outcome(data: Any, out: Any) -> Any:
+    """Set ``outcome``/``outcome_reason`` when validating from a ``Job`` row (the only input that
+    carries the never-exposed ``last_error_summary``); a re-validated model keeps its own."""
+    if hasattr(data, "last_error_summary") and hasattr(data, "job_type"):
+        out.outcome, out.outcome_reason = outcome_of(data)
+    return out
 
 
 class JobOut(BaseModel):
@@ -37,8 +56,15 @@ class JobOut(BaseModel):
     cancelled_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    outcome: RunOutcome | None = Field(default=None, description=_OUTCOME_DESCRIPTION)
+    outcome_reason: RunOutcomeReason | None = Field(default=None, description=_REASON_DESCRIPTION)
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _derive_outcome(cls, data: Any, handler: Any) -> JobOut:
+        return _with_outcome(data, handler(data))
 
 
 class JobListOut(BaseModel):

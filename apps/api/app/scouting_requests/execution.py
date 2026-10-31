@@ -30,7 +30,9 @@ timestamp exists. Every read is scoped by the Scout's own organization and works
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import func, select
@@ -116,48 +118,13 @@ def _job_row(db: Session, job_id: str | None):
     ).first()
 
 
-def _unresolved(db: Session, request: ScoutRequest, now: datetime) -> list[tuple[Any, bool]]:
-    rows = db.scalars(
-        select(ScoutAdmission)
-        .where(
-            ScoutAdmission.scout_request_id == request.id,
-            ScoutAdmission.organization_id == request.organization_id,
-            ScoutAdmission.workspace_id == request.workspace_id,
-            ScoutAdmission.resolved_at.is_(None),
-        )
-        .order_by(ScoutAdmission.admitted_at)
-    ).all()
-    return [(row, attempt_holds_authority(_job_row(db, row.job_id), row, now)) for row in rows]
+@dataclass
+class _ScoutRows:
+    """The committed rows the classification of one Scout reads."""
 
-
-def _jobs(db: Session, request: ScoutRequest):
-    scope = (
-        Job.scout_request_id == request.id,
-        Job.organization_id == request.organization_id,
-        Job.workspace_id == request.workspace_id,
-        Job.job_type == _EXECUTE,
-    )
-    live = [
-        job
-        for job in db.execute(
-            select(Job.status, Job.payload, Job.started_at, Job.created_at).where(
-                *scope, Job.status.in_(LIVE_JOB_STATUSES)
-            )
-        ).all()
-        if _fence(job.payload) == request.run_fence
-    ]
-    latest = db.execute(
-        select(
-            Job.status,
-            Job.last_error_summary,
-            Job.completed_at,
-            Job.cancelled_at,
-        )
-        .where(*scope)
-        .order_by(Job.created_at.desc(), Job.id.desc())
-        .limit(1)
-    ).first()
-    return live, latest
+    unresolved: list[tuple[Any, bool]] = field(default_factory=list)
+    live: list[Any] = field(default_factory=list)
+    latest: Any = None
 
 
 def _fence(payload: Any) -> int:
@@ -165,10 +132,106 @@ def _fence(payload: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def derive_execution(db: Session, request: ScoutRequest) -> ScoutExecutionOut:
-    """The Scout's execution state now (read-only)."""
-    now = db_now(db)
-    unresolved = _unresolved(db, request, now)
+def _scopes(requests: list[ScoutRequest]) -> dict[tuple[str, str], list[ScoutRequest]]:
+    groups: dict[tuple[str, str], list[ScoutRequest]] = {}
+    for request in requests:
+        groups.setdefault((request.organization_id, request.workspace_id), []).append(request)
+    return groups
+
+
+def _unresolved_rows(
+    db: Session, organization_id: str, workspace_id: str, ids: list[str], now: datetime
+) -> dict[str, list[tuple[Any, bool]]]:
+    """Unresolved admissions of the Scouts, oldest first, each with whether its attempt holds
+    valid authority: ONE statement (the admitting job joined, not read per row)."""
+    out: dict[str, list[tuple[Any, bool]]] = {}
+    rows = db.execute(
+        select(
+            ScoutAdmission,
+            Job.status.label("job_status"),
+            Job.attempt_count.label("job_attempt"),
+            Job.worker_id.label("job_worker"),
+            Job.lease_expires_at.label("job_lease"),
+        )
+        .outerjoin(Job, Job.id == ScoutAdmission.job_id)
+        .where(
+            ScoutAdmission.scout_request_id.in_(ids),
+            ScoutAdmission.organization_id == organization_id,
+            ScoutAdmission.workspace_id == workspace_id,
+            ScoutAdmission.resolved_at.is_(None),
+        )
+        .order_by(ScoutAdmission.admitted_at, ScoutAdmission.id)
+    ).all()
+    for row in rows:
+        admission = row[0]
+        job = (
+            None
+            if row.job_status is None
+            else SimpleNamespace(
+                status=row.job_status,
+                attempt_count=row.job_attempt,
+                worker_id=row.job_worker,
+                lease_expires_at=row.job_lease,
+            )
+        )
+        out.setdefault(admission.scout_request_id, []).append(
+            (admission, attempt_holds_authority(job, admission, now))
+        )
+    return out
+
+
+def _load(db: Session, requests: list[ScoutRequest], now: datetime) -> dict[str, _ScoutRows]:
+    """The rows every Scout's classification reads, for a whole page of Scouts in a bounded
+    number of statements (W16 customer repairs §C, PROPOSED): the unresolved admissions with
+    their jobs, the live execute jobs, and the latest execute job per Scout - three statements
+    per tenant scope (a list page has one), whatever the number of Scouts. Every read is scoped
+    by the Scouts' own organization and workspace."""
+    out: dict[str, _ScoutRows] = {r.id: _ScoutRows() for r in requests}
+    for (organization_id, workspace_id), group in _scopes(requests).items():
+        ids = [r.id for r in group]
+        fences = {r.id: r.run_fence for r in group}
+        for request_id, rows in _unresolved_rows(
+            db, organization_id, workspace_id, ids, now
+        ).items():
+            out[request_id].unresolved = rows
+        scope = (
+            Job.scout_request_id.in_(ids),
+            Job.organization_id == organization_id,
+            Job.workspace_id == workspace_id,
+            Job.job_type == _EXECUTE,
+        )
+        for job in db.execute(
+            select(
+                Job.scout_request_id, Job.status, Job.payload, Job.started_at, Job.created_at
+            ).where(*scope, Job.status.in_(LIVE_JOB_STATUSES))
+        ).all():
+            if _fence(job.payload) == fences[job.scout_request_id]:
+                out[job.scout_request_id].live.append(job)
+        ranked = (
+            select(
+                Job.scout_request_id,
+                Job.status,
+                Job.last_error_summary,
+                Job.completed_at,
+                Job.cancelled_at,
+                func.row_number()
+                .over(
+                    partition_by=Job.scout_request_id,
+                    order_by=(Job.created_at.desc(), Job.id.desc()),
+                )
+                .label("rank"),
+            )
+            .where(*scope)
+            .subquery()
+        )
+        for latest in db.execute(select(ranked).where(ranked.c.rank == 1)).all():
+            out[latest.scout_request_id].latest = latest
+    return out
+
+
+def _classify(request: ScoutRequest, rows: _ScoutRows, now: datetime) -> ScoutExecutionOut:
+    """The Scout's execution state from its rows (pure: no database access)."""
+    unresolved, live, latest = rows.unresolved, rows.live, rows.latest
     for row, holds in unresolved:
         if is_eligible(row, holds=holds, now=now):
             if row.end_kind == "unknown":
@@ -187,7 +250,6 @@ def derive_execution(db: Session, request: ScoutRequest) -> ScoutExecutionOut:
         return ScoutExecutionOut(
             state=State.PAUSED, reason=Reason.PAUSED_BY_USER, next_action=Next.RESUME, since=None
         )
-    live, latest = _jobs(db, request)
     if live:
         first = min(live, key=lambda job: _aware(job.created_at))
         return ScoutExecutionOut(
@@ -238,13 +300,47 @@ def derive_execution(db: Session, request: ScoutRequest) -> ScoutExecutionOut:
     )
 
 
+def derive_executions(
+    db: Session, requests: list[ScoutRequest]
+) -> dict[str, ScoutExecutionOut]:
+    """The execution state of every Scout in ``requests`` (read-only), from one database clock
+    reading and the rows of :func:`_load`: the same classification for the list and the detail."""
+    if not requests:
+        return {}
+    now = db_now(db)
+    rows = _load(db, requests, now)
+    return {r.id: _classify(r, rows[r.id], now) for r in requests}
+
+
+def derive_execution(db: Session, request: ScoutRequest) -> ScoutExecutionOut:
+    """The Scout's execution state now (read-only)."""
+    return derive_executions(db, [request])[request.id]
+
+
+def live_run_exists(db: Session, request: ScoutRequest, *, fence: int) -> bool:
+    """A live execute job of the Scout that a pause has not fenced out (its payload fence equals
+    ``fence``): the "in progress" an edit is refused for (W16 §B, PROPOSED). The same rule as the
+    derivation's ``run_active``."""
+    for (payload,) in db.execute(
+        select(Job.payload).where(
+            Job.scout_request_id == request.id,
+            Job.organization_id == request.organization_id,
+            Job.workspace_id == request.workspace_id,
+            Job.job_type == _EXECUTE,
+            Job.status.in_(LIVE_JOB_STATUSES),
+        )
+    ).all():
+        if _fence(payload) == fence:
+            return True
+    return False
+
+
 def needs_attention(db: Session, request: ScoutRequest) -> bool:
     """Some unresolved admission of the Scout is eligible for reconciliation (Run now is
     refused: contract §4.2, §9.5.6)."""
     now = db_now(db)
-    return any(
-        is_eligible(row, holds=holds, now=now) for row, holds in _unresolved(db, request, now)
-    )
+    rows = _unresolved_rows(db, request.organization_id, request.workspace_id, [request.id], now)
+    return any(is_eligible(row, holds=holds, now=now) for row, holds in rows.get(request.id, ()))
 
 
 def eligible_admissions(
@@ -283,7 +379,9 @@ __all__ = [
     "attempt_holds_authority",
     "db_now",
     "derive_execution",
+    "derive_executions",
     "eligible_admissions",
     "is_eligible",
+    "live_run_exists",
     "needs_attention",
 ]

@@ -33,6 +33,16 @@ class OpportunityCard(BaseModel):
     scout_request_id: str
     is_simulated: bool
     created_at: datetime
+    #: W16 (PROPOSED): how many runs produced this finding (1 for a card seen once, or created
+    #: before sightings were recorded) and when it was last produced (null: only its creation).
+    seen_count: int = Field(
+        default=1,
+        description="How many runs produced this finding (PROPOSED). At least 1.",
+    )
+    last_seen_at: datetime | None = Field(
+        default=None,
+        description="When a run last produced this finding (PROPOSED); null if only at creation.",
+    )
 
     model_config = {"from_attributes": True}
 
