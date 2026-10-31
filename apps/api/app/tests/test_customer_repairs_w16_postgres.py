@@ -382,3 +382,61 @@ def test_an_edit_after_a_committed_run_now_is_refused(world):
         s.rollback()
     with w.factory() as s:
         assert s.get(ScoutRequest, w.rid).name != "Too late"
+
+
+def test_a_run_now_between_the_edits_check_and_write_cannot_slip_through(world, monkeypatch):
+    """§B atomicity: a Run now issued after the edit's in-progress check and before its write
+    either waits for the edit (the Scout row is locked) or makes the edit refuse; it can never
+    commit in between with the edit then succeeding over a queued Scout."""
+    from app.scouting_requests import routes as scout_routes
+
+    w = world
+    _settle(w)
+    real = scout_routes.live_run_exists
+    seen: dict = {}
+
+    def check_then_race(db, request, *, fence):
+        result = real(db, request, fence=fence)
+
+        def run_now():
+            with w.factory() as s:
+                seen["pid"] = s.execute(text("select pg_backend_pid()")).scalar_one()
+                return run_scout_request_endpoint(
+                    workspace_id=w.ws, request_id=w.rid, db=s, ctx=w.ctx
+                )
+
+        racer = Background(run_now)
+        racer.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and racer.is_alive():
+            if seen.get("pid") and _waiting(w, seen["pid"]):
+                seen["waited"] = True
+                break
+            time.sleep(0.05)
+        seen["racer"] = racer
+        return result
+
+    monkeypatch.setattr(scout_routes, "live_run_exists", check_then_race)
+    refused = None
+    with w.factory() as s:
+        try:
+            update_scout_request(
+                workspace_id=w.ws,
+                request_id=w.rid,
+                body=ScoutRequestUpdate(name="Edited during a Run now"),
+                db=s,
+                ctx=w.ctx,
+            )
+            s.commit()
+        except ValidationDomainError as exc:
+            refused = exc.code
+            s.rollback()
+    seen["racer"].join_ok()
+    with w.factory() as s:
+        req = s.get(ScoutRequest, w.rid)
+    assert req.status == "queued"
+    if refused is None:
+        assert seen.get("waited"), "the edit succeeded although Run now committed in between"
+        assert req.name == "Edited during a Run now"
+    else:
+        assert refused == "scout_in_progress" and req.name != "Edited during a Run now"
