@@ -164,6 +164,34 @@ def test_a_rerun_records_seen_again_and_creates_no_card(factory, clean_findings)
         assert session.get(Job, first_job).result_summary["opportunities_new"] == 3
 
 
+def test_a_changed_member_set_is_a_new_finding_even_with_the_same_title(
+    factory, clean_findings, monkeypatch
+):
+    """Distinct evidence -> a distinct card (contract §A): a finding whose member set changed
+    (one item gone) is a new card, though its title is the same; unchanged findings are
+    seen again. Kills an identity taken from the title."""
+    _run(factory, _rid())
+    first = _cards(factory, _rid())
+    biggest = max(first, key=lambda c: len(c.observed_evidence))
+    assert len(biggest.observed_evidence) > 1
+    dropped = biggest.observed_evidence[0]["excerpt"]
+    real_fetch = pipeline.fetch_signals
+
+    def fetch_without_one(**kwargs):
+        batch = real_fetch(**kwargs)
+        batch.signals = [x for x in batch.signals if not x.content.startswith(dropped[:60])]
+        return batch
+
+    monkeypatch.setattr(pipeline, "fetch_signals", fetch_without_one)
+    _run(factory, _rid())
+    after = _cards(factory, _rid())
+    new = [c for c in after if c.id not in {f.id for f in first}]
+    assert [c.title for c in new] == [biggest.title]
+    assert new[0].finding_key != biggest.finding_key
+    seen = [o for o in _sightings(factory, _rid()) if o.kind == "seen_again"]
+    assert {o.opportunity_id for o in seen} == {c.id for c in first} - {biggest.id}
+
+
 def test_a_rerun_does_not_attach_its_intelligence_to_the_existing_card(factory, clean_findings):
     from app.intelligence.records import SignalIntelligenceRecord
 
