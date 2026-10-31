@@ -15,6 +15,7 @@ stopped run, the edit-vs-Run-now lock) is in ``test_customer_repairs_w16_postgre
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -422,6 +423,153 @@ def test_a_identity_includes_the_market_the_item_was_collected_for():
     ]
     assert finding_key(rows[:1]) != finding_key(rows[1:])
     assert finding_key(rows[:1]).startswith("f2:")
+
+
+#: FU-W16-4 (review r2 G2): same-named places in different markets, and spellings of one market
+#: the contract treats as equal (whitespace collapsed, case folded; nothing else).
+_SAME_CITY_OTHER_MARKET = [("Paris, TX", "Paris, FR"), ("Lagos, NG", "Lagos, Lagos")]
+_SAME_MARKET_OTHER_SPELLING = [("Paris, TX", "  PARIS,   tx "), ("Lagos, NG", "lagos,  NG ")]
+_OTHER_MARKET_IDS = ["paris_tx-paris_fr", "lagos_ng-lagos_lagos"]
+_SAME_MARKET_IDS = ["paris_tx-respaced_recased", "lagos_ng-respaced_recased"]
+
+
+@pytest.mark.parametrize(("one", "other"), _SAME_CITY_OTHER_MARKET, ids=_OTHER_MARKET_IDS)
+def test_a_identity_keeps_a_same_named_city_in_another_market_apart(one, other):
+    """Contract §J.1 (review r2 G2): nothing may merge two different markets. Identical evidence
+    recorded for "Paris, TX" and "Paris, FR" (or "Lagos, NG" and "Lagos, Lagos") differs only in
+    the market part, and that part keeps the items and their findings apart."""
+    base = dict(
+        source_type="rss_news",
+        source_key="w16-market-proof",
+        source_url="https://w16-market-proof.example/item",
+        content_hash="e" * 64,
+    )
+    a = item_identity(**base, ingest_metadata={"market": one})
+    b = item_identity(**base, ingest_metadata={"market": other})
+    assert a[:3] == b[:3]  # the evidence is identical: only the market differs
+    assert a != b
+    rows = [SimpleNamespace(**base, ingest_metadata={"market": m}) for m in (one, other)]
+    assert finding_key(rows[:1]) != finding_key(rows[1:])
+
+
+@pytest.mark.parametrize(("one", "same"), _SAME_MARKET_OTHER_SPELLING, ids=_SAME_MARKET_IDS)
+def test_a_identity_treats_spacing_and_case_of_one_market_as_equal(one, same):
+    """The control for the test above: the normalization the contract permits (whitespace and
+    case) still compares one market equal, so the market part is not merely always different."""
+    base = dict(
+        source_type="rss_news",
+        source_key="w16-market-proof",
+        source_url="https://w16-market-proof.example/item",
+        content_hash="e" * 64,
+    )
+    assert one != same
+    assert item_identity(**base, ingest_metadata={"market": one}) == item_identity(
+        **base, ingest_metadata={"market": same}
+    )
+
+
+def _run_recorded_for(factory, monkeypatch, label: str) -> str:
+    """One run of the Dallas Scout whose evidence is the sample library's Dallas items, recorded
+    for ``label``: the live and sandbox connectors stamp the market they were asked for
+    (``scope.market``) on every item, so this is the same evidence collected for another market.
+    Nothing else about the items changes."""
+    real_fetch = pipeline.fetch_signals
+
+    def fetch_recorded_for(**kwargs):
+        batch = real_fetch(**kwargs)
+        assert batch.signals, "the sample library returned no evidence"
+        batch.signals = [dataclasses.replace(x, market=label) for x in batch.signals]
+        return batch
+
+    monkeypatch.setattr(pipeline, "fetch_signals", fetch_recorded_for)
+    return _run(factory, _rid())
+
+
+def _member_markets(session, cluster_id: str) -> set[str | None]:
+    """The market labels a cluster's member rows store, as stored (read without the identity
+    module, so a change to its market rule cannot change what this reports)."""
+    from app.signals.models import NormalizedSignal
+
+    return {
+        (row.ingest_metadata or {}).get("market")
+        for row in session.scalars(
+            select(NormalizedSignal).where(NormalizedSignal.cluster_id == cluster_id)
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    ("one", "other", "same_market"),
+    [(a, b, False) for a, b in _SAME_CITY_OTHER_MARKET]
+    + [(a, b, True) for a, b in _SAME_MARKET_OTHER_SPELLING],
+    ids=[f"other_market-{i}" for i in _OTHER_MARKET_IDS]
+    + [f"same_market-{i}" for i in _SAME_MARKET_IDS],
+)
+def test_a_a_sighting_never_attaches_to_another_markets_card(
+    factory, clean_findings, monkeypatch, one, other, same_market
+):
+    """Review r2 G2 through the real worker and pipeline: the same evidence recorded first for
+    ``one``, then for ``other``. For another market (Paris, TX / Paris, FR; Lagos, NG / Lagos,
+    Lagos) the second run's findings are new cards and none of its sightings lands on a first-run
+    card; for another spelling of the same market (the control) every finding is seen again on
+    its first-run card. A second-run sighting's card was built from evidence recorded for the
+    second run's market, never the first's, unless the two are one market."""
+    first_job = _run_recorded_for(factory, monkeypatch, one)
+    first = _cards(factory, _rid())
+    assert len(first) == 3
+    second_job = _run_recorded_for(factory, monkeypatch, other)
+    after = _cards(factory, _rid())
+    sightings = [o for o in _sightings(factory, _rid()) if o.job_id == second_job]
+    assert len(sightings) == 3
+    first_ids = {c.id for c in first}
+    if same_market:
+        assert [c.id for c in after] == [c.id for c in first]  # no new card
+        assert {o.kind for o in sightings} == {"seen_again"}
+        assert {o.opportunity_id for o in sightings} == first_ids
+    else:
+        assert len(after) == 6
+        assert {o.kind for o in sightings} == {"first_seen"}
+        assert {o.opportunity_id for o in sightings}.isdisjoint(first_ids)
+    with factory() as session:
+        for o in _sightings(factory, _rid()):
+            card = session.get(Opportunity, o.opportunity_id)
+            label = one if o.job_id == first_job else other
+            card_label = one if (o.job_id == first_job or same_market) else other
+            assert _member_markets(session, o.cluster_id) == {label}
+            assert _member_markets(session, card.cluster_id) == {card_label}, (o.kind, label)
+        stats = session.get(ScoutRequest, _rid()).stats
+    assert (stats["opportunities_new"], stats["opportunities_seen_again"]) == (
+        (0, 3) if same_market else (3, 0)
+    )
+
+
+def test_a_the_sample_library_records_its_own_label_so_a_relabel_keeps_the_cards(
+    factory, client, committed
+):
+    """The documented sample-library behaviour, kept (#278 Limitation 4; review r2 G4): the
+    library records its own market label, so relabelling a Lagos, NG location's Scout from
+    "Lagos, Lagos" to "Lagos, NG" reads the same sample market, and its cards are seen again.
+    The Lagos, NG / Lagos, Lagos distinction above applies where the recorded label is the text
+    the sources were asked for (the live and sandbox connectors)."""
+    rid, loc_id = _lagos_location_scout(factory, client)
+    try:
+        _run(factory, rid)
+        first = _cards(factory, rid)
+        assert first
+        assert _edit(client, {"resolved_market": "Lagos, NG"}, rid).status_code == 200
+        second_job = _run(factory, rid)
+        after = _cards(factory, rid)
+        assert [c.id for c in after] == [c.id for c in first]
+        sightings = [o for o in _sightings(factory, rid) if o.job_id == second_job]
+        assert sightings and {o.kind for o in sightings} == {"seen_again"}
+        with factory() as session:
+            assert session.get(ScoutRequest, rid).resolved_market == "Lagos, NG"
+            for card in after:  # the library's own label, whatever text the Scout sent
+                assert _member_markets(session, card.cluster_id) == {"Lagos, NG"}
+            for o in sightings:
+                assert _member_markets(session, o.cluster_id) == {"Lagos, NG"}
+    finally:
+        _drop_scout_and_location(factory, rid, loc_id)
 
 
 def test_a_opportunity_reads_carry_the_sightings(factory, clean_findings, client):
@@ -944,6 +1092,172 @@ def test_e_the_live_path_keeps_the_stored_market_text(
             session.execute(delete(ScoutRequest).where(ScoutRequest.id == rid))
             session.execute(delete(BusinessLocation).where(BusinessLocation.id == loc_id))
             session.commit()
+
+
+def _lagos_location_scout(factory, client) -> tuple[str, str]:
+    """A Scout on a new Lagos, Lagos, NG location, created through the API (stored market
+    "Lagos, Lagos"); returns ``(scout id, location id)``."""
+    with factory() as session:
+        loc = BusinessLocation(
+            organization_id=seed_mod.sid("org"),
+            workspace_id=_ws(),
+            brand_id=seed_mod.sid("brand"),
+            name=f"Lagos fu {uuid.uuid4().hex[:4]}",
+            city="Lagos",
+            state_province="Lagos",
+            country="NG",
+            is_active=True,
+        )
+        session.add(loc)
+        session.commit()
+        loc_id = loc.id
+    made = client.post(
+        f"{API}/workspaces/{_ws()}/scout-requests",
+        json={"name": "Lagos fu scout", "location_id": loc_id, "keywords": ["coffee"]},
+        headers=_owner(),
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["resolved_market"] == "Lagos, Lagos"
+    return made.json()["id"], loc_id
+
+
+def _drop_scout_and_location(factory, rid: str, loc_id: str) -> None:
+    with factory() as session:
+        session.execute(
+            delete(OpportunityObservation).where(OpportunityObservation.scout_request_id == rid)
+        )
+        session.execute(delete(Opportunity).where(Opportunity.scout_request_id == rid))
+        session.execute(delete(Job).where(Job.scout_request_id == rid))
+        session.execute(delete(ScoutRequest).where(ScoutRequest.id == rid))
+        session.execute(delete(BusinessLocation).where(BusinessLocation.id == loc_id))
+        session.commit()
+
+
+#: FU-W16-3 (review r2 G1): an approved live source cleared for the stored text "Lagos, Lagos",
+#: and an approved source for another market.
+_SERVING_KEY = "w16-lagos-lagos-proof"
+_UNRELATED_KEY = "w16-toronto-proof"
+
+
+def _approved_target(key: str, market: str):
+    from datetime import date
+
+    from app.connectors.live import SourceTarget
+    from app.connectors.sources import LegalStatus, SourceRecord
+
+    record = SourceRecord(
+        source_key=key,
+        connector="rss_news",
+        display_name=key,
+        publisher="W16 proof publisher",
+        feed_url=f"https://{key}.example/feed.xml",
+        markets=(market,),
+        tos_url=f"https://{key}.example/terms",
+        approval_reference="DEC-W16-FU3",
+        approved_on=date(2026, 1, 1),
+        legal_status=LegalStatus.APPROVED,
+        enabled=True,
+    )
+    assert record.is_activatable()
+    return SourceTarget(source=record, fetch_url=record.feed_url, delivery="live")
+
+
+@pytest.mark.parametrize(
+    ("workspace_rss_off", "taken_down", "expected"),
+    [
+        # Positive controls: an eligible source serves the stored text, so it is kept.
+        (False, (), "Lagos, Lagos"),
+        (False, (_UNRELATED_KEY,), "Lagos, Lagos"),
+        # The workspace's effective RSS decision is off: no live source can serve the run.
+        (True, (), "Lagos, Lagos, NG"),
+        # The only serving source is taken down: no live source can serve the run.
+        (False, (_SERVING_KEY,), "Lagos, Lagos, NG"),
+    ],
+    ids=["serving", "unrelated_source_taken_down", "rss_off", "serving_source_taken_down"],
+)
+def test_e_the_live_check_honours_the_workspace_rss_decision_and_takedowns(
+    factory, client, committed, monkeypatch, workspace_rss_off, taken_down, expected
+):
+    """Contract §J.4 (review r2 G1): the stored market text goes to the sources only when a live
+    source would actually serve it. The production selection decides: the capability resolver
+    (RSS on globally; a workspace override row turns it off), ``live_targets_for`` over an
+    approved list holding one source cleared for "Lagos, Lagos", and the takedown rows. When the
+    workspace's RSS is off, or the serving source is taken down, the run asks for the qualified
+    text, as for any other location Scout. Nothing is fetched: the run reads the sample library
+    with RSS off, and a live collection fails the test."""
+    import app.connectors.live as live_mod
+    import app.core.config as config_mod
+    from app.capabilities.models import WorkspaceCapabilityOverride
+    from app.capabilities.registry import Capability
+    from app.connectors.models import SourceTakedown
+
+    live = config_mod.get_settings().model_copy(
+        update={
+            "connector_rss_enabled": True,
+            "connector_rss_live_enabled": True,
+            "connector_rss_kill_switch": False,
+            "connector_rss_replay_origin": None,
+        }
+    )
+    monkeypatch.setattr(config_mod, "get_settings", lambda: live)  # the resolver's global flag
+    monkeypatch.setattr(pipeline, "get_settings", lambda: live)  # the live selection's switch
+    monkeypatch.setattr(
+        live_mod,
+        "_targets",
+        lambda settings: [
+            _approved_target(_SERVING_KEY, "Lagos, Lagos"),
+            _approved_target(_UNRELATED_KEY, "Toronto, ON"),
+        ],
+    )
+
+    def no_live_collection(self, scope):
+        raise AssertionError("a live source was collected")
+
+    monkeypatch.setattr(live_mod.LiveRssConnector, "collect", no_live_collection)
+    asked: list = []
+    real_fetch = pipeline.fetch_signals
+
+    def recording_fetch(**kwargs):
+        asked.append((kwargs["market"], kwargs["rss_enabled"], kwargs["takedowns"]))
+        return real_fetch(**{**kwargs, "rss_enabled": False})
+
+    monkeypatch.setattr(pipeline, "fetch_signals", recording_fetch)
+    rid, loc_id = _lagos_location_scout(factory, client)
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(SourceTakedown)) == 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(WorkspaceCapabilityOverride)
+                .where(WorkspaceCapabilityOverride.workspace_id == _ws())
+            )
+            == 0
+        )
+        for key in taken_down:
+            session.add(SourceTakedown(source_key=key))
+        if workspace_rss_off:
+            session.add(
+                WorkspaceCapabilityOverride(
+                    organization_id=seed_mod.sid("org"),
+                    workspace_id=_ws(),
+                    capability=Capability.CONNECTOR_RSS.value,
+                    enabled=False,
+                )
+            )
+        session.commit()
+    try:
+        _run(factory, rid)
+        assert asked == [(expected, not workspace_rss_off, frozenset(taken_down))]
+    finally:
+        with factory() as session:
+            session.execute(delete(SourceTakedown))
+            session.execute(
+                delete(WorkspaceCapabilityOverride).where(
+                    WorkspaceCapabilityOverride.workspace_id == _ws()
+                )
+            )
+            session.commit()
+        _drop_scout_and_location(factory, rid, loc_id)
 
 
 def test_e_a_scout_without_a_location_gets_no_country(factory, committed):
