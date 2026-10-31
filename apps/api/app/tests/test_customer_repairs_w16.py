@@ -15,6 +15,7 @@ stopped run, the edit-vs-Run-now lock) is in ``test_customer_repairs_w16_postgre
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -50,6 +51,52 @@ committed = promise.committed
 client = promise.client
 
 DALLAS = "dallas"
+
+#: The Scout fields the edit route can change (``ScoutRequestUpdate``).
+_EDITABLE = ("name", "source_types", "keywords", "resolved_market", "notes")
+
+
+@pytest.fixture(scope="module")
+def _as_seeded(factory) -> dict:
+    """The seeded Scouts' editable fields and the audit rows that name them, read once, right
+    after the module's seed and before any case runs."""
+    rids = [seed_mod.sid("scout", m) for m in promise._MARKETS]
+    with factory() as session:
+        fields = {
+            rid: {f: copy.deepcopy(getattr(session.get(ScoutRequest, rid), f)) for f in _EDITABLE}
+            for rid in rids
+        }
+        audit = set(session.scalars(select(AuditLog.id).where(AuditLog.entity_id.in_(rids))))
+    return {"fields": fields, "audit": audit}
+
+
+@pytest.fixture(autouse=True)
+def seeded_scouts(factory, _as_seeded):
+    """Every case starts and ends with the seeded Scouts as seeded (review r4 T1).
+
+    The B tests edit a seeded Scout through the real route (its name, keywords or notes) and so
+    write audit rows. ``committed`` restores only the run fields, so a later run of that Scout
+    would read the edited keywords and find fewer cards, and a later edit test would see the
+    earlier audit row. Before and after each case, this puts the editable fields back to their
+    seeded values and removes the seeded Scouts' audit rows that the seed did not write."""
+
+    def reset() -> None:
+        with factory() as session:
+            for rid, fields in _as_seeded["fields"].items():
+                req = session.get(ScoutRequest, rid)
+                for name, value in fields.items():
+                    setattr(req, name, copy.deepcopy(value))
+            session.execute(
+                delete(AuditLog).where(
+                    AuditLog.entity_id.in_(list(_as_seeded["fields"])),
+                    AuditLog.id.not_in(sorted(_as_seeded["audit"])),
+                )
+            )
+            session.commit()
+
+    reset()
+    yield
+    reset()
 
 
 def _rid(market: str = DALLAS) -> str:
