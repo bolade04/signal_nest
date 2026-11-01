@@ -45,7 +45,6 @@ from app.creative.models import ContentReview, CreativeDraft
 from app.creative.schemas import CreativeDraftCreate
 from app.creative.service import (
     GENERATE_TASK,
-    compute_input_hash,
     draft_approval_refusal,
     generation_context,
     request_generation,
@@ -57,6 +56,7 @@ from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMUsageEvent
 from app.llm.prompts import PROMPTS
 from app.llm.schemas import GenerateCreativeOut
+from app.llm.service import compute_input_hash
 from app.organizations.models import User
 from app.tests._creative_support import (
     BRIEF_SUMMARY,
@@ -313,7 +313,7 @@ def test_every_draft_carries_complete_server_side_provenance(world, ws, spy):
         sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str,
     )
     assert draft["input_hash"] == hashlib.sha256(canonical.encode()).hexdigest()
-    assert draft["input_hash"] == compute_input_hash(GENERATE_TASK, sent)
+    assert draft["input_hash"] == compute_input_hash(GENERATE_TASK, PROMPTS[GENERATE_TASK], sent)
     mock_hash = MockLLMProvider(seed=get_settings().llm_mock_seed).generate(
         spy.requests[0], prompt.name, prompt.version
     ).input_hash

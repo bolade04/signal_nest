@@ -23,9 +23,14 @@ it stands when the job's turn comes; app.llm.quota):
   breached (:mod:`app.llm.quota`; refused while any is unset or unusable), checked under the
   global and workspace generation locks before every provider attempt.
 
-**The model call** is the 5C ``generate_creative`` task through
-:meth:`app.llm.service.LLMService.run` with a :class:`~app.llm.quota.CeilingMeter` bound to
-the workspace (run cap, monthly budget, usage rows, the daily ceilings) and the output limit
+**The model call** is the 5C ``generate_creative`` task through the Phase 5A-hardened seam,
+:meth:`app.llm.service.LLMService.run` (:func:`app.llm.service.get_llm_service`), naming the
+job's tenant (``organization_id``/``workspace_id``; a tenant other than the meter's raises
+``LLMTenantError``), with every input sanitized at the service boundary and the prompt rendered
+fail-closed (a template/input mismatch raises ``LLMPromptRenderError`` before anything is sent);
+both are programming errors and end the job non-retryably. A
+:class:`~app.llm.quota.CeilingMeter` is bound to the workspace (run cap, monthly budget, usage
+rows, the daily ceilings) and the output limit is
 ``min(llm_max_output_tokens, llm_max_output_tokens_per_call)``. The inputs are stored context
 only — the brief's text, the brand voice, the workspace's **active** approved claims and
 required disclaimers — never caller free text. Every model attempt's usage row is kept even
@@ -40,10 +45,11 @@ disclaimer (the library's, plus the offer calendar's active offers') is carried.
 is stored with the draft, one row per draft version, and a blocked or failed review makes
 the draft unapprovable (:func:`draft_approval_refusal`).
 
-**Provenance from the server.** Prompt name and version, model, ``input_hash`` (computed
-here from the task, the prompt identity and the exact inputs — never by a provider), trace
-id, ``is_simulated``, the usage snapshot (tokens and ``estimated_cost_usd`` from the price
-table; 0 for the mock) and the usage-ledger row of the call; the author and their snapshot.
+**Provenance from the server.** Prompt name and version, model, ``input_hash`` (the LLM
+service's, over the task, the prompt identity and the sanitized inputs — never a provider's),
+trace id, ``is_simulated``, the usage snapshot (tokens and ``estimated_cost_usd`` from the
+price table; 0 for the mock) and the usage-ledger row of the attempt that produced the output
+(``response.usage_event_id``); the author and their snapshot.
 
 **Versions.** A draft is never updated: a revision is a new row. ``draft_version`` is the
 brief's highest plus one, read under the brief row's lock (``SELECT … FOR UPDATE``) after the
@@ -57,7 +63,6 @@ only (no generated text, no author identity beyond the actor column).
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -109,13 +114,14 @@ from app.jobs.service import enqueue_job
 from app.jobs.status import JobErrorCode, JobExecutionError, JobStatus, JobType
 from app.llm.base import (
     LLMError,
+    LLMPromptRenderError,
     LLMRateLimitError,
+    LLMTenantError,
     LLMTimeoutError,
     LLMUnavailableError,
 )
 from app.llm.metering import LLMBudgetExceededError
 from app.llm.models import LLMUsageEvent
-from app.llm.prompts import get_prompt
 from app.llm.quota import (
     CeilingMeter,
     LLMCeilingExceededError,
@@ -501,20 +507,6 @@ def generation_context(
     )
 
 
-def compute_input_hash(task: str, inputs: dict[str, Any]) -> str:
-    """SHA-256 hex of the canonical JSON of the task, its prompt identity and the exact
-    inputs — computed here, never taken from a provider."""
-    prompt = get_prompt(task)
-    canonical = json.dumps(
-        {"task": task, "prompt": f"{prompt.name}@{prompt.version}", "inputs": inputs},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def _cap_items(items: Iterable[Any]) -> list[Any]:
     limit, chars = CREATIVE_BOUNDS["review_items"], CREATIVE_BOUNDS["review_item_chars"]
     capped: list[Any] = []
@@ -562,24 +554,14 @@ def _requester(db: Session, organization_id: str, user_id: str) -> User:
     return user
 
 
-def _usage_ids(db: Session, job_id: str) -> set[str]:
-    return set(db.scalars(select(LLMUsageEvent.id).where(LLMUsageEvent.job_id == job_id)))
-
-
-def _call_usage_event_id(db: Session, job_id: str, before: set[str]) -> str | None:
-    """The usage-ledger row of the attempt that produced the output: the one new ``ok``
-    generation row of this job since ``before`` (written at settlement or by ``flush``)."""
-    rows = db.execute(
-        select(LLMUsageEvent.id, LLMUsageEvent.outcome, LLMUsageEvent.task).where(
-            LLMUsageEvent.job_id == job_id
-        )
-    ).all()
-    new_ok = [
-        r.id
-        for r in rows
-        if r.id not in before and r.outcome == "ok" and r.task == GENERATE_TASK
-    ]
-    return new_ok[0] if len(new_ok) == 1 else None
+def _existing_usage_event(db: Session, usage_event_id: str | None) -> str | None:
+    """The usage-ledger row of the attempt that produced the output, as the LLM service names
+    it (``response.usage_event_id``, pre-assigned by the meter, Phase 5A) — once it exists
+    (settled on PostgreSQL, flushed on SQLite); a row a vanished tenant prevented is not
+    referenced."""
+    if usage_event_id is None or db.get(LLMUsageEvent, usage_event_id) is None:
+        return None
+    return usage_event_id
 
 
 def _next_version(db: Session, brief: RecommendationBrief) -> int:
@@ -650,14 +632,23 @@ def execute_generation(
         ),
     ).bind(db, organization_id=org_id, workspace_id=ws_id, scout_request_id=None)
     ctx.after_rollback.append(meter.flush)
-    before = _usage_ids(db, ctx.job_id)
     try:
         out, response = llm.run(
             GENERATE_TASK,
             context.inputs,
+            organization_id=org_id,
+            workspace_id=ws_id,
             meter=meter,
             max_output_tokens=settings.llm_max_output_tokens_per_call,
         )
+    except (LLMPromptRenderError, LLMTenantError) as exc:
+        # Programming errors of the 5A seam (a template/input mismatch, a tenant that is not
+        # the meter's): raised before anything is sent, reserved or charged; never retried.
+        reason = "prompt_render_failed" if isinstance(exc, LLMPromptRenderError) else (
+            "tenant_mismatch"
+        )
+        _log_not_generated(ws_id, brief.id, "error", reason)
+        raise _fail(JobErrorCode.NON_RETRYABLE, reason) from None
     except LLMCeilingExceededError as exc:
         _log_not_generated(ws_id, brief.id, "refused", exc.reason)
         raise _fail(JobErrorCode.POLICY, f"ceiling:{exc.reason}") from None
@@ -699,13 +690,14 @@ def execute_generation(
         prompt_name=response.prompt_name,
         prompt_version=response.prompt_version,
         model_identifier=response.model,
-        input_hash=compute_input_hash(GENERATE_TASK, context.inputs),
+        # The LLM service's hash of the task, prompt identity and SANITIZED inputs (5A seam).
+        input_hash=response.input_hash,
         trace_id=response.trace_id,
         is_simulated=response.is_simulated,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         estimated_cost_usd=Decimal(str(usage.estimated_cost_usd)),
-        llm_usage_event_id=_call_usage_event_id(db, ctx.job_id, before),
+        llm_usage_event_id=_existing_usage_event(db, response.usage_event_id),
         created_by=author.id,
         created_by_snapshot=actor_snapshot(
             user_id=author.id, full_name=author.full_name, email=author.email
@@ -780,7 +772,6 @@ __all__ = [
     "CreativeQuotaExceededError",
     "GenerationContext",
     "brief_is_approved",
-    "compute_input_hash",
     "creative_capability",
     "draft_approval_refusal",
     "draft_out",

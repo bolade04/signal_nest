@@ -26,11 +26,9 @@ def execute_creative_generation(ctx: HandlerContext) -> dict[str, Any]:
     # Deferred imports: the creative service imports the enqueue service, which imports the
     # handler modules to register them.
     from app.creative.service import execute_generation
-    from app.llm import service as llm_service_module
+    from app.llm.service import get_llm_service
 
-    return execute_generation(
-        ctx, settings=get_settings(), llm=llm_service_module.llm_service
-    )
+    return execute_generation(ctx, settings=get_settings(), llm=get_llm_service())
 
 
 __all__ = ["execute_creative_generation"]

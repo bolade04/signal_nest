@@ -212,7 +212,10 @@ def test_the_meter_itself_refuses_while_a_ceiling_is_unset(world, ws, monkeypatc
             s, organization_id=world.org, workspace_id=ws, scout_request_id=None
         )
         with pytest.raises(LLMCeilingExceededError) as refused:
-            service_module.llm_service.run(GENERATE_TASK, {"channel": "sms"}, meter=meter)
+            service_module.llm_service.run(
+                GENERATE_TASK, {"channel": "sms"}, organization_id=world.org, workspace_id=ws,
+                meter=meter,
+            )
     assert refused.value.reason == CEILINGS_UNSET
     assert provider.calls == 0
 
@@ -369,7 +372,7 @@ def test_every_metered_call_writes_one_usage_row_per_attempt(world, ws, task, in
         meter = LLMMeter(get_settings()).bind(
             s, organization_id=world.org, workspace_id=ws, scout_request_id=None
         )
-        service.run(task, inputs, meter=meter)
+        service.run(task, inputs, organization_id=world.org, workspace_id=ws, meter=meter)
         meter.flush(s)
     [row] = world.rows(LLMUsageEvent, workspace_id=ws)
     assert (row["task"], row["provider"], row["outcome"]) == (task, "mock", "ok")
@@ -378,15 +381,20 @@ def test_every_metered_call_writes_one_usage_row_per_attempt(world, ws, task, in
 
 def test_both_scouting_call_sites_pass_the_runs_meter():
     """The legacy calls are metered at the pipeline's two call sites (``jobs/pipeline.py``):
-    each ``llm_service.run`` passes ``meter=meter``."""
+    each ``get_llm_service().run`` (Phase 5A's accessor) passes ``meter=meter``."""
     import ast
     import inspect
+
+    def is_service(node) -> bool:
+        return getattr(node, "id", None) == "llm_service" or (
+            isinstance(node, ast.Call) and getattr(node.func, "id", None) == "get_llm_service"
+        )
 
     tree = ast.parse(inspect.getsource(pipeline))
     runs = [
         node for node in ast.walk(tree)
         if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "run"
-        and getattr(getattr(node.func, "value", None), "id", None) == "llm_service"
+        and is_service(getattr(node.func, "value", None))
     ]
     assert len(runs) == 2
     for call in runs:
