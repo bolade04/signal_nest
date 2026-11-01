@@ -2327,6 +2327,10 @@ export interface components {
             capability_overrides_set: {
                 [key: string]: unknown;
             }[];
+            /** Drafts Authored */
+            drafts_authored: {
+                [key: string]: unknown;
+            }[];
             email_keyed_data: components["schemas"]["EmailKeyedDataOut"];
             /** Email Verification Requests */
             email_verification_requests: {
@@ -2423,6 +2427,8 @@ export interface components {
             decision: components["schemas"]["ApprovalDecision"];
             /** Decision Seq */
             decision_seq: number;
+            /** Draft Id */
+            draft_id: string | null;
             /** Id */
             id: string;
             /** Is Simulated */
@@ -2448,11 +2454,11 @@ export interface components {
          * ApprovalSubjectType
          * @description What an approval decides on (Phase 5B).
          *
-         *     Closed: only recommendation briefs at CF-1. ``creative_draft`` joins at CF-2
-         *     (Phase 5C), together with the widening migration of the matching CHECK.
+         *     Closed: recommendation briefs since CF-1; ``creative_draft`` joined at CF-2 (Phase
+         *     5C), together with the widening migration of the matching CHECK.
          * @enum {string}
          */
-        ApprovalSubjectType: "recommendation_brief";
+        ApprovalSubjectType: "recommendation_brief" | "creative_draft";
         /** AudienceIn */
         AudienceIn: {
             /** Demographics */
@@ -2492,7 +2498,7 @@ export interface components {
          * @description The closed set of audit actions. The value is the stored ``audit_logs.action``.
          * @enum {string}
          */
-        AuditAction: "auth.register" | "auth.login_succeeded" | "auth.login_failed" | "onboarding.completed" | "business_profile.updated" | "organization_member.role_changed" | "organization_member.removed" | "organization_invitation.created" | "organization_invitation.accepted" | "organization_invitation.revoked" | "location.created" | "location.deactivated" | "location.reactivated" | "geo_coverage.updated" | "scout_request.created" | "scout_request.updated" | "scout_request.paused" | "scout_request.resumed" | "scout_request.run" | "scout_schedule.created" | "scout_schedule.paused" | "scout_schedule.resumed" | "scout_schedule.deleted" | "scout_admission.reconciled" | "opportunity.new" | "opportunity.saved" | "opportunity.monitoring" | "opportunity.ignored" | "opportunity.actioned" | "opportunity_feedback.created" | "workspace_capability_override.created" | "workspace_capability_override.updated" | "workspace_capability_override.cleared" | "workspace_capability_override.rejected" | "data_source.taken_down" | "recommendation_brief.created" | "approval.approved" | "approval.rejected" | "approval.revoked";
+        AuditAction: "auth.register" | "auth.login_succeeded" | "auth.login_failed" | "onboarding.completed" | "business_profile.updated" | "organization_member.role_changed" | "organization_member.removed" | "organization_invitation.created" | "organization_invitation.accepted" | "organization_invitation.revoked" | "location.created" | "location.deactivated" | "location.reactivated" | "geo_coverage.updated" | "scout_request.created" | "scout_request.updated" | "scout_request.paused" | "scout_request.resumed" | "scout_request.run" | "scout_schedule.created" | "scout_schedule.paused" | "scout_schedule.resumed" | "scout_schedule.deleted" | "scout_admission.reconciled" | "opportunity.new" | "opportunity.saved" | "opportunity.monitoring" | "opportunity.ignored" | "opportunity.actioned" | "opportunity_feedback.created" | "workspace_capability_override.created" | "workspace_capability_override.updated" | "workspace_capability_override.cleared" | "workspace_capability_override.rejected" | "data_source.taken_down" | "recommendation_brief.created" | "approval.approved" | "approval.rejected" | "approval.revoked" | "claims_library_entry.created" | "claims_library_entry.updated" | "claims_library_entry.retired" | "creative_draft.created";
         /**
          * AuditLogOut
          * @description One audit record as an owner, admin or compliance reviewer reads it.
@@ -2739,7 +2745,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -3246,6 +3252,8 @@ export interface components {
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
             connector_rss_enabled: boolean;
+            /** Creative Generation Enabled */
+            creative_generation_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
             /** Recommendation Briefs Enabled */
@@ -3950,7 +3958,7 @@ export interface components {
          *     error), so an unknown/renamed type can never silently no-op.
          * @enum {string}
          */
-        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge";
+        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge" | "creative.generate";
         /** JobsOverviewOut */
         JobsOverviewOut: {
             /** Dead Letter Count */

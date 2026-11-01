@@ -11,7 +11,8 @@ oracle for whether an id exists elsewhere. Rows written before the check are not
 they are reported, read-only, by ``app.campaign_context.location_refs``.
 
 P6-PLAT-9. Each of the nine context collections gains ``PATCH /{item_id}``: the same role
-gate as POST (OWNER/ADMIN/MARKETER), the same tenant scoping, the same field validation, a
+gate as POST (OWNER/ADMIN/MARKETER; for the claims library, since W21 CF-2, exactly
+OWNER/ADMIN/COMPLIANCE_REVIEWER), the same tenant scoping, the same field validation, a
 stable id, and only the fields sent are changed. For every collection: success, a
 validation failure that leaves the row unchanged, cross-workspace denial (same organization
 and foreign organization) and role denial.
@@ -161,6 +162,15 @@ COLLECTIONS = (
     ),
 )
 COLLECTION_IDS = [c[0] for c in COLLECTIONS]
+
+NON_OWNER_ROLES = ("admin", "marketer", "reviewer", "compliance_reviewer", "viewer")
+
+
+def _non_owner_writers(path: str) -> set[str]:
+    """The non-owner roles a collection admits for writes. The claims library is the W21 CF-2
+    protected control (exact OWNER/ADMIN/COMPLIANCE_REVIEWER); the rest keep the
+    OWNER/ADMIN/MARKETER editors."""
+    return {"admin", "compliance_reviewer"} if path == "claims" else {"admin", "marketer"}
 
 PATCH_PAIRS = (
     (ProductIn, ProductPatch),
@@ -735,27 +745,29 @@ class TestPatch:
         r = world.a("PATCH", f"/workspaces/{world.ws_a1}/{path}/{'0' * 32}", valid)
         assert _error(r) == ITEM_404
 
-    @pytest.mark.parametrize("role", ["reviewer", "compliance_reviewer", "viewer"])
-    def test_role_denial_403_row_unchanged(self, world, path, model, create, valid, invalid, role):
-        item = _create(world, world.ws_a1, path, create)
-        before = world.row(model, item)
-        r = world.send(
-            "PATCH", f"/workspaces/{world.ws_a1}/{path}/{item}", world.tokens[role], valid
-        )
-        assert _error(r) == (
-            403,
-            "permission_denied",
-            f"Role '{role}' is not permitted for this action.",
-        ), r.text
-        assert world.row(model, item) == before
+    def test_role_denial_403_row_unchanged(self, world, path, model, create, valid, invalid):
+        denied = sorted(set(NON_OWNER_ROLES) - _non_owner_writers(path))
+        assert len(denied) == 3
+        for role in denied:
+            item = _create(world, world.ws_a1, path, create)
+            before = world.row(model, item)
+            r = world.send(
+                "PATCH", f"/workspaces/{world.ws_a1}/{path}/{item}", world.tokens[role], valid
+            )
+            assert _error(r) == (
+                403,
+                "permission_denied",
+                f"Role '{role}' is not permitted for this action.",
+            ), (role, r.text)
+            assert world.row(model, item) == before, role
 
-    @pytest.mark.parametrize("role", ["admin", "marketer"])
-    def test_admitted_non_owner_roles(self, world, path, model, create, valid, invalid, role):
-        item = _create(world, world.ws_a1, path, create)
-        r = world.send(
-            "PATCH", f"/workspaces/{world.ws_a1}/{path}/{item}", world.tokens[role], valid
-        )
-        assert r.status_code == 200, r.text
+    def test_admitted_non_owner_roles(self, world, path, model, create, valid, invalid):
+        for role in sorted(_non_owner_writers(path)):
+            item = _create(world, world.ws_a1, path, create)
+            r = world.send(
+                "PATCH", f"/workspaces/{world.ws_a1}/{path}/{item}", world.tokens[role], valid
+            )
+            assert r.status_code == 200, (role, r.text)
 
 
 def test_nullable_field_can_be_cleared_and_required_field_cannot(world: World):

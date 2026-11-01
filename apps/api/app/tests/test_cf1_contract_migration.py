@@ -2,8 +2,9 @@
 
 Through the real Alembic CLI on a throwaway SQLite database (as CI validates migrations):
 
-* the head is single and follows ``e7b3c5a9d1f4``; ``upgrade head`` then ``alembic check``
-  reports no drift between the CF-1 models and the migration (Phase 5 plan §6.2.0);
+* ``f3a9c1e7b2d5`` follows ``e7b3c5a9d1f4`` and the single head (CF-2's ``a7d2e9f4c1b8``)
+  follows it; ``upgrade head`` then ``alembic check`` reports no drift between the models and
+  the migrations (Phase 5 plan §6.2.0);
 * **the migrated database's CHECKs equal their Python authorities, in both directions** — the
   capability set (``persisted_values()``), the approval decision / subject-type / decided-role
   vocabularies and the reason-code **polarity partition** (decision → codes, not a flat set,
@@ -11,10 +12,15 @@ Through the real Alembic CLI on a throwaway SQLite database (as CI validates mig
   gate on them (a CF-1-scoped form of the plan's ``PP5-CHK-001`` control, §9.2). Discovery
   runs too: every CHECK on the three tables must be one this module knows;
 * the CHECKs hold on insert (capability widened; polarity; the brief/subject binding);
-* the downgrade refuses, before any DDL, while an override names ``recommendation_briefs``
-  or while ``approvals`` holds a row; once neither holds, one step down removes exactly this
-  revision (both tables gone, the capability CHECK narrowed, the override table's indexes
-  intact) and ``upgrade`` restores it.
+* the downgrade **from this revision** refuses, before any DDL, while an override names
+  ``recommendation_briefs`` or while ``approvals`` holds a row; once neither holds, one step
+  down removes exactly this revision (both tables gone, the capability CHECK narrowed, the
+  override table's indexes intact) and ``upgrade`` restores it.
+
+The CHECK-equality and insert tests run at the code head, where the CHECKs must equal the
+*current* Python authorities (CF-2 widened the capability and approval-subject vocabularies
+and added ``ck_approval_draft_subject``); the downgrade tests start from ``f3a9c1e7b2d5``
+itself (CF-2's own downgrade is pinned by ``test_cf2_contract_migration``).
 """
 
 from __future__ import annotations
@@ -37,14 +43,18 @@ from app.capabilities.registry import persisted_values
 from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
 
 API_DIR = Path(__file__).resolve().parents[2]
-HEAD = "f3a9c1e7b2d5"
+#: This revision (W21 CF-1).
+CF1 = "f3a9c1e7b2d5"
+#: The code head (W21 CF-2), which follows CF-1.
+HEAD = "a7d2e9f4c1b8"
 PREV = "e7b3c5a9d1f4"
 OVERRIDES = "workspace_capability_overrides"
 
-#: Every CHECK the CF-1 tables (and the widened override table) may carry.
+#: Every CHECK the CF-1 tables (and the widened override table) may carry at the code head.
 EXPECTED_CHECKS = {
     "approvals": {
         "ck_approval_brief_subject",
+        "ck_approval_draft_subject",  # CF-2
         "ck_approval_decided_role",
         "ck_approval_decision",
         "ck_approval_decision_seq",
@@ -151,6 +161,16 @@ def migrated(tmp_path) -> Path:
     return db_path
 
 
+@pytest.fixture()
+def at_cf1(tmp_path) -> Path:
+    """A database at exactly this revision (for its own downgrade)."""
+    db_path = tmp_path / "cf1-only.db"
+    result = _alembic(db_path, "upgrade", CF1)
+    assert result.returncode == 0, result.stderr
+    assert _version(db_path) == [CF1]
+    return db_path
+
+
 # --------------------------------------------------------------------------- #
 # Head, drift, and the CHECKs against their Python authorities
 # --------------------------------------------------------------------------- #
@@ -160,7 +180,8 @@ def test_the_head_is_single_and_follows_the_finding_identity() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == PREV
+    assert script.get_revision(HEAD).down_revision == CF1
+    assert script.get_revision(CF1).down_revision == PREV
 
 
 def test_upgrade_leaves_no_model_drift(migrated: Path) -> None:
@@ -246,7 +267,7 @@ def test_the_checks_hold_on_insert(migrated: Path) -> None:
         ("bad-polarity", {"decision": "approved", "reason": "inaccurate", "seq": 4}),
         ("bad-reason", {"reason": "not_a_code", "seq": 5}),
         ("bad-decision", {"decision": "maybe", "seq": 6}),
-        ("bad-subject", {"subject": "creative_draft", "seq": 7}),
+        ("bad-subject", {"subject": "not_a_subject", "seq": 7}),
         ("bad-role", {"role": "superuser", "seq": 8}),
         ("bad-binding", {"brief": "another-brief", "seq": 9}),
         ("bad-seq", {"seq": 0}),
@@ -288,65 +309,67 @@ def _indexes(db_path: Path, table: str) -> set[str]:
     }
 
 
-def test_downgrade_refuses_while_an_override_names_the_capability(migrated: Path) -> None:
+def test_downgrade_refuses_while_an_override_names_the_capability(at_cf1: Path) -> None:
     _sql(
-        migrated,
+        at_cf1,
         f"INSERT INTO {OVERRIDES} (id, organization_id, workspace_id, capability, enabled)"
         " VALUES ('ov-briefs', 'o', 'w', 'recommendation_briefs', 1)",
     )
-    tables_before = _tables(migrated)
-    refused = _alembic(migrated, "downgrade", "-1")
+    tables_before = _tables(at_cf1)
+    refused = _alembic(at_cf1, "downgrade", "-1")
     assert refused.returncode != 0
     assert "clear them before downgrading" in refused.stdout + refused.stderr
     # Nothing changed: same revision, same tables, the override still there.
-    assert _version(migrated) == [HEAD]
-    assert _tables(migrated) == tables_before
-    assert _sql(migrated, f"SELECT capability FROM {OVERRIDES}") == [("recommendation_briefs",)]
+    assert _version(at_cf1) == [CF1]
+    assert _tables(at_cf1) == tables_before
+    assert _sql(at_cf1, f"SELECT capability FROM {OVERRIDES}") == [("recommendation_briefs",)]
 
 
-def test_downgrade_refuses_while_approvals_hold_rows(migrated: Path) -> None:
+def test_downgrade_refuses_while_approvals_hold_rows(at_cf1: Path) -> None:
     """Approvals are compliance records O-6 keeps: a rollback never drops one (review r1)."""
     _sql(
-        migrated,
+        at_cf1,
         _APPROVAL_SQL,
         ("kept-1", "recommendation_brief", None, "approved", 1, None, "reviewer"),
     )
-    tables_before = _tables(migrated)
-    refused = _alembic(migrated, "downgrade", "-1")
+    tables_before = _tables(at_cf1)
+    refused = _alembic(at_cf1, "downgrade", "-1")
     assert refused.returncode != 0
     assert "approval record(s) exist" in refused.stdout + refused.stderr
-    assert _version(migrated) == [HEAD]
-    assert _tables(migrated) == tables_before
-    assert _sql(migrated, "SELECT id FROM approvals") == [("kept-1",)]
-    narrowed_not = _checks(migrated, OVERRIDES)["ck_workspace_capability_override_capability"]
+    assert _version(at_cf1) == [CF1]
+    assert _tables(at_cf1) == tables_before
+    assert _sql(at_cf1, "SELECT id FROM approvals") == [("kept-1",)]
+    narrowed_not = _checks(at_cf1, OVERRIDES)["ck_workspace_capability_override_capability"]
     assert "recommendation_briefs" in _in_list(narrowed_not, "capability")  # CHECK untouched
 
 
 def test_one_step_down_removes_exactly_this_revision_and_up_restores_it(
-    migrated: Path,
+    at_cf1: Path,
 ) -> None:
-    override_indexes = _indexes(migrated, OVERRIDES)
+    override_indexes = _indexes(at_cf1, OVERRIDES)
     assert len(override_indexes) == 3
     _sql(
-        migrated,
+        at_cf1,
         f"INSERT INTO {OVERRIDES} (id, organization_id, workspace_id, capability, enabled)"
         " VALUES ('ov-feedback', 'o', 'w', 'opportunity_feedback', 1)",
     )
 
-    down = _alembic(migrated, "downgrade", "-1")
+    down = _alembic(at_cf1, "downgrade", "-1")
     assert down.returncode == 0, down.stdout + down.stderr
-    assert _version(migrated) == [PREV]
-    assert not {"recommendation_briefs", "approvals"} & _tables(migrated)
-    narrowed = _checks(migrated, OVERRIDES)["ck_workspace_capability_override_capability"]
+    assert _version(at_cf1) == [PREV]
+    assert not {"recommendation_briefs", "approvals"} & _tables(at_cf1)
+    narrowed = _checks(at_cf1, OVERRIDES)["ck_workspace_capability_override_capability"]
     assert _in_list(narrowed, "capability") == {
         "connector_rss", "opportunity_feedback", "scout_scheduling"
     }
-    assert _indexes(migrated, OVERRIDES) == override_indexes  # the rebuild kept them
-    assert _sql(migrated, f"SELECT id FROM {OVERRIDES}") == [("ov-feedback",)]  # data kept
-    assert "opportunity_observations" in _tables(migrated)  # the revision below: untouched
+    assert _indexes(at_cf1, OVERRIDES) == override_indexes  # the rebuild kept them
+    assert _sql(at_cf1, f"SELECT id FROM {OVERRIDES}") == [("ov-feedback",)]  # data kept
+    assert "opportunity_observations" in _tables(at_cf1)  # the revision below: untouched
 
-    up = _alembic(migrated, "upgrade", "head")
+    up = _alembic(at_cf1, "upgrade", CF1)
     assert up.returncode == 0, up.stderr
-    assert _version(migrated) == [HEAD]
-    assert {"recommendation_briefs", "approvals"} <= _tables(migrated)
-    assert _alembic(migrated, "check").returncode == 0
+    assert _version(at_cf1) == [CF1]
+    assert {"recommendation_briefs", "approvals"} <= _tables(at_cf1)
+    # And on to the head, which then shows no drift.
+    assert _alembic(at_cf1, "upgrade", "head").returncode == 0
+    assert _alembic(at_cf1, "check").returncode == 0

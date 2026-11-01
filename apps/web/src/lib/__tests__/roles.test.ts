@@ -6,6 +6,7 @@ import {
   canEditWorkspace,
   canGrantRole,
   canInviteMembers,
+  canManageClaims,
   canManageMember,
   canManageOrganizationData,
   canReadAuditLogs,
@@ -66,6 +67,7 @@ describe('policy predicates × six roles (§25, §36, §37)', () => {
     canInviteMembers: [canInviteMembers, ['owner', 'admin']],
     canReadAuditLogs: [canReadAuditLogs, ['owner', 'admin', 'compliance_reviewer']],
     canManageOrganizationData: [canManageOrganizationData, ['owner']],
+    canManageClaims: [canManageClaims, ['owner', 'admin', 'compliance_reviewer']],
   };
 
   it.each(Object.entries(table))('%s admits exactly the backend set', (_name, [predicate, admitted]) => {
@@ -83,6 +85,15 @@ describe('policy predicates × six roles (§25, §36, §37)', () => {
     // A marketer edits but may not read the audit log: a duty boundary, not a rank.
     expect(canEditWorkspace('marketer')).toBe(true);
     expect(canReadAuditLogs('marketer')).toBe(false);
+  });
+
+  it('keeps a marketer off the claims library it is checked against (W21 CF-2)', () => {
+    // A marketer edits every other campaign-context collection, but not the claims.
+    expect(canEditWorkspace('marketer')).toBe(true);
+    expect(canManageClaims('marketer')).toBe(false);
+    // A compliance reviewer stewards the claims and is still no kind of editor.
+    expect(canManageClaims('compliance_reviewer')).toBe(true);
+    expect(canEditWorkspace('compliance_reviewer')).toBe(false);
   });
 });
 

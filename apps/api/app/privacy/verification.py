@@ -237,7 +237,7 @@ def verify_subject_erased(
 _AUDIT_IDENTIFYING = ("actor_user_id", "entity_id", "reason", "previous_state", "new_state")
 #: The columns of an organization's retained approvals (Project Phase 5B, W21 CF-1) that must
 #: all be NULL; their ``decided_by_snapshot`` must be the erased marker.
-_APPROVAL_IDENTIFYING = ("decided_by", "note", "brief_id")
+_APPROVAL_IDENTIFYING = ("decided_by", "note", "brief_id", "draft_id")
 #: The marker the deletion writes over an erased snapshot. Repeated here rather than imported,
 #: so this module stays independent of the deletion code; a test pins the two equal.
 _ERASED_MARKER = "[erased]"

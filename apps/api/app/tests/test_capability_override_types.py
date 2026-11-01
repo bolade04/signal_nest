@@ -157,6 +157,8 @@ _RAW_FLAGS = frozenset(
         # Project Phase 5 CF-1 reserved it; the 5A gate (app/briefs/routes.py) decides
         # through the resolver, and this guard forbids it the raw flag.
         "recommendation_briefs_enabled",
+        # Project Phase 5 CF-2: likewise for the 5C gate when it lands.
+        "creative_generation_enabled",
     }
 )
 #: The only production module allowed to read them: the deliberately raw-global
