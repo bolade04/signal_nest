@@ -35,16 +35,36 @@ the service propagates it before any request is built for the provider and never
 to the mock (the same path as a budget refusal).
 
 **Under a lock, per workspace and globally.** The caller holds :func:`lock_for_generation`
-for the whole read-check-call-record sequence, so two concurrent generation jobs can never
-both pass a check that only one of them fits: on PostgreSQL a transaction-scoped advisory lock
-serializes generation globally (there is no global row to lock), then the workspace row is
-locked with ``SELECT … FOR NO KEY UPDATE`` (the ``capabilities/service.py``
-``_workspace_lock_select`` pattern). ``NO KEY UPDATE`` rather than ``UPDATE``: the meter's own
-ledger transactions insert rows referencing the workspace from a second session while this
-lock is held, and those foreign-key checks take ``KEY SHARE``, which ``NO KEY UPDATE`` does not
-block (``FOR UPDATE`` would). Lock order is always global, then workspace. On SQLite both
-compile to nothing: its single writer serializes writers, the degradation every Phase 6 lock
-documents.
+for the whole read-check-call-record sequence (and the creative job takes it before it reads
+any of its gates, ``app.creative.service.execute_generation``), so two concurrent generation
+jobs can never both pass a check that only one of them fits. On PostgreSQL:
+
+* a transaction-scoped advisory lock serializes generation globally (there is no global row
+  to lock);
+* the workspace row is locked ``SELECT … FOR NO KEY UPDATE`` (the ``capabilities/service.py``
+  ``_workspace_lock_select`` pattern). ``NO KEY UPDATE`` rather than ``UPDATE``: the meter's own
+  ledger transactions insert rows referencing the workspace and organization from a second
+  session while this lock is held, and those foreign-key checks take ``KEY SHARE``, which
+  ``NO KEY UPDATE`` does not block (``FOR UPDATE`` would).
+
+**Lock order (PostgreSQL), always:** the organization row ``FOR KEY SHARE`` → the global
+advisory lock → the workspace row ``FOR NO KEY UPDATE`` → (after the model call, at version
+allocation) the brief row ``FOR UPDATE``. The organization row comes first because
+organization erasure (``app.privacy.erasure``; its caller locks the organization ``FOR
+UPDATE`` and then deletes the workspace) would otherwise wait for this workspace row while this
+generation's ledger session waited, inside the process and invisible to PostgreSQL's deadlock
+detector, for the ``KEY SHARE`` the erasure blocks — a hang nothing breaks (review W21-REV-P5C
+r1 MAJOR-3). With the organization first, an erasure that holds it makes the generation wait
+before it locks anything (the job then ends ``workspace_not_found``), and an erasure that comes
+second waits for the generation to finish; the ledger's own ``KEY SHARE`` stays compatible. The
+other orders this composes with: the ledger (``app.llm.budget``: period row, then reservation
+rows, each in a short transaction of its own) and the Scout run (``app.jobs.admission``: job,
+request, ledger row, period row) take no organization or workspace row lock beyond the
+foreign-key ``KEY SHARE``.
+
+On SQLite every lock compiles to a plain read: the read-check-call sequence is *not*
+serialized across worker processes there (SQLite serializes writers, not these reads) — the
+per-session degradation the Phase 6 budget documents for SQLite, which is never production.
 """
 
 from __future__ import annotations
@@ -64,7 +84,7 @@ from app.llm import budget as ledger
 from app.llm.bound import Unbounded
 from app.llm.metering import LLMBudgetExceededError, LLMMeter
 from app.llm.models import LLMBudgetReservation, LLMUsageEvent
-from app.organizations.models import Workspace
+from app.organizations.models import Organization, Workspace
 
 #: The refusal reasons (``LLMCeilingExceededError.reason``).
 CEILINGS_UNSET = "ceilings_unset"
@@ -103,18 +123,31 @@ def global_lock_statement():
 def workspace_lock_select(workspace_id: str):
     """``SELECT … FOR NO KEY UPDATE`` on the workspace row (see the module docstring)."""
     return (
-        select(Workspace.id)
+        select(Workspace.id, Workspace.organization_id)
         .where(Workspace.id == workspace_id)
         .with_for_update(key_share=True)
     )
 
 
-def lock_for_generation(db: Session, workspace_id: str) -> bool:
-    """Take the global then the workspace generation lock, held until ``db``'s transaction
-    ends. Returns False when the workspace row does not exist."""
+def organization_lock_select(organization_id: str):
+    """``SELECT … FOR KEY SHARE`` on the organization row: the first generation lock (see
+    "Lock order" in the module docstring)."""
+    return (
+        select(Organization.id)
+        .where(Organization.id == organization_id)
+        .with_for_update(read=True, key_share=True)
+    )
+
+
+def lock_for_generation(db: Session, organization_id: str, workspace_id: str) -> bool:
+    """Take the generation locks in their fixed order — organization (``KEY SHARE``), global
+    (advisory), workspace (``NO KEY UPDATE``) — held until ``db``'s transaction ends.
+    Returns False when the workspace row (of this organization) does not exist."""
     if db.get_bind().dialect.name == "postgresql":
+        db.execute(organization_lock_select(organization_id))
         db.execute(global_lock_statement())
-    return db.execute(workspace_lock_select(workspace_id)).first() is not None
+    row = db.execute(workspace_lock_select(workspace_id)).first()
+    return row is not None and row.organization_id == organization_id
 
 
 @dataclass(frozen=True)
@@ -290,6 +323,7 @@ __all__ = [
     "day_window",
     "global_lock_statement",
     "lock_for_generation",
+    "organization_lock_select",
     "unusable_ceilings",
     "workspace_lock_select",
 ]

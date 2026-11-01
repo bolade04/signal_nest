@@ -7,7 +7,10 @@ everything it can answer at once and enqueues one ``creative.generate`` job
 (the job's handler, :mod:`app.jobs.creative_handlers`) generates, reviews and stores the
 draft. The route only enqueues and the client polls the job, then reads the draft.
 
-**Gates, re-checked when the job runs** (a job can wait; the world can change):
+**Gates, re-checked when the job runs, under the generation locks** (a job can wait — behind
+the whole platform's generation queue, since the global lock is held across each model call —
+and the world can change meanwhile; the locks are taken first, so every gate below is read as
+it stands when the job's turn comes; app.llm.quota):
 
 * the capability ``creative_generation`` resolves enabled for the workspace (the
   deny-biased resolver; dark by default);
@@ -341,7 +344,8 @@ def request_generation(
     Raises :class:`BriefNotApprovedError` (422), :class:`~app.core.errors.NotFoundError`
     (a parent draft not of this brief, 404), :class:`CreativeGenerationUnconfiguredError`
     (503) and :class:`CreativeQuotaExceededError` (429). The capability and role gates are
-    the route's; the job re-checks every gate under the generation locks.
+    the route's; the job re-checks every gate after taking the generation locks
+    (:func:`execute_generation`).
     """
     now = now or datetime.now(UTC)
     if not brief_is_approved(db, brief):
@@ -609,6 +613,14 @@ def execute_generation(
     brief = db.get(RecommendationBrief, payload.brief_id)
     if brief is None or brief.workspace_id != ws_id or brief.organization_id != org_id:
         raise _fail(JobErrorCode.VALIDATION, "brief_not_found")
+    # The generation locks first (organization, then global, then workspace; app.llm.quota),
+    # held until the attempt's transaction ends, so EVERY gate below — the capability (the
+    # kill switch), the brief's approval, the parent, the requester, the ceilings — is read
+    # under them: a job that waited behind another generation reads the state as it is when
+    # its turn comes, not as it was when it was claimed. Every ceiling check, the call and its
+    # usage rows happen inside them too.
+    if not lock_for_generation(db, org_id, ws_id):
+        raise _fail(JobErrorCode.VALIDATION, "workspace_not_found")
     if not creative_capability(db, settings, org_id, ws_id).effective_enabled:
         raise _fail(JobErrorCode.POLICY, "capability_unavailable")
     if not brief_is_approved(db, brief):
@@ -623,10 +635,6 @@ def execute_generation(
     if ctx.is_cancelled():
         raise _fail(JobErrorCode.CANCELLED, "cancelled before generation")
 
-    # Held until the attempt's transaction ends: every ceiling check, the call and its
-    # usage rows happen inside it (app.llm.quota).
-    if not lock_for_generation(db, ws_id):
-        raise _fail(JobErrorCode.VALIDATION, "workspace_not_found")
     now = ctx.now if ctx.now.tzinfo is not None else ctx.now.replace(tzinfo=UTC)
     context = generation_context(db, brief, payload.channel.value, now)
 

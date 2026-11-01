@@ -908,3 +908,75 @@ def test_the_ledger_link_is_the_retrys_own_call(world, ws, monkeypatch):
     assert v2["llm_usage_event_id"] is not None
     assert v2["llm_usage_event_id"] not in after_first
 
+
+# --------------------------------------------------------------------------- #
+# PostgreSQL: every gate is read under the generation locks (review r1 MAJOR-2, probe P5)
+# --------------------------------------------------------------------------- #
+def _await(predicate, what: str, seconds: float = 30.0):
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+def _advisory_waiters(world) -> list:
+    from sqlalchemy import text
+
+    with world.witness.connect() as conn:
+        return conn.execute(text(
+            "select a.pid from pg_stat_activity a join pg_locks l on l.pid = a.pid"
+            " where a.datname = current_database() and l.locktype = 'advisory'"
+            " and not l.granted"
+        )).all()
+
+
+@pytest.mark.parametrize(
+    "change, code, summary",
+    [
+        ("capability_disabled", "policy", "capability_unavailable"),
+        ("brief_rejected", "validation", "brief_not_approved"),
+    ],
+)
+def test_postgres_a_gate_changed_while_the_job_waits_for_the_lock_stops_it(change, code, summary):
+    """Another generation holds the global lock (held here directly); this job waits on it.
+    The kill switch is thrown (a real override disable) or the brief is rejected, and that
+    commits; then the lock is released. The job reads its gates under the lock, so it refuses
+    and nothing is generated."""
+    from app.capabilities.registry import Capability
+    from app.capabilities.service import set_capability_override
+    from app.llm.quota import global_lock_statement
+    from app.tests._creative_support import postgres_creative_world
+
+    with postgres_creative_world(f"p5c{change[:4]}") as world:
+        world.enable()
+        brief_id = world.seed_brief()
+        job_id = world.generate(brief_id).json()["job_id"]
+        holder = world.witness.connect()
+        tx = holder.begin()
+        holder.execute(global_lock_statement())
+        worker = threading.Thread(target=world.drain, daemon=True)
+        worker.start()
+        _await(lambda: _advisory_waiters(world), "the job to wait on the global lock")
+        if change == "capability_disabled":
+            with world.session() as s:
+                set_capability_override(
+                    s, organization_id=world.org, workspace_id=world.ws,
+                    capability=Capability.CREATIVE_GENERATION, enabled=False,
+                    actor_user_id=world.users["owner"], reason="kill switch",
+                )
+        else:
+            world.decide(brief_id, "rejected")
+        tx.commit()
+        holder.close()
+        worker.join(60)
+        assert not worker.is_alive()
+        job = world.job(job_id)
+        assert (job["status"], job["last_error_code"], job["last_error_summary"]) == (
+            "failed", code, summary
+        )
+        assert world.rows(CreativeDraft, workspace_id=world.ws) == []

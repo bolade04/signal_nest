@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
 
 from app.core.config import CREATIVE_GENERATION_CEILINGS, get_settings
@@ -50,6 +51,7 @@ from app.llm.quota import (
     day_window,
     global_lock_statement,
     lock_for_generation,
+    organization_lock_select,
     unusable_ceilings,
     workspace_lock_select,
 )
@@ -404,10 +406,41 @@ def test_a_generation_jobs_rows_carry_its_job_and_tenant(world, ws):
 # --------------------------------------------------------------------------- #
 def test_the_locks_compile_as_documented():
     pg = postgresql.dialect()
+    organization = str(organization_lock_select("o").compile(dialect=pg))
+    assert organization.rstrip().endswith("FOR KEY SHARE")
     workspace = str(workspace_lock_select("w").compile(dialect=pg))
     assert workspace.rstrip().endswith("FOR NO KEY UPDATE")
     assert "pg_advisory_xact_lock" in str(global_lock_statement().compile(dialect=pg))
     assert "FOR" not in str(workspace_lock_select("w").compile(dialect=sqlite.dialect()))
+
+
+def test_the_locks_are_taken_organization_then_global_then_workspace(monkeypatch):
+    """The fixed order (module docstring, review W21-REV-P5C r1 MAJOR-3), recorded on a
+    session that reports PostgreSQL."""
+    from types import SimpleNamespace
+
+    executed: list[str] = []
+
+    class _Result:
+        def first(self):
+            return SimpleNamespace(organization_id="o")
+
+    class _Session:
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def execute(self, statement):
+            executed.append(str(statement.compile(dialect=postgresql.dialect())))
+            return _Result()
+
+    assert lock_for_generation(_Session(), "o", "w") is True
+    assert len(executed) == 3
+    assert executed[0].startswith("SELECT organizations.id ")
+    assert executed[1].startswith("SELECT pg_advisory_xact_lock(")
+    assert executed[2].startswith("SELECT workspaces.id, workspaces.organization_id ")
+    assert executed[0].rstrip().endswith("FOR KEY SHARE")
+    assert executed[2].rstrip().endswith("FOR NO KEY UPDATE")
+    assert lock_for_generation(_Session(), "another-organization", "w") is False
 
 
 def test_sqlite_takes_no_advisory_lock(world, ws):
@@ -420,8 +453,9 @@ def test_sqlite_takes_no_advisory_lock(world, ws):
             seen.append(statement)
 
         try:
-            assert lock_for_generation(s, ws) is True
-            assert lock_for_generation(s, "missing-workspace") is False
+            assert lock_for_generation(s, world.org, ws) is True
+            assert lock_for_generation(s, world.org, "missing-workspace") is False
+            assert lock_for_generation(s, world.org_b, ws) is False  # not its organization
         finally:
             event.remove(s.get_bind(), "before_cursor_execute", _record)
     assert not any("advisory" in st for st in seen)
@@ -505,6 +539,7 @@ def test_postgres_a_priced_call_reserves_through_the_ledger_under_the_lock(monke
 def test_the_settings_fixture_matches_the_ceiling_names():
     assert set(SETTINGS_CEILINGS) == set(CREATIVE_GENERATION_CEILINGS) == set(CEILINGS)
 
+
 # --------------------------------------------------------------------------- #
 # Review W21-REV-P5C r1 MINOR-1 (mutant RV15): the meter checks the attempt's real worst case
 # --------------------------------------------------------------------------- #
@@ -568,3 +603,70 @@ def test_an_attempt_whose_worst_case_would_cross_the_ceiling_is_never_made(
     assert world.generated(world.seed_brief(ws), ws=ws)["status"] == "succeeded"
     assert priced.calls == 1
 
+
+# --------------------------------------------------------------------------- #
+# PostgreSQL: generation and organization erasure never wait on each other undetected
+# (review W21-REV-P5C r1 MAJOR-3, probe P8)
+# --------------------------------------------------------------------------- #
+def test_postgres_generation_and_organization_erasure_do_not_hang(monkeypatch, priced):
+    """The erasure's caller holds the organization row FOR UPDATE and has passed its
+    active-jobs check while the creative job was still pending; a worker then claims the job.
+    With the organization row taken first by the generation, the generation waits for the
+    erasure before it locks anything, and the erasure completes — no undetected cycle through
+    the generation's own ledger session."""
+    from sqlalchemy import text
+
+    from app.organizations.models import Organization
+    from app.privacy import erasure
+    from app.tests._creative_support import postgres_creative_world
+
+    def blocked_by(world, holder: int) -> list:
+        with world.witness.connect() as conn:
+            return conn.execute(
+                text("select pid from pg_stat_activity where datname = current_database()"
+                     " and :h = any(pg_blocking_pids(pid))"),
+                {"h": holder},
+            ).all()
+
+    with postgres_creative_world("p5cerase") as world:
+        world.enable()
+        job_id = world.generate(world.seed_brief()).json()["job_id"]
+        x = world.factory()
+        x.execute(select(Organization.id).where(Organization.id == world.org).with_for_update())
+        erasure._require_no_active_jobs(x, world.org)  # passes: the job is still pending
+        x_pid = x.execute(text("select pg_backend_pid()")).scalar_one()
+        generation = threading.Thread(target=world.drain, daemon=True)
+        generation.start()
+        deadline = time.monotonic() + 30
+        while not blocked_by(world, x_pid):
+            assert time.monotonic() < deadline, "the generation never reached the erasure"
+            time.sleep(0.05)
+        result: dict = {}
+
+        def erase():
+            try:
+                monkeypatch.setattr(erasure, "_require_no_active_jobs", lambda db, org: None)
+                erasure.erase_organization(x, organization_id=world.org)
+                x.commit()
+                result["erasure"] = "committed"
+            except Exception as exc:  # noqa: BLE001 - reported below
+                result["erasure"] = type(exc).__name__
+                x.rollback()
+
+        eraser = threading.Thread(target=erase, daemon=True)
+        eraser.start()
+        eraser.join(20)
+        hung = eraser.is_alive()
+        if hung:  # release the test's database before failing
+            with world.witness.connect() as conn:
+                conn.execute(text("select pg_cancel_backend(:p)"), {"p": x_pid})
+            eraser.join(30)
+        generation.join(60)
+        x.close()
+        assert not hung, "generation and organization erasure waited on each other"
+        assert result == {"erasure": "committed"}
+        assert not generation.is_alive()
+        assert world.count(CreativeDraft) == 0
+        from app.jobs.models import Job
+
+        assert world.row(Job, job_id) is None  # deleted with its organization
