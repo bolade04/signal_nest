@@ -39,6 +39,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+import boundary_precheck  # noqa: E402
 import gen_bootstrap_operator_policy as boot  # noqa: E402
 import gen_boundary_policy as gb  # noqa: E402
 import gen_boundary_rollout as rollout  # noqa: E402
@@ -134,6 +135,9 @@ def consumers() -> dict[str, str]:
             _condition_values(bootstrap, "iam:PermissionsBoundary")[0],
         "resource_oracle expected": oracle_rows["iam:boundary_policy"]["expected"],
         "gen_boundary_rollout graph": rollout.evaluate()["boundary_policy_arn"],
+        # P6-INF-15: the Stage-A precheck compares the plan and the live policy against this.
+        "boundary_precheck expected_identity()":
+            boundary_precheck.expected_identity()["boundary_policy_arn"],
     }
 
 

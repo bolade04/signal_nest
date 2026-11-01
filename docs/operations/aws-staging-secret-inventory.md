@@ -277,8 +277,10 @@ appearing in a web artifact is a G5 failure (`G5-10`).
 
 - **Rotation.** Secrets rotate in AWS Secrets Manager; task definitions reference a
   secret by ARN (and, where pinned, a specific version stage), so a rotation is picked
-  up on the next task start with no image rebuild. Operational rotation *procedures*
-  are owned by INFRA-6; this document owns only the inventory and disposition contract.
+  up on the next task start with no image rebuild. Operational population and rotation
+  *procedures* (INFRA-6), including the per-secret index and the `SECRET_KEY` length
+  check, are in [operational procedures](./aws-staging-operational-procedures.md) §3,
+  §5 and §5.6–§5.8; this document owns only the inventory and disposition contract.
   `LLM_API_KEY` is one platform key per environment, read once per process (at import,
   through cached settings), so its rotation means replacing every API and worker task
   while the old key is still valid
