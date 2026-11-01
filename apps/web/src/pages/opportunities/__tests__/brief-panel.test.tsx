@@ -160,6 +160,8 @@ describe('OpportunityBriefPanel', () => {
     server.use(http.get(BRIEFS, () => HttpResponse.json(page([brief(2), brief(1)]))));
     const screen = render();
 
+    // The panel is a labelled region (its aria-labelledby is not inert on a plain div).
+    expect(await screen.findByRole('region', { name: /recommendation brief/i })).toBeInTheDocument();
     const latest = await screen.findByRole('article', { name: /brief version 2/i });
     expect(within(latest).getByText('Summary of version 2.')).toBeInTheDocument();
     expect(within(latest).getByText('Version 2 of 2')).toBeInTheDocument();

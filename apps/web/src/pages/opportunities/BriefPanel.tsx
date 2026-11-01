@@ -138,7 +138,7 @@ function BriefPanelBody({
   const recordId = intelligence.data?.intelligence?.intelligence_record_id ?? null;
 
   return (
-    <Card aria-labelledby="brief-panel-heading">
+    <Card role="region" aria-labelledby="brief-panel-heading">
       <CardHeader>
         <CardTitle id="brief-panel-heading" className="flex items-center gap-2">
           <FileText className="size-4 text-primary" /> Recommendation brief
