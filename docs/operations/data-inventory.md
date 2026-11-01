@@ -191,7 +191,7 @@ mechanism, with the procedure an operator follows.
 
 | Endpoint | Who | Contains |
 |---|---|---|
-| `GET /api/v1/account/export` | the signed-in account | profile, memberships, sessions (no tokens), invitations it accepted, and the others addressed to the account (no token digests; the others **only when its address is verified**, as `email_keyed_data` states), invitations it sent (no invitee address), feedback it submitted, audit events it performed (action, entity type, time, organization); no `llm_usage_events` rows (no user key: no supported relationship to an account) |
+| `GET /api/v1/account/export` | the signed-in account | profile, memberships, sessions (no tokens), invitations it accepted, and the others addressed to the account (no token digests; the others **only when its address is verified**, as `email_keyed_data` states), invitations it sent (no invitee address), feedback it submitted, audit events it performed (action, entity type, time, organization), the recommendation briefs it authored (ids, version, its own snapshot; not the model-derived content) and the approval decisions it made (decision, reason code, its own note, role and snapshot) — Project Phase 5, W21 CF-1; no `llm_usage_events` rows (no user key: no supported relationship to an account) |
 | `GET /api/v1/organizations/{id}/export` | exact role OWNER | the **export index**: the subject, `members` (id, email and name), `page_size_default` (1000) and `page_size_cap` (5000), `complete`, a `consistency` statement, `not_exported`, and for every exported tenant table its **exact `row_count`**, its **first page** of rows and the `next_cursor` of the next page (null when the first page holds every row; `complete` is true when that holds for every table) |
 | `GET /api/v1/organizations/{id}/export/{table}?cursor=&limit=` | exact role OWNER | one **page** of one exported table, in `(created_at, id)` order after `cursor` (absent = the first page); `limit` 1–5000 (default 1000; above 5000 is refused with 422); the answer carries `rows` and `next_cursor` (null = the table is finished). An unknown or not-exported table is one and the same 404; a cursor that is not well-formed for that table (not URL-safe base64 of a JSON array of exactly three bounded strings `[table, created_at, id]` without control characters, or naming another table) is 422 `invalid_cursor`; any well-formed cursor naming the table is accepted |
 
@@ -258,7 +258,8 @@ An operator can reproduce the same export with `curl` loops (`privacy-operations
 
 **The account export is not paged**: it holds one person's own rows (profile, memberships,
 sessions, tokens' metadata, the invitations, feedback, overrides and audit events that account
-produced), which one account's activity bounds; it does not carry tenant tables, and no
-`llm_usage_events` row.
+produced, and the recommendation briefs it authored and approval decisions it made), which one
+account's activity bounds; it does not carry tenant tables (a brief's model-derived content is
+in the organization export, not the author's), and no `llm_usage_events` row.
 
 Exports are read-only: they write nothing, not even an audit record.

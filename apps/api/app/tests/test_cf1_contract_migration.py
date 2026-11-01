@@ -11,9 +11,10 @@ Through the real Alembic CLI on a throwaway SQLite database (as CI validates mig
   gate on them (a CF-1-scoped form of the plan's ``PP5-CHK-001`` control, §9.2). Discovery
   runs too: every CHECK on the three tables must be one this module knows;
 * the CHECKs hold on insert (capability widened; polarity; the brief/subject binding);
-* the downgrade refuses, before any DDL, while an override names ``recommendation_briefs``;
-  once it is cleared, one step down removes exactly this revision (both tables gone, the
-  capability CHECK narrowed, the override table's indexes intact) and ``upgrade`` restores it.
+* the downgrade refuses, before any DDL, while an override names ``recommendation_briefs``
+  or while ``approvals`` holds a row; once neither holds, one step down removes exactly this
+  revision (both tables gone, the capability CHECK narrowed, the override table's indexes
+  intact) and ``upgrade`` restores it.
 """
 
 from __future__ import annotations
@@ -301,6 +302,24 @@ def test_downgrade_refuses_while_an_override_names_the_capability(migrated: Path
     assert _version(migrated) == [HEAD]
     assert _tables(migrated) == tables_before
     assert _sql(migrated, f"SELECT capability FROM {OVERRIDES}") == [("recommendation_briefs",)]
+
+
+def test_downgrade_refuses_while_approvals_hold_rows(migrated: Path) -> None:
+    """Approvals are compliance records O-6 keeps: a rollback never drops one (review r1)."""
+    _sql(
+        migrated,
+        _APPROVAL_SQL,
+        ("kept-1", "recommendation_brief", None, "approved", 1, None, "reviewer"),
+    )
+    tables_before = _tables(migrated)
+    refused = _alembic(migrated, "downgrade", "-1")
+    assert refused.returncode != 0
+    assert "approval record(s) exist" in refused.stdout + refused.stderr
+    assert _version(migrated) == [HEAD]
+    assert _tables(migrated) == tables_before
+    assert _sql(migrated, "SELECT id FROM approvals") == [("kept-1",)]
+    narrowed_not = _checks(migrated, OVERRIDES)["ck_workspace_capability_override_capability"]
+    assert "recommendation_briefs" in _in_list(narrowed_not, "capability")  # CHECK untouched
 
 
 def test_one_step_down_removes_exactly_this_revision_and_up_restores_it(

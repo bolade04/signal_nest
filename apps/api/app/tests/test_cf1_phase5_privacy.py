@@ -15,12 +15,19 @@ approvals in organization A before acting:
   verifier; B's approval is untouched. Before the deletion the verifier would flag a
   non-anonymised retained approval (negative control).
 * **Inventory and retention.** Both tables are inventoried; approvals share the
-  ``audit_logs`` retention class (no new duration setting); the erased markers agree.
+  ``audit_logs`` retention class (no new duration setting) and its purge removes an approval
+  past the cut-off and keeps a newer one and the brief (review r1 DATA-C3); the erased
+  markers agree.
+* **Account export** (review r1 DATA-C2). The account's export lists the briefs it authored
+  and the approvals it decided — its own ids, versions, decision, reason, note and snapshot —
+  and never the brief's model-derived content or another person's identity.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import insert, update
@@ -29,7 +36,7 @@ from app.approvals.models import Approval
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import ERASED_ACTOR_SNAPSHOT, actor_snapshot
 from app.core.config import Settings
-from app.privacy import erasure, verification
+from app.privacy import erasure, retention, verification
 from app.privacy.inventory import TABLES, Category, RetentionClass
 from app.privacy.retention import _ROOTS
 from app.privacy.verification import verify_organization_erased, verify_subject_erased
@@ -214,6 +221,66 @@ def test_the_verifier_flags_a_retained_approval_that_was_not_anonymised(env):
 # --------------------------------------------------------------------------- #
 # Inventory, retention, markers
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Account export (review r1 DATA-C2)
+# --------------------------------------------------------------------------- #
+def test_the_account_export_lists_the_accounts_briefs_and_decisions_only(env):
+    _add_phase5_rows(env)
+
+    carol = env.client.get(f"{API}/account/export", headers=env.auth(CAROL))
+
+    assert carol.status_code == 200, carol.text
+    body = carol.json()
+    assert [b["id"] for b in body["briefs_authored"]] == ["cf1-brief-a"]
+    brief = body["briefs_authored"][0]
+    assert brief["created_by_snapshot"] == _snapshot(CAROL)
+    assert brief["brief_version"] == 1 and brief["opportunity_id"] == "a1-opp"
+    for content in ("summary", "rationale", "recommended_actions", "evidence_refs",
+                    "input_hash", "trace_id", "llm_usage_event_id", "created_by"):
+        assert content not in brief
+    assert [a["id"] for a in body["approvals_decided"]] == ["cf1-appr-carol"]
+    decision = body["approvals_decided"][0]
+    assert (decision["decision"], decision["decided_role"]) == ("approved", "reviewer")
+    assert decision["decided_by_snapshot"] == _snapshot(CAROL)
+    text = json.dumps(body)
+    # DAVE's decision (whose note names CAROL) and BOB's are not CAROL's records.
+    for other in (ALICE, BOB, DAVE):
+        assert EMAIL[other] not in text and _snapshot(other) not in text
+
+    dave = env.client.get(f"{API}/account/export", headers=env.auth(DAVE)).json()
+    assert dave["briefs_authored"] == []
+    assert [a["id"] for a in dave["approvals_decided"]] == ["cf1-appr-dave"]
+    alice = env.client.get(f"{API}/account/export", headers=env.auth(ALICE)).json()
+    assert alice["briefs_authored"] == [] and alice["approvals_decided"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Retention: approvals purge with the audit_logs class (review r1 DATA-C3)
+# --------------------------------------------------------------------------- #
+def test_the_audit_logs_class_purges_old_approvals_only_and_leaves_the_brief(env):
+    _add_phase5_rows(env)
+    now = datetime.now(UTC)
+    table = Approval.__table__
+    with env.engine.begin() as conn:
+        conn.execute(
+            update(table)
+            .where(table.c.id == "cf1-appr-carol")
+            .values(created_at=now - timedelta(days=400))
+        )
+    cutoff = now - timedelta(days=30)
+
+    with env.session() as s:
+        result = retention.purge_batch(s, RetentionClass.AUDIT_LOGS, cutoff, batch_size=500)
+        s.commit()
+
+    assert result.counts.deleted["approvals"] == 1
+    approvals = _by_id(env, Approval)
+    assert "cf1-appr-carol" not in approvals  # past the cut-off: purged
+    assert {"cf1-appr-dave", "cf1-appr-bob"} <= set(approvals)  # newer: kept
+    assert set(_by_id(env, RecommendationBrief)) == {"cf1-brief-a", "cf1-brief-b"}
+    assert approvals["cf1-appr-dave"]["brief_id"] == "cf1-brief-a"
+
+
 def test_inventory_and_retention_of_the_two_tables():
     assert TABLES["approvals"].category is Category.COMPLIANCE
     assert TABLES["approvals"].retention_class is RetentionClass.AUDIT_LOGS

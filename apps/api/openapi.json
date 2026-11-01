@@ -95,12 +95,28 @@
       "AccountExportOut": {
         "description": "Everything stored about the signed-in account (schema version 1).",
         "properties": {
+          "approvals_decided": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Approvals Decided",
+            "type": "array"
+          },
           "audit_events_performed": {
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
             "title": "Audit Events Performed",
+            "type": "array"
+          },
+          "briefs_authored": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Briefs Authored",
             "type": "array"
           },
           "capability_overrides_set": {
@@ -201,7 +217,9 @@
           "invitations_sent",
           "feedback_submitted",
           "capability_overrides_set",
-          "audit_events_performed"
+          "audit_events_performed",
+          "briefs_authored",
+          "approvals_decided"
         ],
         "title": "AccountExportOut",
         "type": "object"

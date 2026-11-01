@@ -30,9 +30,11 @@ compares the migrated database's CHECKs with the Python authorities they were re
 directions, so a later vocabulary change without its own widening revision fails there.
 
 Rollback: ``downgrade`` narrows the capability CHECK back, then drops ``approvals`` and
-``recommendation_briefs`` (their rows are lost - none exist while the capability is dark). It
-**refuses, before any DDL,** while any override row names ``recommendation_briefs``: clear
-that override first. No override is deleted implicitly.
+``recommendation_briefs`` (brief rows are lost - none exist while the capability is dark). It
+**refuses, before any DDL,** while any override row names ``recommendation_briefs`` (clear
+that override first; no override is deleted implicitly) or while ``approvals`` holds any row:
+approvals are compliance records that O-6 keeps, so a downgrade never destroys one - export
+or purge them under the retention policy first.
 
 Revision ID: f3a9c1e7b2d5
 Revises: e7b3c5a9d1f4
@@ -219,6 +221,14 @@ def downgrade() -> None:
         raise RuntimeError(
             f"{named} workspace capability override(s) name 'recommendation_briefs'; clear "
             "them before downgrading below f3a9c1e7b2d5. Nothing was changed."
+        )
+    # Likewise while approvals hold any row: compliance records O-6 keeps are never dropped
+    # by a schema rollback (review r1 recommendation).
+    decisions = op.get_bind().execute(sa.text(f"SELECT count(*) FROM {_APPROVALS}")).scalar_one()
+    if decisions:
+        raise RuntimeError(
+            f"{decisions} approval record(s) exist; approvals are compliance records (O-6) and "
+            "are not dropped by a downgrade below f3a9c1e7b2d5. Nothing was changed."
         )
     with op.batch_alter_table(_OVERRIDES, schema=None) as batch_op:
         batch_op.drop_constraint(_CAPABILITY_CHECK, type_="check")

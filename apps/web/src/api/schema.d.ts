@@ -2162,8 +2162,16 @@ export interface components {
          * @description Everything stored about the signed-in account (schema version 1).
          */
         AccountExportOut: {
+            /** Approvals Decided */
+            approvals_decided: {
+                [key: string]: unknown;
+            }[];
             /** Audit Events Performed */
             audit_events_performed: {
+                [key: string]: unknown;
+            }[];
+            /** Briefs Authored */
+            briefs_authored: {
                 [key: string]: unknown;
             }[];
             /** Capability Overrides Set */
