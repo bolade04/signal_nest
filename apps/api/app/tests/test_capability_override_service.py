@@ -1334,6 +1334,10 @@ _BRIEFS_GATE_RELS = ("briefs/routes.py",)
 #: ``RECOMMENDATION_BRIEFS`` for a workspace through the resolver exactly as the feedback gate
 #: does (one decision call site, fail-closed), and imports nothing from the service.
 _APPROVALS_GATE_REL = "approvals/routes.py"
+#: The creative-generation gate (Project Phase 5C, W21 lane P5C) — resolver only, one
+#: decision call site (``creative.service.creative_capability``), which the route gate, the
+#: reflection and the ``creative.generate`` job all call. Relative to ``app/``.
+_CREATIVE_GATE_RELS = ("creative/service.py",)
 #: Sanctioned production consumers of the capability control plane, each mapped to the
 #: exact control-plane modules it may import. The operator router (4A-C.4) may consume
 #: both the service and the resolver; the opportunity-feedback gate (4B-A), the
@@ -1346,6 +1350,7 @@ _SANCTIONED_CONSUMERS = {
     **{
         rel: frozenset({_RESOLVER_MODULE})
         for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS
+        + _CREATIVE_GATE_RELS
     },
     _APPROVALS_GATE_REL: frozenset({_RESOLVER_MODULE}),
 }
@@ -1456,6 +1461,7 @@ def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None
         "scouting_requests/schedules.py",
         "connectors/registry.py",
         *_BRIEFS_GATE_RELS,
+        *_CREATIVE_GATE_RELS,
         _ALLOWED_CONSUMER_REL,  # the allow-listed consumers must actually be in scope
     ):
         assert expected in scanned, expected
@@ -1479,10 +1485,13 @@ def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None
     feedback_imports = _control_plane_imports(feedback_path, feedback_tree)
     assert _RESOLVER_MODULE in feedback_imports
     assert _SERVICE_MODULE not in feedback_imports
-    # The P6-CAP-1 and Phase 5A entries are grounded and narrow the same way: each
-    # genuinely imports the resolver and none imports the service.
+    # The P6-CAP-1, Phase 5A and Phase 5C entries are grounded and narrow the same way:
+    # each genuinely imports the resolver and none imports the service.
     # The Phase 5B approvals gate likewise (W21 P5B).
-    for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS + (_APPROVALS_GATE_REL,):
+    for rel in (
+        _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS + _CREATIVE_GATE_RELS
+        + (_APPROVALS_GATE_REL,)
+    ):
         path = _APP_DIR / rel
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imports = _control_plane_imports(path, tree)
