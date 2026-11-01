@@ -513,11 +513,23 @@ def test_a_nested_plain_orm_insert_is_not_refused(world, model):
     guarded model as a CTE passes the guard (coordinator ruling, FU-CF1-H2 extended).
     PostgreSQL writes the new row and leaves the stored one alone; SQLite has no DML in WITH
     and refuses it itself (a driver error, not the guard)."""
-    rid = _seed(world)[model]
+    ids = _seed(world)
+    rid = ids[model]
     before = _stored(world, model, rid)
     new = dict(before, id=rid + "-cte")
+    # A genuinely new row: move off each table's unique key.
     if model is RecommendationBrief:
-        new["brief_version"] = before["brief_version"] + 1000  # its unique version key
+        new["brief_version"] = before["brief_version"] + 1000
+    elif model is Approval:
+        new["decision_seq"] = before["decision_seq"] + 1000
+    elif model is CreativeDraft:
+        new["draft_version"] = before["draft_version"] + 1000
+    elif model is ContentReview:  # one review per draft: review a second draft of the brief
+        draft = dict(_stored(world, CreativeDraft, ids[CreativeDraft]), id=rid + "-draft")
+        draft["draft_version"] += 1000
+        with world.engine.begin() as conn:
+            conn.execute(insert(CreativeDraft.__table__).values(**draft))
+        new["draft_id"] = draft["id"]
     stmt = select(insert(model).values(**new).returning(model.id).cte("i").c.id)
     factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
     with factory() as s:
