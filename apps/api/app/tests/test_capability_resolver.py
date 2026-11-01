@@ -119,11 +119,15 @@ def test_override_enable_decides_over_false_global_flag() -> None:
 
 
 def test_override_disable_decides_over_true_global_flag() -> None:
+    # Rule 2 is reached for scheduling only where the environment has lifted its
+    # ceiling (FU-267-C1); the engaged ceiling is covered in
+    # test_scheduling_environment_ceiling.py.
     result = decide_capability(
         capability=Capability.SCOUT_SCHEDULING,
         workspace_id=_WS_A,
         global_flag=True,
         override_value=False,
+        environment_ceiling_lifted=True,
     )
     assert result.effective_enabled is False
     assert result.decided_by is DecisionSource.WORKSPACE_OVERRIDE
@@ -194,7 +198,9 @@ def test_resolve_happy_path_disable_over_enabled_global_flag(factory) -> None:
                    capability=Capability.SCOUT_SCHEDULING, enabled=False)
     with factory() as s:
         result = resolve_capability(
-            session=s, settings=_settings(scout_scheduling_enabled=True),
+            session=s,
+            settings=_settings(scout_scheduling_enabled=True,
+                               scout_scheduling_ceiling_lifted=True),
             capability=Capability.SCOUT_SCHEDULING,
             organization_id=_ORG_A, workspace_id=_WS_A)
     assert result.effective_enabled is False
@@ -236,16 +242,18 @@ def test_resolve_tenant_mismatch_treated_as_absent(factory) -> None:
 
 def test_resolve_per_workspace_isolation(factory) -> None:
     # Only workspace A has an enable override; workspace B must resolve independently
-    # to the (dark) global flag.
+    # to the (dark) global flag. The scheduling ceiling is lifted so that the override
+    # is honourable at all (FU-267-C1).
     _seed_override(factory, org=_ORG_A, ws=_WS_A,
                    capability=Capability.SCOUT_SCHEDULING, enabled=True)
+    lifted = _settings(scout_scheduling_ceiling_lifted=True)
     with factory() as s:
         a = resolve_capability(
-            session=s, settings=_settings(),
+            session=s, settings=lifted,
             capability=Capability.SCOUT_SCHEDULING,
             organization_id=_ORG_A, workspace_id=_WS_A)
         b = resolve_capability(
-            session=s, settings=_settings(),
+            session=s, settings=lifted,
             capability=Capability.SCOUT_SCHEDULING,
             organization_id=_ORG_B, workspace_id=_WS_B)
     assert a.effective_enabled is True
@@ -255,11 +263,12 @@ def test_resolve_per_workspace_isolation(factory) -> None:
 
 
 def test_resolve_override_for_one_capability_does_not_affect_another(factory) -> None:
+    # Ceiling lifted, so the scheduling resolution really reads the override table.
     _seed_override(factory, org=_ORG_A, ws=_WS_A,
                    capability=Capability.OPPORTUNITY_FEEDBACK, enabled=True)
     with factory() as s:
         other = resolve_capability(
-            session=s, settings=_settings(),
+            session=s, settings=_settings(scout_scheduling_ceiling_lifted=True),
             capability=Capability.SCOUT_SCHEDULING,
             organization_id=_ORG_A, workspace_id=_WS_A)
     assert other.effective_enabled is False
@@ -301,8 +310,15 @@ def test_resolve_issues_single_query(factory) -> None:
 # Dark-by-default regression + registry coupling
 # --------------------------------------------------------------------------- #
 def test_dark_by_default_every_capability_disabled(factory) -> None:
-    # Shipped defaults: all flags False, zero override rows → every registered
-    # capability resolves disabled in a sample workspace.
+    # Shipped defaults: all flags False, zero override rows, scheduling ceiling engaged
+    # → every registered capability resolves disabled in a sample workspace; scheduling
+    # by the safety ceiling (FU-267-C1), the others by their global flag.
+    expected = {
+        Capability.OPPORTUNITY_FEEDBACK: DecisionSource.GLOBAL_CONFIGURATION,
+        Capability.SCOUT_SCHEDULING: DecisionSource.SAFETY_CEILING,
+        Capability.CONNECTOR_RSS: DecisionSource.GLOBAL_CONFIGURATION,
+    }
+    assert set(expected) == set(iter_capabilities())
     with factory() as s:
         for capability in iter_capabilities():
             result = resolve_capability(
@@ -310,7 +326,7 @@ def test_dark_by_default_every_capability_disabled(factory) -> None:
                 capability=capability,
                 organization_id=_ORG_A, workspace_id=_WS_A)
             assert result.effective_enabled is False, capability
-            assert result.decided_by is DecisionSource.GLOBAL_CONFIGURATION, capability
+            assert result.decided_by is expected[capability], capability
 
 
 def test_resolver_reads_flag_via_registry_binding() -> None:
@@ -343,6 +359,7 @@ def test_resolution_fields_are_exactly_the_documented_set() -> None:
         "global_flag",
         "has_override",
         "override_value",
+        "environment_ceiling_lifted",
     }
 
 

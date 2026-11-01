@@ -114,6 +114,7 @@ concern; every row's disposition is **non-secret configuration**.
 | --- | --- | --- |
 | `opportunity_feedback_enabled` | `OPPORTUNITY_FEEDBACK_ENABLED` | Must remain `False`; activation is a separate authorized gate, not INFRA-3. |
 | `scout_scheduling_enabled` | `SCOUT_SCHEDULING_ENABLED` | Must remain `False`. |
+| `scout_scheduling_ceiling_lifted` | `SCOUT_SCHEDULING_CEILING_LIFTED` | The scheduling environment ceiling (FU-267-C1, D-25-c (b)); must remain `False` (engaged). Lifting it is a scheduling activation, gated by Addendum v8 §I, not INFRA-3. |
 | `connector_rss_enabled` | `CONNECTOR_RSS_ENABLED` | Must remain `False`. |
 
 **General / API:** `app_name` (`APP_NAME`), `app_mode` (`APP_MODE`, staging=`full`),

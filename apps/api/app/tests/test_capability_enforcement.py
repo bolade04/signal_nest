@@ -19,6 +19,11 @@ read (``GET /internal/system/capabilities/effective``) — across the precedence
 
 All override rows are synthetic test intent on synthetic workspaces; the shipped global
 flags are only toggled through ``monkeypatch`` on the cached settings object and restored.
+
+Since FU-267-C1 scheduling is also blocked by an environment ceiling that is engaged by
+default. These tests pin the ordinary precedence, which applies only where the environment
+has lifted it, so the fixture lifts it (``scout_scheduling_ceiling_lifted=True``); the
+engaged ceiling has its own module, ``test_scheduling_environment_ceiling.py``.
 No connector performs a network fetch (the RSS connector's default provider is the bundled
 sandbox feed, and the pipeline test stops before fetching).
 """
@@ -177,9 +182,12 @@ def h(tmp_path_factory, monkeypatch):
 
     # Every reader resolves the same cached settings object; pin both flags to the
     # shipped dark default so a test opts in explicitly (monkeypatch restores them).
+    # The scheduling environment ceiling is lifted: this module tests the precedence
+    # below it (FU-267-C1; see the module docstring).
     settings = get_settings()
     monkeypatch.setattr(settings, "scout_scheduling_enabled", False)
     monkeypatch.setattr(settings, "connector_rss_enabled", False)
+    monkeypatch.setattr(settings, "scout_scheduling_ceiling_lifted", True)
     app.dependency_overrides[get_db] = _override_get_db
     try:
         yield _Harness(TestClient(app), make, markets)
@@ -196,14 +204,17 @@ def _global(monkeypatch, capability: Capability, enabled: bool) -> None:
 def _ceiling_blocks(monkeypatch, capability: Capability) -> None:
     """Make the safety ceiling (precedence rule 1) prohibit ``capability``.
 
-    The shipped ceiling blocks only unregistered capabilities; a broader environment
-    ceiling is a deferred decision (4A-C plan §8.28 Q1). Patching the rule-1 predicate
-    is how these tests prove each enforcement point *consumes* a ceiling decision
-    rather than reading a flag around it.
+    The shipped ceiling blocks unregistered capabilities and, until the environment
+    lifts it, scheduling (FU-267-C1; the fixture lifts it here). Patching the rule-1
+    predicate is how these tests prove each enforcement point *consumes* a ceiling
+    decision rather than reading a flag around it — for RSS too, which has no
+    environment ceiling input.
     """
     real = resolver_mod._ceiling_blocks
     monkeypatch.setattr(
-        resolver_mod, "_ceiling_blocks", lambda c: c is capability or real(c)
+        resolver_mod,
+        "_ceiling_blocks",
+        lambda c, **kwargs: c is capability or real(c, **kwargs),
     )
 
 

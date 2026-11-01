@@ -312,7 +312,10 @@ def test_resolver_failure_fails_closed_before_any_write(h, monkeypatch):
 # --------------------------------------------------------------------------- #
 # G. Unrelated capabilities are unaffected by a feedback override
 # --------------------------------------------------------------------------- #
-def test_feedback_override_does_not_alter_other_capability_resolutions(h):
+def test_feedback_override_does_not_alter_other_capability_resolutions(h, monkeypatch):
+    # Scheduling's environment ceiling is lifted so that its resolution really reads the
+    # override table (FU-267-C1); engaged, it would decide without a lookup.
+    monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
     h.set_override("a", enabled=True)
     make, _ = h.factory
     with make() as s:

@@ -2,9 +2,10 @@
 
 Operating the **recurring scouting schedule** subsystem: enabling it, rolling it
 back, and troubleshooting. Scheduling is **dark-deployed** — every code path ships
-disabled: the `scout_scheduling_enabled` flag defaults to `False` and no workspace
-override exists, so no recurring scouting run can occur until an operator explicitly
-enables it.
+disabled: the scheduling **environment ceiling** is engaged
+(`scout_scheduling_ceiling_lifted` defaults to `False`), the `scout_scheduling_enabled`
+flag defaults to `False` and no workspace override exists, so no recurring scouting run
+can occur until an operator explicitly enables it.
 
 > **Since P6-CAP-1 availability is decided per workspace by the capability resolver**
 > (safety ceiling → workspace override → global flag → secure default), not by the raw
@@ -12,9 +13,16 @@ enables it.
 > customer reflection `GET …/workspaces/{id}/scheduling-capability`, tick seeding on
 > create/resume/failure recovery, and the tick itself — calls the same
 > `resolve_scheduling_capability`, and the operator console's effective view resolves
-> the same pair. An honored workspace **enable** override therefore activates scheduling
-> for that workspace even while the global flag is `False`, and a **disable** override
-> stops it there even while the flag is `True`.
+> the same pair.
+>
+> **Since FU-267-C1 the safety ceiling has an environment input for scheduling** (the
+> operator's D-25-c ruling, option (b): "an environment ceiling that outranks
+> overrides"). While `SCOUT_SCHEDULING_CEILING_LIFTED` is not `true` — the default —
+> scheduling resolves disabled in **every** workspace, whatever the workspace overrides
+> and the global flag say. Once an environment lifts the ceiling, the ordinary
+> precedence applies unchanged: an honored workspace **enable** override activates
+> scheduling for that workspace even while the global flag is `False`, and a **disable**
+> override stops it there even while the flag is `True`.
 
 Related runbooks: the durable worker in [worker_operations.md](./worker_operations.md);
 telemetry in [observability.md](./observability.md); dashboards and alerts in
@@ -49,9 +57,10 @@ Source: `apps/api/app/scouting_requests/schedules.py` (service),
 
 - **Dark by default.** While scheduling resolves disabled for a workspace, a tick
   that somehow exists there is a self-terminating no-op (`run_schedule_tick` returns
-  `feature_disabled`) — no run, no successor. Turning the global flag off is a
-  kill-switch **for every workspace without an enable override**; see Rolling back
-  for workspaces that have one.
+  `feature_disabled`) — no run, no successor. **The kill switch is the environment
+  ceiling:** with it engaged, scheduling resolves disabled for every workspace,
+  enable overrides included (see Rolling back). Turning only the global flag off stops
+  every workspace *without* an enable override.
 - **A failed tick does not end the schedule.** The chain survives a `failed` /
   `dead_lettered` tick on either dead-letter path and stops only where a healthy tick
   would also stop (schedule deleted or paused, or scheduling unavailable for the
@@ -75,22 +84,32 @@ Source: `apps/api/app/scouting_requests/schedules.py` (service),
 
 ## Enabling scheduling (rollout)
 
-Enabling is a single flag flip. **Prerequisite:** at least one durable worker is
+Enabling takes two settings: lifting the environment ceiling, then the flag (or a
+workspace enable override). **Prerequisite:** at least one durable worker is
 healthy (see [worker_operations.md](./worker_operations.md)) — ticks accumulate as
 `SCHEDULED` jobs and only fire when a worker claims them.
 
+> Lifting the ceiling in a live environment is an activation decision. Under the
+> operator's rulings, any live scheduling enable override or scheduling activation needs
+> FU-267-C1 implemented **and reviewed** first; this runbook does not authorize it.
+
 1. **Announce** a change window; scheduling changes tenant-visible behavior
    (recurring runs begin appearing in run history).
-2. **Set the flag** in the API + worker environment and restart both so the
-   `get_settings()` cache is rebuilt (for a single workspace instead, record an enable
-   override from the operator console — that activates scheduling for that workspace
-   only, with no restart):
+2. **Lift the ceiling and set the flag** in the API + worker environment and restart
+   both so the `get_settings()` cache is rebuilt (for a single workspace instead, lift
+   the ceiling but leave the flag `false`, then record an enable override from the
+   operator console — that activates scheduling for that workspace only; recording or
+   clearing an override needs no restart):
 
    ```bash
+   SCOUT_SCHEDULING_CEILING_LIFTED=true
    SCOUT_SCHEDULING_ENABLED=true
    ```
 
-   Both the API and the worker read the same flag; both must carry it.
+   Both the API and the worker read the same settings; both must carry them. A worker
+   whose ceiling is still engaged ends every chain at its next tick (`feature_disabled`).
+   Lifting the ceiling enables nothing by itself: with the flag `false` and no enable
+   override, scheduling stays disabled (`decided_by=global_configuration`).
 3. **Existing schedules do not auto-start.** Any schedule created while the flag
    was dark is `enabled` but has no live tick chain — it reports
    `activation_required`. It stays inert until the customer (or operator, via the
@@ -103,22 +122,41 @@ healthy (see [worker_operations.md](./worker_operations.md)) — ticks accumulat
 
 ## Rolling back (kill-switch)
 
-Rollback is the reverse flip and is always safe:
+The kill switch is the **environment ceiling** (FU-267-C1; the operator's D-25-c
+ruling, option (b)). It outranks every workspace enable override and the global flag,
+and it is always safe:
 
-1. **Set `SCOUT_SCHEDULING_ENABLED=false`** on the API + worker and restart.
-2. **Clear every scheduling enable override** (operator console → Capability
-   activation → *Clear override*, or record a *disable* override). A workspace with an
-   honored enable override keeps scheduling after the global flag is off — that is
-   what the override means. A global stop that outranks overrides would be a
-   safety-ceiling input, which is a deferred decision (4A-C plan §8.28 Q1) and is not
-   wired.
+1. **Engage the ceiling:** set `SCOUT_SCHEDULING_CEILING_LIFTED=false` (or remove it:
+   `false` is the default) on the API + worker and restart both. From then on scheduling
+   resolves disabled in every workspace: schedule mutations answer `503
+   capability_unavailable`, the customer reflection reports `{"enabled": false}`, and no
+   tick is seeded. You may also set `SCOUT_SCHEDULING_ENABLED=false`; the ceiling does not
+   need it.
+2. **Verify** in the operator console (Capability activation) or with
+   `GET /internal/system/capabilities/effective?organization_id=…&workspace_id=…&capability=scout_scheduling`:
+   `effective_enabled=false`, `decided_by=safety_ceiling` and
+   `environment_ceiling_lifted=false`, also for a workspace that holds an enable override.
 3. **In-flight ticks self-terminate.** The next time any existing tick fires where
    scheduling resolves disabled it returns `feature_disabled` and does **not** chain
    a successor, so every chain drains itself within one interval. No manual job purge
    is required.
-4. **No data is destroyed.** Schedule rows are retained; they simply stop fanning
+4. **Enable overrides need no clearing.** Clearing them is no longer a step of the
+   stop: the ceiling outranks them. They stay as recorded intent (the console marks them
+   as not honored while the ceiling applies) and take effect again only if the ceiling is
+   lifted again. Before lifting it again, clear (or record a *disable* override for) any
+   workspace that should not resume.
+5. **What the ceiling does not stop.** Execute jobs that are already queued or running
+   when it is engaged are not refused (D-25-c option (c), refusing them, was not chosen):
+   they run as usual. A tick never queues a second run on a request that already has one
+   in flight, so at most one more scheduled run per request can start after the switch.
+   Manual runs (*Run now*) have no scheduling check and are not governed by the ceiling.
+6. **No data is destroyed.** Schedule rows are retained; they simply stop fanning
    out. Re-enabling later returns to step 3 of Enabling (rows report
    `activation_required` until re-activated).
+
+A narrower stop remains available where the ceiling is lifted: turning only the global
+flag off stops every workspace **without** an honored enable override; a workspace with
+one keeps scheduling — that is what the override means.
 
 For a **per-tenant** stop without a global flip, pause or delete the individual
 schedules (editor endpoints below). Pausing flips `enabled → False` and clears
@@ -448,6 +486,7 @@ Source: `apps/api/app/scouting_requests/routes.py`.
 | Schedule reports `last_tick_failed_at` while `active` | One occurrence's tick failed; the chain was re-seeded | Inspect the failed `scout_schedule.tick` job (`error_class`); the next occurrence runs normally and the signal clears once it succeeds. |
 | Schedule in `stalled` | A tick failed and its re-seed could not run (scheduling unavailable for the workspace at the time, or the hook itself failed — see `worker.terminal_failure_hook_failed`) | Fix the cause, then resume/activate the schedule; it seeds one fresh tick. |
 | Ticks pile up in `SCHEDULED`, never fire | No healthy worker, or flag off on the worker | Check worker fleet; confirm the worker env carries the flag. |
+| Schedule mutations answer `503` although the workspace has an enable override | The environment ceiling is engaged (`SCOUT_SCHEDULING_CEILING_LIFTED` not `true`): it outranks overrides | Expected while scheduling is stopped. The effective read shows `decided_by=safety_ceiling`, `environment_ceiling_lifted=false`. Lift it only as an authorized activation (see Enabling). |
 | A run failed | Pipeline error for that request | The failure is **market-isolated** — other schedules are unaffected. Inspect the failed `scout_request.execute` job; the chain continues. |
 | Duplicate runs feared | — | Ticks and their fanned-out runs cannot duplicate: idempotency keys collapse them to one row. Two attempts of one Scout can still run at once (a manual run racing a tick, or a re-claim after a lease expired while the old worker was alive); a pause stops each at its next admission (PROPOSED pending D-25, see above). |
 
@@ -461,8 +500,9 @@ rationale in [../verification/sb-d-schedule-closeout.md](../verification/sb-d-sc
    `404` is the deliberate "no schedule yet" contract the UI already treats as a
    normal, non-error signal.
 2. **Pause and delete are feature-gated (`503`) while scheduling is disabled.**
-   Consistent with all mutations; with the flag off there is no live chain to stop,
-   and the global kill-switch already halts fan-out.
+   Consistent with all mutations; while scheduling is disabled a remaining tick
+   self-terminates at its next fire, so there is no live chain to stop, and the kill
+   switch (the environment ceiling, see Rolling back) already halts fan-out.
 3. **Pending-tick lookup is request-scoped.** Safe under the one-schedule-per-request
    uniqueness invariant — a request's tick chain is unambiguously that schedule's.
 4. **Create accepts an interval only and is activation-oriented.** Matches the

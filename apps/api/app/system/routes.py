@@ -62,7 +62,9 @@ class FeatureFlagsOut(BaseModel):
     opportunity_feedback_enabled: bool
 
     #: The RAW global scout-scheduling flag. Since P6-CAP-1 it does NOT decide
-    #: availability for a workspace holding an honored override; the schedule panel
+    #: availability for a workspace holding an honored override, and since FU-267-C1
+    #: it decides nothing while the environment ceiling is engaged
+    #: (``scout_scheduling_ceiling_lifted=False``, the default); the schedule panel
     #: reads the workspace-effective reflection at
     #: ``GET /workspaces/{workspace_id}/scheduling-capability`` instead (P6-UI-006).
     scout_scheduling_enabled: bool

@@ -478,6 +478,24 @@ class Settings(BaseSettings):
     #: that lets a schedule tick fan out into a scout-request execution.
     scout_scheduling_enabled: bool = False
 
+    # --- Scheduling environment ceiling (FU-267-C1, D-25-c (b)) — BEGIN -------
+    #: The scheduling kill switch: an environment ceiling that outranks every
+    #: workspace override and the global flag (operator ruling D-25-c / D-SC-1,
+    #: option (b)). While ``False`` (the default, deny-biased) the capability
+    #: resolver's safety-ceiling rule blocks ``scout_scheduling`` in this
+    #: environment: no workspace enable override and no
+    #: ``scout_scheduling_enabled=true`` can make it available, schedule mutations
+    #: answer 503, ticks end as ``feature_disabled`` without chaining, and nothing is
+    #: seeded. Setting it ``True`` (``SCOUT_SCHEDULING_CEILING_LIFTED=true`` on the
+    #: API and the worker, then a restart) restores exactly the ordinary precedence:
+    #: workspace override, then the global flag, then the secure default. Lifting
+    #: it enables nothing by itself: scheduling still needs the flag or an honored
+    #: enable override. The ceiling does not refuse execute jobs that are already
+    #: queued or running, and manual runs never consult it (D-25-c option (c) was
+    #: not chosen).
+    scout_scheduling_ceiling_lifted: bool = False
+    # --- END scheduling environment ceiling block ----------------------------
+
     # --- Opportunity feedback (Phase 3C, 3C-B) -------------------------------
     #: Master switch for opportunity feedback capture (dark by default). While
     #: off, no feedback write path is exposed to customers: the 3C-B persistence

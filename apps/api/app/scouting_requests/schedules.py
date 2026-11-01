@@ -24,9 +24,12 @@ This module owns the *backend* recurrence foundation for a scouting request:
 
 Everything here is dark by default. Whether scheduling is available is decided per
 workspace by the capability resolver (:func:`resolve_scheduling_capability`, P6-CAP-1)
-— the same decision the HTTP gate enforces and the customer reflection reports — so
-with the shipped ``scout_scheduling_enabled=False`` and no workspace override no tick
-is ever enqueued and no scheduled scouting run can occur. The service never touches
+— the same decision the HTTP gate enforces and the customer reflection reports. The
+resolver's environment ceiling (FU-267-C1) blocks scheduling in every workspace until
+the environment sets ``scout_scheduling_ceiling_lifted``, whatever the overrides and the
+flag; with it engaged (the shipped default), or with the shipped
+``scout_scheduling_enabled=False`` and no workspace override, no tick is ever enqueued
+and no scheduled scouting run can occur. The service never touches
 the manual-run, cancellation or lease semantics of the durable-job system; it only
 *enqueues* work through the existing service seam.
 """
