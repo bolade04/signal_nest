@@ -12,8 +12,11 @@ metadata entries behind a read-only ``MappingProxyType``).
   with the same five strings.
 * **Service-layer enforcement only.** There is no database constraint on
   ``audit_logs.action`` in this round: existing rows keep their values (Phase 5B plan §2).
-* **Additions are freeze-owned.** After CF-1 this module is a contract surface: a later
-  milestone adds members only at its CF-* gate, through the integration owner.
+* **Additions are freeze-owned; nothing is ever removed or renamed.** After CF-1 this module
+  is a contract surface: a later milestone adds members only at its CF-* gate, through the
+  integration owner. A member is never removed and its value never changes, because stored
+  rows keep their values and the typed read (``AuditLogOut.action``) refuses a value outside
+  the registry.
 
 Members reserved at CF-1 for the 5A/5B build lanes (vocabulary only; nothing writes
 them until those lanes do): ``auth.login_succeeded`` / ``auth.login_failed`` (5B login

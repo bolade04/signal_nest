@@ -6,8 +6,12 @@
   rolled back, and the stored row is unchanged.
 * Exactly these three models are append-only, and the two new tables carry ``created_at``
   only — no ``updated_at`` and no ``onupdate`` (Phase 5A plan §2).
-* The guard is an ORM-level control: the sanctioned Core paths (privacy anonymisation, the
-  foreign-key walk) still reach the rows, by design (O-10; ``app.db.append_only``).
+* This module covers the unit of work. Every other ORM path (ORM UPDATE/DELETE statements,
+  ``Query.update/delete``, the bulk API, upserts) is covered, on SQLite and PostgreSQL, by
+  ``test_cf1_append_only_bulk_paths.py``, which also pins statically that no production
+  module outside ``app/privacy/`` writes these rows after insert.
+* The sanctioned Core paths (privacy anonymisation, the foreign-key walk) still reach the
+  rows, by design (O-10; ``app.db.append_only``).
 
 The briefs test is the target of the CF-1 mutation check: with the guard removed from
 ``RecommendationBrief`` the update succeeds silently and this module fails.

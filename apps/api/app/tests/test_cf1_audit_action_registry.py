@@ -7,9 +7,13 @@
   ``OpportunityStatus``, with the same five strings; every ``ApprovalDecision`` has its action.
 * ``record_audit`` admits only registry members and writes the member's string; anything else
   is refused before a row exists.
-* Single seam (AST, production code only): ``AuditLog`` is constructed only in
-  ``app/audit/service.py``; no production module inserts into ``audit_logs`` any other way; and
-  no ``record_audit`` call passes a literal or interpolated string as its action.
+* Single seam (production code only): ``AuditLog`` is constructed only in
+  ``app/audit/service.py``; no production module inserts into ``audit_logs`` another way —
+  ``insert(AuditLog)`` or ``insert(AuditLog.__table__)``, ``AuditLog.__table__.insert()`` (AST)
+  or a raw ``INSERT INTO audit_logs`` string in any case or spacing (text), with in-test
+  controls for each form; and no ``record_audit`` call passes a literal or interpolated string
+  as its action. Not pinned: an insert through an aliased table object or ``Base.metadata``,
+  or SQL assembled at run time.
 """
 
 from __future__ import annotations
@@ -193,25 +197,71 @@ def test_audit_log_is_constructed_only_inside_record_audit() -> None:
     assert len(sites) == 1 and sites[0].startswith("app/audit/service.py:"), sites
 
 
+def _audit_insert_offences(tree: ast.AST, text: str) -> list[str]:
+    """Every way, other than ``record_audit``, a module could insert an audit row:
+
+    * ``insert(AuditLog)`` / ``insert(AuditLog.__table__)`` (function form);
+    * ``AuditLog.__table__.insert()`` (method form);
+    * a raw ``INSERT INTO audit_logs`` in any string, in any letter case or spacing.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _called_name(node) == "insert" and any(
+            isinstance(arg, ast.Name) and arg.id == "AuditLog"
+            or isinstance(arg, ast.Attribute)
+            and isinstance(arg.value, ast.Name)
+            and arg.value.id == "AuditLog"
+            for arg in node.args
+        ):
+            found.append(f"insert(AuditLog...):{node.lineno}")
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "insert"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "__table__"
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == "AuditLog"
+        ):
+            found.append(f"AuditLog.__table__.insert():{node.lineno}")
+    if "INSERT INTO AUDIT_LOGS" in " ".join(text.upper().split()):
+        found.append("raw INSERT INTO audit_logs")
+    return found
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "db.execute(insert(AuditLog).values(id='x'))",
+        "db.execute(insert(AuditLog.__table__).values(id='x'))",
+        "db.execute(AuditLog.__table__.insert().values(id='x'))",
+        "SQL = 'insert into   audit_logs (id) values (:i)'",
+        "SQL = '''INSERT\n    INTO audit_logs (id) VALUES (:i)'''",
+    ],
+)
+def test_the_insert_detector_fires_on_every_form(snippet: str) -> None:
+    """Controls (review r1 AUDIT-MINOR-1: the text limb used to be unmatchable)."""
+    assert _audit_insert_offences(ast.parse(snippet), snippet)
+
+
+@pytest.mark.parametrize(
+    "clean",
+    [
+        "db.execute(insert(Job).values(id='x'))",
+        "db.execute(select(AuditLog))",
+        "SQL = 'SELECT * FROM audit_logs'",
+    ],
+)
+def test_the_insert_detector_ignores_other_statements(clean: str) -> None:
+    assert not _audit_insert_offences(ast.parse(clean), clean)
+
+
 def test_no_production_module_inserts_audit_rows_another_way() -> None:
     offenders = []
     for rel, tree in _production_modules():
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and _called_name(node) == "insert"
-                and any(
-                    isinstance(arg, ast.Name) and arg.id == "AuditLog"
-                    or isinstance(arg, ast.Attribute)
-                    and isinstance(arg.value, ast.Name)
-                    and arg.value.id == "AuditLog"
-                    for arg in node.args
-                )
-            ):
-                offenders.append(f"{rel}:{node.lineno}")
         text = (API_DIR / rel).read_text(encoding="utf-8")
-        if "INSERT INTO audit_logs" in text.upper().replace("\n", " "):
-            offenders.append(str(rel))
+        offenders += [f"{rel} {hit}" for hit in _audit_insert_offences(tree, text)]
     assert offenders == []
 
 

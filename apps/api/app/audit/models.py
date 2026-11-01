@@ -1,11 +1,14 @@
 """Audit log model for sensitive actions.
 
-Append-only (Project Phase 5B audit spine, W21 CF-1): the ORM refuses to update or delete
-a row (:func:`app.db.append_only.append_only`), and the only constructor is
-:func:`app.audit.service.record_audit`, which admits only the closed
-:class:`app.audit.actions.AuditAction` registry. See :mod:`app.audit.service` for the
-enforcement level (application layer; database-level immutability is a separate
-infrastructure change, O-10).
+Append-only (Project Phase 5B audit spine, W21 CF-1): every ORM path that would update or
+delete a row raises — the unit of work, ORM UPDATE/DELETE statements and
+``Query.update/delete``, the bulk API and ORM upserts (:func:`app.db.append_only.
+append_only`). Statements on the table (Core) and raw SQL are not refused; only
+:mod:`app.privacy` (erasure, retention) and the development-only demo reset write that way,
+and a static test pins it. The only constructor is :func:`app.audit.service.record_audit`,
+which admits only the closed :class:`app.audit.actions.AuditAction` registry. See
+:mod:`app.db.append_only` for the exact enforcement level: application layer only;
+database-level immutability is a separate infrastructure change (O-10).
 
 **Why ``updated_at`` is retained (Phase 5B plan §2 asks for the drop or this record).**
 ``audit_logs`` inherits ``updated_at`` with ``onupdate`` from :class:`TimestampMixin`.

@@ -7,12 +7,18 @@ separate_infra``):**
 * :func:`record_audit` is the only place an :class:`~app.audit.models.AuditLog` is
   constructed in application code (pinned by ``test_cf1_audit_action_registry.py``), and
   it accepts only a member of the closed :class:`~app.audit.actions.AuditAction` registry.
-* No application path updates or deletes an audit record through the ORM; the model is
-  :func:`~app.db.append_only.append_only`, so an ORM update or delete raises.
-* The two sanctioned Core-level writes after insert are both privacy obligations in
-  :mod:`app.privacy`: the erasure anonymisation (values naming an erased account or a
-  deleted organization are cleared, the row is kept — O-6) and the time-based purge of the
-  ``audit_logs`` retention class (duration undecided — O-5).
+* The model is :func:`~app.db.append_only.append_only`: every ORM path that would update or
+  delete an audit record raises — the unit of work (attribute change or ``delete`` + flush,
+  ``merge``), ORM ``update(AuditLog)`` / ``delete(AuditLog)`` statements, ``Query.update()``
+  and ``Query.delete()``, ``bulk_update_mappings`` / ``bulk_save_objects`` updates and ORM
+  upserts (``test_cf1_append_only_models.py``, ``test_cf1_append_only_bulk_paths.py``).
+* Not refused, by design: statements on ``AuditLog.__table__`` (Core) and raw SQL. The
+  sanctioned writers after insert are the privacy obligations in :mod:`app.privacy` — the
+  erasure anonymisation (values naming an erased account or a deleted organization are
+  cleared, the row is kept — O-6) and the time-based purge of the ``audit_logs`` retention
+  class (duration undecided — O-5) — and the guarded, development-only demo reset
+  (``app.db.seed``). A static test pins that no other production module builds an UPDATE or
+  DELETE over the model or its table.
 * Database-level immutability (a restricted role or a trigger) is **not** in place: the
   runtime role owns the database. That is a separate infrastructure change (O-10).
 """
