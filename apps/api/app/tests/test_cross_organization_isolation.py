@@ -68,6 +68,7 @@ from sqlalchemy.orm import sessionmaker
 import app.auth.dependencies as deps
 from app.audit.models import AuditLog
 from app.brands.models import Brand, BusinessProfile
+from app.briefs.models import RecommendationBrief
 from app.campaign_context.models import (
     AudienceProfile,
     BrandVoiceProfile,
@@ -89,6 +90,7 @@ from app.geography.geocoder import get_geocoding_service
 from app.infra.cache import tenant_cache_key
 from app.jobs.models import Job
 from app.jobs.status import JobStatus
+from app.llm.models import LLMUsageEvent
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.main import app
 from app.opportunities.models import Opportunity
@@ -411,6 +413,17 @@ def scheduling_on() -> Iterator[None]:
 
 
 @pytest.fixture
+def briefs_on() -> Iterator[None]:
+    settings = get_settings()
+    saved = settings.recommendation_briefs_enabled
+    settings.recommendation_briefs_enabled = True
+    try:
+        yield
+    finally:
+        settings.recommendation_briefs_enabled = saved
+
+
+@pytest.fixture
 def feedback_on() -> Iterator[None]:
     settings = get_settings()
     saved = settings.opportunity_feedback_enabled
@@ -419,6 +432,10 @@ def feedback_on() -> Iterator[None]:
         yield
     finally:
         settings.opportunity_feedback_enabled = saved
+
+
+#: An id that is never created (fits String(32)).
+SENTINEL = "ci3-sentinel-never-created"
 
 
 # --------------------------------------------------------------------------- #
@@ -1233,6 +1250,49 @@ class TestOpportunities:
         assert world.row(Opportunity, b.opportunity_id) == opp_before
 
 
+    def test_brief_routes_with_foreign_opportunity_id_404_and_nothing_written(
+        self, world: World, pov: Pov, briefs_on
+    ):
+        """Project Phase 5A. Brief capture needs an intelligence record, which no customer
+        route creates; the limbs that need one (a foreign brief id, a foreign record) are
+        proven in ``test_briefs_api`` (each market there is its own organization)."""
+        a, b = pov.a, pov.b
+        briefs_before = world.count(RecommendationBrief)
+        usage_before = world.count(LLMUsageEvent)
+        opp_before = world.row(Opportunity, b.opportunity_id)
+        own = pov.send("GET", _ws_path(world, a, f"/opportunities/{a.opportunity_id}/briefs"))
+        assert own.status_code == 200 and own.json()["items"] == []
+        for method, suffix, body in (
+            ("GET", "/briefs", None),
+            ("GET", f"/briefs/{SENTINEL}", None),
+            ("POST", "/briefs", {"intelligence_record_id": SENTINEL}),
+        ):
+            foreign_opp = f"/opportunities/{b.opportunity_id}{suffix}"
+            _assert_404(
+                pov.send(method, _ws_path(world, a, foreign_opp), body),
+                "Opportunity not found in this workspace.",
+            )
+            _assert_membership_403(pov.send(method, _ws_path(world, b, foreign_opp), body))
+        # Under the caller's own opportunity: an unknown brief and an unknown record 404.
+        _assert_404(
+            pov.send(
+                "GET", _ws_path(world, a, f"/opportunities/{a.opportunity_id}/briefs/{SENTINEL}")
+            ),
+            "Brief not found for this opportunity.",
+        )
+        _assert_404(
+            pov.send(
+                "POST",
+                _ws_path(world, a, f"/opportunities/{a.opportunity_id}/briefs"),
+                {"intelligence_record_id": SENTINEL},
+            ),
+            "Intelligence record not found in this workspace.",
+        )
+        assert world.count(RecommendationBrief) == briefs_before
+        assert world.count(LLMUsageEvent) == usage_before
+        assert world.row(Opportunity, b.opportunity_id) == opp_before
+
+
 # --------------------------------------------------------------------------- #
 # 9. Jobs
 # --------------------------------------------------------------------------- #
@@ -1686,6 +1746,12 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
+    **{
+        (m, f"{W}/opportunities/{{opportunity_id}}/briefs{tail}"): (
+            "TestOpportunities::test_brief_routes_with_foreign_opportunity_id_404_and_nothing_written",
+        )
+        for m, tail in (("GET", ""), ("POST", ""), ("GET", "/{brief_id}"))
+    },
     ("GET", f"{W}/jobs"): ("TestJobs::test_list_own_only_and_foreign_query_filters_empty",),
     ("GET", f"{W}/jobs/{{job_id}}"): (
         "TestJobs::test_get_events_cancel_with_foreign_job_id_404_unchanged",
@@ -1717,6 +1783,13 @@ PROVEN_ELSEWHERE: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {
     ("POST", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         ("test_opportunity_feedback_api.py", "test_cross_workspace_record_404"),
         ("test_opportunity_feedback_api.py", "test_cross_market_record_is_rejected"),
+    ),
+    ("GET", f"{W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}"): (
+        ("test_briefs_api.py", "test_a_foreign_brief_id_is_indistinguishable_from_a_missing_one"),
+    ),
+    ("POST", f"{W}/opportunities/{{opportunity_id}}/briefs"): (
+        ("test_briefs_api.py", "test_a_foreign_record_is_a_404_and_a_sibling_record_a_422"),
+        ("test_briefs_api.py", "test_the_campaign_is_validated_against_the_workspace"),
     ),
     ("GET", f"{W}/audit-logs"): (
         ("test_audit_logs_role_matrix.py", "test_allowed_role_cannot_reach_another_orgs_workspace"),
@@ -1790,8 +1863,9 @@ class TestCoverageCompleteness:
         assert covered - served == set(), sorted(covered - served)
         # 71 -> 85: P6-PLAT-9 +9, P6-UI-023 +2, P6-UI-006 +1 (83), P6-PRIV-1 +2 (organization
         # export and deletion); 85 -> 86: D-9f +1 (organization export table page); the
-        # equalities above prove no other operation came or went.
-        assert len(served) == 86
+        # equalities above prove no other operation came or went. 86 -> 89: Project Phase 5A
+        # +3 (the recommendation-brief list, capture and read).
+        assert len(served) == 89
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

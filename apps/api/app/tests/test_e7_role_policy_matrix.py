@@ -141,6 +141,7 @@ JOB_404 = "Job not found in this workspace."
 LOCATION_404 = "Location not found in this workspace."
 SCHEDULING_DARK = "Scout scheduling is not available yet."
 FEEDBACK_DARK = "Opportunity feedback is not available yet."
+BRIEFS_DARK = "Recommendation briefs are not available yet."  # Project Phase 5A
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
 INVITATION_NOT_FOUND = ("invitation_not_found", "Invitation not found.")
 MEMBER_NOT_FOUND = ("member_not_found", "Member not found.")
@@ -185,7 +186,8 @@ _O = "/organizations/{organization_id}"
 #: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
 #: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route; P6-PRIV-1 adds
 #: 2 OWNER-only organization routes, counted in ORG_EXACT), and
-#: the 2 GET routes whose membership check is inside the handler.
+#: the 2 GET routes whose membership check is inside the handler. Project Phase 5A adds 3:
+#: the editor-only brief capture (RANK_FLOOR) and the two member-gated brief reads.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -296,6 +298,15 @@ E7_POLICY: tuple[Policy, ...] = (
         RANK_FLOOR,
         _dark_503(FEEDBACK_DARK),
     ),
+    # Project Phase 5A: brief capture is editor-only (the feedback set, a rank floor).
+    _row(
+        "POST",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs",
+        "workspace",
+        EDITORS,
+        RANK_FLOOR,
+        _body_422(),
+    ),
     _row(
         "POST",
         f"{_W}/jobs/{{job_id}}/cancel",
@@ -391,6 +402,19 @@ E7_POLICY: tuple[Policy, ...] = (
             _handler_404(JOB_404),
         )
         for tail in ("", "/events")
+    ),
+    # Project Phase 5A: brief reads are member-gated like the opportunity they belong to
+    # (a 5B reviewer reads the brief it approves); dark by default, so the probe is the 503.
+    *(
+        _row(
+            "GET",
+            f"{_W}/opportunities/{{opportunity_id}}/briefs{tail}",
+            "workspace",
+            ALL_ROLES,
+            MEMBER_WS,
+            _dark_503(BRIEFS_DARK),
+        )
+        for tail in ("", "/{brief_id}")
     ),
     # workspace_id is a QUERY parameter here; the body is the probe.
     _row("POST", "/geocode", "workspace", ALL_ROLES, MEMBER_WS, _body_422()),
@@ -557,8 +581,8 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 58,
-            MEMBER_WS: 25,
+            "role_gated": 59,
+            MEMBER_WS: 27,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -568,10 +592,10 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            RANK_FLOOR: 48,
+            RANK_FLOOR: 49,
             WS_EXACT: 1,
             ORG_EXACT: 9,
-            MEMBER_WS: 25,
+            MEMBER_WS: 27,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -602,7 +626,9 @@ class TestPolicyTableCompleteness:
         # POST /internal/system/data-sources/{source_key}/takedown, both operator-only.
         # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        assert len(served) == 127
+        # 127 -> 130 (Project Phase 5A): POST .../opportunities/{opportunity_id}/briefs, a
+        # RANK_FLOOR row, and GET .../briefs and GET .../briefs/{brief_id}, MEMBER_WS rows.
+        assert len(served) == 130
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -610,7 +636,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 86
+        assert len(rows) == 89
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -873,6 +899,7 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
         "{job_id}",
         "{invitation_id}",
         "{user_id}",
+        "{brief_id}",  # Project Phase 5A
     ):
         path = path.replace(name, SENTINEL)
     assert "{" not in path, path
