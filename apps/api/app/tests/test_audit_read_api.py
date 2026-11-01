@@ -284,6 +284,9 @@ class TestCursorPagination:
             {"entity_type": "scout_request"},
             {"entity_type": "business_location", "action": "location.created"},
             {"entity_type": "business_location", "created_from": T0.isoformat()},
+            {"entity_type": "business_location", "created_before": T0.isoformat()},
+            # Each filter is bound on its own: entity_id alone changes the listing.
+            {"entity_type": "business_location", "entity_id": "loc-1"},
             {},
         ):
             r = env.get({**other, "limit": 1, "cursor": cursor})
