@@ -171,9 +171,9 @@ export function canReadAuditLogs(role: RoleInput): boolean {
  * (`require_exact_roles`, `CLAIMS_STEWARDS` in `apps/api/app/campaign_context/routes.py`).
  * The claims library is a protected safety control (Project Phase 5C, W21 CF-2): a
  * marketer edits every other campaign-context collection but may not add, edit or retire
- * claims through these routes. Reading the library stays membership-only. Known exception
- * (coordinator ruling R1): onboarding (`POST /workspaces/{workspace_id}/onboarding`) still
- * lets any editor add claims until the 5C build closes it.
+ * claims through these routes. Reading the library stays membership-only. Onboarding
+ * (`POST /workspaces/{workspace_id}/onboarding`), the library's other writer, applies the
+ * same steward gate to its claims input since the 5C build (coordinator ruling R1).
  */
 export function canManageClaims(role: RoleInput): boolean {
   return isRole(role) && CLAIMS_STEWARD_ROLES.has(role);

@@ -23,12 +23,14 @@ marketer whose draft is blocked must not be able to remove the claim that blocks
   (``claims_library_entry.created`` / ``.updated`` / ``.retired``) naming the changed field
   names, never their values.
 
-**Known exception (coordinator ruling R1).** ``POST /workspaces/{workspace_id}/onboarding``
-(:mod:`app.brands.service`) still creates claims-library entries for any editor (owner, admin
-or marketer): of any kind, at any time (it has no completed-onboarding guard), with no
-per-claim audit record and no ``ClaimIn`` validation. So a marketer cannot edit or retire a
-claim, but can still *add* one, ``approved`` included, through onboarding. The 5C build lane
-closes this (steward-only and audited) before 5C reads ``approved_claims``.
+**Onboarding is held to the same rules (coordinator ruling R1, closed by the 5C build, W21
+lane P5C).** ``POST /workspaces/{workspace_id}/onboarding`` (:mod:`app.brands.service`) is the
+library's only other writer: its ``claims`` are refused for a non-steward (403
+``permission_denied``), validated as a ``/claims`` create body (``ClaimIn``; 422), accepted
+only on the workspace's first onboarding (409 ``onboarding_claims_closed`` afterwards), and
+audited per entry in this module's ``claims_library_entry.created`` shape
+(:func:`app.claims.library.audit_claim_created`). A marketer can therefore neither add, edit
+nor retire a claim by any route.
 """
 
 from __future__ import annotations
