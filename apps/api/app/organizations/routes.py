@@ -187,6 +187,11 @@ def change_member_role(
     db: Session = Depends(get_db),
     ctx: OrganizationContext = Depends(ORGANIZATION_ADMINS),
 ) -> OrganizationMemberOut:
+    """Change a member's role. The role is organization-wide: it applies in every workspace
+    of the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore
+    makes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).
+    Exactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,
+    or grants or changes ``owner`` unless they are an owner; the last owner stays. Audited."""
     row = member_service.change_member_role(db, ctx=ctx, target_user_id=user_id, new_role=body.role)
     db.commit()
     return OrganizationMemberOut.model_validate(row)

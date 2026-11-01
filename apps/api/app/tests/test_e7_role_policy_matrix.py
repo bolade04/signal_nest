@@ -94,6 +94,8 @@ EDITORS = (OWNER, ADMIN, MARKETER)  # require_role(OWNER, ADMIN, MARKETER): a ra
 ORG_ADMINS = (OWNER, ADMIN)  # require_exact_organization_roles(OWNER, ADMIN)
 ORG_OWNER = (OWNER,)  # require_exact_organization_roles(OWNER) -- P6-PRIV-1
 AUDIT_READERS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- P6-AUTH-3
+APPROVERS = (REVIEWER,)  # require_exact_roles(REVIEWER) -- Phase 5B, O-2 (approvals.policy)
+APPROVAL_HISTORY_READERS = (OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE)  # Phase 5B
 
 # Categories.
 RANK_FLOOR = "role_gated_workspace_rank_floor"
@@ -141,6 +143,7 @@ JOB_404 = "Job not found in this workspace."
 LOCATION_404 = "Location not found in this workspace."
 SCHEDULING_DARK = "Scout scheduling is not available yet."
 FEEDBACK_DARK = "Opportunity feedback is not available yet."
+APPROVALS_DARK = "Recommendation briefs and approvals are not available yet."
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
 INVITATION_NOT_FOUND = ("invitation_not_found", "Invitation not found.")
 MEMBER_NOT_FOUND = ("member_not_found", "Member not found.")
@@ -306,6 +309,28 @@ E7_POLICY: tuple[Policy, ...] = (
     ),
     # --- role-gated, workspace scope, exact set -- the P6-AUTH-3 audit-route case ----------
     _row("GET", f"{_W}/audit-logs", "workspace", AUDIT_READERS, WS_EXACT, OK_200),
+    # --- role-gated, workspace scope, exact set -- Phase 5B approvals (W21 P5B) ---------------
+    # Dark by default: an admitted role clears the gate and meets the capability's 503 (the
+    # GETs) or the body validation that FastAPI runs before the handler (the POST).
+    _row(
+        "POST",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals",
+        "workspace",
+        APPROVERS,
+        WS_EXACT,
+        _body_422(),
+    ),
+    _row(
+        "GET",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals",
+        "workspace",
+        APPROVAL_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(APPROVALS_DARK),
+    ),
+    _row(
+        "GET", f"{_W}/approval-queue", "workspace", APPROVERS, WS_EXACT, _dark_503(APPROVALS_DARK)
+    ),
     # --- role-gated, organization scope, exact set ------------------------------------------
     _row("POST", f"{_O}/workspaces", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
     _row("POST", f"{_O}/invitations", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
@@ -557,7 +582,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 58,
+            "role_gated": 61,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -569,7 +594,7 @@ class TestPolicyTableCompleteness:
         }
         assert by_category == {
             RANK_FLOOR: 48,
-            WS_EXACT: 1,
+            WS_EXACT: 4,
             ORG_EXACT: 9,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
@@ -602,7 +627,9 @@ class TestPolicyTableCompleteness:
         # POST /internal/system/data-sources/{source_key}/takedown, both operator-only.
         # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        assert len(served) == 127
+        # 127 -> 130 (Phase 5B, W21 P5B): POST and GET .../briefs/{brief_id}/approvals and
+        # GET /workspaces/{workspace_id}/approval-queue, each a WS_EXACT row above.
+        assert len(served) == 130
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -610,7 +637,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 86
+        assert len(rows) == 89
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -873,6 +900,7 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
         "{job_id}",
         "{invitation_id}",
         "{user_id}",
+        "{brief_id}",
     ):
         path = path.replace(name, SENTINEL)
     assert "{" not in path, path

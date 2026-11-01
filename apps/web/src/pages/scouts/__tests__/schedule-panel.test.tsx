@@ -78,6 +78,7 @@ function rawGlobalFlag(rawFlag: boolean) {
           opportunity_feedback_enabled: false,
           scout_scheduling_enabled: rawFlag,
           connector_rss_enabled: false,
+          recommendation_briefs_enabled: false,
         },
       }),
     ),
