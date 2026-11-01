@@ -56,6 +56,8 @@ class ApprovalOut(BaseModel):
     subject_version: int
     #: NULL once the brief is gone (the decision survives it, O-6).
     brief_id: str | None
+    #: For a ``creative_draft`` subject (CF-2): NULL once the draft is gone.
+    draft_id: str | None
     decision: ApprovalDecision
     decision_seq: int
     reason_code: ApprovalReason | None

@@ -127,6 +127,14 @@
             "title": "Capability Overrides Set",
             "type": "array"
           },
+          "drafts_authored": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Drafts Authored",
+            "type": "array"
+          },
           "email_keyed_data": {
             "$ref": "#/components/schemas/EmailKeyedDataOut"
           },
@@ -219,7 +227,8 @@
           "capability_overrides_set",
           "audit_events_performed",
           "briefs_authored",
-          "approvals_decided"
+          "approvals_decided",
+          "drafts_authored"
         ],
         "title": "AccountExportOut",
         "type": "object"
@@ -1092,7 +1101,8 @@
           "opportunity_feedback",
           "scout_scheduling",
           "connector_rss",
-          "recommendation_briefs"
+          "recommendation_briefs",
+          "creative_generation"
         ],
         "title": "Capability",
         "type": "string"
@@ -2244,6 +2254,10 @@
             "title": "Connector Rss Enabled",
             "type": "boolean"
           },
+          "creative_generation_enabled": {
+            "title": "Creative Generation Enabled",
+            "type": "boolean"
+          },
           "opportunity_feedback_enabled": {
             "title": "Opportunity Feedback Enabled",
             "type": "boolean"
@@ -2261,7 +2275,8 @@
           "opportunity_feedback_enabled",
           "scout_scheduling_enabled",
           "connector_rss_enabled",
-          "recommendation_briefs_enabled"
+          "recommendation_briefs_enabled",
+          "creative_generation_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"
@@ -4043,7 +4058,8 @@
         "enum": [
           "scout_request.execute",
           "scout_schedule.tick",
-          "retention.purge"
+          "retention.purge",
+          "creative.generate"
         ],
         "title": "JobType",
         "type": "string"

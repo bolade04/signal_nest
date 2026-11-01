@@ -24,6 +24,10 @@ auditing), ``approval.approved`` / ``approval.rejected`` / ``approval.revoked`` 
 :class:`~app.core.enums.ApprovalDecision`, :data:`APPROVAL_DECISION_ACTIONS`) and
 ``recommendation_brief.created`` (5A capture). Member-role assignment already audits as
 ``organization_member.role_changed`` (Phase 6, PR #181).
+
+Added at CF-2 (Project Phase 5C): ``claims_library_entry.created`` / ``.updated`` /
+``.retired`` — written now, by the protected claims-library routes — and
+``creative_draft.created`` (reserved for the 5C lanes).
 """
 
 from __future__ import annotations
@@ -92,6 +96,12 @@ class AuditAction(StrEnum):
     APPROVAL_REJECTED = "approval.rejected"
     APPROVAL_REVOKED = "approval.revoked"
 
+    # --- Project Phase 5C (CF-2) -----------------------------------------------------
+    CLAIMS_LIBRARY_ENTRY_CREATED = "claims_library_entry.created"
+    CLAIMS_LIBRARY_ENTRY_UPDATED = "claims_library_entry.updated"
+    CLAIMS_LIBRARY_ENTRY_RETIRED = "claims_library_entry.retired"
+    CREATIVE_DRAFT_CREATED = "creative_draft.created"
+
 
 @dataclass(frozen=True, slots=True)
 class AuditActionSpec:
@@ -115,6 +125,14 @@ def _spec(action: AuditAction, introduced: str = "pre-registry") -> AuditActionS
 
 
 _RESERVED_5A = frozenset({AuditAction.RECOMMENDATION_BRIEF_CREATED})
+_ADDED_5C = frozenset(
+    {
+        AuditAction.CLAIMS_LIBRARY_ENTRY_CREATED,
+        AuditAction.CLAIMS_LIBRARY_ENTRY_UPDATED,
+        AuditAction.CLAIMS_LIBRARY_ENTRY_RETIRED,
+        AuditAction.CREATIVE_DRAFT_CREATED,
+    }
+)
 _RESERVED_5B = frozenset(
     {
         AuditAction.AUTH_LOGIN_SUCCEEDED,
@@ -125,10 +143,22 @@ _RESERVED_5B = frozenset(
     }
 )
 
+
+
+def _introduced(action: AuditAction) -> str:
+    if action in _RESERVED_5A:
+        return "5A"
+    if action in _RESERVED_5B:
+        return "5B"
+    if action in _ADDED_5C:
+        return "5C"
+    return "pre-registry"
+
+
 #: Read-only registry, in declaration order.
 AUDIT_ACTION_REGISTRY: Mapping[AuditAction, AuditActionSpec] = MappingProxyType(
     {
-        a: _spec(a, "5A" if a in _RESERVED_5A else "5B" if a in _RESERVED_5B else "pre-registry")
+        a: _spec(a, _introduced(a))
         for a in AuditAction
     }
 )

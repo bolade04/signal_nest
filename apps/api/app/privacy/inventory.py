@@ -118,6 +118,12 @@ TABLES: dict[str, TableEntry] = {
         # retention class (compliance records), whose duration is unset and undecided; no
         # duration is chosen here, and production refuses to start until it is set.
         TableEntry("approvals", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
+        # Project Phase 5C content reviews (W21 CF-2): the output-side claim-safety review of
+        # one draft version (risk level, findings quoting the draft, blocked-claim ids,
+        # required disclaimers, passed). No actor, no account data. Explicit tenant columns;
+        # cascades with its draft, so it is never kept beyond the draft it judges (bounded,
+        # not indefinite: the O-6 rider). No retention class of its own; no duration decided.
+        TableEntry("content_reviews", Category.COMPLIANCE),
         TableEntry("workspaces", _TENANT),
         TableEntry("workspace_capability_overrides", _TENANT),
         TableEntry("brands", _TENANT),
@@ -156,6 +162,12 @@ TABLES: dict[str, TableEntry] = {
         # intelligence record (CASCADE), purged with them. Deleting the author's account
         # anonymises ``created_by_snapshot`` and keeps the brief.
         TableEntry("recommendation_briefs", _COLLECTED),
+        # Project Phase 5C creative drafts (W21 CF-2; dark until the 5C service writes
+        # them): model-generated marketing text from a brief, plus the author snapshot.
+        # Exported with the organization; deleted with its brief/opportunity/workspace; no
+        # retention class of its own (a dependent of ``recommendation_briefs``). Deleting
+        # the author's account anonymises ``created_by_snapshot`` and keeps the draft.
+        TableEntry("creative_drafts", _COLLECTED),
         # W16 customer repairs (PROPOSED): one row per sighting of a finding by a run
         # (``first_seen`` / ``seen_again``, the run's job and cluster). Ids, a kind and instants
         # only - no content. Exported with the organization (scoped by ``organization_id``);

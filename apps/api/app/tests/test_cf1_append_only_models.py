@@ -4,8 +4,10 @@
   spine) are :func:`~app.db.append_only.append_only`: a flush that would UPDATE or DELETE one
   of their rows raises :class:`~app.db.append_only.AppendOnlyViolation`, the transaction is
   rolled back, and the stored row is unchanged.
-* Exactly these three models are append-only, and the two new tables carry ``created_at``
-  only — no ``updated_at`` and no ``onupdate`` (Phase 5A plan §2).
+* Exactly these three models — and, since CF-2, the 5C ``creative_drafts`` and
+  ``content_reviews`` (unit of work in ``test_cf2_creative_contracts.py``) — are append-only,
+  and the new tables carry ``created_at`` only — no ``updated_at`` and no ``onupdate``
+  (Phase 5A plan §2).
 * This module covers the unit of work. Every other ORM path (ORM UPDATE/DELETE statements,
   ``Query.update/delete``, the bulk API, upserts) is covered, on SQLite and PostgreSQL, by
   ``test_cf1_append_only_bulk_paths.py``, which also pins statically that no production
@@ -31,6 +33,7 @@ from app.audit.models import AuditLog
 from app.audit.service import record_audit
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import actor_snapshot
+from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation, append_only, is_append_only, is_guarded
 from app.db.models import Base
 
@@ -213,16 +216,23 @@ def test_an_orm_delete_of_an_audit_record_raises(session: Session) -> None:
 # --------------------------------------------------------------------------- #
 # Shape and scope of the control
 # --------------------------------------------------------------------------- #
-def test_exactly_the_three_append_only_models_are_guarded() -> None:
+def test_exactly_the_append_only_models_are_guarded() -> None:
     guarded = {
         mapper.class_.__tablename__
         for mapper in Base.registry.mappers
         if is_append_only(mapper.class_)
     }
-    assert guarded == {"recommendation_briefs", "approvals", "audit_logs"}
+    assert guarded == {
+        "recommendation_briefs",
+        "approvals",
+        "audit_logs",
+        # CF-2 (Project Phase 5C).
+        "creative_drafts",
+        "content_reviews",
+    }
 
 
-@pytest.mark.parametrize("model", [RecommendationBrief, Approval])
+@pytest.mark.parametrize("model", [RecommendationBrief, Approval, CreativeDraft, ContentReview])
 def test_new_append_only_tables_carry_created_at_only(model) -> None:
     columns = model.__table__.c
     assert "created_at" in columns

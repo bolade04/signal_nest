@@ -156,6 +156,8 @@ _RAW_FLAGS = frozenset(
         # Project Phase 5 CF-1: no gate exists yet; when 5A adds one it must decide
         # through the resolver, and this guard already forbids it the raw flag.
         "recommendation_briefs_enabled",
+        # Project Phase 5 CF-2: likewise for the 5C gate when it lands.
+        "creative_generation_enabled",
     }
 )
 #: The only production module allowed to read them: the deliberately raw-global

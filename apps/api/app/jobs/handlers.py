@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.core.enums import ScoutRequestStatus
 from app.core.logging import get_logger, log_event
 from app.infra.vector import SignalVolumeAboveBoundError
+from app.jobs import creative_handlers as _creative_handlers  # noqa: F401 (5C, CF-2 stub)
 from app.jobs.admission import (
     CAUSE_CANCEL_REQUESTED,
     CAUSE_IDENTITY_INCOMPLETE,

@@ -45,7 +45,7 @@ Exactly three places write these tables through Core after insert, all sanctione
 (the runtime guard above is): it checks that no other production module builds an UPDATE or
 DELETE (function or attribute-call form, method form, ``Query``) or an upsert over these
 models or their tables, writes a literal ``UPDATE <table>`` / ``DELETE FROM <table>`` /
-``INSERT INTO <table> … DO UPDATE`` string naming one of the three tables unqualified, calls
+``INSERT INTO <table> … DO UPDATE`` string naming one of the guarded tables unqualified, calls
 the bulk API or calls ``delete_rows`` — following **model** import aliases and annotated,
 tuple and walrus aliases. **Not pinned:** the statement functions (``update``, ``delete``,
 ``insert``, dialect inserts) imported under another name; models referenced through a module

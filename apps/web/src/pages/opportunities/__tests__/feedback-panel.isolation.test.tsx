@@ -51,6 +51,7 @@ function enableCapability(enabled = true, globalFlag = false) {
           scout_scheduling_enabled: false,
           connector_rss_enabled: false,
           recommendation_briefs_enabled: false,
+          creative_generation_enabled: false,
         },
       }),
     ),

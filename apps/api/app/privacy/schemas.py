@@ -164,6 +164,9 @@ class AccountExportOut(BaseModel):
     #: Project Phase 5 (W21 CF-1): approval decisions the account made (its decision, reason,
     #: note, role and snapshot).
     approvals_decided: list[dict[str, Any]]
+    #: Project Phase 5C (W21 CF-2): creative drafts the account generated (ids, version,
+    #: channel, its own snapshot; no model-generated text).
+    drafts_authored: list[dict[str, Any]]
 
 
 class ExportedTableOut(BaseModel):

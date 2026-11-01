@@ -297,8 +297,23 @@ class ApprovalDecision(StrEnum):
 class ApprovalSubjectType(StrEnum):
     """What an approval decides on (Phase 5B).
 
-    Closed: only recommendation briefs at CF-1. ``creative_draft`` joins at CF-2
-    (Phase 5C), together with the widening migration of the matching CHECK.
+    Closed: recommendation briefs since CF-1; ``creative_draft`` joined at CF-2 (Phase
+    5C), together with the widening migration of the matching CHECK.
     """
 
     RECOMMENDATION_BRIEF = "recommendation_brief"
+    CREATIVE_DRAFT = "creative_draft"
+
+
+# --- Project Phase 5C creative generation (W21 CF-2) -------------------------------
+
+
+class CreativeChannel(StrEnum):
+    """The text channel a creative draft is written for (Phase 5C; text-first: no image,
+    video or audio channel exists). The list is a CF-2 proposal recorded for review."""
+
+    SOCIAL_POST = "social_post"
+    EMAIL = "email"
+    SEARCH_AD = "search_ad"
+    SMS = "sms"
+    LANDING_PAGE = "landing_page"

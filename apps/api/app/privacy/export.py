@@ -7,10 +7,11 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   account-token history, invitations addressed to it, invitations it sent (without the
   invitee's address, which is someone else's data), feedback it submitted, capability
   overrides it set, the audit events it performed and — Project Phase 5 (W21 CF-1) — the
-  recommendation briefs it authored and the approval decisions it made (ids, versions,
-  decision, reason code, its own snapshot, and the account's own free-text note, which may
-  name other people, as ``capability_overrides_set.reason`` may; never the brief's
-  model-derived content and never another account's records). No credential, token or
+  recommendation briefs it authored, the creative drafts it generated (CF-2) and the approval
+  decisions it made (ids, versions, channel, decision, reason code, its own snapshot, and the
+  account's own free-text note, which may name other people, as
+  ``capability_overrides_set.reason`` may; never a brief's or draft's model-generated text and
+  never another account's records). No credential, token or
   digest.
   The invitations it accepted are bound to it by id and always listed; the others addressed
   to its email address are found by that address, so they are listed only when it is
@@ -46,6 +47,7 @@ from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetTo
 from app.briefs.models import RecommendationBrief
 from app.capabilities.models import WorkspaceCapabilityOverride
 from app.core.errors import NotFoundError, ValidationDomainError
+from app.creative.models import CreativeDraft
 from app.db.clock import as_utc
 from app.db.models import Base
 from app.feedback.models import OpportunityFeedback
@@ -286,6 +288,23 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             )
             .where(Approval.decided_by == uid)
             .order_by(Approval.created_at, Approval.id),
+        ),
+        # Project Phase 5C (W21 CF-2): drafts the account generated — ids, version, channel
+        # and its own snapshot; the text is model output, in the organization export.
+        "drafts_authored": _rows(
+            db,
+            select(
+                CreativeDraft.id,
+                CreativeDraft.organization_id,
+                CreativeDraft.workspace_id,
+                CreativeDraft.brief_id,
+                CreativeDraft.draft_version,
+                CreativeDraft.channel,
+                CreativeDraft.created_by_snapshot,
+                CreativeDraft.created_at,
+            )
+            .where(CreativeDraft.created_by == uid)
+            .order_by(CreativeDraft.created_at, CreativeDraft.id),
         ),
     }
 

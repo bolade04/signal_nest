@@ -3,7 +3,8 @@
 The unit-of-work guard (``before_update`` / ``before_delete``) is covered by
 ``test_cf1_append_only_models.py``. This module covers every other ORM write path the review
 found open at ``30fc045c`` — ORM-enabled UPDATE/DELETE statements, ``Query.update/delete``,
-the legacy bulk API and an ORM upsert — for each of the three append-only models, and shows:
+the legacy bulk API and an ORM upsert — for each append-only model (the three of CF-1 and,
+since CF-2, ``creative_drafts`` and ``content_reviews``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
   byte-identical afterwards;
@@ -13,7 +14,7 @@ the legacy bulk API and an ORM upsert — for each of the three append-only mode
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
   (function, attribute-call or method form, or ``Query``) or an upsert over these models or
   their tables, writes a literal unqualified UPDATE / DELETE FROM / INSERT … DO UPDATE string
-  on the three tables, calls the bulk API or calls ``delete_rows``, following model import
+  on the guarded tables, calls the bulk API or calls ``delete_rows``, following model import
   aliases and annotated, tuple, list and walrus aliases — with an in-test control per form
   and look-alikes that must pass. It is a backstop to the runtime guard; what it does not
   pin is listed on the production-scan test and in ``app.db.append_only``;
@@ -43,13 +44,20 @@ from sqlalchemy.orm import sessionmaker
 from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.briefs.models import RecommendationBrief
+from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation
 from app.tests._privacy_support import ORG_A, WS_A, PrivacyEnv, privacy_world
 
 API_DIR = Path(__file__).resolve().parents[2]
-GUARDED = (RecommendationBrief, Approval, AuditLog)
+GUARDED = (RecommendationBrief, Approval, AuditLog, CreativeDraft, ContentReview)
 #: The column each probe tries to change (always allowed by the table's CHECKs).
-FIELD = {RecommendationBrief: "summary", Approval: "note", AuditLog: "reason"}
+FIELD = {
+    RecommendationBrief: "summary",
+    Approval: "note",
+    AuditLog: "reason",
+    CreativeDraft: "body",
+    ContentReview: "warnings",
+}
 
 BACKENDS = [
     "sqlite",
@@ -75,10 +83,12 @@ _serial = itertools.count(1)
 
 
 def _seed(world: PrivacyEnv) -> dict[type, str]:
-    """One fresh committed brief, approval and audit record (Core inserts, as a fixture)."""
+    """One fresh committed brief, approval, audit record, creative draft and content review
+    (Core inserts, as a fixture)."""
     n = next(_serial)
     ids = {RecommendationBrief: f"cf1b-brief-{n}", Approval: f"cf1b-appr-{n}",
-           AuditLog: f"cf1b-log-{n}"}
+           AuditLog: f"cf1b-log-{n}", CreativeDraft: f"cf2b-draft-{n}",
+           ContentReview: f"cf2b-review-{n}"}
     with world.engine.begin() as conn:
         conn.execute(
             insert(RecommendationBrief.__table__).values(
@@ -105,6 +115,24 @@ def _seed(world: PrivacyEnv) -> dict[type, str]:
             insert(AuditLog.__table__).values(
                 id=ids[AuditLog], organization_id=ORG_A, workspace_id=WS_A,
                 action="auth.register", reason="original", context={},
+            )
+        )
+        conn.execute(
+            insert(CreativeDraft.__table__).values(
+                id=ids[CreativeDraft], organization_id=ORG_A, workspace_id=WS_A,
+                brief_id=ids[RecommendationBrief], opportunity_id="a1-opp", draft_version=1,
+                channel="email", body="original", prompt_name="generate_creative",
+                prompt_version="1.0.0", model_identifier="mock", input_hash="0" * 64,
+                is_simulated=True, input_tokens=0, output_tokens=0, estimated_cost_usd=0,
+                created_by_snapshot="u Name <u@example.test>",
+            )
+        )
+        conn.execute(
+            insert(ContentReview.__table__).values(
+                id=ids[ContentReview], organization_id=ORG_A, workspace_id=WS_A,
+                draft_id=ids[CreativeDraft], draft_version=1, risk_level="low",
+                is_blocked=False, findings=[], warnings=["original"], blocked_claim_ids=[],
+                required_disclaimers=[], disclaimers_resolved=True, passed=True,
             )
         )
     return ids
@@ -197,7 +225,7 @@ def test_the_sanctioned_core_statements_still_work_under_the_guard(world):
     """Privacy anonymisation and the foreign-key walk use the TABLE, through a Session."""
     ids = _seed(world)
     factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
-    briefs, approvals, logs = (m.__table__ for m in GUARDED)
+    briefs, approvals, logs = (m.__table__ for m in (RecommendationBrief, Approval, AuditLog))
     with factory() as s:
         s.execute(
             update(briefs)
@@ -456,7 +484,7 @@ def test_the_detector_ignores_look_alikes(form: str) -> None:
 def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert() -> None:
     """A backstop to the runtime guard, not the enforcement layer. It follows **model** import
     aliases and annotated, tuple and walrus aliases, and matches only literal, unqualified
-    ``UPDATE`` / ``DELETE FROM`` / ``INSERT … DO UPDATE`` strings on the three tables.
+    ``UPDATE`` / ``DELETE FROM`` / ``INSERT … DO UPDATE`` strings on the guarded tables.
 
     Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts)
     imported under another name; models referenced through a module (``models.Approval``);

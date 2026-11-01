@@ -80,8 +80,8 @@ def test_a_correct_deletion_verifies(carol_deleted: PrivacyEnv):
     report = _account_report(carol_deleted)
     assert report.verified, report.as_dict()
     # W16 (PROPOSED): + opportunity_observations. Project Phase 5 CF-1 (W21): +
-    # recommendation_briefs, approvals.
-    assert report.tables_checked == 46
+    # recommendation_briefs, approvals. CF-2: + creative_drafts, content_reviews.
+    assert report.tables_checked == 48
     assert report.email_sha256 and EMAIL[CAROL] not in str(report.as_dict())
 
 
