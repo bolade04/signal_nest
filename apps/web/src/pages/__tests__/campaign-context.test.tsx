@@ -27,7 +27,7 @@ describe('campaign context center', () => {
   });
 });
 
-// W21 CF-2: the claims library is a protected safety control. Its writes are exactly
+// W21 CF-2: the claims library is a protected safety control. Its /claims writes are exactly
 // owner, admin and compliance_reviewer (`CLAIMS_STEWARDS`,
 // apps/api/app/campaign_context/routes.py); the other eight kinds keep the editors
 // (owner, admin, marketer). The page must offer each role exactly the controls the API

@@ -31,7 +31,8 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
  *   ORG_ADMIN = require_exact_organization_roles(OWNER, ADMIN)
  *               (apps/api/app/organizations/routes.py:75-83)
  *   CLAIMS_STEWARD = require_exact_roles(OWNER, ADMIN, COMPLIANCE_REVIEWER), the claims
- *               library's writes (apps/api/app/campaign_context/routes.py:88-92, W21 CF-2)
+ *               library's /claims writes (apps/api/app/campaign_context/routes.py:88-92,
+ *               W21 CF-2)
  *
  * The role is configured in the stateful backend model before render, so /auth/me
  * answers it like the server would. Every absence assertion waits for two witnesses
@@ -143,8 +144,9 @@ const CONTEXT_TABS = [
   ['Channels', 'channel preference'],
 ] as const;
 type ContextTab = (typeof CONTEXT_TABS)[number];
-// W21 CF-2: the claims library's writes are steward-only (CLAIMS_STEWARD); the other
-// eight kinds keep the editors (EDITOR). Each campaign-context site is judged per policy.
+// W21 CF-2: the claims library's /claims writes are steward-only (CLAIMS_STEWARD);
+// the other eight kinds keep the editors (EDITOR). Each campaign-context site is judged
+// per policy.
 const CLAIMS_TAB: ContextTab = ['Claims library', 'claim'];
 const EDITOR_TABS: ContextTab[] = CONTEXT_TABS.filter(([tab]) => tab !== CLAIMS_TAB[0]);
 

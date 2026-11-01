@@ -14,14 +14,21 @@ marketer whose draft is blocked must not be able to remove the claim that blocks
 ``/claims`` only:
 
 * create, update and delete are gated by ``require_exact_roles(OWNER, ADMIN,
-  COMPLIANCE_REVIEWER)`` — **marketers lose claims write access** (a disclosed, live
-  behaviour change; every other collection keeps the ``OWNER``/``ADMIN``/``MARKETER``
+  COMPLIANCE_REVIEWER)`` — **marketers lose write access to these routes** (a disclosed,
+  live behaviour change; every other collection keeps the ``OWNER``/``ADMIN``/``MARKETER``
   editors);
 * ``DELETE`` soft-retires the entry (``retired_at``) instead of deleting it; a retired entry
   is no longer listed, updated or retired again (404, as a missing one);
 * every create, update and retirement writes an audit record
   (``claims_library_entry.created`` / ``.updated`` / ``.retired``) naming the changed field
   names, never their values.
+
+**Known exception (coordinator ruling R1).** ``POST /workspaces/{workspace_id}/onboarding``
+(:mod:`app.brands.service`) still creates claims-library entries for any editor (owner, admin
+or marketer): of any kind, at any time (it has no completed-onboarding guard), with no
+per-claim audit record and no ``ClaimIn`` validation. So a marketer cannot edit or retire a
+claim, but can still *add* one, ``approved`` included, through onboarding. The 5C build lane
+closes this (steward-only and audited) before 5C reads ``approved_claims``.
 """
 
 from __future__ import annotations

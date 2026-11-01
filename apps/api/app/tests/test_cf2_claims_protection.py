@@ -16,7 +16,10 @@ plan §2). For ``/workspaces/{workspace_id}/claims`` only:
 * **Nothing else changed.** Another collection (products) keeps the OWNER/ADMIN/MARKETER
   editors, hard delete and no audit record.
 
-This is a disclosed live behaviour change at merge: marketers lose claims write access.
+This is a disclosed live behaviour change at merge: marketers lose write access to the
+``/claims`` routes. **Known exception (coordinator ruling R1):** ``POST /onboarding`` still
+lets any editor, a marketer included, *add* claims (any kind, at any time, without a
+per-claim audit record) until the 5C build closes it; this module does not test onboarding.
 
 The world is built through real HTTP flows (the P6-PLAT-8 harness of
 ``test_campaign_context_integrity``) on a temporary SQLite file with foreign keys on; this

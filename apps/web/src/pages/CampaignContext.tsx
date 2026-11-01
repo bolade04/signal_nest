@@ -395,9 +395,9 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
   const { toast } = useToast();
   const { organizationId } = useWorkspace();
   // Adding and removing context are editor actions (EDITORS gate), except on the claims
-  // library: a protected safety control whose writes are steward-only (owner, admin,
-  // compliance_reviewer; CLAIMS_STEWARDS, W21 CF-2). Every member keeps the list. An
-  // unresolved role is denied until it resolves.
+  // library: a protected safety control whose /claims writes are steward-only (owner,
+  // admin, compliance_reviewer; CLAIMS_STEWARDS, W21 CF-2). Every member keeps the list.
+  // An unresolved role is denied until it resolves.
   const role = useActorRole(organizationId).role;
   const canEdit = config.kind === 'claims' ? canManageClaims(role) : canEditWorkspace(role);
   const [dialogOpen, setDialogOpen] = useState(false);
