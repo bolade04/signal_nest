@@ -845,3 +845,66 @@ def test_the_engine_folds_both_sides_to_one_form():
     assert fold("free park­ing  FOREVER") == fold("free par‍king forever")
     assert fold("ｃｕｒｅ️ all") == "cure all"
 
+
+# --------------------------------------------------------------------------- #
+# Review W21-REV-P5C r1 MINOR-1 pins (mutants RV12, RV17, RV19)
+# --------------------------------------------------------------------------- #
+def test_a_body_that_is_empty_once_persisted_is_withheld(world, ws, spy):
+    """RV12: schema-valid (non-empty) but only invisibles and spaces: nothing to store."""
+    spy.output = {"headline": "", "body": "​ ​", "call_to_action": ""}
+    brief_id = world.seed_brief(ws)
+    job = world.generated(brief_id, ws=ws)
+    assert (job["status"], job["last_error_code"], job["last_error_summary"]) == (
+        "failed", "non_retryable", "withheld:empty"
+    )
+    assert world.count(CreativeDraft, brief_id=brief_id) == 0
+
+
+def test_a_review_naming_a_blocked_claim_refuses_approval_even_if_not_flagged_blocked(world, ws):
+    """RV17: ``blocked_claim_ids`` alone refuses (a review the CHECKs allow: high risk, not
+    blocked, not passed)."""
+    brief_id = world.seed_brief(ws)
+    world.generated(brief_id, ws=ws)
+    [draft] = _drafts(world, brief_id)
+    review = _review(world, draft["id"])
+    with world.witness.begin() as conn:
+        table = ContentReview.__table__
+        conn.execute(table.delete().where(table.c.id == review["id"]))
+        conn.execute(table.insert().values(
+            **{**{k: v for k, v in review.items() if k != "created_at"},
+               "risk_level": "high", "is_blocked": False, "blocked_claim_ids": ["x"],
+               "passed": False},
+        ))
+    assert _refusal(world, draft["id"]) == "review_blocked"
+
+
+def test_the_ledger_link_is_the_retrys_own_call(world, ws, monkeypatch):
+    """RV19: the first attempt's call succeeds and its draft insert then clashes (forced), so
+    the job retries; the stored draft links the retry's own ``ok`` usage row."""
+    brief_id = world.seed_brief(ws)
+    assert world.generated(brief_id, ws=ws)["status"] == "succeeded"  # version 1 exists
+    real = creative_service._next_version
+    calls = {"n": 0}
+
+    def clash_once(db, brief):
+        calls["n"] += 1
+        return 1 if calls["n"] == 1 else real(db, brief)
+
+    monkeypatch.setattr(creative_service, "_next_version", clash_once)
+    job_id = world.generate(brief_id, ws=ws, channel="sms").json()["job_id"]
+    world.drain()
+    first = world.job(job_id)
+    assert (first["status"], first["last_error_summary"]) == ("retry_wait", "version_conflict")
+    after_first = {u["id"] for u in world.rows(LLMUsageEvent, job_id=job_id)}
+    assert len(after_first) == 1  # the clashing attempt's call, kept after its rollback
+    with world.witness.begin() as conn:  # make the retry due now
+        conn.execute(update(Job.__table__).where(Job.__table__.c.id == job_id)
+                     .values(available_at=datetime.now(UTC) - timedelta(seconds=1)))
+    world.drain()
+    assert world.job(job_id)["status"] == "succeeded"
+    [v2] = [d for d in _drafts(world, brief_id) if d["draft_version"] == 2]
+    ok_rows = [u for u in world.rows(LLMUsageEvent, job_id=job_id) if u["outcome"] == "ok"]
+    assert len(ok_rows) == 2
+    assert v2["llm_usage_event_id"] is not None
+    assert v2["llm_usage_event_id"] not in after_first
+

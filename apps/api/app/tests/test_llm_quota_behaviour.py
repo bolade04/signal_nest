@@ -504,3 +504,67 @@ def test_postgres_a_priced_call_reserves_through_the_ledger_under_the_lock(monke
 
 def test_the_settings_fixture_matches_the_ceiling_names():
     assert set(SETTINGS_CEILINGS) == set(CREATIVE_GENERATION_CEILINGS) == set(CEILINGS)
+
+# --------------------------------------------------------------------------- #
+# Review W21-REV-P5C r1 MINOR-1 (mutant RV15): the meter checks the attempt's real worst case
+# --------------------------------------------------------------------------- #
+class _PricedProvider:
+    """An offline fake priced like a Claude model (the ``FixedCostProvider`` pattern): the
+    meter bounds the bytes its ``prepare`` returns."""
+
+    name = "anthropic"
+    model = "claude-sonnet-4-6"
+
+    def __init__(self):
+        self.calls = 0
+
+    def prepare(self, request):
+        from app.llm.providers_real import AnthropicProvider
+
+        return AnthropicProvider("k", self.model, 5).prepare(request)
+
+    def generate(self, request, prompt_name, prompt_version):
+        from app.llm.base import LLMResponse, LLMUsage
+
+        self.calls += 1
+        out = MockLLMProvider().generate(request, prompt_name, prompt_version).output
+        return LLMResponse(
+            task=request.task, provider=self.name, model=self.model, output=out,
+            usage=LLMUsage(input_tokens=1000, output_tokens=200),
+            prompt_name=prompt_name, prompt_version=prompt_version,
+        )
+
+
+@pytest.fixture
+def priced(monkeypatch) -> _PricedProvider:
+    prices = {_PricedProvider.model: [3.0, 15.0]}
+    for settings in (get_settings(), service_module.llm_service._settings):
+        monkeypatch.setattr(settings, "llm_prices_usd_per_mtok", prices)
+    monkeypatch.setattr(get_settings(), "llm_workspace_monthly_budget_usd", 50.0)
+    provider = _PricedProvider()
+    monkeypatch.setattr(service_module.llm_service, "_provider", provider)
+    return provider
+
+
+def test_an_attempt_whose_worst_case_would_cross_the_ceiling_is_never_made(
+    world, ws, monkeypatch, priced
+):
+    """Nothing spent yet, so the route lets the request through; the attempt's own worst case
+    (output limit 400 tokens at $15/Mtok alone is $0.006) crosses a $0.001 ceiling, so the
+    meter refuses before the provider is called."""
+    monkeypatch.setattr(get_settings(), "llm_daily_cost_ceiling_usd_per_workspace", 0.001)
+    brief_id = world.seed_brief(ws)
+    r = world.generate(brief_id, ws=ws)
+    assert r.status_code == 202, r.text
+    world.drain()
+    job = world.job(r.json()["job_id"])
+    assert (job["status"], job["last_error_code"], job["last_error_summary"]) == (
+        "failed", "policy", f"ceiling:{DAILY_COST_WORKSPACE}"
+    )
+    assert priced.calls == 0
+    assert world.count(CreativeDraft, workspace_id=ws) == 0
+    # The same ceiling with room for the worst case lets the same request through.
+    monkeypatch.setattr(get_settings(), "llm_daily_cost_ceiling_usd_per_workspace", 1.0)
+    assert world.generated(world.seed_brief(ws), ws=ws)["status"] == "succeeded"
+    assert priced.calls == 1
+
