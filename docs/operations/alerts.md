@@ -254,10 +254,22 @@ Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
   Scout blocked for over a day) or `scouts_blocked >= 3` (several at once usually means a
   provider or feed incident).
 - **Severity:** SEV3; SEV2 on either escalation.
-- **Missing data:** treat as not breaching, and rely on alert 11 (no active workers) and
-  alert 13 (stale workers): with no worker running nothing sets the gauge. A gauge that
-  stops reporting while workers are healthy means metrics are off or the read is failing
+- **Missing data:** treat missing data as **missing** and **notify on
+  `INSUFFICIENT_DATA`** (or, where a backend cannot notify on that state, treat missing data
+  as **breaching**). Never treat it as not breaching: an absent gauge means nobody is
+  measuring — no worker is running, metrics are off on the workers, or every worker's read is
+  failing — which is indistinguishable from "no blocked Scouts" if it reads as OK. Nothing
+  else covers that gap today: alert 11's `worker_active` is defined but has no emit path,
+  and alert 13 is endpoint-based, so neither can back an alarm. A gauge that stops while
+  workers are healthy means metrics are off or the read is failing
   (`worker.blocked_scouts_sweep_failed` warnings, class name only).
+- **Read bound:** on PostgreSQL each sweep's read sets `SET LOCAL lock_timeout` and
+  `SET LOCAL statement_timeout` (2 s and 5 s by default; at most a quarter of
+  `WORKER_STALE_AFTER_SECONDS − WORKER_HEARTBEAT_SECONDS`), because the read shares the
+  registry heartbeat's loop. A read that hits the bound (for example while a migration holds
+  a lock on `scout_admissions`, `scout_requests` or `jobs`) is logged as
+  `worker.blocked_scouts_sweep_failed` and sets no gauge for that interval; the next beat is
+  late by at most about the bound. Sustained, it shows as missing data.
 - **False positives:** none by state — a healthy in-flight operation (its attempt still
   holds its lease, or its stored deadline has not passed by the database clock) is never
   counted, and every counted Scout really cannot run. But a blocked Scout does **not**

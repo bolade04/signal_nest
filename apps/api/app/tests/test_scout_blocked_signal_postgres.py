@@ -14,8 +14,12 @@ produced, with ledger rows written by the real admission path (``RunAdmission``)
 * healthy in-flight operations are never counted (every non-eligible shape);
 * the gauges carry no label and pass ``validate_metric``;
 * the worker's heartbeat sets them on its own schedule, with no request at all;
-* one sweep is one clock reading plus ONE statement, whatever the number of rows, and that
-  statement reads the partial index ``uq_scout_admission_unresolved``.
+* one sweep is two ``SET LOCAL`` bounds, one clock reading and ONE listing statement, whatever
+  the number of rows, and that statement reads the partial index
+  ``uq_scout_admission_unresolved``;
+* a lock on the ledger (a migration's ``ACCESS EXCLUSIVE``) costs the heartbeat at most the
+  read's bound, never the lock's duration, and sets no gauge from the timed-out read (review r1
+  MINOR-2).
 
 The SQLite behaviour (the signal is absent, never zero) is in ``test_scout_blocked_signal.py``.
 
@@ -47,7 +51,7 @@ from app.core.metrics import (
     validate_metric,
 )
 from app.jobs import blocked_signal
-from app.jobs.blocked_signal import record_blocked_scouts
+from app.jobs.blocked_signal import read_timeouts_ms, record_blocked_scouts
 from app.jobs.reconcile import blocked, resolve
 from app.jobs.service import enqueue_scout_request
 from app.jobs.worker import Worker
@@ -414,8 +418,14 @@ def _statements(w):
     return seen, lambda: event.remove(w.engine, "before_cursor_execute", _record)
 
 
+def _listings(seen) -> list[tuple[str, object]]:
+    return [(st, params) for st, params in seen if "FROM scout_admissions" in st]
+
+
 @pytest.mark.parametrize("blocked_scouts_n", [0, 1, 4])
 def test_one_sweep_is_one_clock_reading_and_one_statement(world, metrics, blocked_scouts_n):
+    """Two ``SET LOCAL`` bounds, one clock reading, ONE listing - whatever the row count; the
+    bounds end with the read's transaction (the pooled connection keeps the engine's own)."""
     w = world
     tenants = [w, *(_scout(w) for _ in range(max(blocked_scouts_n - 1, 0)))]
     for tenant in tenants[:blocked_scouts_n]:
@@ -423,13 +433,20 @@ def test_one_sweep_is_one_clock_reading_and_one_statement(world, metrics, blocke
     _in_flight(_scout(w))
     seen, stop = _statements(w)
     try:
-        record_blocked_scouts(w.factory)
+        record_blocked_scouts(w.factory, timeouts_ms=(2000, 5000))
     finally:
         stop()
     assert metrics.gauge_value(SCOUTS_BLOCKED) == float(blocked_scouts_n)
-    assert len(seen) == 2, [statement for statement, _ in seen]
-    assert "clock_timestamp" in seen[0][0]
-    assert "scout_admissions" in seen[1][0] and "resolved_at IS NULL" in seen[1][0]
+    statements = [statement for statement, _ in seen]
+    assert len(statements) == 4, statements
+    assert statements[0] == "SET LOCAL lock_timeout = '2000ms'"
+    assert statements[1] == "SET LOCAL statement_timeout = '5000ms'"
+    assert "clock_timestamp" in statements[2]
+    [(listing, _)] = _listings(seen)
+    assert listing == statements[3] and "resolved_at IS NULL" in listing
+    with w.factory() as s:  # SET LOCAL did not outlive the read's transaction
+        assert s.execute(text("show lock_timeout")).scalar_one() == "30s"
+        assert s.execute(text("show statement_timeout")).scalar_one() == "30s"
 
 
 def _index_names(plan: dict) -> set[tuple[str, str]]:
@@ -466,7 +483,7 @@ def test_the_sweep_statement_reads_the_unresolved_partial_index(world, metrics):
         assert record_blocked_scouts(w.factory).count == 1
     finally:
         stop()
-    statement, parameters = seen[1]
+    [(statement, parameters)] = _listings(seen)
     with w.observer.connect() as c:
         plan = c.exec_driver_sql(f"EXPLAIN (FORMAT JSON) {statement}", parameters).scalar_one()
     plan = plan if isinstance(plan, list) else json.loads(plan)
@@ -519,3 +536,93 @@ def test_the_worker_heartbeat_sets_the_gauges_on_its_schedule_without_traffic(
     gaps = [b - a for a, b in zip(sweeps, sweeps[1:], strict=False)]
     assert all(gap >= 0.04 for gap in gaps), gaps  # one sweep per beat, never a busy loop
     assert metrics.gauge_value(SCOUTS_BLOCKED_OLDEST_AGE_SECONDS) == 0.0
+
+
+def test_a_lock_on_the_ledger_costs_the_heartbeat_only_the_reads_bound(
+    world, metrics, monkeypatch, caplog
+):
+    """Review r1 MINOR-2: hold ACCESS EXCLUSIVE on ``scout_admissions`` (what a migration's DDL
+    takes) for HOLD seconds, far longer than the read's bound. The sweep's read times out
+    (``lock_timeout``) instead of waiting, is logged as a failed sweep, sets no gauge, and the
+    registry heartbeat that shares its loop is late by at most about the bound."""
+    hold = 3.0
+    w = world
+    _unknown_end(w)
+    settings = get_settings().model_copy(
+        update={"worker_heartbeat_seconds": 0.05, "worker_stale_after_seconds": 2.05}
+    )
+    lock_ms, statement_ms = read_timeouts_ms(heartbeat_seconds=0.05, stale_after_seconds=2.05)
+    assert (lock_ms, statement_ms) == (500, 500)  # a quarter of the 2 s margin
+    bound = statement_ms / 1000.0
+    worker = Worker(settings=settings, session_factory=w.factory)
+    worker.register()
+    beats: list[float] = []
+    real_heartbeat = worker._registry.heartbeat
+
+    def counted_heartbeat(db, worker_id, **kw):
+        beats.append(time.monotonic())
+        return real_heartbeat(db, worker_id, **kw)
+
+    reads: list[tuple[str, float]] = []
+    real_read = blocked_signal.blocked_scouts
+
+    def observed_read(db):
+        try:
+            result = real_read(db)
+        except Exception as exc:
+            reads.append((type(exc).__name__, time.monotonic()))
+            raise
+        reads.append(("ok", time.monotonic()))
+        return result
+
+    gauge_sets: list[float] = []
+    real_set = blocked_signal.set_blocked_gauges
+
+    def observed_set(backend, summary):
+        gauge_sets.append(time.monotonic())
+        return real_set(backend, summary)
+
+    monkeypatch.setattr(worker._registry, "heartbeat", counted_heartbeat)
+    monkeypatch.setattr(blocked_signal, "blocked_scouts", observed_read)
+    monkeypatch.setattr(blocked_signal, "set_blocked_gauges", observed_set)
+    caplog.set_level("WARNING", logger="signalnest.jobs.blocked_signal")
+    stop, thread = worker._start_registry_heartbeat()
+    try:
+        _await(lambda: len(beats) >= 3 and gauge_sets, "beats and a first gauge")
+        locker = w.engine.connect()
+        locker.execute(text("lock table scout_admissions in access exclusive mode"))
+        locked_at = time.monotonic()
+        time.sleep(hold)
+        released_at = time.monotonic()
+        locker.rollback()
+        locker.close()
+        _await(lambda: any(t > released_at for t in gauge_sets), "a gauge after the release")
+    finally:
+        stop.set()
+        thread.join(timeout=WAIT_SECONDS)
+    assert not thread.is_alive()
+    gaps = [b - a for a, b in zip(beats, beats[1:], strict=False)]
+    in_hold = [
+        b - a
+        for a, b in zip(beats, beats[1:], strict=False)
+        if locked_at <= b <= released_at + bound
+    ]
+    print(
+        "BLOCKED-SIGNAL-LOCK hold", hold, "bound", bound, "max gap", round(max(gaps), 3),
+        "beats in hold", len(in_hold), "timed-out reads",
+        sum(1 for kind, t in reads if kind != "ok" and locked_at <= t <= released_at + bound),
+    )
+    # The heartbeat kept beating through the lock, each beat late by at most about the bound.
+    assert len(in_hold) >= 3, in_hold
+    assert max(gaps) <= bound + 0.05 + 1.0, gaps
+    assert max(gaps) < hold - 1.0, gaps
+    # Reads during the lock timed out (OperationalError: lock_timeout), none waited it out.
+    timed_out = [t for kind, t in reads if kind == "OperationalError"]
+    assert len([t for t in timed_out if locked_at <= t <= released_at + bound]) >= 2, reads
+    assert not [t for kind, t in reads if kind == "ok" and locked_at + 0.2 < t < released_at]
+    # ...and set no gauge: the last value stands until a read completes again.
+    assert not [t for t in gauge_sets if locked_at + 0.2 < t < released_at], gauge_sets
+    assert metrics.gauge_value(SCOUTS_BLOCKED) == 1.0
+    messages = [r.getMessage() for r in caplog.records]
+    assert "worker.blocked_scouts_sweep_failed" in messages, messages
+

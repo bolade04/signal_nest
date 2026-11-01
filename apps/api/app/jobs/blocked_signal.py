@@ -16,8 +16,21 @@ same fleet-wide value, so a monitor reads the ``Maximum`` across workers.
 
 **Cost.** One database clock reading and one statement per interval
 (:func:`app.scouting_requests.execution.eligible_admissions`: the unresolved admissions through
-the partial index ``uq_scout_admission_unresolved``, their Scout and job joined), and none at
-all while metrics are off (the no-op backend is installed).
+the partial index ``uq_scout_admission_unresolved``, their Scout and job joined), preceded on
+PostgreSQL by two ``SET LOCAL``s, and none at all while metrics are off (the no-op backend is
+installed).
+
+**Bounded wait (review r1 MINOR-2).** The read shares the registry heartbeat's loop, so a read
+waiting on a lock (a migration's DDL on ``scout_admissions``, ``scout_requests`` or ``jobs``)
+would delay the next beat. On PostgreSQL the read's own transaction therefore starts with
+``SET LOCAL lock_timeout`` and ``SET LOCAL statement_timeout`` (:func:`read_timeouts_ms`: at
+most 2 s and 5 s, and never more than a quarter of ``WORKER_STALE_AFTER_SECONDS -
+WORKER_HEARTBEAT_SECONDS``, the margin a late beat has before peers flag the worker stale;
+60 - 10 s by default, so 2 s and 5 s). A read that hits either bound fails like any other: it
+is rolled back, logged by class name (``worker.blocked_scouts_sweep_failed``), and sets no gauge
+for that interval. ``SET LOCAL`` ends with the transaction, so nothing leaks to the pooled
+connection. The bound covers the wait inside the database; obtaining a connection from the pool
+is shared with the heartbeat's own and is not bounded here.
 
 **Same predicate.** The count is exactly the Scouts the ``reconcile blocked`` view lists and the
 customer read shows as ``needs_attention``; nothing here re-states the rule.
@@ -32,6 +45,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from logging import WARNING
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger, log_event
@@ -42,9 +56,24 @@ from app.core.metrics import (
     NoOpMetrics,
     get_metrics,
 )
-from app.scouting_requests.execution import BlockedScouts, blocked_scouts
+from app.scouting_requests.execution import BlockedScouts, blocked_scouts, ledger_kept
 
 logger = get_logger("signalnest.jobs.blocked_signal")
+
+#: The read's ceilings on PostgreSQL (milliseconds): a lock wait, and any one statement.
+LOCK_TIMEOUT_MS = 2_000
+STATEMENT_TIMEOUT_MS = 5_000
+#: The floor, so a very small margin still leaves the read a chance to complete.
+MIN_TIMEOUT_MS = 100
+
+
+def read_timeouts_ms(*, heartbeat_seconds: float, stale_after_seconds: float) -> tuple[int, int]:
+    """``(lock_timeout, statement_timeout)`` in milliseconds for one sweep's read: at most
+    :data:`LOCK_TIMEOUT_MS` / :data:`STATEMENT_TIMEOUT_MS`, and the statement bound at most a
+    quarter of the margin ``stale_after - heartbeat`` (the lock bound never exceeds it)."""
+    margin_ms = round(max(0.0, stale_after_seconds - heartbeat_seconds) * 1000.0)
+    statement = max(MIN_TIMEOUT_MS, min(STATEMENT_TIMEOUT_MS, margin_ms // 4))
+    return min(LOCK_TIMEOUT_MS, statement), statement
 
 
 def set_blocked_gauges(metrics: MetricsBackend, summary: BlockedScouts) -> None:
@@ -53,16 +82,29 @@ def set_blocked_gauges(metrics: MetricsBackend, summary: BlockedScouts) -> None:
     metrics.set_gauge(SCOUTS_BLOCKED_OLDEST_AGE_SECONDS, summary.oldest_age_seconds or 0.0)
 
 
-def record_blocked_scouts(session_factory: Callable[[], Session]) -> BlockedScouts | None:
+def record_blocked_scouts(
+    session_factory: Callable[[], Session],
+    *,
+    timeouts_ms: tuple[int, int] = (LOCK_TIMEOUT_MS, STATEMENT_TIMEOUT_MS),
+) -> BlockedScouts | None:
     """One sweep: read the blocked Scouts in a short read-only transaction of its own and set
     the gauges. Returns the summary, or ``None`` when nothing was measured (metrics off, the
-    ledger not kept, or the read failed). Never raises a database error: a failed read is
-    logged (class name only) and retried on the next interval."""
+    ledger not kept, or the read failed or hit its bound). Never raises a database error: a
+    failed read is logged (class name only) and retried on the next interval.
+
+    ``timeouts_ms`` is ``(lock_timeout, statement_timeout)``, applied with ``SET LOCAL`` at the
+    start of the read's transaction on PostgreSQL (the worker passes :func:`read_timeouts_ms`
+    of its own settings)."""
     metrics = get_metrics()
     if isinstance(metrics, NoOpMetrics):
         return None  # metrics are off: nothing would be recorded, so nothing is read
+    lock_ms, statement_ms = (int(value) for value in timeouts_ms)
     db = session_factory()
     try:
+        if ledger_kept(db):
+            # Bound the wait before the first read (SET LOCAL: this transaction only).
+            db.execute(text(f"SET LOCAL lock_timeout = '{lock_ms}ms'"))
+            db.execute(text(f"SET LOCAL statement_timeout = '{statement_ms}ms'"))
         summary = blocked_scouts(db)
         db.rollback()  # read-only: end the transaction at once
     except Exception as exc:  # noqa: BLE001 - observation must never break the heartbeat
@@ -86,4 +128,10 @@ def record_blocked_scouts(session_factory: Callable[[], Session]) -> BlockedScou
     return summary
 
 
-__all__ = ["record_blocked_scouts", "set_blocked_gauges"]
+__all__ = [
+    "LOCK_TIMEOUT_MS",
+    "STATEMENT_TIMEOUT_MS",
+    "read_timeouts_ms",
+    "record_blocked_scouts",
+    "set_blocked_gauges",
+]

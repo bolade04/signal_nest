@@ -6,7 +6,7 @@
 * With metrics off (the no-op backend) a sweep reads nothing at all.
 * The gauges carry no label, pass ``validate_metric`` and read 0 / 0 for no blocked Scout.
 * A failed read is logged by class and never raises; a failing signal never stops the worker's
-  registry heartbeat.
+  registry heartbeat from committing; the read's bound stays well inside the stale margin.
 
 The PostgreSQL values (0, 1, several across two organizations; reconciliation; healthy
 operations; cost; the heartbeat schedule) are in ``test_scout_blocked_signal_postgres.py``.
@@ -20,7 +20,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
@@ -34,9 +34,10 @@ from app.core.metrics import (
 )
 from app.db.models import Base
 from app.jobs import worker as worker_mod
-from app.jobs.blocked_signal import record_blocked_scouts, set_blocked_gauges
+from app.jobs.blocked_signal import read_timeouts_ms, record_blocked_scouts, set_blocked_gauges
 from app.jobs.reconcile import blocked
 from app.jobs.worker import Worker
+from app.jobs.worker_models import WorkerRegistration
 from app.scouting_requests.execution import BlockedScouts, blocked_scouts, ledger_kept
 from app.system.internal_observability_routes import internal_overview
 from app.tests import test_scout_pause_promise as promise
@@ -148,7 +149,19 @@ def test_a_failed_read_is_logged_by_class_and_never_raises(metrics, caplog):
     assert not any("server closed the connection" in m for m in messages)
 
 
+def _last_beat(make, worker) -> datetime | None:
+    with make() as session:
+        return session.scalar(
+            select(WorkerRegistration.last_heartbeat_at).where(
+                WorkerRegistration.worker_id == worker.worker_id
+            )
+        )
+
+
 def test_a_failing_signal_never_stops_the_registry_heartbeat(tmp_path, metrics, monkeypatch):
+    """The heartbeat keeps COMMITTING while the signal raises on every beat, not merely keeps
+    looping: the registered worker's ``last_heartbeat_at`` advances (review r1 MINOR-3; a
+    signal moved inside the heartbeat's transaction, before its commit, fails this)."""
     engine = create_engine(
         f"sqlite:///{tmp_path / 'hb.db'}", connect_args={"check_same_thread": False}
     )
@@ -157,15 +170,18 @@ def test_a_failing_signal_never_stops_the_registry_heartbeat(tmp_path, metrics, 
     calls: list[float] = []
     enough = threading.Event()
 
-    def explode(_factory):
+    def explode(_factory, **_kwargs):
         calls.append(time.monotonic())
-        if len(calls) >= 3:
+        if len(calls) >= 5:
             enough.set()
         raise RuntimeError("signal defect")
 
     monkeypatch.setattr(worker_mod, "record_blocked_scouts", explode)
     settings = get_settings().model_copy(update={"worker_heartbeat_seconds": 0.02})
     worker = Worker(settings=settings, session_factory=make)
+    worker.register()
+    registered = _last_beat(make, worker)
+    assert registered is not None
     stop, thread = worker._start_registry_heartbeat()
     try:
         assert enough.wait(20.0), "the heartbeat stopped after a failing signal"
@@ -173,4 +189,27 @@ def test_a_failing_signal_never_stops_the_registry_heartbeat(tmp_path, metrics, 
     finally:
         stop.set()
         thread.join(timeout=20.0)
+    beaten = _last_beat(make, worker)
+    assert beaten is not None and beaten > registered, (registered, beaten)
     engine.dispose()
+
+
+def test_the_read_bound_stays_well_inside_the_stale_margin():
+    """Review r1 MINOR-2: the read's ``SET LOCAL`` bounds (ms) are at most 2 s / 5 s and at most
+    a quarter of ``stale_after - heartbeat``, the time a late beat has before peers flag the
+    worker stale."""
+    assert read_timeouts_ms(heartbeat_seconds=10.0, stale_after_seconds=60.0) == (2000, 5000)
+    assert read_timeouts_ms(heartbeat_seconds=0.05, stale_after_seconds=2.05) == (500, 500)
+    assert read_timeouts_ms(heartbeat_seconds=10.0, stale_after_seconds=10.1) == (100, 100)
+    for heartbeat, stale_after in ((1.0, 3.0), (5.0, 30.0), (10.0, 60.0), (30.0, 300.0)):
+        lock_ms, statement_ms = read_timeouts_ms(
+            heartbeat_seconds=heartbeat, stale_after_seconds=stale_after
+        )
+        assert lock_ms <= statement_ms <= (stale_after - heartbeat) * 1000 / 4
+    settings = get_settings()
+    lock_ms, statement_ms = read_timeouts_ms(
+        heartbeat_seconds=settings.worker_heartbeat_seconds,
+        stale_after_seconds=settings.worker_stale_after_seconds,
+    )
+    margin_ms = (settings.worker_stale_after_seconds - settings.worker_heartbeat_seconds) * 1000
+    assert statement_ms <= margin_ms / 4

@@ -71,7 +71,7 @@ from app.core.tracing import (
     start_span,
 )
 from app.db.session import SessionLocal
-from app.jobs.blocked_signal import record_blocked_scouts
+from app.jobs.blocked_signal import read_timeouts_ms, record_blocked_scouts
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.registry import (
@@ -883,12 +883,21 @@ class Worker:
 
         Each beat then sets the blocked-Scout gauges (FU-267-A1,
         :func:`app.jobs.blocked_signal.record_blocked_scouts`) in a read of its own,
-        after the heartbeat has committed: the signal needs no customer traffic, and
-        its failure can never cost the worker its liveness.
+        after the heartbeat has committed, so the signal needs no customer traffic. A
+        read that FAILS is contained: it is logged by class name and the beat it
+        follows has already committed. A read that WAITS (a lock held by a
+        migration, a slow statement) does delay the next beat, because both share
+        this loop. On PostgreSQL that wait is bounded by the read's ``SET LOCAL``
+        ``lock_timeout`` / ``statement_timeout`` (``read_timeouts_ms``: at most 2 s /
+        5 s and a quarter of ``stale_after - interval``), so a beat is late by at most
+        about that bound and never long enough for peers to flag this worker stale.
         """
         stop = threading.Event()
         interval = self._settings.worker_heartbeat_seconds
         stale_after = self._settings.worker_stale_after_seconds
+        signal_timeouts = read_timeouts_ms(
+            heartbeat_seconds=interval, stale_after_seconds=stale_after
+        )
 
         def _beat() -> None:
             while not stop.wait(interval):
@@ -913,7 +922,7 @@ class Worker:
                 finally:
                     db.close()
                 try:
-                    record_blocked_scouts(self._session_factory)
+                    record_blocked_scouts(self._session_factory, timeouts_ms=signal_timeouts)
                 except Exception as exc:  # noqa: BLE001 - observation is never fatal to the beat
                     log_event(
                         logger,

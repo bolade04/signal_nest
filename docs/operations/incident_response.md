@@ -247,7 +247,10 @@ incident policy.
 
 **Detection.** [Alert 21](./alerts.md): `scouts_blocked >= 1` (Maximum across workers),
 or `/api/v1/internal/system/overview` `scouts.blocked_count > 0`. Escalation: the oldest
-block is over a day old, or three or more Scouts are blocked at once.
+block is over a day old, or three or more Scouts are blocked at once. Alert 21 in
+`INSUFFICIENT_DATA` is not "no blocked Scouts": nobody is measuring (no worker, metrics off,
+or every read failing or hitting its bound, `worker.blocked_scouts_sweep_failed`); poll the
+overview until the gauge returns, and restore the workers or their metrics.
 
 **Triage.** List them: `python -m app.jobs.reconcile blocked` (each Scout's tenancy, the
 operation, `admitted_at`, the stored deadline and whether it has passed, the end kind,

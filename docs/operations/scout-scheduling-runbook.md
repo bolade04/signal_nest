@@ -387,8 +387,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     [alerts.md](./alerts.md) §21 and the response in
     [incident_response.md](./incident_response.md) §13; it fires only where metrics are
     exported (`METRICS_ENABLED=true`, `METRICS_EXPORTER=emf` on the worker) and an alarm
-    is configured — neither is wired in any environment yet, so until then operators must
-    poll the overview.
+    is configured (missing data notifies as `INSUFFICIENT_DATA`, never reads as OK) —
+    neither is wired in any environment yet, so until then operators must poll the
+    overview. The heartbeat's read is bounded on PostgreSQL (`SET LOCAL lock_timeout` 2 s,
+    `statement_timeout` 5 s by default): a read that hits the bound is logged and sets no
+    gauge, and delays the next registry heartbeat by at most about that bound.
   - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
     the run at its next admission (including while it waits): the job ends `cancelled`.
     **Cancel recovery (D-25 recovery, PROPOSED):** whenever Cancel makes an execute job
