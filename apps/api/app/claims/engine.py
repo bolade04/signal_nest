@@ -23,12 +23,12 @@ reach it.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.enums import ClaimRisk
+from app.llm.untrusted import normalise
 
 # Industries requiring stricter controls.
 STRICT_INDUSTRIES = {
@@ -129,14 +129,26 @@ APPROVED_KIND = "approved"
 DISCLAIMER_KIND = "required_disclaimer"
 
 _WHITESPACE = re.compile(r"\s+")
+#: Full stops that IDNA and browsers treat as "." (ideographic, fullwidth, halfwidth
+#: ideographic) — the same map the output screen applies (``app.llm.screening``).
+_FULL_STOPS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 
 
 def fold(text: str) -> str:
-    """The matching form of a text: NFKC, case-folded, whitespace runs collapsed, trimmed.
+    """The one canonical matching form of a text, applied to BOTH sides of every library
+    match — the draft text and every library entry and required disclaimer, in the review
+    (:func:`review_against_library`) and in the approval-time re-check
+    (``app.creative.service.draft_approval_refusal``) alike:
 
-    Both sides of every library match are folded, so a line break, a doubled space or a
-    compatibility form ("ｃｕｒｅ") cannot hide a blocked claim or fake a disclaimer."""
-    return _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", text)).strip().casefold()
+    ``casefold(collapse_ws(normalise(text).translate(FULL_STOPS)))`` — NFKC, every ``Cf`` and
+    Default_Ignorable code point removed (soft hyphen, ZWJ/ZWNJ, variation selectors), NFKC
+    again (:func:`app.llm.untrusted.normalise`, the output screen's form), the ideographic,
+    fullwidth and halfwidth full stops mapped to ".", whitespace runs collapsed, trimmed,
+    case-folded. So an invisible character, a line break, a compatibility form ("ｃｕｒｅ") or a
+    different full stop can neither hide a blocked claim nor keep a carried disclaimer from
+    resolving, on either side."""
+    canonical = normalise(text).translate(_FULL_STOPS)
+    return _WHITESPACE.sub(" ", canonical).strip().casefold()
 
 
 @dataclass(frozen=True)

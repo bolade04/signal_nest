@@ -749,3 +749,99 @@ def test_postgres_concurrent_generations_on_one_brief_take_distinct_versions():
         drafts = world.rows(CreativeDraft, brief_id=brief_id)
         assert sorted(d["draft_version"] for d in drafts) == [1, 2, 3, 4]
         assert world.count(ContentReview, workspace_id=world.ws) == 4
+
+
+# --------------------------------------------------------------------------- #
+# One canonical matching form on both sides (review W21-REV-P5C r1 MAJOR-1, probes P1, P2,
+# PF3): an invisible character, an ideographic full stop or a compatibility form changes
+# nothing on either side — the stored review, the approval-time re-check, the disclaimers.
+# --------------------------------------------------------------------------- #
+BLOCKED_ASCII = "free parking forever"
+
+
+def _body_prefix(monkeypatch, prefix: str) -> None:
+    """The mock's draft body, with ``prefix`` in front (a test-only hook on the mock)."""
+    original = MockLLMProvider._creative
+
+    def creative(self, inputs, rng):
+        out = original(self, inputs, rng)
+        out["body"] = prefix + " " + out["body"]
+        return out
+
+    monkeypatch.setattr(MockLLMProvider, "_creative", creative)
+
+
+@pytest.mark.parametrize(
+    "label, body",
+    [
+        ("control_plain", f"Try {BLOCKED_ASCII} this weekend."),
+        ("zwj_inside_word", "Try free par‍king forever this weekend."),
+    ],
+)
+def test_the_approval_recheck_sees_a_claim_added_after_review_whatever_the_text_holds(
+    world, monkeypatch, label, body
+):
+    """Probe P1: the persisted text keeps ZWJ between letters; the re-check must still see
+    the claim the text carries."""
+    ws = world.workspace(f"p1 {label}")
+    _body_prefix(monkeypatch, body)
+    brief_id = world.seed_brief(ws)
+    assert world.generated(brief_id, ws=ws)["status"] == "succeeded"
+    [draft] = _drafts(world, brief_id)
+    assert _review(world, draft["id"])["passed"] is True
+    world.claim(BLOCKED_ASCII, ws=ws)  # added after the review
+    assert _refusal(world, draft["id"]) == "blocked_claim"
+
+
+@pytest.mark.parametrize(
+    "label, claim, body",
+    [
+        ("control_ascii", BLOCKED_ASCII, f"Enjoy {BLOCKED_ASCII} at the market."),
+        ("ideographic_stop", "必ず治ります。", "新しい駐車場。必ず治ります。週末にどうぞ。"),
+        ("soft_hyphen_entry", "free park­ing forever", f"Enjoy {BLOCKED_ASCII} at the market."),
+        ("zwj_entry", "free par‍king forever", f"Enjoy {BLOCKED_ASCII} at the market."),
+    ],
+)
+def test_a_blocked_claim_carried_verbatim_blocks_the_draft_in_any_form(
+    world, monkeypatch, label, claim, body
+):
+    """Probe P2 (and PF4): the stored review is blocked, names the entry, and the draft is
+    not approvable — whether the full stop is ideographic or the entry holds an invisible."""
+    ws = world.workspace(f"p2 {label}")
+    entry = world.claim(claim, ws=ws)
+    _body_prefix(monkeypatch, body)
+    brief_id = world.seed_brief(ws)
+    assert world.generated(brief_id, ws=ws)["status"] == "succeeded"
+    [draft] = _drafts(world, brief_id)
+    review = _review(world, draft["id"])
+    assert (review["is_blocked"], review["blocked_claim_ids"], review["passed"]) == (
+        True, [entry], False
+    )
+    assert _refusal(world, draft["id"]) == "review_blocked"
+
+
+@pytest.mark.parametrize(
+    "disclaimer",
+    ["効果には個人差があります。", "Terms­ apply．", "Offer ends​ soon."],
+)
+def test_a_required_disclaimer_carried_verbatim_resolves_in_any_form(world, disclaimer):
+    """Probe PF3: a disclaimer ending in an ideographic or fullwidth stop, or holding an
+    invisible character, resolves when the draft carries it (the mock carries every required
+    disclaimer verbatim)."""
+    ws = world.workspace(f"pf3 {len(disclaimer)}")
+    world.claim(disclaimer, kind="required_disclaimer", ws=ws)
+    brief_id = world.seed_brief(ws)
+    assert world.generated(brief_id, ws=ws)["status"] == "succeeded"
+    [draft] = _drafts(world, brief_id)
+    review = _review(world, draft["id"])
+    assert (review["disclaimers_resolved"], review["passed"]) == (True, True)
+    assert _refusal(world, draft["id"]) is None
+
+
+def test_the_engine_folds_both_sides_to_one_form():
+    from app.claims.engine import fold
+
+    assert fold("必ず治ります。") == fold("必ず治ります．") == fold("必ず治ります｡")
+    assert fold("free park­ing  FOREVER") == fold("free par‍king forever")
+    assert fold("ｃｕｒｅ️ all") == "cure all"
+
