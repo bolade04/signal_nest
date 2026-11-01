@@ -436,7 +436,7 @@ export function OperationsPage() {
         }
         description={
           pending?.kind === 'clear'
-            ? 'The workspace returns to the global configuration or the secure default. This change is audited.'
+            ? 'The workspace returns to whichever rule then decides: the safety ceiling, the global configuration or the secure default. This change is audited.'
             : pending?.kind === 'enable'
               ? `Sets a workspace override enabling ${pending.label} for ${activeWorkspace?.name ?? 'the selected workspace'} only, subject to the safety ceiling. No other workspace is affected. This change is audited.`
               : `Sets a workspace override disabling ${pending?.label ?? 'this capability'} for ${activeWorkspace?.name ?? 'the selected workspace'} regardless of the global flag. This change is audited.`

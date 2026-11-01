@@ -153,6 +153,13 @@ describe('operations page — override mutations', () => {
 
     await user.click(within(row).getByRole('button', { name: /^clear/i }));
     const dialog = await screen.findByRole('dialog');
+    // Truthful for every capability: with scheduling's ceiling engaged, clearing
+    // leaves the safety ceiling deciding, not the global configuration.
+    expect(
+      within(dialog).getByText(
+        'The workspace returns to whichever rule then decides: the safety ceiling, the global configuration or the secure default. This change is audited.',
+      ),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /clear override/i }));
 
     expect(await screen.findByText(/override cleared for scout scheduling/i)).toBeInTheDocument();
