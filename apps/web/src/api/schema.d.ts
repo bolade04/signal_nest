@@ -1051,7 +1051,14 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Change Member Role */
+        /**
+         * Change Member Role
+         * @description Change a member's role. The role is organization-wide: it applies in every workspace
+         *     of the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore
+         *     makes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).
+         *     Exactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,
+         *     or grants or changes ``owner`` unless they are an owner; the last owner stays. Audited.
+         */
         put: operations["change_member_role_api_v1_organizations__organization_id__members__user_id__role_put"];
         post?: never;
         delete?: never;

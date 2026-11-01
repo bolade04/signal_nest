@@ -11440,6 +11440,7 @@
     },
     "/api/v1/organizations/{organization_id}/members/{user_id}/role": {
       "put": {
+        "description": "Change a member's role. The role is organization-wide: it applies in every workspace\nof the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore\nmakes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).\nExactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,\nor grants or changes ``owner`` unless they are an owner; the last owner stays. Audited.",
         "operationId": "change_member_role_api_v1_organizations__organization_id__members__user_id__role_put",
         "parameters": [
           {
