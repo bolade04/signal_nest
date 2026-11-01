@@ -15,6 +15,7 @@ when required credentials or services are not configured.
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 from functools import lru_cache
 from typing import Literal
@@ -514,7 +515,9 @@ class Settings(BaseSettings):
     #: means "not configured", and the 5C generation service must refuse every
     #: generation while any of them is unset (fail closed; coordinator decision, W21
     #: CF-2). Values wait for the operator's cost evidence and D-LLM-5. When set, each
-    #: must be positive. ``creative_generation_ceilings_unset()`` names the unset ones.
+    #: must be a finite number greater than 0 (NaN would compare false against every
+    #: spend and fail open; infinity is no ceiling). ``creative_generation_ceilings_unset()``
+    #: names the unset ones.
     #: Daily (UTC) model-spend ceiling across every workspace, in USD.
     llm_daily_cost_ceiling_usd_global: float | None = None
     #: Daily (UTC) model-spend ceiling per workspace, in USD.
@@ -1194,12 +1197,16 @@ class Settings(BaseSettings):
     # --- Project Phase 5C ceilings (W21 CF-2) ----------------------------------
     @model_validator(mode="after")
     def _validate_creative_ceilings(self) -> Settings:
-        """A configured 5C ceiling must be positive. Unset (None) is valid everywhere: it
-        means "not configured", and the 5C service refuses generation until all are set."""
+        """A configured 5C ceiling must be a finite number greater than 0. ``value <= 0``
+        alone would let ``nan`` through (every comparison with NaN is false, so a NaN
+        ceiling would never refuse: fail open) and ``inf`` (no ceiling at all). Unset (None)
+        is valid everywhere: it means "not configured", and the 5C service refuses
+        generation until all are set."""
         errors = [
-            f"{name} must be greater than 0 when set"
+            f"{name} must be a finite number greater than 0 when set"
             for name in CREATIVE_GENERATION_CEILINGS
-            if getattr(self, name) is not None and getattr(self, name) <= 0
+            if (value := getattr(self, name)) is not None
+            and not (math.isfinite(value) and value > 0)
         ]
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))

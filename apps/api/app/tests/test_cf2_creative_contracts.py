@@ -309,8 +309,39 @@ def test_the_four_ceilings_default_unset_and_generation_has_its_refusal_input() 
 @pytest.mark.parametrize("name", CREATIVE_GENERATION_CEILINGS)
 @pytest.mark.parametrize("value", [0, -1])
 def test_a_configured_ceiling_must_be_positive(name: str, value: int) -> None:
-    with pytest.raises(ValidationError, match=f"{name} must be greater than 0 when set"):
+    with pytest.raises(
+        ValidationError, match=f"{name} must be a finite number greater than 0 when set"
+    ):
         Settings(_env_file=None, **{name: value})
+
+
+USD_CEILINGS = ("llm_daily_cost_ceiling_usd_global", "llm_daily_cost_ceiling_usd_per_workspace")
+
+
+@pytest.mark.parametrize("name", USD_CEILINGS)
+@pytest.mark.parametrize("value", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_configured_usd_ceiling_must_be_finite(name: str, value: float) -> None:
+    """CF-2 review CONTROLS C-2: ``nan <= 0`` is False, so a ``> 0`` check written as
+    ``<= 0`` accepts NaN, and a NaN ceiling never refuses (every comparison is False): fail
+    open. ``inf`` is literally > 0 but is no ceiling. Both are refused when set."""
+    assert set(USD_CEILINGS) < set(CREATIVE_GENERATION_CEILINGS)
+    with pytest.raises(
+        ValidationError, match=f"{name} must be a finite number greater than 0 when set"
+    ):
+        Settings(_env_file=None, **{name: value})
+
+
+@pytest.mark.parametrize("name", USD_CEILINGS)
+@pytest.mark.parametrize("value", ["nan", "inf"])
+def test_a_usd_ceiling_from_the_environment_must_be_finite(
+    name: str, value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same refusal for the way an operator sets it: an environment string."""
+    monkeypatch.setenv(name.upper(), value)
+    with pytest.raises(
+        ValidationError, match=f"{name} must be a finite number greater than 0 when set"
+    ):
+        Settings(_env_file=None)
 
 
 # --------------------------------------------------------------------------- #
