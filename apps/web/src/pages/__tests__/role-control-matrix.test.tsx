@@ -19,7 +19,9 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
  * six organization roles. One row per RENDERED ENTRY SITE of M3's inventory
  * (SR/m3/INVENTORY.md, unit U3: 19 entry sites), with the four opportunity status
  * buttons and all nine campaign-context kinds exercised inside their rows — no
- * "one representative button" shortcut.
+ * "one representative button" shortcut. Since W21 CF-2 the claims library is
+ * steward-only, so each of the three campaign-context sites is two rows: the eight
+ * editor kinds, and the claims library under its own policy (22 rows).
  *
  * The oracle is the BACKEND policy, written out literally here rather than read
  * from the frontend's role helper: a test that asked lib/roles.ts what to expect
@@ -28,6 +30,8 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
  *               (apps/api/app/auth/dependencies.py:23-30, :210-219)
  *   ORG_ADMIN = require_exact_organization_roles(OWNER, ADMIN)
  *               (apps/api/app/organizations/routes.py:75-83)
+ *   CLAIMS_STEWARD = require_exact_roles(OWNER, ADMIN, COMPLIANCE_REVIEWER), the claims
+ *               library's writes (apps/api/app/campaign_context/routes.py:88-92, W21 CF-2)
  *
  * The role is configured in the stateful backend model before render, so /auth/me
  * answers it like the server would. Every absence assertion waits for two witnesses
@@ -40,6 +44,7 @@ const P = (path: string) => `*${API_PREFIX}${path}`;
 const ROLES: ModelRole[] = ['owner', 'admin', 'marketer', 'reviewer', 'compliance_reviewer', 'viewer'];
 const EDITOR = new Set<ModelRole>(['owner', 'admin', 'marketer']);
 const ORG_ADMIN = new Set<ModelRole>(['owner', 'admin']);
+const CLAIMS_STEWARD = new Set<ModelRole>(['owner', 'admin', 'compliance_reviewer']);
 
 type Screen = RenderResult & { user: ReturnType<typeof userEvent.setup> };
 
@@ -137,6 +142,11 @@ const CONTEXT_TABS = [
   ['Sources', 'source preference'],
   ['Channels', 'channel preference'],
 ] as const;
+type ContextTab = (typeof CONTEXT_TABS)[number];
+// W21 CF-2: the claims library's writes are steward-only (CLAIMS_STEWARD); the other
+// eight kinds keep the editors (EDITOR). Each campaign-context site is judged per policy.
+const CLAIMS_TAB: ContextTab = ['Claims library', 'claim'];
+const EDITOR_TABS: ContextTab[] = CONTEXT_TABS.filter(([tab]) => tab !== CLAIMS_TAB[0]);
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -157,6 +167,53 @@ function single(name: RegExp, allowedCount: number): Row['check'] {
     const found = buttons(screen, name);
     if (allowed) expectOffered(found, allowedCount);
     else expect(found).toHaveLength(0);
+  };
+}
+
+async function openTab(screen: Screen, tab: string): Promise<HTMLElement> {
+  await screen.user.click(screen.getByRole('tab', { name: new RegExp(`^${escape(tab)}$`, 'i') }));
+  return screen.findByRole('tabpanel');
+}
+
+/** C04 (panel header): "Add {singular}" on each kind's seeded panel. */
+function headerAdd(tabs: readonly ContextTab[]): Row['check'] {
+  return async (screen, allowed) => {
+    for (const [tab, singular] of tabs) {
+      const panel = await openTab(screen, tab);
+      // Liveness: this kind's seeded row rendered (a read surface, every role).
+      await within(panel).findByText(/^Seeded /);
+      const found = within(panel).queryAllByRole('button', { name: new RegExp(`^add ${escape(singular)}$`, 'i') });
+      if (allowed) expectOffered(found, 1);
+      else expect(found, tab).toHaveLength(0);
+    }
+  };
+}
+
+/** C04 (empty state): header + empty-state "Add {singular}" on each kind's empty panel. */
+function emptyAdd(tabs: readonly ContextTab[]): Row['check'] {
+  return async (screen, allowed) => {
+    for (const [tab, singular] of tabs) {
+      const panel = await openTab(screen, tab);
+      await within(panel).findByText(new RegExp(`no ${escape(singular)}s yet`, 'i'));
+      const found = within(panel).queryAllByRole('button', { name: new RegExp(`^add ${escape(singular)}$`, 'i') });
+      // Header + empty-state button for an allowed role; neither for anyone else.
+      if (allowed) expectOffered(found, 2);
+      else expect(found, tab).toHaveLength(0);
+    }
+  };
+}
+
+/** C05: the per-row "Remove {singular}" on each kind's seeded row. */
+function rowRemove(tabs: readonly ContextTab[]): Row['check'] {
+  return async (screen, allowed) => {
+    for (const [tab, singular] of tabs) {
+      const panel = await openTab(screen, tab);
+      // The seeded row is visible to every role before the remove control is judged.
+      await within(panel).findByText(/^Seeded /);
+      const found = within(panel).queryAllByRole('button', { name: new RegExp(`^remove ${escape(singular)}$`, 'i') });
+      if (allowed) expectOffered(found, 1);
+      else expect(found, tab).toHaveLength(0);
+    }
   };
 }
 
@@ -243,64 +300,64 @@ const ROWS: Row[] = [
     },
   },
   {
-    id: 'C04 Add {singular} (panel header) x9 kinds',
-    site: 'CampaignContext.tsx:422',
+    id: 'C04 Add {singular} (panel header) x8 editor kinds',
+    site: 'CampaignContext.tsx:438',
     policy: EDITOR,
     route: '/context',
     handlers: [
       SEEDED_CONTEXT,
     ],
     ready: (s) => s.findByRole('heading', { name: /campaign context/i }),
-    check: async (screen, allowed) => {
-      for (const [tab, singular] of CONTEXT_TABS) {
-        await screen.user.click(screen.getByRole('tab', { name: new RegExp(`^${escape(tab)}$`, 'i') }));
-        const panel = await screen.findByRole('tabpanel');
-        // Liveness: this kind's seeded row rendered (a read surface, every role).
-        await within(panel).findByText(/^Seeded /);
-        const found = within(panel).queryAllByRole('button', { name: new RegExp(`^add ${escape(singular)}$`, 'i') });
-        if (allowed) expectOffered(found, 1);
-        else expect(found, tab).toHaveLength(0);
-      }
-    },
+    check: headerAdd(EDITOR_TABS),
   },
   {
-    id: 'C04 Add {singular} (empty state) x9 kinds',
-    site: 'CampaignContext.tsx:464',
+    id: 'C04 Add claim (panel header, claims library)',
+    site: 'CampaignContext.tsx:438 (claims)',
+    policy: CLAIMS_STEWARD,
+    route: '/context',
+    handlers: [
+      SEEDED_CONTEXT,
+    ],
+    ready: (s) => s.findByRole('heading', { name: /campaign context/i }),
+    check: headerAdd([CLAIMS_TAB]),
+  },
+  {
+    id: 'C04 Add {singular} (empty state) x8 editor kinds',
+    site: 'CampaignContext.tsx:484',
     policy: EDITOR,
     route: '/context',
     ready: (s) => s.findByText(/no products yet/i),
-    check: async (screen, allowed) => {
-      for (const [tab, singular] of CONTEXT_TABS) {
-        await screen.user.click(screen.getByRole('tab', { name: new RegExp(`^${escape(tab)}$`, 'i') }));
-        const panel = await screen.findByRole('tabpanel');
-        await within(panel).findByText(new RegExp(`no ${escape(singular)}s yet`, 'i'));
-        const found = within(panel).queryAllByRole('button', { name: new RegExp(`^add ${escape(singular)}$`, 'i') });
-        // Header + empty-state button for an editor; neither for anyone else.
-        if (allowed) expectOffered(found, 2);
-        else expect(found, tab).toHaveLength(0);
-      }
-    },
+    check: emptyAdd(EDITOR_TABS),
   },
   {
-    id: 'C05 Remove {singular} x9 kinds',
-    site: 'CampaignContext.tsx:444',
+    id: 'C04 Add claim (empty state, claims library)',
+    site: 'CampaignContext.tsx:484 (claims)',
+    policy: CLAIMS_STEWARD,
+    route: '/context',
+    ready: (s) => s.findByText(/no products yet/i),
+    check: emptyAdd([CLAIMS_TAB]),
+  },
+  {
+    id: 'C05 Remove {singular} x8 editor kinds',
+    site: 'CampaignContext.tsx:462',
     policy: EDITOR,
     route: '/context',
     handlers: [
       SEEDED_CONTEXT,
     ],
     ready: (s) => s.findByRole('heading', { name: /campaign context/i }),
-    check: async (screen, allowed) => {
-      for (const [tab, singular] of CONTEXT_TABS) {
-        await screen.user.click(screen.getByRole('tab', { name: new RegExp(`^${escape(tab)}$`, 'i') }));
-        const panel = await screen.findByRole('tabpanel');
-        // The seeded row is visible to every role before the remove control is judged.
-        await within(panel).findByText(/^Seeded /);
-        const found = within(panel).queryAllByRole('button', { name: new RegExp(`^remove ${escape(singular)}$`, 'i') });
-        if (allowed) expectOffered(found, 1);
-        else expect(found, tab).toHaveLength(0);
-      }
-    },
+    check: rowRemove(EDITOR_TABS),
+  },
+  {
+    id: 'C05 Remove claim (claims library)',
+    site: 'CampaignContext.tsx:462 (claims)',
+    policy: CLAIMS_STEWARD,
+    route: '/context',
+    handlers: [
+      SEEDED_CONTEXT,
+    ],
+    ready: (s) => s.findByRole('heading', { name: /campaign context/i }),
+    check: rowRemove([CLAIMS_TAB]),
   },
   {
     id: 'C06 New scout request (page header)',
@@ -411,10 +468,15 @@ afterEach(() => {
 
 describe('formerly ungated mutation controls × six roles (§53)', () => {
   it('covers every rendered entry site of the inventory exactly once', () => {
-    // M3 INVENTORY.md unit U3: 19 entry sites (C01-C11). A row added or dropped
-    // without the inventory changing is a coverage defect.
-    expect(ROWS).toHaveLength(19);
-    expect(new Set(ROWS.map((r) => r.site)).size).toBe(19);
+    // M3 INVENTORY.md unit U3: 19 entry sites (C01-C11); since W21 CF-2 the three
+    // campaign-context sites are each split into the eight editor kinds and the
+    // steward-only claims library, so 22 rows. A row added or dropped without the
+    // inventory changing is a coverage defect.
+    expect(ROWS).toHaveLength(22);
+    expect(new Set(ROWS.map((r) => r.site)).size).toBe(22);
+    // The split covers all nine kinds exactly once: eight editor kinds plus claims.
+    expect(EDITOR_TABS).toHaveLength(8);
+    expect(CONTEXT_TABS).toContainEqual(CLAIMS_TAB);
   });
 
   describe.each(ROWS)('$id ($site)', (row) => {
