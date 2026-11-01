@@ -341,6 +341,22 @@ describe('CreativeDraftsPanel — draft editor', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('daily limit');
   });
 
+  it('releases the editor when the job cannot be read', async () => {
+    capability(true);
+    listDrafts([]);
+    server.use(
+      http.post(DRAFTS, () => HttpResponse.json({ job_id: 'job-1' }, { status: 202 })),
+      http.get(P(`/workspaces/${WS}/jobs/job-1`), () =>
+        HttpResponse.json({ error: { code: 'not_found', message: 'Job not found in this workspace.' } }, { status: 404 }),
+      ),
+    );
+    const screen = render();
+    await screen.findByText(/No drafts yet/);
+    await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    expect(await screen.findByText(/Automatic status updates stopped/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate draft' })).toBeEnabled();
+  });
+
   it('explains a job that ended without a draft', async () => {
     capability(true);
     listDrafts([]);

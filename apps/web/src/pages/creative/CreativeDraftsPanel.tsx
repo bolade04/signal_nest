@@ -62,14 +62,19 @@ function DraftsInner({ workspaceId, briefId }: { workspaceId: string; briefId: s
 
   const drafts = useBriefDrafts(workspaceId, briefId, true);
   const generate = useGenerateDraft(workspaceId, briefId);
-  const { schedule } = useStatusPolling();
+  const { schedule, stopped } = useStatusPolling();
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useGenerationJob(workspaceId, briefId, jobId, schedule);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const items = drafts.data?.items ?? [];
   const jobStatus = job.data?.status ?? null;
-  const generating = generate.isPending || (jobId !== null && (jobStatus === null || isGenerationInFlight(jobStatus)));
+  // In flight while the job is pending or running and we are still reading its status. Once
+  // automatic reads stop (the shared 10-minute bound) or the job cannot be read, the editor is
+  // released: the draft appears in the list if the job later succeeds.
+  const jobPending =
+    jobId !== null && !job.isError && !stopped && (jobStatus === null || isGenerationInFlight(jobStatus));
+  const generating = generate.isPending || jobPending;
 
   // Until the member picks a version, the one the last generation created is shown (else the
   // newest); a new request clears the pick so its result is shown when it lands.
@@ -111,6 +116,11 @@ function DraftsInner({ workspaceId, briefId }: { workspaceId: string; briefId: s
             <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden />
               Generating a draft…
+            </p>
+          )}
+          {jobId !== null && !generating && (stopped || job.isError) && jobStatus !== 'succeeded' && (
+            <p role="status" className="text-sm text-muted-foreground">
+              Automatic status updates stopped. The draft appears below once it is ready.
             </p>
           )}
           {generate.isError && (
