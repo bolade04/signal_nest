@@ -32,8 +32,10 @@ Phase 5A seam (always live, un-flagged; disclosed in the Phase 5 plan section 9)
   the task, the prompt name and version and the sanitized inputs
   (:func:`compute_input_hash`). Every response, the dev fallback's included, carries it.
 * **Fail-closed rendering.** A prompt that cannot be rendered raises
-  :class:`~app.llm.base.LLMPromptRenderError` before any attempt is made, reserved or
-  charged; it is never retried and never falls back to the mock.
+  :class:`~app.llm.base.LLMPromptRenderError` (a programming error, not an ``LLMError``)
+  while the request is built: on the metered path before the attempt is reserved, and in
+  every case before anything is sent. It is never retried and never falls back to the
+  mock.
 * **Usage link.** A metered response carries ``usage_event_id``, the usage-ledger row of
   the attempt that produced it (Phase 5A brief provenance).
 * **Injectable clock.** ``sleep`` (the retry wait) is injectable, so retry tests wait for
@@ -48,7 +50,6 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
@@ -58,7 +59,6 @@ from app.core.logging import get_logger, trace_id_ctx
 from app.llm.base import (
     LLMError,
     LLMMalformedError,
-    LLMPromptRenderError,
     LLMProvider,
     LLMRateLimitError,
     LLMRequest,
@@ -203,14 +203,6 @@ class LLMService:
         )
         provider_name = self._provider.name
         model = getattr(self._provider, "model", "") or ""
-        # Fail-closed rendering: a provider that renders a prompt shows its request before
-        # any attempt, so a render failure raises here - nothing reserved, sent or charged.
-        # A body that cannot be encoded (TypeError / ValueError) is handled per attempt, as
-        # before: the metered path refuses it as unbounded.
-        prepare = getattr(self._provider, "prepare", None)
-        if prepare is not None:
-            with suppress(TypeError, ValueError):
-                prepare(request)
 
         def charge(response: LLMResponse | None = None, error: Exception | None = None):
             if meter is not None:
@@ -285,11 +277,7 @@ class LLMService:
         )
 
         # Explicit dev-only fallback (never enabled in staging/production by config validation).
-        if (
-            settings.llm_allow_dev_fallback
-            and not isinstance(self._provider, MockLLMProvider)
-            and not isinstance(last_error, LLMPromptRenderError)
-        ):
+        if settings.llm_allow_dev_fallback and not isinstance(self._provider, MockLLMProvider):
             logger.warning("llm.dev_fallback_to_mock", extra={"extra_fields": {"task": task}})
             mock = MockLLMProvider(seed=settings.llm_mock_seed)
             response = mock.generate(request, prompt.name, prompt.version)

@@ -289,7 +289,14 @@ class TestFailClosedRender:
             assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 0
         engine.dispose()
 
-    def test_the_render_check_runs_before_the_first_attempt_without_a_meter(self):
+    def test_a_render_failure_is_a_programming_error_not_an_llm_outcome(self):
+        # Not an LLMError: no retry, no dev fallback and no "degraded" marking absorbs it.
+        from app.llm.base import LLMError
+
+        assert not issubclass(LLMPromptRenderError, LLMError)
+        assert not issubclass(LLMPromptRenderError, ValueError)  # never "cost unbounded"
+
+    def test_without_a_meter_nothing_is_sent_retried_or_fallen_back(self):
         sent = _Transport()
         sleeps: list[float] = []
         settings = offline_settings(llm_allow_dev_fallback=True)

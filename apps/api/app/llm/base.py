@@ -54,16 +54,19 @@ class LLMUnavailableError(LLMProviderError):
     """Transient provider-side failure (5xx, 529 overloaded, connection error)."""
 
 
-class LLMPromptRenderError(LLMError):
+class LLMPromptRenderError(RuntimeError):
     """The prompt could not be rendered from its template and inputs (Phase 5A).
 
-    Raised before anything is sent: a template field with no input key, or a template
-    the formatter cannot fill. Rendering is fail-closed - there is no fallback that sends
-    an unrendered or partly rendered template - and the service neither retries this
-    error nor falls back to the mock on it. Nothing was sent, so nothing is charged.
-    Deliberately not a ``ValueError``: the metered path's wire-size probe treats a
-    ``ValueError`` as "cost cannot be bounded", which would misreport this as a budget
-    refusal.
+    Raised while the request is built, before anything is sent, reserved or charged: a
+    template field with no input key, or a template the formatter cannot fill. Rendering is
+    fail-closed - there is no fallback that sends an unrendered or partly rendered
+    template.
+
+    A programming error (a call site and its template disagree), not an LLM outcome: like
+    :class:`LLMTenantError` it is not an ``LLMError``, so it is never retried, never falls
+    back to the mock and is never absorbed as a degraded result. Nor is it a
+    ``ValueError``, which the metered path's wire-size probe would read as "cost cannot be
+    bounded" and misreport as a budget refusal.
     """
 
 
