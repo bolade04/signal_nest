@@ -572,7 +572,7 @@ class TestMetrics:
         ids=lambda value: value if isinstance(value, str) else value.__name__,
     )
     def test_each_llm_error_class_maps_to_its_cf1_code(self, cls, code):
-        if cls is LLMBudgetExceededError:
+        if issubclass(cls, LLMBudgetExceededError):  # incl. 5C's LLMCeilingExceededError
             error = cls("refused", "workspace_budget")
         else:
             error = cls("x")
