@@ -60,7 +60,8 @@ def jurisdiction_code_check_sql(column: str = "jurisdiction_code", *, nullable: 
     """The portable CHECK every jurisdiction column carries (a shape bound; see above).
 
     ``nullable=False`` (the ``exports`` table, born jurisdiction-aware) drops the ``IS NULL``
-    limb, so a NULL is refused by the CHECK as well as by ``NOT NULL``.
+    limb (the column's ``NOT NULL`` is what refuses a NULL: a CHECK that evaluates to NULL is
+    satisfied).
     """
     shape = (
         f"upper({column}) = {column} AND (length({column}) = 2 OR "
