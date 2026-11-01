@@ -8,7 +8,7 @@ views:
 
 * ``GET /internal/system/overview`` — one operational snapshot (job status
   counts + total, stuck count, dead-letter count, worker-fleet health, schedule
-  state counts).
+  state counts, and the blocked-Scout count and oldest age, FU-267-A1).
 * ``GET /internal/system/jobs/list`` — bounded, filtered, cross-tenant job page.
 * ``GET /internal/system/jobs/stuck`` — live stuck-job summary (§8.10, via
   :mod:`app.jobs.stuck`).
@@ -51,6 +51,7 @@ from app.jobs.store import job_store, utcnow
 from app.jobs.stuck import count_stuck, list_stuck
 from app.jobs.worker_registry import worker_registry
 from app.organizations.models import User
+from app.scouting_requests.execution import blocked_scouts
 from app.scouting_requests.models import ScoutSchedule
 from app.scouting_requests.schedules import derive_schedule_state, last_tick_failure
 
@@ -116,14 +117,34 @@ class SchedulesOverviewOut(BaseModel):
     state_counts: dict[str, int]
 
 
+class BlockedScoutsOverviewOut(BaseModel):
+    """Scouts blocked in ``needs_attention`` across every tenant (FU-267-A1, PROPOSED).
+
+    The same Scouts ``python -m app.jobs.reconcile blocked`` lists (that command names
+    them and gives the ``resolve`` command); here only a count and an age, never an id,
+    tenancy or customer content. ``ledger_kept`` is false where the admission ledger is
+    not kept (SQLite): nothing is measured there, and the other fields are ``null``,
+    never a zero.
+    """
+
+    ledger_kept: bool
+    #: Scouts in ``needs_attention`` now (``null`` when the ledger is not kept).
+    blocked_count: int | None
+    #: Since when the longest-blocked Scout has been blocked (database clock).
+    oldest_blocked_since: datetime | None
+    #: Its age in seconds at the database clock (``null`` when none is blocked).
+    oldest_blocked_age_seconds: float | None
+
+
 class OperationalOverviewOut(BaseModel):
-    """One coarse operator snapshot of queue, fleet and schedule health."""
+    """One coarse operator snapshot of queue, fleet, schedule and blocked-Scout health."""
 
     stale_after_seconds: float
     as_of: datetime
     jobs: JobsOverviewOut
     workers: WorkersOverviewOut
     schedules: SchedulesOverviewOut
+    scouts: BlockedScoutsOverviewOut
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +196,25 @@ def _schedule_state_counts(db: Session) -> tuple[int, dict[str, int]]:
     return paused + len(enabled_rows), counts
 
 
+def _blocked_scouts_overview(db: Session) -> BlockedScoutsOverviewOut:
+    """The blocked-Scout signal the worker emits as gauges, read on demand (one shared
+    computation: :func:`app.scouting_requests.execution.blocked_scouts`)."""
+    summary = blocked_scouts(db)
+    if summary is None:
+        return BlockedScoutsOverviewOut(
+            ledger_kept=False,
+            blocked_count=None,
+            oldest_blocked_since=None,
+            oldest_blocked_age_seconds=None,
+        )
+    return BlockedScoutsOverviewOut(
+        ledger_kept=True,
+        blocked_count=summary.count,
+        oldest_blocked_since=summary.oldest_since,
+        oldest_blocked_age_seconds=summary.oldest_age_seconds,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
@@ -220,6 +260,7 @@ def internal_overview(
             ),
         ),
         schedules=SchedulesOverviewOut(total=schedule_total, state_counts=state_counts),
+        scouts=_blocked_scouts_overview(db),
     )
 
 

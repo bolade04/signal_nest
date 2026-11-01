@@ -243,6 +243,37 @@ purge audit rows.
 isolation suite, patch, and file a security review finding. Notify per your data-
 incident policy.
 
+## 13. Blocked Scouts (SEV3; SEV2 when long or several) (FU-267-A1, PROPOSED)
+
+**Detection.** [Alert 21](./alerts.md): `scouts_blocked >= 1` (Maximum across workers),
+or `/api/v1/internal/system/overview` `scouts.blocked_count > 0`. Escalation: the oldest
+block is over a day old, or three or more Scouts are blocked at once. Alert 21 in
+`INSUFFICIENT_DATA` is not "no blocked Scouts": nobody is measuring (no worker, metrics off,
+or every read failing or hitting its bound, `worker.blocked_scouts_sweep_failed`); poll the
+overview until the gauge returns, and restore the workers or their metrics.
+
+**Triage.** List them: `python -m app.jobs.reconcile blocked` (each Scout's tenancy, the
+operation, `admitted_at`, the stored deadline and whether it has passed, the end kind,
+the job's status and the exact `resolve` command). Several at once, all `model` with an
+unknown end, points at a provider incident (timeouts, 5xx/529); all `fetch` from one
+source points at that feed. Per Scout, `python -m app.jobs.reconcile list --scout <id>`
+shows every unresolved admission in its three categories.
+
+**Containment.** Only the blocked Scouts are affected: they admit nothing (Run now is
+refused with `scout_needs_attention`, scheduled occurrences are skipped, not caught up).
+Other Scouts and tenants run normally. If a provider or feed incident is the cause, treat
+it first; new unknown ends will keep arriving until it clears.
+
+**Recovery.** For each admission, establish **outside SignalNest** that the operation is
+over (the provider's console or request log, the feed server), then
+`python -m app.jobs.reconcile resolve --admission <id> --operator <name> --reason <code>`
+(the full procedure, its refusals and the legacy acknowledgement:
+[scout-scheduling-runbook.md](./scout-scheduling-runbook.md) "Reconciliation
+(procedure)"). The stored deadline makes an admission eligible; it does not prove the
+external party stopped, so the resolve is the operator's declaration. Reconciliation is
+audited and changes no accounting. Confirm `scouts.blocked_count` returns to `0` and the
+gauge follows within one heartbeat.
+
 ---
 
 ## After any incident

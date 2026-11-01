@@ -132,6 +132,7 @@ Anything else (the defaults) leaves the no-op backend in place.
 | HTTP | `http_requests_total`, `http_request_duration_ms` |
 | Jobs | `jobs_enqueued_total`, `jobs_claimed_total`, `jobs_completed_total`, `jobs_failed_total`, `jobs_retried_total`, `jobs_dead_lettered_total`, `job_execution_duration_ms`, `jobs_queue_depth` |
 | Workers | `worker_poll_total`, `worker_lease_recovered_total`, `worker_active` |
+| Scout execution | `scouts_blocked`, `scouts_blocked_oldest_age_seconds` (gauges, no labels; set by the worker's registry heartbeat on PostgreSQL, absent on SQLite; [alerts.md](./alerts.md) §21) |
 | Dependencies | `redis_notify_total`, `dependency_operation_total`, `dependency_operation_duration_ms` |
 | Telemetry | `telemetry_failures_total` |
 

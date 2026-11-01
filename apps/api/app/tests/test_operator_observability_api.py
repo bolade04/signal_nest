@@ -369,7 +369,7 @@ class TestOverview:
         assert r.status_code == 200
         body = r.json()
         assert set(body) == {
-            "stale_after_seconds", "as_of", "jobs", "workers", "schedules"
+            "stale_after_seconds", "as_of", "jobs", "workers", "schedules", "scouts"
         }
         assert set(body["jobs"]) == {
             "total", "status_counts", "stuck_count", "dead_letter_count"
@@ -388,6 +388,16 @@ class TestOverview:
         assert sched["total"] == 3
         assert sched["state_counts"] == {
             "active": 1, "activation_required": 1, "paused": 1, "stalled": 0
+        }
+
+        # FU-267-A1: SQLite keeps no admission ledger, so the blocked-Scout signal is
+        # absent here (null, never a zero); its PostgreSQL values are proven in
+        # test_scout_blocked_signal_postgres.py.
+        assert body["scouts"] == {
+            "ledger_kept": False,
+            "blocked_count": None,
+            "oldest_blocked_since": None,
+            "oldest_blocked_age_seconds": None,
         }
 
     def test_secret_free(self, h):

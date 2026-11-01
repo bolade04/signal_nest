@@ -33,6 +33,8 @@ work, intentionally not prescribed here.
 | `service_startups_total` | counter | `main.py` | `service`, `environment` |
 | `service_shutdowns_total` | counter | `main.py` | `service`, `environment` |
 | `migration_runs_total` | counter | `db/migrate.py` | `operation`, `outcome` |
+| `scouts_blocked` | gauge | `jobs/blocked_signal.py` (the worker's registry heartbeat; PostgreSQL only, absent on SQLite) | none |
+| `scouts_blocked_oldest_age_seconds` | gauge (Seconds) | `jobs/blocked_signal.py` (as above) | none |
 
 ### Defined but not yet emitted (do not graph as live)
 
@@ -107,6 +109,23 @@ catalog). Until then, use the operator endpoints or logs.
   with a halted rollout (see [incident_response.md](./incident_response.md) §9).
 - **Restart/shutdown cadence** — `service_startups_total` /
   `service_shutdowns_total` by `service`.
+
+## Dashboard 7 — Scout execution (FU-267-A1, PROPOSED)
+
+- **Blocked Scouts** — `scouts_blocked`, statistic **Maximum** (every worker sets the
+  same fleet-wide value; a sum would multiply it by the fleet size), with a horizontal
+  line at the [alert 21](./alerts.md) threshold (`>= 1`).
+- **Longest block** — `scouts_blocked_oldest_age_seconds`, Maximum, shown in hours, with a
+  line at 24h (the SEV2 escalation).
+- **Context** — beside them, `worker_lease_recovered_total` and
+  `jobs_failed_total{job_type="scout_request.execute"}`: a block follows a lost attempt or
+  an unknown end, and a Scout that waited for one fails `admission_unresolved`.
+- **Live source without metrics** — `GET /api/v1/internal/system/overview` → `scouts`
+  (`blocked_count`, `oldest_blocked_since`, `oldest_blocked_age_seconds`;
+  `ledger_kept: false` and `null` values on SQLite). The Scouts themselves, with the
+  `resolve` command for each: `python -m app.jobs.reconcile blocked`. Response steps:
+  [scout-scheduling-runbook.md](./scout-scheduling-runbook.md) "Reconciliation
+  (procedure)".
 
 ## Notes for whoever wires the backend
 

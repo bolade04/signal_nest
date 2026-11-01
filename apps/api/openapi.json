@@ -305,6 +305,57 @@
         "title": "AudiencePatch",
         "type": "object"
       },
+      "BlockedScoutsOverviewOut": {
+        "description": "Scouts blocked in ``needs_attention`` across every tenant (FU-267-A1, PROPOSED).\n\nThe same Scouts ``python -m app.jobs.reconcile blocked`` lists (that command names\nthem and gives the ``resolve`` command); here only a count and an age, never an id,\ntenancy or customer content. ``ledger_kept`` is false where the admission ledger is\nnot kept (SQLite): nothing is measured there, and the other fields are ``null``,\nnever a zero.",
+        "properties": {
+          "blocked_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Count"
+          },
+          "ledger_kept": {
+            "title": "Ledger Kept",
+            "type": "boolean"
+          },
+          "oldest_blocked_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Blocked Age Seconds"
+          },
+          "oldest_blocked_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Blocked Since"
+          }
+        },
+        "required": [
+          "ledger_kept",
+          "blocked_count",
+          "oldest_blocked_since",
+          "oldest_blocked_age_seconds"
+        ],
+        "title": "BlockedScoutsOverviewOut",
+        "type": "object"
+      },
       "BrandOut": {
         "properties": {
           "business_type": {
@@ -4941,7 +4992,7 @@
         "type": "object"
       },
       "OperationalOverviewOut": {
-        "description": "One coarse operator snapshot of queue, fleet and schedule health.",
+        "description": "One coarse operator snapshot of queue, fleet, schedule and blocked-Scout health.",
         "properties": {
           "as_of": {
             "format": "date-time",
@@ -4953,6 +5004,9 @@
           },
           "schedules": {
             "$ref": "#/components/schemas/SchedulesOverviewOut"
+          },
+          "scouts": {
+            "$ref": "#/components/schemas/BlockedScoutsOverviewOut"
           },
           "stale_after_seconds": {
             "title": "Stale After Seconds",
@@ -4967,7 +5021,8 @@
           "as_of",
           "jobs",
           "workers",
-          "schedules"
+          "schedules",
+          "scouts"
         ],
         "title": "OperationalOverviewOut",
         "type": "object"
