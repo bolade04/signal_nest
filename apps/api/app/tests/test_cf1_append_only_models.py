@@ -9,9 +9,10 @@
   and the new tables carry ``created_at`` only — no ``updated_at`` and no ``onupdate``
   (Phase 5A plan §2).
 * This module covers the unit of work. Every other ORM path (ORM UPDATE/DELETE statements,
-  ``Query.update/delete``, the bulk API, upserts) is covered, on SQLite and PostgreSQL, by
-  ``test_cf1_append_only_bulk_paths.py``, which also pins statically that no production
-  module outside ``app/privacy/`` writes these rows after insert.
+  ``Query.update/delete``, the bulk API, upserts and, since FU-CF1-H1, an insert carrying a
+  statement prefix such as SQLite ``OR REPLACE``) is covered, on SQLite and PostgreSQL, by
+  ``test_cf1_append_only_bulk_paths.py``, which also pins statically, within the forms it
+  names, that no production module outside ``app/privacy/`` writes these rows after insert.
 * The sanctioned Core paths (privacy anonymisation, the foreign-key walk) still reach the
   rows, by design (O-10; ``app.db.append_only``).
 
@@ -24,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import String, create_engine, delete, select, update
+from sqlalchemy import String, create_engine, delete, insert, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.approvals.models import Approval
@@ -303,7 +304,8 @@ def test_the_subclass_is_guarded_but_not_enumerated_as_decorated() -> None:
 @pytest.mark.parametrize(
     "path",
     ["flush update", "flush delete", "update(SubClass)", "delete(SubClass)",
-     "bulk_update_mappings(SubClass)", "bulk_save_objects(SubClass)"],
+     "bulk_update_mappings(SubClass)", "bulk_save_objects(SubClass)",
+     "insert(SubClass).prefix_with('OR REPLACE')"],
 )
 def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, path) -> None:
     s = child_session
@@ -320,6 +322,12 @@ def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, 
             s.execute(delete(_Child).where(_Child.id == "c1"))
         elif path == "bulk_update_mappings(SubClass)":
             s.bulk_update_mappings(_Child, [{"id": "c1", "value": "changed"}])
+        elif path == "insert(SubClass).prefix_with('OR REPLACE')":  # FU-CF1-H1 (SQLite)
+            s.execute(
+                insert(_Child).prefix_with("OR REPLACE").values(
+                    id="c1", kind="child", value="changed"
+                )
+            )
         else:  # a detached, modified instance: bulk_save_objects would UPDATE it
             child = s.get(_Child, "c1")
             s.expunge(child)

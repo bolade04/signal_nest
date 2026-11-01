@@ -3,21 +3,25 @@
 The unit-of-work guard (``before_update`` / ``before_delete``) is covered by
 ``test_cf1_append_only_models.py``. This module covers every other ORM write path the review
 found open at ``30fc045c`` — ORM-enabled UPDATE/DELETE statements, ``Query.update/delete``,
-the legacy bulk API and an ORM upsert — for each append-only model (the three of CF-1 and,
-since CF-2, ``creative_drafts`` and ``content_reviews``), and shows:
+the legacy bulk API and an ORM upsert — plus, since FU-CF1-H1, an ORM insert carrying a
+statement prefix (SQLite ``OR REPLACE`` replaced a stored row through a session), for each
+append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
+``content_reviews``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
   byte-identical afterwards;
 * the sanctioned Core statements on the *table* (privacy anonymisation, the foreign-key walk)
   still work under the guard, and an ORM INSERT (plain or ``ON CONFLICT DO NOTHING``) is not
-  refused;
+  refused; no guarded table declares a SQLite DDL conflict clause;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
-  (function, attribute-call or method form, or ``Query``) or an upsert over these models or
-  their tables, writes a literal unqualified UPDATE / DELETE FROM / INSERT … DO UPDATE string
-  on the guarded tables, calls the bulk API or calls ``delete_rows``, following model import
-  aliases and annotated, tuple, list and walrus aliases — with an in-test control per form
-  and look-alikes that must pass. It is a backstop to the runtime guard; what it does not
-  pin is listed on the production-scan test and in ``app.db.append_only``;
+  (function, attribute-call or method form, or ``Query``), an upsert or a prefixed insert
+  over these models or their tables, writes a literal unqualified UPDATE [ONLY] / UPDATE OR
+  <algorithm> / DELETE FROM [ONLY] / INSERT OR <algorithm> INTO / REPLACE INTO / INSERT …
+  DO UPDATE string on the guarded tables, calls the bulk API or calls ``delete_rows``,
+  following model import aliases and annotated, tuple, list and walrus aliases — with an
+  in-test control per form and look-alikes that must pass. It is a backstop to the runtime
+  guard; what it does not pin is listed on the production-scan test and in
+  ``app.db.append_only``;
 * a **mapped subclass** of a guarded model is guarded too (unit of work, statements, bulk
   API).
 
@@ -36,7 +40,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, insert, update
+from sqlalchemy import delete, insert, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
@@ -194,6 +198,35 @@ def _merge_detached(s, m, rid, w):
     s.merge(obj)
 
 
+def _changed_row(w, m, rid) -> dict:
+    return {**_stored(w, m, rid), FIELD[m]: "changed"}
+
+
+# FU-CF1-H1: on SQLite, ``INSERT OR REPLACE`` deletes the conflicting row and inserts the new
+# one, so before the prefix guard ``insert(Model).prefix_with("OR REPLACE")`` through a
+# Session replaced a stored row with no error (CF1-DESC r1 raw/002, r2 raw/003). PostgreSQL
+# has no INSERT prefix; every prefix is refused before any statement is sent.
+def _insert_or_replace(s, m, rid, w):
+    s.execute(insert(m).prefix_with("OR REPLACE").values(**_changed_row(w, m, rid)))
+
+
+def _insert_or_replace_executemany(s, m, rid, w):
+    s.execute(insert(m).prefix_with("OR REPLACE"), [_changed_row(w, m, rid)])
+
+
+def _insert_or_replace_text_prefix(s, m, rid, w):
+    s.execute(insert(m).prefix_with(text("or  replace")).values(**_changed_row(w, m, rid)))
+
+
+def _insert_or_replace_sqlite_only(s, m, rid, w):
+    stmt = _upsert(w)(m).prefix_with("OR REPLACE", dialect="sqlite")
+    s.execute(stmt.values(**_changed_row(w, m, rid)))
+
+
+def _insert_or_ignore(s, m, rid, w):
+    s.execute(insert(m).prefix_with("OR IGNORE").values(**_changed_row(w, m, rid)))
+
+
 PATHS: dict[str, Callable] = {
     "execute(update(Model).where(...))": _update_where,
     "execute(update(Model), [pk rows])": _update_by_pk,
@@ -204,6 +237,13 @@ PATHS: dict[str, Callable] = {
     "Query.delete()": _query_delete,
     "insert(Model).on_conflict_do_update": _orm_upsert,
     "merge(detached, modified)": _merge_detached,
+    "insert(Model).prefix_with('OR REPLACE')": _insert_or_replace,
+    "execute(insert(Model).prefix_with('OR REPLACE'), [rows])": _insert_or_replace_executemany,
+    "insert(Model).prefix_with(text('or  replace'))": _insert_or_replace_text_prefix,
+    "dialect insert(Model).prefix_with('OR REPLACE', dialect='sqlite')": (
+        _insert_or_replace_sqlite_only
+    ),
+    "insert(Model).prefix_with('OR IGNORE')": _insert_or_ignore,
 }
 
 
@@ -260,6 +300,21 @@ def test_orm_inserts_are_not_refused(world):
     assert _stored(world, AuditLog, ids[AuditLog]) == row
 
 
+def test_no_guarded_table_declares_a_sqlite_conflict_clause():
+    """A DDL conflict clause (``sqlite_on_conflict…``, rendered ``ON CONFLICT REPLACE``) would
+    make a plain INSERT replace a stored row, which no statement guard can see. None of the
+    guarded tables declares one (FU-CF1-H1; ``app.db.append_only`` says so)."""
+    for model in GUARDED:
+        table = model.__table__
+        for constraint in table.constraints:
+            options = constraint.dialect_options["sqlite"]
+            assert options.get("on_conflict") is None, (table.name, constraint)
+        for column in table.columns:
+            options = column.dialect_options["sqlite"]
+            for key in ("on_conflict_not_null", "on_conflict_primary_key", "on_conflict_unique"):
+                assert options.get(key) is None, (table.name, column.name, key)
+
+
 # --------------------------------------------------------------------------- #
 # Static pin: production code writes these rows after insert only in app/privacy/
 # --------------------------------------------------------------------------- #
@@ -268,11 +323,23 @@ _TABLES = {m.__tablename__ for m in GUARDED}
 _BULK = {"bulk_update_mappings", "bulk_insert_mappings", "bulk_save_objects"}
 _INSERT_FNS = {"insert", "pg_insert", "sqlite_insert", "mysql_insert"}
 _UPSERTS = {"on_conflict_do_update", "on_duplicate_key_update"}
+#: Any statement prefix on a guarded insert (SQLite OR REPLACE / OR IGNORE / ...), as the
+#: runtime guard refuses (FU-CF1-H1).
+_PREFIXES = {"prefix_with"}
 _TABLE_ALT = "|".join(sorted(_TABLES))
+#: A guarded table name, bare or quoted with "...", [...] or backticks (SQLite takes all three).
+_T = rf"[\"\[`]?(?:{_TABLE_ALT})[\"\]`]?(?![\w])"
+#: SQLite's conflict algorithms (``UPDATE OR <alg>``, ``INSERT OR <alg>``).
+_ALG = r"(?:ROLLBACK|ABORT|REPLACE|FAIL|IGNORE)"
 _SQL_WRITE = re.compile(
-    rf"\bUPDATE\s+\"?(?:{_TABLE_ALT})\"?(?![\w])"
-    rf"|\bDELETE\s+FROM\s+\"?(?:{_TABLE_ALT})\"?(?![\w])"
-    rf"|\bINSERT\s+INTO\s+\"?(?:{_TABLE_ALT})\"?(?![\w]).*"
+    # UPDATE t; PostgreSQL UPDATE ONLY t; SQLite UPDATE OR <alg> t
+    rf"\bUPDATE\s+(?:OR\s+{_ALG}\s+)?(?:ONLY\s+)?{_T}"
+    # DELETE FROM t; PostgreSQL DELETE FROM ONLY t
+    rf"|\bDELETE\s+FROM\s+(?:ONLY\s+)?{_T}"
+    # SQLite INSERT OR <alg> INTO t, and REPLACE INTO t (an alias of INSERT OR REPLACE)
+    rf"|\b(?:INSERT\s+OR\s+{_ALG}|REPLACE)\s+INTO\s+{_T}"
+    # INSERT INTO t ... DO UPDATE / ON DUPLICATE KEY UPDATE
+    rf"|\bINSERT\s+INTO\s+{_T}.*"
     r"(?:\bDO\s+UPDATE\b|\bON\s+DUPLICATE\s+KEY\s+UPDATE\b)",
     re.IGNORECASE | re.DOTALL,
 )
@@ -339,11 +406,15 @@ def _guarded_names(tree: ast.AST) -> set[str]:
 
 
 def _guarded_insert(node: ast.AST, names: set[str]) -> bool:
-    """An ``insert(...)`` / ``pg_insert(...)`` / ... call of a guarded name inside ``node``."""
+    """An ``insert(...)`` / ``pg_insert(...)`` / ... call of a guarded name, or the method form
+    ``Model.__table__.insert()``, inside ``node``."""
     return any(
         isinstance(inner, ast.Call)
         and _callee(inner) in _INSERT_FNS
-        and any(_is_guarded(a, names) for a in inner.args)
+        and (
+            any(_is_guarded(a, names) for a in inner.args)
+            or (isinstance(inner.func, ast.Attribute) and _is_guarded(inner.func.value, names))
+        )
         for inner in ast.walk(node)
     )
 
@@ -367,7 +438,8 @@ def _chain_root(node: ast.AST) -> ast.AST:
 
 def _offences(tree: ast.AST) -> list[int]:
     names = _guarded_names(tree)
-    upsert_vars = {name for name, value in _bindings(tree) if _guarded_insert(value, names)}
+    # Variables holding a guarded insert (for a later upsert or prefix through the variable).
+    insert_vars = {name for name, value in _bindings(tree) if _guarded_insert(value, names)}
     prose = _docstrings(tree)
     lines = []
     for node in ast.walk(tree):
@@ -400,11 +472,12 @@ def _offences(tree: ast.AST) -> list[int]:
                 for inner in ast.walk(func.value)
             ):
                 lines.append(node.lineno)
-        elif name in _UPSERTS and isinstance(func, ast.Attribute):
-            # insert(Model)....on_conflict_do_update(...), chained or through a variable
+        elif name in _UPSERTS | _PREFIXES and isinstance(func, ast.Attribute):
+            # insert(Model)....on_conflict_do_update(...) or .prefix_with(...), chained or
+            # through a variable
             root = _chain_root(func.value)
             if _guarded_insert(func.value, names) or (
-                isinstance(root, ast.Name) and root.id in upsert_vars
+                isinstance(root, ast.Name) and root.id in insert_vars
             ):
                 lines.append(node.lineno)
     return lines
@@ -453,6 +526,32 @@ FLAGGED_FORMS = {
     ),
     "delete_rows of a guarded table": "delete_rows(db, Approval.__table__, ids)",
     "delete_rows of any table": "delete_rows(db, Opportunity.__table__, ids)",
+    # FU-CF1-H1 (CF1-DESC r1 raw/001): the forms the pin missed at fd12d69f.
+    "PostgreSQL UPDATE ONLY": "db.execute(text('UPDATE ONLY approvals SET note = NULL'))",
+    "PostgreSQL DELETE FROM ONLY": "db.execute(text('DELETE FROM ONLY audit_logs WHERE id = :i'))",
+    "SQLite INSERT OR REPLACE": (
+        "db.execute(text('INSERT OR REPLACE INTO approvals (id, note) VALUES (:i, :n)'))"
+    ),
+    "SQLite INSERT OR IGNORE": "SQL = 'insert or ignore into creative_drafts (id) values (:i)'",
+    "SQLite REPLACE INTO": "db.execute(text('REPLACE INTO audit_logs (id) VALUES (:i)'))",
+    "SQLite UPDATE OR REPLACE": "db.execute(text('UPDATE OR REPLACE approvals SET note = null'))",
+    "SQLite UPDATE OR IGNORE, bracket-quoted": (
+        "SQL = 'UPDATE OR IGNORE [content_reviews] SET x = 1'"
+    ),
+    "backtick-quoted DELETE": "SQL = 'DELETE FROM `recommendation_briefs` WHERE id = :i'",
+    "ORM insert prefix_with": "db.execute(insert(Approval).prefix_with('OR REPLACE').values(**r))",
+    "Core insert prefix_with (method form)": (
+        "db.execute(Approval.__table__.insert().prefix_with('OR REPLACE').values(**r))"
+    ),
+    "Core insert prefix_with (function form, after values)": (
+        "db.execute(insert(AuditLog.__table__).values(**r).prefix_with('OR REPLACE'))"
+    ),
+    "dialect insert prefix_with": (
+        "db.execute(sqlite_insert(CreativeDraft).prefix_with('OR IGNORE').values(**r))"
+    ),
+    "prefix_with through a variable": (
+        "stmt = insert(ContentReview).values(**r)\ndb.execute(stmt.prefix_with('OR REPLACE'))"
+    ),
 }
 #: Look-alikes the pin must not flag.
 CLEAN_FORMS = {
@@ -468,6 +567,11 @@ CLEAN_FORMS = {
     "a similar table name": "SQL = 'UPDATE approvals_archive SET x = 1'",
     "an INSERT without DO UPDATE": "SQL = 'INSERT INTO approvals (id) VALUES (:i)'",
     "a docstring": 'def f():\n    """Never UPDATE approvals here."""\n    return 1',
+    "another model's prefixed insert": "db.execute(insert(Job).prefix_with('OR REPLACE'))",
+    "a prefixed select": "db.execute(select(AuditLog).prefix_with('DISTINCT'))",
+    "INSERT OR REPLACE into another table": "SQL = 'INSERT OR REPLACE INTO jobs (id) VALUES (:i)'",
+    "UPDATE ONLY a similar table name": "SQL = 'UPDATE ONLY approvals_archive SET x = 1'",
+    "prose naming a table": "MSG = 'You cannot update or delete approvals.'",
 }
 
 
@@ -484,16 +588,24 @@ def test_the_detector_ignores_look_alikes(form: str) -> None:
 def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert() -> None:
     """A backstop to the runtime guard, not the enforcement layer. It follows **model** import
     aliases and annotated, tuple and walrus aliases, and matches only literal, unqualified
-    ``UPDATE`` / ``DELETE FROM`` / ``INSERT … DO UPDATE`` strings on the guarded tables.
+    SQL strings on the guarded tables: ``UPDATE [ONLY]``, SQLite's ``UPDATE OR <algorithm>``,
+    ``DELETE FROM [ONLY]``, ``INSERT OR <algorithm> INTO``, ``REPLACE INTO`` and ``INSERT …
+    DO UPDATE``, the table name bare or quoted with ``"…"``, ``[…]`` or backticks. It flags a
+    ``prefix_with`` on a guarded insert (function or method form), as the runtime guard
+    refuses every prefix on a guarded ORM insert.
 
-    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts)
-    imported under another name; models referenced through a module (``models.Approval``);
-    tables built or reflected by name (``table("approvals")``, ``Table("approvals", …)``) or
-    reached through ``Base.metadata``, ``getattr``, ``inspect(...).local_table`` or
-    ``Model.__mapper__.local_table``; tables passed as parameters; SQL that schema-qualifies
-    the table or uses TRUNCATE or MERGE; and SQL assembled at run time. (The guarded,
-    development-only demo reset in ``app.db.seed`` writes through ``Base.metadata`` and is the
-    one sanctioned writer outside ``app/privacy/``.)"""
+    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts,
+    ``prefix_with``) imported or called under another name (e.g. the ``Insert`` class or an
+    unbound ``Insert.prefix_with(stmt, …)``); models referenced through a module
+    (``models.Approval``); tables built or reflected by name (``table("approvals")``,
+    ``Table("approvals", …)``) or reached through ``Base.metadata``, ``getattr``,
+    ``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as
+    parameters; SQL that schema-qualifies the table (``public.approvals``,
+    ``main.approvals``), puts a comment between the keywords and the table name, or uses
+    TRUNCATE or MERGE; a conflict clause declared in DDL (pinned absent separately, by
+    ``test_no_guarded_table_declares_a_sqlite_conflict_clause``); and SQL assembled at run
+    time. (The guarded, development-only demo reset in ``app.db.seed`` writes through
+    ``Base.metadata`` and is the one sanctioned writer outside ``app/privacy/``.)"""
     privacy_hits, offenders = 0, []
     for path in sorted((API_DIR / "app").rglob("*.py")):
         rel = path.relative_to(API_DIR)
