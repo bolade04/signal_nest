@@ -1088,7 +1088,7 @@
         "type": "object"
       },
       "CampaignStatus": {
-        "description": "The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).\n\nValidated at the schema layer and by ``ck_campaign_status``. The list is a CF-3 proposal\nrecorded for review (the plan names the enum, not its members). ``active`` is the\ndefault, as it was for the free-string column. Nothing in the product reads a campaign's\nstatus yet; the members are a vocabulary, not behaviour.",
+        "description": "The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).\n\nValidated at the schema layer and by ``ck_campaign_status``. The plan names the enum, not\nits members: these are CF-3's proposal, accepted by the coordinator and disclosed as\nPROPOSED. ``active`` is the default, as it was for the free-string column. Nothing in the\nproduct reads a campaign's status yet; the members are a vocabulary, not behaviour.",
         "enum": [
           "draft",
           "active",

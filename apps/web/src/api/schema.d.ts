@@ -2453,10 +2453,10 @@ export interface components {
          * CampaignStatus
          * @description The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).
          *
-         *     Validated at the schema layer and by ``ck_campaign_status``. The list is a CF-3 proposal
-         *     recorded for review (the plan names the enum, not its members). ``active`` is the
-         *     default, as it was for the free-string column. Nothing in the product reads a campaign's
-         *     status yet; the members are a vocabulary, not behaviour.
+         *     Validated at the schema layer and by ``ck_campaign_status``. The plan names the enum, not
+         *     its members: these are CF-3's proposal, accepted by the coordinator and disclosed as
+         *     PROPOSED. ``active`` is the default, as it was for the free-string column. Nothing in the
+         *     product reads a campaign's status yet; the members are a vocabulary, not behaviour.
          * @enum {string}
          */
         CampaignStatus: "draft" | "active" | "paused" | "completed" | "archived";
