@@ -1,4 +1,5 @@
 import { apiRequest, apiRequestPage } from './client';
+import type { components } from './schema';
 import type {
   FeedbackCapability,
   AccountDeletionOut,
@@ -321,6 +322,38 @@ export const createContext = (workspaceId: string, kind: ContextKind, body: Cont
 
 export const deleteContext = (workspaceId: string, kind: ContextKind, itemId: string) =>
   apiRequest<void>(`/workspaces/${workspaceId}/${kind}/${itemId}`, { method: 'DELETE' });
+
+// ---- Campaign context: partial update (P6-PLAT-9) ---------------------------------
+// Campaign-context entries only. The PATCH bodies come straight from the generated
+// contract (apps/api/app/campaign_context/schemas.py `_patch_model`): every create field,
+// none required. An omitted field is left unchanged and `null` clears a nullable one.
+type ContextSchemas = components['schemas'];
+
+/** Each collection's PATCH body, so a field key is checked per collection at compile time. */
+export interface ContextPatchByKind {
+  products: ContextSchemas['ProductPatch'];
+  audiences: ContextSchemas['AudiencePatch'];
+  competitors: ContextSchemas['CompetitorPatch'];
+  'brand-voice': ContextSchemas['BrandVoicePatch'];
+  offers: ContextSchemas['OfferPatch'];
+  claims: ContextSchemas['ClaimPatch'];
+  'source-preferences': ContextSchemas['SourcePrefPatch'];
+  'channel-preferences': ContextSchemas['ChannelPrefPatch'];
+  campaigns: ContextSchemas['CampaignPatch'];
+}
+
+/**
+ * `PATCH /workspaces/{workspace_id}/{kind}/{item_id}`: change only the fields sent. The
+ * row keeps its id; the answer is the whole stored row, like the list's rows.
+ */
+export const updateContext = <K extends ContextKind>(
+  workspaceId: string,
+  kind: K,
+  itemId: string,
+  body: ContextPatchByKind[K],
+) =>
+  apiRequest<ContextRow>(`/workspaces/${workspaceId}/${kind}/${itemId}`, { method: 'PATCH', body });
+// ---- end campaign context: partial update ------------------------------------------
 
 // ---- Locations & geo ----
 export const listLocations = (workspaceId: string, signal?: AbortSignal) =>

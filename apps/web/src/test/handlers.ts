@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
 import type { LocationOut, OpportunityDetail, OpportunitySort } from '@/api/types';
+import type { ContextKind, ContextPatchByKind } from '@/api/endpoints';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -898,6 +899,210 @@ async function tenantGate({ request, params }: { request: Request; params: Recor
   }
   return undefined;
 }
+
+// ---- Campaign context rows (P6-PLAT-9) ------------------------------------------------
+//
+// The API stores and answers a context row as every column of its model: the six id and
+// tenant columns plus exactly the keys of the collection's create schema, which its PATCH
+// schema repeats with none required (apps/api/app/campaign_context/{models,schemas}.py). The
+// tables below are typed by the GENERATED PATCH schemas, so a missing or invented key is a
+// compile error, and campaign-context.test.tsx checks every rule (type, null, min length)
+// and every default against apps/api/openapi.json at run time.
+
+/** `T?` admits null (`T | None`); `string+` is `Field(min_length=1)`; `string[]` a list of strings. */
+export type ContextFieldRule =
+  | 'string'
+  | 'string+'
+  | 'string?'
+  | 'date-time?'
+  | 'integer?'
+  | 'number'
+  | 'number?'
+  | 'boolean'
+  | 'string[]'
+  | 'object';
+
+type ContextRules = { [K in ContextKind]: { [F in keyof Required<ContextPatchByKind[K]>]: ContextFieldRule } };
+type ContextDefaults = { [K in ContextKind]: Required<ContextPatchByKind[K]> };
+
+export const CONTEXT_FIELD_RULES: ContextRules = {
+  products: {
+    name: 'string+',
+    description: 'string?',
+    audience: 'string?',
+    pain_points: 'string[]',
+    use_cases: 'string[]',
+    competitors: 'string[]',
+    keywords: 'string[]',
+    exclusion_rules: 'string[]',
+    relevance_weight: 'number',
+    claims_rules: 'object',
+  },
+  audiences: {
+    label: 'string+',
+    description: 'string?',
+    demographics: 'object',
+    motivations: 'string[]',
+    objections: 'string[]',
+    keywords: 'string[]',
+  },
+  competitors: { name: 'string+', website: 'string?', known_weaknesses: 'string[]', notes: 'string?' },
+  'brand-voice': {
+    tone: 'string[]',
+    personality: 'string[]',
+    do_use: 'string[]',
+    avoid: 'string[]',
+    example_copy: 'string?',
+  },
+  offers: {
+    name: 'string+',
+    product_service: 'string?',
+    discount_amount: 'number?',
+    percentage_discount: 'number?',
+    sale_price: 'number?',
+    regular_price: 'number?',
+    promo_code: 'string?',
+    start_date: 'date-time?',
+    end_date: 'date-time?',
+    eligible_location_ids: 'string[]',
+    terms: 'string?',
+    required_disclaimer: 'string?',
+    cta: 'string?',
+    landing_url: 'string?',
+    is_active: 'boolean',
+  },
+  claims: { text: 'string+', kind: 'string', category: 'string?', risk_level: 'string', notes: 'string?' },
+  'source-preferences': { source_type: 'string', enabled: 'boolean', config: 'object' },
+  'channel-preferences': { channel: 'string', enabled: 'boolean', weekly_volume: 'integer?' },
+  campaigns: { name: 'string+', goal: 'string?', mode: 'string', location_ids: 'string[]', status: 'string' },
+};
+
+/** A stored row's columns when a test does not set them: the create schema's defaults. */
+export const CONTEXT_ROW_DEFAULTS: ContextDefaults = {
+  products: {
+    name: '',
+    description: null,
+    audience: null,
+    pain_points: [],
+    use_cases: [],
+    competitors: [],
+    keywords: [],
+    exclusion_rules: [],
+    relevance_weight: 1,
+    claims_rules: {},
+  },
+  audiences: { label: '', description: null, demographics: {}, motivations: [], objections: [], keywords: [] },
+  competitors: { name: '', website: null, known_weaknesses: [], notes: null },
+  'brand-voice': { tone: [], personality: [], do_use: [], avoid: [], example_copy: null },
+  offers: {
+    name: '',
+    product_service: null,
+    discount_amount: null,
+    percentage_discount: null,
+    sale_price: null,
+    regular_price: null,
+    promo_code: null,
+    start_date: null,
+    end_date: null,
+    eligible_location_ids: [],
+    terms: null,
+    required_disclaimer: null,
+    cta: null,
+    landing_url: null,
+    is_active: true,
+  },
+  claims: { text: '', kind: 'approved', category: null, risk_level: 'low', notes: null },
+  'source-preferences': { source_type: '', enabled: true, config: {} },
+  'channel-preferences': { channel: '', enabled: true, weekly_volume: null },
+  campaigns: { name: '', goal: null, mode: 'per_location', location_ids: [], status: 'active' },
+};
+
+const CONTEXT_KINDS = Object.keys(CONTEXT_FIELD_RULES) as ContextKind[];
+type StoredContextRow = Record<string, unknown> & { id: string; workspace_id: string };
+const contextRows = Object.fromEntries(CONTEXT_KINDS.map((k) => [k, []])) as unknown as Record<
+  ContextKind,
+  StoredContextRow[]
+>;
+
+function asContextKind(value: unknown): ContextKind | null {
+  return CONTEXT_KINDS.find((k) => k === value) ?? null;
+}
+
+/** One Pydantic error item exactly as the API publishes it (core/errors.py allowlist). */
+interface ContextFieldError {
+  type: string;
+  loc: string[];
+  msg: string;
+  ctx?: Record<string, number>;
+}
+
+/**
+ * The API's answer to one sent value, as recorded from the real app at N (evidence
+ * P6-W21-PLAT9-01, PATCH-CONTRACT-AT-N.json): null if accepted, its error item if refused.
+ * An input the recording does not cover is a VIOLATION, not a guess: the mock never
+ * invents a verdict the API was not seen to give.
+ */
+function checkContextValue(key: string, rule: ContextFieldRule, value: unknown): ContextFieldError | null {
+  const loc = ['body', key];
+  const nullable = rule.endsWith('?');
+  if (value === null) {
+    if (nullable) return null;
+    if (rule === 'string' || rule === 'string+') return { type: 'string_type', loc, msg: 'Input should be a valid string' };
+    if (rule === 'string[]') return { type: 'list_type', loc, msg: 'Input should be a valid list' };
+    if (rule === 'boolean') return { type: 'bool_type', loc, msg: 'Input should be a valid boolean' };
+  } else if (rule === 'string' || rule === 'string+' || rule === 'string?') {
+    if (typeof value === 'string') {
+      if (rule === 'string+' && value.length === 0) {
+        return { type: 'string_too_short', loc, msg: 'String should have at least 1 character', ctx: { min_length: 1 } };
+      }
+      return null;
+    }
+    return { type: 'string_type', loc, msg: 'Input should be a valid string' };
+  } else if (rule === 'string[]') {
+    if (Array.isArray(value) && value.every((v) => typeof v === 'string')) return null;
+    if (!Array.isArray(value)) return { type: 'list_type', loc, msg: 'Input should be a valid list' };
+  } else if (rule === 'boolean') {
+    if (typeof value === 'boolean') return null;
+  } else if (rule === 'integer?') {
+    if (typeof value === 'number' && Number.isInteger(value)) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return { type: 'int_from_float', loc, msg: 'Input should be a valid integer, got a number with a fractional part' };
+    }
+  }
+  model.violations.push(`context PATCH: no recorded API answer for ${key} (${rule}) = ${JSON.stringify(value)}`);
+  return { type: 'unrecorded', loc, msg: 'The test mock has no recorded answer for this value' };
+}
+
+export const contextModel = {
+  reset(): void {
+    for (const k of CONTEXT_KINDS) contextRows[k] = [];
+  },
+  /** Store a full row (the defaults overlaid with `fields`) and return a copy of it. */
+  seed<K extends ContextKind>(
+    kind: K,
+    id: string,
+    fields: ContextPatchByKind[K],
+    workspaceId: string = workspace.id,
+  ): StoredContextRow {
+    const row: StoredContextRow = {
+      id,
+      organization_id: org.id,
+      workspace_id: workspaceId,
+      brand_id: brand.id,
+      created_at: '2026-06-01T00:00:00Z',
+      updated_at: '2026-06-01T00:00:00Z',
+      ...CONTEXT_ROW_DEFAULTS[kind],
+      ...fields,
+    };
+    contextRows[kind].push(row);
+    return { ...row };
+  },
+  rows: (kind: ContextKind): readonly StoredContextRow[] => contextRows[kind],
+  /** Someone else removed the row meanwhile (the screen still lists it). */
+  removeBehindTheUi(kind: ContextKind, id: string): void {
+    contextRows[kind] = contextRows[kind].filter((r) => r.id !== id);
+  },
+};
 
 /** Test-facing control surface for the model. */
 export const orgModel = {
@@ -1888,12 +2093,64 @@ export const handlers = [
     ),
   ),
 
-  // ---- Campaign context (all kinds return an empty list by default) ----
+  // ---- Campaign context (each kind is empty unless a test seeds contextModel) ----
   // Registered LAST so the specific single-segment routes above (locations,
   // scout-requests, opportunities) take precedence over this greedy :kind match.
   http.get(P('/workspaces/:ws/:kind'), ({ params }) => {
-    const kinds = ['products', 'audiences', 'competitors', 'brand-voice', 'offers', 'claims', 'source-preferences', 'channel-preferences', 'campaigns'];
-    if (kinds.includes(String(params.kind))) return HttpResponse.json([]);
-    return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+    const kind = asContextKind(params.kind);
+    if (!kind) return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+    // No `limit`: every row of this workspace, oldest first, with the total (P6-PLAT-12).
+    const rows = contextRows[kind].filter((r) => r.workspace_id === String(params.ws));
+    return HttpResponse.json(rows, { headers: { 'X-Total-Count': String(rows.length) } });
+  }),
+  // P6-PLAT-9: PATCH changes only the fields sent (apps/api/app/campaign_context/routes.py
+  // `_update`). The order of refusals is the API's: the tenancy gate above (403 for a
+  // non-member), then the role gate (EDITORS), then body validation (422, every field),
+  // then the item's scoping to this workspace (404).
+  http.patch(P('/workspaces/:ws/:kind/:id'), async ({ request, params }) => {
+    const kind = asContextKind(params.kind);
+    // Not a context collection: no answer here, so the request stays unhandled (an error).
+    if (!kind) return undefined;
+    const user = userOf(request);
+    if (!user) return modelError(401, 'unauthorized', 'Invalid or expired token.');
+    const orgId = workspaceOrganization(String(params.ws));
+    const role = orgId ? membershipOf(orgId, user.id)?.role : undefined;
+    if (role && !['owner', 'admin', 'marketer'].includes(role)) {
+      return modelError(403, 'permission_denied', `Role '${role}' is not permitted for this action.`);
+    }
+    let raw: unknown;
+    try {
+      raw = await request.clone().json();
+    } catch {
+      raw = undefined;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      model.violations.push(`PATCH /${kind}: the body is not a JSON object`);
+      return modelError(422, 'validation_error', 'Request validation failed');
+    }
+    const body = raw as Record<string, unknown>;
+    const rules = CONTEXT_FIELD_RULES[kind] as Record<string, ContextFieldRule>;
+    const details: ContextFieldError[] = [];
+    // Pydantic reports in the schema's field order; the API ignores an unknown key, which
+    // would hide a client sending a misspelt one, so the model records it as a violation.
+    for (const key of Object.keys(body)) {
+      if (!(key in rules)) model.violations.push(`PATCH /${kind} sent unknown key ${key}`);
+    }
+    for (const [key, rule] of Object.entries(rules)) {
+      if (!(key in body)) continue;
+      const error = checkContextValue(key, rule, body[key]);
+      if (error) details.push(error);
+    }
+    if (details.length) {
+      return HttpResponse.json(
+        { error: { code: 'validation_error', message: 'Request validation failed', request_id: 'req-model', details } },
+        { status: 422 },
+      );
+    }
+    const row = contextRows[kind].find((r) => r.id === params.id && r.workspace_id === String(params.ws));
+    if (!row) return modelError(404, 'not_found', 'Item not found in this workspace.');
+    for (const key of Object.keys(rules)) if (key in body) row[key] = body[key];
+    row.updated_at = '2026-07-01T00:00:00Z';
+    return HttpResponse.json({ ...row });
   }),
 ];
