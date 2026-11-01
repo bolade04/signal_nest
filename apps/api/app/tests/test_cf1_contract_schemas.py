@@ -9,7 +9,7 @@
   ``trace_id``, the usage-ledger link; ``updated_at`` for audit records).
 * The approver gate is the Phase 6 exact-role primitive admitting exactly ``REVIEWER`` (O-1,
   O-2).
-* Nothing activates: the flag defaults ``False``, and CF-1 mounts no brief or approval route.
+* Nothing activates: the flag defaults ``False`` and is reflected (required) in ``FeatureFlagsOut``.
 """
 
 from __future__ import annotations
@@ -177,9 +177,10 @@ def test_only_a_reviewer_passes_the_approver_gate(role: Role) -> None:
 # --------------------------------------------------------------------------- #
 # Nothing activates
 # --------------------------------------------------------------------------- #
-def test_the_flag_ships_dark_and_no_route_is_mounted() -> None:
+def test_the_flag_ships_dark() -> None:
+    # That CF-1 itself mounts no route is shown by the regenerated contract (operation count
+    # unchanged), not pinned here: the 5A/5B build lanes add routes on top of this module.
     assert Settings(_env_file=None).recommendation_briefs_enabled is False
-    paths = set(app.openapi()["paths"])
-    assert not [p for p in paths if "/briefs" in p or "approval" in p], sorted(paths)
-    schemas = set(app.openapi()["components"]["schemas"])
-    assert not {"RecommendationBriefOut", "ApprovalOut", "AuditLogOut"} & schemas
+    assert app.openapi()["components"]["schemas"]["FeatureFlagsOut"]["required"].count(
+        "recommendation_briefs_enabled"
+    ) == 1
