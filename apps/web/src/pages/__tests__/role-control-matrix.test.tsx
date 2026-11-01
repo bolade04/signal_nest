@@ -9,7 +9,7 @@ import { ApiError } from '@/api/client';
 import { API_PREFIX } from '@/api/config';
 import * as api from '@/api/endpoints';
 import { useAuth } from '@/auth/AuthContext';
-import { orgModel, type ModelRole } from '@/test/handlers';
+import { CONTEXT_ROW_DEFAULTS, orgModel, type ModelRole } from '@/test/handlers';
 import { server } from '@/test/server';
 import { emulateExitAnimations, renderApp, renderProductionApp } from '@/test/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -501,6 +501,35 @@ const SWITCH_PAGES: SwitchPage[] = [
     route: '/context',
     ready: (s) => s.findByText(/no products yet/i),
     controls: [/^add product$/i],
+  },
+  {
+    // P6-PLAT-9: the per-row Edit control. Each workspace holds one stored product (every
+    // column of the row, as the API lists it), and the gate is judged on the ACTIVE
+    // workspace's own row.
+    page: 'Campaign context (a stored product)',
+    route: '/context',
+    handlers: [
+      http.get(P('/workspaces/:ws/products'), ({ params }) => {
+        const ws = String(params.ws);
+        return HttpResponse.json([
+          {
+            id: `prod-${ws}`,
+            organization_id: ws === 'ws-2' ? 'org-2' : 'org-1',
+            workspace_id: ws,
+            brand_id: 'brand-1',
+            created_at: '2026-06-01T00:00:00Z',
+            updated_at: '2026-06-01T00:00:00Z',
+            ...CONTEXT_ROW_DEFAULTS.products,
+            name: `Stored product ${ws}`,
+          },
+        ]);
+      }),
+    ],
+    ready: async (s) => {
+      await waitFor(() => expect(localStorage.getItem('signalnest-active-workspace')).toMatch(/^ws-/));
+      await s.findByText(`Stored product ${localStorage.getItem('signalnest-active-workspace')}`);
+    },
+    controls: [/^edit product$/i],
   },
   {
     page: 'Onboarding (review step)',
