@@ -319,7 +319,10 @@ def test_a_configured_ceiling_must_be_positive(name: str, value: int) -> None:
 def test_the_job_type_is_built_in_and_registered() -> None:
     assert JobType.CREATIVE_GENERATE.value == "creative.generate"
     assert "creative.generate" in builtin_job_types()
-    assert set(known_job_types()) == set(builtin_job_types())
+    # The worker's own startup rule (``JobWorker.validate``): every built-in type has a
+    # handler. A superset, not equality: other test modules register test-only handlers
+    # into the same process-wide registry.
+    assert set(builtin_job_types()) - set(known_job_types()) == set()
     assert get_job_handler("creative.generate") is creative_handlers.execute_creative_generation
 
 
