@@ -273,3 +273,32 @@ NEGATIVE_FEEDBACK_REASONS: frozenset[FeedbackReason] = frozenset(
         FeedbackReason.OTHER,
     }
 )
+
+
+# --- Project Phase 5B approvals (W21 CF-1) -----------------------------------------
+# Bare closed vocabularies join this module (Project Phase 5 plan §6.2.1); the approval
+# reason codes and their polarity sets live with their domain in ``app.approvals.reasons``.
+
+
+class ApprovalDecision(StrEnum):
+    """The closed decision vocabulary of an append-only approval row (Phase 5B).
+
+    A change of mind is a new row, never an edit: ``revoked`` withdraws an earlier
+    approval of the same subject version. The controlling decision for a subject version
+    is the row with the highest ``decision_seq``; consumers gate on that latest row,
+    never on "an approved row exists".
+    """
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    REVOKED = "revoked"
+
+
+class ApprovalSubjectType(StrEnum):
+    """What an approval decides on (Phase 5B).
+
+    Closed: only recommendation briefs at CF-1. ``creative_draft`` joins at CF-2
+    (Phase 5C), together with the widening migration of the matching CHECK.
+    """
+
+    RECOMMENDATION_BRIEF = "recommendation_brief"

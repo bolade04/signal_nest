@@ -485,6 +485,16 @@ class Settings(BaseSettings):
     #: enabling this never influences scoring, ranking, or model training.
     opportunity_feedback_enabled: bool = False
 
+    # --- Project Phase 5A: recommendation briefs (W21 CF-1) — BEGIN ----------
+    #: Master switch for recommendation briefs and their approvals (dark by
+    #: default). Bound to ``Capability.RECOMMENDATION_BRIEFS``, which is
+    #: ``workspace_enableable`` (operator decision O-3), so availability is the
+    #: capability resolver's per-workspace decision, never this raw flag. CF-1 adds
+    #: the flag, the capability and the contracts only: no route, service or model
+    #: call consumes it yet.
+    recommendation_briefs_enabled: bool = False
+    # --- Project Phase 5A: recommendation briefs (W21 CF-1) — END ------------
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None

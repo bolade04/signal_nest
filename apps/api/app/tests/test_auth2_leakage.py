@@ -33,14 +33,15 @@ password) echo no password and no hash either.
 forbids unknown fields, and the password change takes both passwords the same way; no
 operation anywhere has a token in its path, query or headers; the two public operations
 have no parameters at all (no bearer dependency), the two verification operations and the
-password change only the ``authorization`` header; each answers 204 with no body. 127
+password change only the ``authorization`` header; each answers 204 with no body. 131
 operations (105 before P6-UI-017 added the password change; 106 before P6-PLAT-9 added a
 PATCH to each of the nine campaign-context collections; 115 before P6-UI-023 added
 location deactivate and reactivate; 117 before P6-UI-006 added the scheduling-capability
 reflection; 118 before P6-PRIV-4 added the two operator-only
 ``/internal/system/data-sources`` routes and P6-PRIV-1 / D-9f the six account and
 organization export and deletion routes (124 with #246 alone); 126 before D-9e added the
-operator-only ``GET /internal/system/data-sources/{source_key}/cases``).
+operator-only ``GET /internal/system/data-sources/{source_key}/cases``; 127 before Project
+Phase 5A added the four customer recommendation-brief routes).
 """
 
 from __future__ import annotations
@@ -760,7 +761,10 @@ class TestOpenApiContract:
         # /internal/system/data-sources routes.
         # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        assert count == 127
+        # 127 -> 131 (Project Phase 5A): GET and POST .../opportunities/{opportunity_id}/briefs,
+        # GET .../briefs/{brief_id} and GET /workspaces/{workspace_id}/brief-capability;
+        # customer (workspace) routes, none token-bearing.
+        assert count == 131
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

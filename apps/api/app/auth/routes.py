@@ -4,6 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth import account_tokens, mail_dispatch, service
 from app.auth.dependencies import (
@@ -86,7 +87,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)) -> SessionOut
         db,
         organization_id=membership.organization_id,
         actor_user_id=user.id,
-        action="auth.register",
+        action=AuditAction.AUTH_REGISTER,
         entity_type="user",
         entity_id=user.id,
     )

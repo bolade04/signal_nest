@@ -47,7 +47,7 @@ from app.llm.providers_real import (
 )
 from app.llm.schemas import ClassifySignalOut
 from app.llm.service import LLMService
-from app.tests._llm_offline import offline_llm, offline_settings
+from app.tests._llm_offline import TEST_TENANT, offline_llm, offline_settings
 
 KEY = "fixture-key"
 CLASSIFIED = {
@@ -529,6 +529,14 @@ def _service(replay: Replay, sleeps: list[float]) -> LLMService:
 
 
 INPUTS = {"content": "the queue at the cafe is so slow", "audiences": ["commuters"]}
+#: Every explain template field is a key (rendering is fail-closed, Phase 5A).
+EXPLAIN_INPUTS = {
+    "resolved_market": "Dallas",
+    "audience_fit": "commuters",
+    "pain_point_dna": "speed_complaint",
+    "safe_positioning": None,
+}
+TASK_INPUTS = {"classify_signal": INPUTS, "explain_opportunity": EXPLAIN_INPUTS}
 
 
 class TestServiceRetries:
@@ -539,7 +547,7 @@ class TestServiceRetries:
             anthropic_ok(CLASSIFIED),
         )
         sleeps: list[float] = []
-        validated, response = _service(replay, sleeps).run("classify_signal", INPUTS)
+        validated, response = _service(replay, sleeps).run("classify_signal", INPUTS, **TEST_TENANT)
         assert isinstance(validated, ClassifySignalOut)
         assert validated.signal_type == "complaint" and response.provider == "anthropic"
         assert len(replay.requests) == 3
@@ -553,7 +561,7 @@ class TestServiceRetries:
             anthropic_ok(CLASSIFIED),
         )
         sleeps: list[float] = []
-        _service(replay, sleeps).run("classify_signal", INPUTS)
+        _service(replay, sleeps).run("classify_signal", INPUTS, **TEST_TENANT)
         assert sleeps == [4.0]
 
     def test_attempts_are_bounded_and_no_sleep_follows_the_last(self, settings):
@@ -564,7 +572,7 @@ class TestServiceRetries:
         )
         sleeps: list[float] = []
         with pytest.raises(LLMUnavailableError):
-            _service(replay, sleeps).run("classify_signal", INPUTS)
+            _service(replay, sleeps).run("classify_signal", INPUTS, **TEST_TENANT)
         assert len(replay.requests) == 3  # llm_max_retries=2 -> 3 attempts
         assert sleeps == [0.1, 0.2]
 
@@ -573,7 +581,7 @@ class TestServiceRetries:
         replay = Replay(anthropic_error(529, "overloaded_error"))
         sleeps: list[float] = []
         with pytest.raises(LLMUnavailableError):
-            _service(replay, sleeps).run("classify_signal", INPUTS)
+            _service(replay, sleeps).run("classify_signal", INPUTS, **TEST_TENANT)
         assert len(replay.requests) == 1 and sleeps == []
 
     @pytest.mark.parametrize(
@@ -591,14 +599,14 @@ class TestServiceRetries:
         replay = Replay(step)
         sleeps: list[float] = []
         with pytest.raises(error):
-            _service(replay, sleeps).run("classify_signal", INPUTS)
+            _service(replay, sleeps).run("classify_signal", INPUTS, **TEST_TENANT)
         assert len(replay.requests) == 1 and sleeps == []
 
     def test_schema_invalid_json_is_malformed_and_not_retried(self, settings):
         replay = Replay(anthropic_ok({"sentiment": "negative"}))  # no signal_type
         sleeps: list[float] = []
         with pytest.raises(LLMMalformedError, match="schema validation"):
-            _service(replay, sleeps).run("classify_signal", INPUTS)
+            _service(replay, sleeps).run("classify_signal", INPUTS, **TEST_TENANT)
         assert len(replay.requests) == 1
 
     def test_schema_invalid_types_are_malformed(self, settings):
@@ -614,12 +622,12 @@ class TestServiceRetries:
             )
         )
         with pytest.raises(LLMMalformedError):
-            _service(replay, []).run("explain_opportunity", {"resolved_market": "Dallas"})
+            _service(replay, []).run("explain_opportunity", EXPLAIN_INPUTS, **TEST_TENANT)
 
     def test_max_output_tokens_setting_reaches_the_wire(self, settings):
         settings(llm_max_output_tokens=333)
         replay = Replay(anthropic_ok(CLASSIFIED))
-        _service(replay, []).run("classify_signal", INPUTS)
+        _service(replay, []).run("classify_signal", INPUTS, **TEST_TENANT)
         assert replay.body()["max_tokens"] == 333
 
     def test_failures_are_logged_without_body_text(self, settings, caplog):
@@ -628,7 +636,7 @@ class TestServiceRetries:
             anthropic_error(429, "rate_limit_error"), anthropic_error(400, "invalid_request_error")
         )
         with pytest.raises(LLMProviderError):
-            _service(replay, []).run("classify_signal", INPUTS)
+            _service(replay, []).run("classify_signal", INPUTS, **TEST_TENANT)
         events = {
             r.getMessage(): getattr(r, "extra_fields", {})
             for r in caplog.records
@@ -669,7 +677,7 @@ class TestServiceRetries:
     def test_schema_errors_never_carry_model_output(self, settings, caplog, task, output, error):
         caplog.set_level(logging.DEBUG, logger="signalnest.llm")
         with pytest.raises(LLMMalformedError) as exc:
-            _service(Replay(anthropic_ok(output)), []).run(task, INPUTS)
+            _service(Replay(anthropic_ok(output)), []).run(task, TASK_INPUTS[task], **TEST_TENANT)
         assert str(exc.value) == f"Response failed schema validation: {error}"
         # No chained ValidationError either: its text quotes the rejected input.
         assert exc.value.__cause__ is None and exc.value.__suppress_context__
@@ -689,7 +697,7 @@ class TestServiceRetries:
     def test_dev_fallback_still_serves_mock_when_explicitly_enabled(self, settings):
         settings(llm_allow_dev_fallback=True)
         replay = Replay(anthropic_error(400, "invalid_request_error"))
-        validated, response = _service(replay, []).run("classify_signal", INPUTS)
+        validated, response = _service(replay, []).run("classify_signal", INPUTS, **TEST_TENANT)
         assert response.provider == "mock" and response.is_simulated is True
         assert isinstance(validated, ClassifySignalOut)
 

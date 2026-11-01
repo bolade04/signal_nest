@@ -158,6 +158,12 @@ class AccountExportOut(BaseModel):
     feedback_submitted: list[dict[str, Any]]
     capability_overrides_set: list[dict[str, Any]]
     audit_events_performed: list[dict[str, Any]]
+    #: Project Phase 5 (W21 CF-1): recommendation briefs the account authored (ids, version,
+    #: its own snapshot; no model-derived content).
+    briefs_authored: list[dict[str, Any]]
+    #: Project Phase 5 (W21 CF-1): approval decisions the account made (its decision, reason,
+    #: note, role and snapshot).
+    approvals_decided: list[dict[str, Any]]
 
 
 class ExportedTableOut(BaseModel):

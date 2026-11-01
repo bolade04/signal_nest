@@ -39,6 +39,7 @@ import { safeExternalHref } from '@/lib/links';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatDateTime, titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { OpportunityBriefPanel } from './opportunities/BriefPanel';
 import { OpportunityIntelligencePanel } from './opportunities/IntelligencePanel';
 
 function str(value: unknown): string | null {
@@ -383,6 +384,9 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
 
           {/* Persisted signal intelligence (Batch 4B read-only) */}
           <OpportunityIntelligencePanel workspaceId={workspaceId} opportunityId={opportunityId} />
+
+          {/* Recommendation briefs (Project Phase 5A; renders nothing while dark) */}
+          <OpportunityBriefPanel workspaceId={workspaceId} opportunityId={opportunityId} />
         </div>
 
         {/* Sidebar: scores, sources, validation */}

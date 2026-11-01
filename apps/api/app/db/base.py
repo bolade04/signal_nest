@@ -43,5 +43,18 @@ class TimestampMixin:
     )
 
 
+class CreatedAtMixin:
+    """``created_at`` only, for append-only tables (Project Phase 5, W21 CF-1).
+
+    A deliberate departure from :class:`TimestampMixin`: an append-only row is never
+    updated, so it carries no ``updated_at`` and no ``onupdate`` hook (Phase 5A plan §2).
+    Pair it with :func:`app.db.append_only.append_only`, which makes an ORM update raise.
+    """
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+
 class UUIDPrimaryKeyMixin:
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_uuid)

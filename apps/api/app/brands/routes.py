@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands import service
@@ -39,7 +40,7 @@ def onboard(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="onboarding.completed",
+        action=AuditAction.ONBOARDING_COMPLETED,
         entity_type="brand",
         entity_id=brand.id,
     )
@@ -96,7 +97,7 @@ def update_business_profile(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="business_profile.updated",
+        action=AuditAction.BUSINESS_PROFILE_UPDATED,
         entity_type="business_profile",
         entity_id=profile.id,
     )

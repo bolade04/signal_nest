@@ -27,6 +27,10 @@ import type {
   FeedbackCreate,
   FeedbackHistoryOut,
   FeedbackOut,
+  RecommendationBriefCapability,
+  RecommendationBriefCreate,
+  RecommendationBriefListOut,
+  RecommendationBriefOut,
   GeoCoverageBase,
   GeoCoverageOut,
   GeocodeRequest,
@@ -552,3 +556,51 @@ export const submitOpportunityFeedback = (
   opportunityId: string,
   body: FeedbackCreate,
 ) => apiRequest<FeedbackOut>(feedbackPath(workspaceId, opportunityId), { method: 'POST', body });
+
+// ---- Project Phase 5A recommendation briefs (lane P5A) ----
+// Every brief endpoint is capability-gated: while `recommendation_briefs` resolves
+// disabled FOR THAT WORKSPACE it answers 503 (capability_unavailable). Reads are open
+// to every workspace member; capture is editor-only (403 otherwise). Briefs are
+// immutable versions: there is no update or delete call.
+const briefsPath = (workspaceId: string, opportunityId: string) =>
+  `/workspaces/${workspaceId}/opportunities/${opportunityId}/briefs`;
+
+// Workspace-effective brief availability, decided by the same resolver call the brief gate
+// enforces with. Member-gated and deliberately NOT capability-gated: it answers 200
+// {enabled:false} while dark rather than 503.
+export const getBriefCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<RecommendationBriefCapability>(`/workspaces/${workspaceId}/brief-capability`, {
+    signal,
+  });
+
+export const listOpportunityBriefs = (
+  workspaceId: string,
+  opportunityId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<RecommendationBriefListOut>(briefsPath(workspaceId, opportunityId), {
+    query: { ...params },
+    signal,
+  });
+
+export const getOpportunityBrief = (
+  workspaceId: string,
+  opportunityId: string,
+  briefId: string,
+  signal?: AbortSignal,
+) =>
+  apiRequest<RecommendationBriefOut>(`${briefsPath(workspaceId, opportunityId)}/${briefId}`, {
+    signal,
+  });
+
+export const createOpportunityBrief = (
+  workspaceId: string,
+  opportunityId: string,
+  body: RecommendationBriefCreate,
+) =>
+  apiRequest<RecommendationBriefOut>(briefsPath(workspaceId, opportunityId), {
+    method: 'POST',
+    body,
+  });
+// ---- end Phase 5A recommendation briefs ----

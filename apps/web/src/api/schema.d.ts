@@ -1240,6 +1240,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/brief-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether recommendation briefs are available for this workspace
+         * @description Customer-facing, workspace-effective brief availability (Phase 5A).
+         *
+         *     Workspace-scoped, not opportunity-scoped: the resolver decides per
+         *     ``(capability, workspace)``. Any member may read it, matching the brief reads. Advisory
+         *     only; the brief endpoints remain the enforcement boundary.
+         */
+        get: operations["read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/business-profile": {
         parameters: {
             query?: never;
@@ -1684,6 +1708,57 @@ export interface paths {
         };
         /** Get Opportunity */
         get: operations["get_opportunity_api_v1_workspaces__workspace_id__opportunities__opportunity_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an opportunity's recommendation briefs, newest version first
+         * @description A bounded page of the opportunity's immutable brief versions (any member; gated).
+         */
+        get: operations["list_opportunity_briefs_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_get"];
+        put?: never;
+        /**
+         * Generate and capture a new recommendation-brief version
+         * @description Generate a brief from one of the opportunity's intelligence records (editor; gated).
+         *
+         *     The record must live in this workspace (404) and belong to this opportunity (422); an
+         *     optional campaign must belong to the workspace (404). Answers 429
+         *     ``llm_budget_exhausted`` when the workspace's AI budget is spent, 503
+         *     ``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when
+         *     the output fails the safety screen, and 409 when a concurrent capture took the version;
+         *     none of these stores a brief.
+         */
+        post: operations["create_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one recommendation-brief version
+         * @description One immutable brief version of this opportunity (any member; gated).
+         */
+        get: operations["get_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2162,8 +2237,16 @@ export interface components {
          * @description Everything stored about the signed-in account (schema version 1).
          */
         AccountExportOut: {
+            /** Approvals Decided */
+            approvals_decided: {
+                [key: string]: unknown;
+            }[];
             /** Audit Events Performed */
             audit_events_performed: {
+                [key: string]: unknown;
+            }[];
+            /** Briefs Authored */
+            briefs_authored: {
                 [key: string]: unknown;
             }[];
             /** Capability Overrides Set */
@@ -2453,7 +2536,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -2962,6 +3045,8 @@ export interface components {
             connector_rss_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
+            /** Recommendation Briefs Enabled */
+            recommendation_briefs_enabled: boolean;
             /** Scout Scheduling Enabled */
             scout_scheduling_enabled: boolean;
         };
@@ -4331,6 +4416,98 @@ export interface components {
             schema_migrated: boolean;
             /** Unconfigured */
             unconfigured: string[];
+        };
+        /**
+         * RecommendationBriefCapabilityOut
+         * @description Customer-visible recommendation-briefs availability for one workspace.
+         *
+         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent). The operator endpoint's
+         *     ``decided_by`` / ``global_flag`` / ``has_override`` / ``override_value`` are governance
+         *     metadata: they would tell a customer the platform-wide rollout posture and that an
+         *     operator intervened on their tenant. A customer needs only whether briefs (and the
+         *     approvals that act on them) are available to them. Returned by
+         *     ``GET /workspaces/{workspace_id}/brief-capability`` (added by the 5A lane).
+         */
+        RecommendationBriefCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * RecommendationBriefCreate
+         * @description Strict request body to generate and capture one brief version.
+         */
+        RecommendationBriefCreate: {
+            /** Campaign Id */
+            campaign_id?: string | null;
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+        };
+        /**
+         * RecommendationBriefListOut
+         * @description Bounded, newest-version-first page of an opportunity's briefs.
+         */
+        RecommendationBriefListOut: {
+            /** Items */
+            items: components["schemas"]["RecommendationBriefOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * RecommendationBriefOut
+         * @description Customer-safe projection of one stored brief version.
+         */
+        RecommendationBriefOut: {
+            /** Analysis Version */
+            analysis_version: string;
+            /** Brief Version */
+            brief_version: number;
+            /** Campaign Id */
+            campaign_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Created By Snapshot */
+            created_by_snapshot: string;
+            /** Evidence Refs */
+            evidence_refs?: string[];
+            /** Id */
+            id: string;
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Location Id */
+            location_id: string | null;
+            /** Model Identifier */
+            model_identifier: string;
+            /** Opportunity Id */
+            opportunity_id: string;
+            /** Parent Brief Id */
+            parent_brief_id: string | null;
+            /** Prompt Name */
+            prompt_name: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Rationale */
+            rationale: string;
+            /** Recommended Actions */
+            recommended_actions?: string[];
+            /** Risk Notes */
+            risk_notes?: string[];
+            /** Scoring Version */
+            scoring_version: string;
+            /** Suggested Angles */
+            suggested_angles?: string[];
+            /** Summary */
+            summary: string;
         };
         /** RegisterRequest */
         RegisterRequest: {
@@ -7253,6 +7430,39 @@ export interface operations {
             };
         };
     };
+    read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_business_profile_api_v1_workspaces__workspace_id__business_profile_get: {
         parameters: {
             query?: never;
@@ -8620,6 +8830,116 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_opportunity_briefs_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecommendationBriefCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefOut"];
                 };
             };
             /** @description Validation Error */

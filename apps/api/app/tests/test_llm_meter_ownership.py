@@ -34,7 +34,7 @@ from app.llm.models import LLMUsageEvent
 from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
 from app.organizations.models import Organization, Workspace
-from app.tests._llm_offline import offline_llm, offline_settings, wire_payload
+from app.tests._llm_offline import offline_llm, offline_settings, tenant_of, wire_payload
 
 KEY = "fixture-key"
 MODEL = "claude-sonnet-4-6"
@@ -148,7 +148,9 @@ def test_a_failed_rebind_changes_nothing_before_or_after(db, target):
     assert meter.prior_attempts == 2 and meter.attempts == 2
     assert meter.month_to_date == pytest.approx(0.5)
 
-    service.run("classify_signal", {"content": "x"}, meter=meter)
+    service.run(
+        "classify_signal", {"content": "x", "audiences": None}, meter=meter, **tenant_of(meter)
+    )
     before = _state(meter)
 
     with pytest.raises(RuntimeError, match="already bound") as exc:
@@ -159,9 +161,13 @@ def test_a_failed_rebind_changes_nothing_before_or_after(db, target):
 
     # The run goes on as A's, and the call cap still counts every attempt (2 prior +
     # 1 + 1 = 4): a rebind did not reset ``attempts`` back to ``prior_attempts``.
-    service.run("classify_signal", {"content": "x"}, meter=meter)
+    service.run(
+        "classify_signal", {"content": "x", "audiences": None}, meter=meter, **tenant_of(meter)
+    )
     with pytest.raises(LLMBudgetExceededError) as cap:
-        service.run("classify_signal", {"content": "x"}, meter=meter)
+        service.run(
+            "classify_signal", {"content": "x", "audiences": None}, meter=meter, **tenant_of(meter)
+        )
     assert cap.value.reason == "run_call_cap"
     assert meter.attempts == 4 and meter.refusals == {"run_call_cap": 1}
 

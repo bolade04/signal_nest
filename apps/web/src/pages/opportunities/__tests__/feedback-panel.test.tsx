@@ -32,8 +32,8 @@ function enableCapability(enabled = true, globalFlag = false) {
   // With the default below, every row runs in the override-enabled/flag-false
   // configuration, which is both the canary shape and the one that kills that revert.
   //
-  // All three booleans are supplied because `FeatureFlagsOut` requires all three;
-  // omitting two asserted a response shape the server cannot return.
+  // All four booleans are supplied because `FeatureFlagsOut` requires all four;
+  // omitting any asserts a response shape the server cannot return.
   server.use(
     http.get(P('/workspaces/:workspaceId/feedback-capability'), () =>
       HttpResponse.json({ enabled }),
@@ -48,6 +48,7 @@ function enableCapability(enabled = true, globalFlag = false) {
           opportunity_feedback_enabled: globalFlag,
           scout_scheduling_enabled: false,
           connector_rss_enabled: false,
+          recommendation_briefs_enabled: false,
         },
       }),
     ),

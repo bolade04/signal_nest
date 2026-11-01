@@ -389,6 +389,15 @@ const capabilityRegistryItems = [
     workspace_disableable: true,
     future_activation_phase: '4B',
   },
+  {
+    // Project Phase 5A (W21 CF-1): enableable per workspace (O-3), dark by default.
+    capability: 'recommendation_briefs',
+    label: 'Recommendation Briefs',
+    global_flag_attr: 'recommendation_briefs_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5A',
+  },
 ] as const;
 
 interface OverrideRow {
@@ -1099,6 +1108,18 @@ export const orgModel = {
 
 orgModel.reset();
 
+// Project Phase 5A: the dark answer of every brief endpoint (app/briefs/routes.py).
+const BRIEFS_DARK = () =>
+  HttpResponse.json(
+    {
+      error: {
+        code: 'capability_unavailable',
+        message: 'Recommendation briefs are not available yet.',
+      },
+    },
+    { status: 503 },
+  );
+
 export const handlers = [
   // ---- Tenant gate for every workspace-scoped route (runs first, then falls through) ----
   http.all(P('/workspaces/:ws'), tenantGate),
@@ -1239,7 +1260,7 @@ export const handlers = [
       is_local_mode: true,
       all_configured: true,
       // Every registered capability ships dark by default, mirroring the server
-      // flags (`config.py`: all three default False). Tests that need a
+      // flags (`config.py`: all four default False). Tests that need a
       // capability ON install a per-test `server.use(...)` override rather than
       // changing this shared default — so the dark path is what renders unless a
       // test explicitly opts out of it.
@@ -1247,6 +1268,7 @@ export const handlers = [
         opportunity_feedback_enabled: false,
         scout_scheduling_enabled: false,
         connector_rss_enabled: false,
+        recommendation_briefs_enabled: false,
       },
     }),
   ),
@@ -1887,6 +1909,20 @@ export const handlers = [
       { status: 503 },
     ),
   ),
+
+  // ---- Recommendation briefs (Project Phase 5A; dark by default) ----
+  // Every brief endpoint answers 503 capability_unavailable while the capability is off,
+  // which is the shipped state; tests opt in with server.use(...). The message is the
+  // server's (app/briefs/routes.py).
+  ...[
+    // The workspace-effective reflection: 200 {enabled:false} while dark, never 503.
+    http.get(P('/workspaces/:workspaceId/brief-capability'), () =>
+      HttpResponse.json({ enabled: false }),
+    ),
+    http.get(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
+    http.post(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
+    http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId'), () => BRIEFS_DARK()),
+  ],
 
   // ---- Campaign context (all kinds return an empty list by default) ----
   // Registered LAST so the specific single-segment routes above (locations,

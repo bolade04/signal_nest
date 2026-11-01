@@ -727,7 +727,7 @@ def test_a_refused_live_run_is_isolated_and_spends_nothing_while_its_neighbour_r
     completes. The refused run made no provider call and left no reservation and no usage
     row; its neighbour's calls each left exactly one usage row (the counters are live)."""
     provider = _FakeProvider()
-    monkeypatch.setattr(pipeline, "llm_service", provider.service())
+    monkeypatch.setattr("app.llm.service.llm_service", provider.service())
     refused_id = _toronto_request(world, keywords=("coffee",))
     other_ws = _second_workspace(world, "live-bound-ws2")
     other_id = _toronto_request(world, keywords=("tea",), workspace_id=other_ws)
@@ -792,7 +792,7 @@ def test_a_refused_live_run_reserves_nothing_on_the_shared_ledger(
     reaches no call, so ``budget.reserve`` is never invoked and no reservation, usage or
     period row appears."""
     provider = _FakeProvider()
-    monkeypatch.setattr(pipeline, "llm_service", provider.service())
+    monkeypatch.setattr("app.llm.service.llm_service", provider.service())
     shared = functools.partial(handlers.LLMMeter, shared_ledger=True)
     monkeypatch.setattr(handlers, "LLMMeter", shared)
     reserved: list = []

@@ -108,9 +108,7 @@ class Provider:
 
 def _use(monkeypatch, provider) -> None:
     monkeypatch.setattr(pipeline, "fetch_signals", Sources())
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
     )
 
@@ -491,7 +489,7 @@ def test_a_lapsed_lease_stops_the_run_retryably_and_loses_nothing(world, monkeyp
         MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
         settings=offline_settings(),
     )
-    monkeypatch.setattr(pipeline, "llm_service", _use_mock_llm)
+    monkeypatch.setattr("app.llm.service.llm_service", _use_mock_llm)
     shift = [timedelta(0)]
     runner = _runner(w, clock=lambda: datetime.now(UTC) + shift[0])
     worker = _start_worker(w, runner)

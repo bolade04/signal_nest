@@ -146,10 +146,18 @@ _DECISION_SITES = {
     "opportunity_feedback": Path("app/feedback/routes.py"),  # Phase 4B-A
     "scout_scheduling": Path("app/scouting_requests/schedules.py"),  # P6-CAP-1
     "connector_rss": Path("app/scouting_requests/connectors.py"),  # P6-CAP-1
+    "recommendation_briefs": Path("app/briefs/routes.py"),  # Project Phase 5A
 }
 #: The raw global flags. Reading one directly is how a gate bypasses the resolver.
 _RAW_FLAGS = frozenset(
-    {"opportunity_feedback_enabled", "scout_scheduling_enabled", "connector_rss_enabled"}
+    {
+        "opportunity_feedback_enabled",
+        "scout_scheduling_enabled",
+        "connector_rss_enabled",
+        # Project Phase 5 CF-1 reserved it; the 5A gate (app/briefs/routes.py) decides
+        # through the resolver, and this guard forbids it the raw flag.
+        "recommendation_briefs_enabled",
+    }
 )
 #: The only production module allowed to read them: the deliberately raw-global
 #: ``FeatureFlagsOut`` reflection on ``GET /system/capabilities`` (P6-CAP-2).
