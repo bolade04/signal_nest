@@ -1,4 +1,5 @@
 import type { ScoutRequestOut } from '@/api/types';
+import { runResultCopy } from '@/lib/run-outcome';
 
 /**
  * A Scout's derived execution state (D-25 blocked-Scout recovery, PROPOSED): computed by the
@@ -22,12 +23,21 @@ export interface ExecutionNotice {
 }
 
 /** The customer-facing copy for a state that needs one; `null` for idle and in-progress runs
- * (the existing status refresh covers those). */
+ * (the existing status refresh covers those).
+ *
+ * `deferNextStep` (review r1 MINOR-3, PROPOSED): the page shows a refused run's one next step in
+ * the run-result panel (narrow the scout, then run it). A notice whose own step would be to run
+ * the scout again then points at the panel instead, so the page gives one next step, not two
+ * that conflict (a bare re-run of a refused scout is refused again). Titles are unchanged. The
+ * notices whose step is a prerequisite the panel's step cannot replace (Paused: resume first;
+ * needs attention or interrupted: support) keep their own wording. */
 export function executionNotice(
   execution: ScoutExecution | null | undefined,
   status: string,
+  { deferNextStep = false }: { deferNextStep?: boolean } = {},
 ): ExecutionNotice | null {
   if (!execution) return null;
+  const see = runResultCopy.seeResultBelow;
   switch (execution.state) {
     case 'needs_attention':
       return {
@@ -44,14 +54,24 @@ export function executionNotice(
     case 'stopped':
       switch (execution.reason) {
         case 'run_cancelled':
-          return { tone: 'info', title: 'The last run was cancelled', body: 'Run now to start a new run.' };
-        case 'admission_unresolved':
           return {
             tone: 'info',
-            title: 'The last run could not start',
+            title: 'The last run was cancelled',
+            body: deferNextStep ? see : 'Run now to start a new run.',
+          };
+        case 'admission_unresolved':
+          // W21 FU-Q1-2 follow-up (PROPOSED, pending the copy owner's sign-off): neutral wording.
+          // The run may have been refused at once or after a wait, at its first external operation
+          // or a later one; `execution` does not carry the job's recorded wait, so this says
+          // neither "could not start" nor "timed out".
+          return {
+            tone: 'info',
+            title: 'The last run could not continue',
             body:
-              "An earlier operation's outcome was unknown when it ran. That operation has since " +
-              'been confirmed as ended; you can run this scout again.',
+              'The last run could not continue because an earlier operation had no confirmed ' +
+              (deferNextStep
+                ? `outcome. That operation has since been confirmed as ended. ${see}`
+                : 'outcome. That operation has since been confirmed as ended, so this scout can run again.'),
           };
         case 'run_interrupted':
           return {
@@ -60,7 +80,11 @@ export function executionNotice(
             body: 'It cannot be started from here. Contact support.',
           };
         default:
-          return { tone: 'info', title: 'The last run did not complete', body: 'Run now to try again.' };
+          return {
+            tone: 'info',
+            title: 'The last run did not complete',
+            body: deferNextStep ? see : 'Run now to try again.',
+          };
       }
     case 'in_progress':
       // A settled status with an operation still finishing (after Cancel or Resume).
@@ -69,7 +93,9 @@ export function executionNotice(
           tone: 'info',
           title: 'An earlier operation is still finishing',
           // W16 §C (PROPOSED; FU-267-R2): Run now is accepted now; the run waits for it.
-          body: 'You can run this scout now; the run waits until the earlier operation ends.',
+          body: deferNextStep
+            ? `A new run waits until the earlier operation ends. ${see}`
+            : 'You can run this scout now; the run waits until the earlier operation ends.',
         };
       }
       return null;

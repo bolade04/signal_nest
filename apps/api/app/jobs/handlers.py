@@ -36,6 +36,7 @@ from app.jobs.admission import (
     settle_cancelled_request,
 )
 from app.jobs.context import ExecutionContext
+from app.jobs.models import Job
 from app.jobs.pipeline import _run, metered_run, refused_run_stats
 from app.jobs.registry import (
     HandlerContext,
@@ -152,6 +153,32 @@ def _record_refused_run(
             bound=exc.bound,
             partial_fetch=stats.get("partial_fetch"),
             request_paused=settled.rowcount != 1,
+        )
+
+    return write
+
+
+def _record_admission_wait(
+    *, job_id: str | None, worker_id: str | None, lease_token: str | None, wait: str
+) -> Callable[[Session], None]:
+    """A writer that records how a refused external admission waited (W21 FU-Q1-2, PROPOSED).
+
+    The failed job's ``result_summary`` becomes ``{"admission_wait": <ADMISSION_WAIT_*>}``: a
+    closed code and nothing else (no id, no time, no content). It runs in the worker's
+    token-fenced failure transaction (``HandlerContext.on_fenced_failure``) and its own UPDATE
+    also requires this attempt's worker and lease token, so it commits only together with this
+    attempt's own failure transition; a stale attempt writes nothing. A failed write is logged by
+    the worker and leaves the summary unrecorded, which reads as the neutral reason, never as a
+    wait that timed out."""
+
+    def write(db: Session) -> None:
+        if job_id is None or worker_id is None or lease_token is None:
+            return
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id, Job.worker_id == worker_id, Job.lease_token == lease_token)
+            .values(result_summary={"admission_wait": wait})
+            .execution_options(synchronize_session=False)
         )
 
     return write
@@ -296,13 +323,25 @@ def execute_scout_request(ctx: HandlerContext) -> dict[str, Any]:
                     stopped_at=stop.operation,
                     admitted=dict(admission.admitted),
                 )
-            except AdmissionUnresolved:
+            except AdmissionUnresolved as unresolved:
                 # Wait expiry (PROPOSED): the Scout's one allowed unresolved admission stayed
                 # unresolved. The job fails for good; the final-failure hook settles the
                 # request ``failed``; the owner is cleared; the admission stays unresolved.
                 writer = admission.release_owner_writer()
                 if writer is not None:
                     ctx.after_rollback.append(writer)
+                # W21 FU-Q1-2 (PROPOSED): whether this run waited, and how the wait ended, is
+                # recorded on the failed job (its ``result_summary``), committed with the job's
+                # token-fenced failure transition or not at all, so an immediate refusal is never
+                # worded as a wait that timed out (``app.jobs.outcomes``).
+                ctx.on_fenced_failure.append(
+                    _record_admission_wait(
+                        job_id=ctx.job_id,
+                        worker_id=ctx.worker_id,
+                        lease_token=ctx.lease_token,
+                        wait=unresolved.wait,
+                    )
+                )
                 raise JobExecutionError(
                     JobErrorCode.NON_RETRYABLE, "admission_unresolved"
                 ) from None

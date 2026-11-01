@@ -10,11 +10,14 @@ import { formatRelative } from '@/lib/utils';
 export function ScoutExecutionNotice({
   execution,
   status,
+  deferNextStep = false,
 }: {
   execution: ScoutExecution | null | undefined;
   status: string;
+  /** The run-result panel carries the one next step (a refused run; review r1 MINOR-3). */
+  deferNextStep?: boolean;
 }) {
-  const notice = executionNotice(execution, status);
+  const notice = executionNotice(execution, status, { deferNextStep });
   if (!notice) return null;
   const attention = notice.tone === 'attention';
   const Icon = attention ? AlertTriangle : Info;

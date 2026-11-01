@@ -77,3 +77,11 @@ export function sumStat(
 export function formatStat(value: number | null): string {
   return value === null ? '—' : String(value);
 }
+
+/**
+ * A statistic with its noun: the singular only for exactly one ("1 opportunity"), the plural for
+ * zero, many and "not reported" ("0 opportunities", "— opportunities").
+ */
+export function formatCount(value: number | null, one: string, many: string): string {
+  return `${formatStat(value)} ${value === 1 ? one : many}`;
+}

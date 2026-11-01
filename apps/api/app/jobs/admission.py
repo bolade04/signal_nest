@@ -133,6 +133,17 @@ _K_INDEX = "uq_scout_admission_unresolved"
 #: at most this many times in a row (more would mean the index refuses with nothing unresolved).
 _RESOLVED_MEANWHILE_RETRIES = 3
 
+#: How a refused external admission ended its wait (:attr:`AdmissionUnresolved.wait`; recorded on
+#: the failed job's ``result_summary`` as ``admission_wait``; W21 FU-Q1-2, PROPOSED). Only these
+#: three values exist; ``app.jobs.outcomes`` words each one.
+#: Refused at the first look: the blocking admission already had an unknown end, or its deadline
+#: had already passed. Nothing waited.
+ADMISSION_WAIT_NONE = "none"
+#: This run waited, and the blocking admission's deadline passed (database time) while it did.
+ADMISSION_WAIT_UNTIL_DEADLINE = "until_deadline"
+#: This run waited, and the blocking admission recorded an unknown end while it did.
+ADMISSION_WAIT_UNTIL_UNKNOWN_END = "until_unknown_end"
+
 
 #: The rule an admission's persisted deadline was computed with (D-25 recovery contract §3,
 #: PROPOSED): ``admitted_at`` + the operation's client deadline + the lease. Rows created
@@ -222,12 +233,17 @@ class RunStopped(Exception):  # noqa: N818 - a control-flow signal, not an error
 class AdmissionUnresolved(Exception):  # noqa: N818 - a definite end, not a crash
     """An external operation could not be admitted: the Scout's one allowed unresolved
     admission (K = 1) stayed unresolved past its deadline, or ended with an unknown outcome.
-    The waiting never resolves it (PROPOSED)."""
+    The waiting never resolves it (PROPOSED).
 
-    def __init__(self, blocking_id: str, operation: str):
+    ``wait`` says whether this run waited for it, and how the wait ended (``ADMISSION_WAIT_*``;
+    W21 FU-Q1-2, PROPOSED): an immediate refusal, where nothing waited, is never presented as a
+    wait that timed out."""
+
+    def __init__(self, blocking_id: str, operation: str, wait: str = ADMISSION_WAIT_NONE):
         super().__init__(f"admission refused at {operation}: {blocking_id} unresolved")
         self.blocking_id = blocking_id
         self.operation = operation
+        self.wait = wait
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -524,6 +540,8 @@ class RunAdmission:
         that admission is outstanding and before its own deadline (database time),
         re-checking this attempt's authority on every try; raise :class:`AdmissionUnresolved`
         once it has an unknown end or its deadline has passed. The wait never resolves it.
+        The exception records whether this call waited at all, and how the wait ended
+        (``ADMISSION_WAIT_*``, W21 FU-Q1-2, PROPOSED).
         """
         if not self._ledger_enabled():
             # SQLite (development and tests): the run's own connection holds the database
@@ -567,6 +585,7 @@ class RunAdmission:
 
         delay = 0.25
         resolved_meanwhile = 0
+        waited = False
         while True:
             try:
                 admission_id, result = self._in_own_transaction(work)
@@ -581,8 +600,15 @@ class RunAdmission:
                     continue  # resolved meanwhile: try again at once
                 blocking_id, ended, expired = blocking
                 if ended or expired:
-                    raise AdmissionUnresolved(blocking_id, operation) from None
+                    if not waited:
+                        wait = ADMISSION_WAIT_NONE
+                    elif ended:
+                        wait = ADMISSION_WAIT_UNTIL_UNKNOWN_END
+                    else:
+                        wait = ADMISSION_WAIT_UNTIL_DEADLINE
+                    raise AdmissionUnresolved(blocking_id, operation, wait) from None
                 sleep(delay)
+                waited = True
                 delay = min(delay * 2, 2.0)
                 continue
             self.granted(operation)
@@ -1029,6 +1055,9 @@ def record_external_end(admission_id: str | None, *, known: bool) -> None:
 
 
 __all__ = [
+    "ADMISSION_WAIT_NONE",
+    "ADMISSION_WAIT_UNTIL_DEADLINE",
+    "ADMISSION_WAIT_UNTIL_UNKNOWN_END",
     "DEADLINE_RULE",
     "DEADLINE_UNRECORDED",
     "LIVE_JOB_STATUSES",

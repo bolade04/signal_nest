@@ -5756,6 +5756,15 @@
         "title": "OrganizationOut",
         "type": "object"
       },
+      "PartialFetchReason": {
+        "description": "Why a run did not read everything its sources held (``app.connectors.fetch_limits``).",
+        "enum": [
+          "source_failed",
+          "fetch_limit_reached"
+        ],
+        "title": "PartialFetchReason",
+        "type": "string"
+      },
       "PasswordResetConfirmRequest": {
         "additionalProperties": false,
         "description": "Set a new password with a reset token carried in the body, never in a URL.\n\nThe new password is bounded as in :class:`RegisterRequest`. Unknown fields are\nrejected.",
@@ -6366,12 +6375,21 @@
           "scout_changed",
           "scout_removed",
           "earlier_operation_timed_out",
+          "earlier_operation_unresolved",
           "too_many_signals",
           "retries_exhausted",
           "worker_stopped_responding",
           "internal"
         ],
         "title": "RunOutcomeReason",
+        "type": "string"
+      },
+      "RunRefusalReason": {
+        "description": "Why a run was refused before analysis (P6-PLAT-1 strategy B).",
+        "enum": [
+          "signal_volume_above_bound"
+        ],
+        "title": "RunRefusalReason",
         "type": "string"
       },
       "RunStats": {
@@ -7026,6 +7044,17 @@
             ],
             "title": "Resolved Market"
           },
+          "run_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutRunOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest recorded run's outcome (PROPOSED, Q1 (a+)): what ran, what did not and one next action, lifted from stats. Null when the stats record none (no result yet, or a completed run recorded before per-source fetch facts existed)."
+          },
           "source_types": {
             "items": {
               "type": "string"
@@ -7146,6 +7175,97 @@
         "title": "ScoutRequestUpdate",
         "type": "object"
       },
+      "ScoutRunNextAction": {
+        "description": "The one next step a customer can take in the product today.\n\n``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again\n(a refusal). ``run_again_later``: run the Scout again later (a source failed).\n``no_action``: nothing the customer can do changes the result (only a fetch limit clipped a\nsource: no setting raises it, and a re-run reads the same limit).",
+        "enum": [
+          "narrow_request",
+          "run_again_later",
+          "no_action"
+        ],
+        "title": "ScoutRunNextAction",
+        "type": "string"
+      },
+      "ScoutRunOutcome": {
+        "additionalProperties": false,
+        "description": "The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).\n\nLifted read-only from ``stats``, which hold the result of the latest run that completed or\nwas refused at the bound (a cancelled, stopped, skipped or otherwise failed run writes no\nstats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``\nwhen none covered the market, ``null`` when the run recorded no per-source facts) and the\ncounts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``\nfor a refusal, ``partial_reasons`` and the clipped or failed ``sources``. **One next\naction:** ``next_action`` (``null`` for a complete run).",
+        "properties": {
+          "bound": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bound"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScoutRunOutcomeKind"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutRunNextAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partial_reasons": {
+            "items": {
+              "$ref": "#/components/schemas/PartialFetchReason"
+            },
+            "title": "Partial Reasons",
+            "type": "array"
+          },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunRefusalReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ScoutRunSource"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          }
+        },
+        "required": [
+          "kind",
+          "sources",
+          "partial_reasons",
+          "refusal_reason",
+          "bound",
+          "next_action"
+        ],
+        "title": "ScoutRunOutcome",
+        "type": "object"
+      },
+      "ScoutRunOutcomeKind": {
+        "description": "How completely the latest recorded run read its sources.\n\n``complete``: the run completed and every source it consulted was read in full.\n``partial``: the run completed, but at least one source was clipped by its fetch limit or\nfailed. ``refused``: the run was refused at the per-run bound before anything was analysed.",
+        "enum": [
+          "complete",
+          "partial",
+          "refused"
+        ],
+        "title": "ScoutRunOutcomeKind",
+        "type": "string"
+      },
       "ScoutRunResult": {
         "properties": {
           "scout_request_id": {
@@ -7168,6 +7288,63 @@
           "stats"
         ],
         "title": "ScoutRunResult",
+        "type": "object"
+      },
+      "ScoutRunSource": {
+        "description": "What one consulted source delivered in the run (one ``stats.fetch_limits`` entry).\n\n``fetched`` entries were read within the source's limit, ``eligible_seen`` of them matched the\nScout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:\nthe source declares no limit). ``failed`` is true when the source contributed nothing because\nit failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not\nknow, so the failure itself is never dropped). Counts and codes only.",
+        "properties": {
+          "clipped": {
+            "title": "Clipped",
+            "type": "boolean"
+          },
+          "eligible_seen": {
+            "title": "Eligible Seen",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceFailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fetched": {
+            "title": "Fetched",
+            "type": "integer"
+          },
+          "max_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Items"
+          },
+          "source_key": {
+            "title": "Source Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_key",
+          "max_items",
+          "fetched",
+          "eligible_seen",
+          "clipped",
+          "failed",
+          "failure_reason"
+        ],
+        "title": "ScoutRunSource",
         "type": "object"
       },
       "ScoutScheduleCreate": {
@@ -7307,6 +7484,21 @@
         ],
         "title": "SessionOut",
         "type": "object"
+      },
+      "SourceFailureReason": {
+        "description": "Why one source failed and contributed nothing (``app.connectors.fetch_limits``).",
+        "enum": [
+          "feed_too_large",
+          "xml_unsafe",
+          "xml_malformed",
+          "rate_limited",
+          "retries_exhausted",
+          "response_refused",
+          "egress_blocked",
+          "fetch_error"
+        ],
+        "title": "SourceFailureReason",
+        "type": "string"
       },
       "SourcePrefIn": {
         "properties": {

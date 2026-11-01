@@ -901,9 +901,25 @@ EXECUTE = "scout_request.execute"
             (RunOutcome.STOPPED, RunOutcomeReason.INTERNAL),
         ),
         ("cancelled", None, None, None, (RunOutcome.CANCELLED, None)),
+        # W21 FU-Q1-2 (PROPOSED): "timed out" only for a recorded wait that ended at the deadline;
+        # a failure that records no wait is never worded as one (test_run_outcome_guidance_w21).
         (
             "failed",
             None,
+            "non_retryable",
+            "admission_unresolved",
+            (RunOutcome.FAILED, RunOutcomeReason.EARLIER_OPERATION_UNRESOLVED),
+        ),
+        (
+            "failed",
+            {"admission_wait": "none"},
+            "non_retryable",
+            "admission_unresolved",
+            (RunOutcome.FAILED, RunOutcomeReason.EARLIER_OPERATION_UNRESOLVED),
+        ),
+        (
+            "failed",
+            {"admission_wait": "until_deadline"},
             "non_retryable",
             "admission_unresolved",
             (RunOutcome.FAILED, RunOutcomeReason.EARLIER_OPERATION_TIMED_OUT),
@@ -997,6 +1013,12 @@ def test_d_the_jobs_api_labels_a_skip_and_never_exposes_the_summary(factory, cli
         job = session.get(Job, job_id)
         job.status, job.last_error_code = "failed", "non_retryable"
         job.last_error_summary = "admission_unresolved"
+        # W21 FU-Q1-2 (PROPOSED): no recorded wait is never worded as a wait that timed out.
+        assert (
+            JobOut.model_validate(job).outcome_reason
+            == RunOutcomeReason.EARLIER_OPERATION_UNRESOLVED
+        )
+        job.result_summary = {"admission_wait": "until_deadline"}
         assert (
             JobOut.model_validate(job).outcome_reason
             == RunOutcomeReason.EARLIER_OPERATION_TIMED_OUT

@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/select';
 import { scoutStatusLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
-import { formatStat, statValue } from '@/lib/scout-stats';
+import { formatCount, statValue } from '@/lib/scout-stats';
 import { isScoutInFlight } from '@/lib/scout-status';
 import { moveFocusTo } from '@/lib/focus';
 import { inFlightSignature, pollingOptions, useStatusPolling } from '@/lib/status-polling';
@@ -183,8 +183,8 @@ function ScoutsInner({ workspaceId }: { workspaceId: string }) {
                       {locName(r.location_id) ? <Badge intent="neutral">{locName(r.location_id)}</Badge> : null}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {formatStat(statValue(r.stats, 'opportunities'))} opportunities ·{' '}
-                      {formatStat(statValue(r.stats, 'signals_analyzed'))} signals ·{' '}
+                      {formatCount(statValue(r.stats, 'opportunities'), 'opportunity', 'opportunities')} ·{' '}
+                      {formatCount(statValue(r.stats, 'signals_analyzed'), 'signal', 'signals')} ·{' '}
                       {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
                     </p>
                   </div>
