@@ -34,6 +34,7 @@ from app.db.downgrade_guard import (
     target_fingerprint,
 )
 from app.db.models import Base  # noqa: F401  (imports all models onto Base.metadata)
+from app.db.utc_session import enforce_utc_session, utc_connect_args
 
 config = context.config
 
@@ -228,11 +229,15 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against a live connection."""
+    # Migrations run in a UTC session too (app.db.utc_session): a step that reads, compares
+    # or writes a timestamptz sees the same instants the app does (W21 TZPIN).
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=utc_connect_args(settings.database_url),
     )
+    enforce_utc_session(connectable)
     with connectable.connect() as connection:
         context.configure(
             connection=connection,

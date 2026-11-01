@@ -30,7 +30,7 @@ import sys
 from collections.abc import Collection, Iterable
 from dataclasses import asdict, dataclass
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
@@ -168,8 +168,11 @@ def _run(argv: list[str]) -> int:
         return _fail("unexpected-arguments", EXIT_CONFIG_OR_CONNECT_FAILURE)
     try:
         from app.core.config import get_settings
+        from app.db.utc_session import create_utc_engine
 
-        engine = create_engine(
+        # A UTC session, as the app's (app.db.utc_session); a refused one is a
+        # connection-failure below.
+        engine = create_utc_engine(
             get_settings().database_url, poolclass=NullPool, hide_parameters=True
         )
     except Exception:

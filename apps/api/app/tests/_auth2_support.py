@@ -58,6 +58,7 @@ from app.core.middleware import RateLimitMiddleware
 from app.core.security import ALGORITHM, decode_access_token, hash_password
 from app.db.models import Base
 from app.db.session import SessionLocal, get_db
+from app.db.utc_session import create_utc_engine
 from app.infra import mail
 from app.jobs.models import Job
 from app.main import app
@@ -384,11 +385,12 @@ def environment(db_file: Path | None, *, teardown_commit: bool = True) -> Iterat
         with pg_database() as url:
             # The witness bounds its lock waits so a competitor that would deadlock against
             # the request's own locks fails the test instead of hanging it.
-            witness = create_engine(
+            # Both engines are built as the app's are: UTC sessions (app.db.utc_session).
+            witness = create_utc_engine(
                 url, future=True, connect_args={"options": "-c lock_timeout=5000"}
             )
             with _built(
-                create_engine(url, future=True), witness, teardown_commit=teardown_commit
+                create_utc_engine(url, future=True), witness, teardown_commit=teardown_commit
             ) as env:
                 yield env
         return
