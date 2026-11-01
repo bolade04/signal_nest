@@ -173,3 +173,16 @@ def mock_llm_service(mock_llm_provider, mock_llm_sleeps):
         sleep=mock_llm_sleeps.append,
         settings=offline_settings(llm_mock_seed=MOCK_LLM_SEED),
     )
+
+
+@pytest.fixture
+def mock_llm_recorder():
+    """The seeded ``MockLLMProvider`` that also records every request it is sent (5A-W4).
+
+    Same seed as :func:`mock_llm_provider`, so its outputs are the seeded mock's; the recorded
+    :class:`~app.llm.base.LLMRequest` objects show what reached the provider after the
+    service's boundary sanitization (``app.tests.fixtures.llm.RecordingMock``).
+    """
+    from app.tests.fixtures.llm import RecordingMock
+
+    return RecordingMock(model="mock-1", seed=MOCK_LLM_SEED)

@@ -14,7 +14,16 @@ names - another workspace of the SAME organization - and the dark-before-lookup 
   scope lookup (so a dark deployment cannot be probed by id), for every role; the overrides
   are honoured exactly.
 
-World (SQLite, FKs on, one database per test):
+5A-W4 additions (W21 lane ADV5AB), each pinned by the mutant it kills (lane evidence
+P6-W21-ADV5AB-01):
+
+* every test of the world below also runs on PostgreSQL when ``TEST_POSTGRES_URL`` is set;
+* a brief's ``evidence_refs`` name only its own opportunity's validation evidence, never a
+  sibling opportunity's or another tenant's;
+* on PostgreSQL, a capture in flight (holding its opportunity's row lock) never blocks a
+  capture of another opportunity, workspace or organization.
+
+World (SQLite with FKs on, or PostgreSQL; one database per test):
   org-a: ws-a1 and ws-a2 (SAME organization, so every org-a member reaches both workspaces)
   org-b: ws-b1
   org-a has one member of each of the six roles; org-b an owner; plus an outsider.
@@ -28,6 +37,7 @@ updated or deleted: each test has a fresh database.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -47,8 +57,9 @@ from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMUsageEvent
 from app.llm.service import LLMService, get_llm_service
 from app.main import app
-from app.tests._auth2_support import live_bearer
+from app.tests._auth2_support import live_bearer, pg_database, require_postgres
 from app.tests._llm_offline import offline_llm, offline_settings
+from app.tests.fixtures.briefs import HOLD_SECONDS, add_validation_evidence, capture_hold
 
 API = get_settings().api_prefix
 ROLES = [Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER, Role.COMPLIANCE_REVIEWER,
@@ -179,17 +190,29 @@ def _reset_rate_limiter() -> None:
         stack = getattr(stack, "app", None)
 
 
-@pytest.fixture
-def w(tmp_path, monkeypatch) -> Iterator[W]:
-    engine = create_engine(f"sqlite:///{tmp_path / 'rev.db'}",
-                           connect_args={"check_same_thread": False}, future=True)
+@pytest.fixture(params=["sqlite", "postgresql"])
+def w(request, tmp_path, monkeypatch) -> Iterator[W]:
+    # 5A-W4 (W21 lane ADV5AB): every isolation and dark-gate test also runs on PostgreSQL,
+    # the production engine, when TEST_POSTGRES_URL is set (require_postgres: unset FAILS in
+    # CI and skips only on a developer machine). Each test gets a database of its own.
+    if request.param == "sqlite":
+        engine = create_engine(f"sqlite:///{tmp_path / 'rev.db'}",
+                               connect_args={"check_same_thread": False}, future=True)
 
-    @event.listens_for(engine, "connect")
-    def _fk(dbapi_conn, _):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.close()
+        @event.listens_for(engine, "connect")
+        def _fk(dbapi_conn, _):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
 
+        yield from _world(engine, monkeypatch)
+        return
+    require_postgres()
+    with pg_database("sn_w4bi") as url:  # pragma: no cover - gated on PostgreSQL
+        yield from _world(create_engine(url, future=True), monkeypatch)
+
+
+def _world(engine, monkeypatch) -> Iterator[W]:
     Base.metadata.create_all(engine)
     make = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     with make() as s:
@@ -367,3 +390,141 @@ class TestDark:
         assert w.create().status_code == 201
         assert w.client.get(f"{API}/workspaces/ws-a2/brief-capability",
                             headers=w.auth["a-owner"]).json() == {"enabled": False}
+
+
+# --------------------------------------------------------------------------- #
+# 5A-W4 additions (W21 lane ADV5AB). Each class names the mutant it kills; the mutation
+# record is in the lane evidence P6-W21-ADV5AB-01.
+# --------------------------------------------------------------------------- #
+class TestEvidenceStaysWithItsOpportunity:
+    """Kills W4A-M01 (``_evidence_refs`` drops its opportunity filter) and W4A-M02 (it drops
+    both its filters). W4A-M01 survives ``test_briefs_api.py``, whose markets each hold one
+    opportunity with evidence, and every other brief module."""
+
+    def test_evidence_refs_name_only_the_opportunitys_own_evidence(self, w, on):
+        with w.make() as s:
+            own = add_validation_evidence(
+                s, workspace_id="ws-a1", opportunity_id="opp-a1", key="a1", count=2
+            )
+            sibling = add_validation_evidence(
+                s, workspace_id="ws-a1", opportunity_id="opp-a1s", key="a1s", count=1
+            )
+            add_validation_evidence(
+                s, workspace_id="ws-a2", opportunity_id="opp-a2", key="a2", count=1
+            )
+            add_validation_evidence(
+                s, workspace_id="ws-b1", opportunity_id="opp-b1", key="b1", count=1
+            )
+            s.commit()
+        mine = w.create()
+        assert mine.status_code == 201, mine.text
+        assert mine.json()["evidence_refs"] == ["sir-a1", *own]
+        theirs = w.create(opp="opp-a1s", record="sir-a1s")
+        assert theirs.status_code == 201, theirs.text
+        assert theirs.json()["evidence_refs"] == ["sir-a1s", *sibling]
+        other_ws = w.create(ws="ws-a2", opp="opp-a2", record="sir-a2")
+        assert other_ws.json()["evidence_refs"] == ["sir-a2", "ev-a2-0"]
+
+
+def _pg_capture(make, llm, opp: str, record: str, author: str) -> tuple[str, int]:
+    """One capture through the brief service in its own session, as the route makes it."""
+    from app.briefs.service import create_brief
+    from app.intelligence.records import SignalIntelligenceRecord
+    from app.opportunities.models import Opportunity
+    from app.organizations.models import User
+
+    with make() as s:
+        brief = create_brief(
+            s,
+            opportunity=s.get(Opportunity, opp),
+            intelligence_record=s.get(SignalIntelligenceRecord, record),
+            campaign_id=None,
+            author=s.get(User, author),
+            llm=llm,
+            settings=offline_settings(),
+        )
+        s.commit()
+        return brief.workspace_id, brief.brief_version
+
+
+class _Runner(threading.Thread):
+    def __init__(self, name: str, fn, *args):
+        super().__init__(name=name, daemon=True)
+        self._call = (fn, args)
+        self.result = None
+        self.error: BaseException | None = None
+
+    def run(self) -> None:  # pragma: no cover - exercised through join
+        fn, args = self._call
+        try:
+            self.result = fn(*args)
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the test thread
+            self.error = exc
+
+    def outcome(self):
+        self.join(HOLD_SECONDS)
+        assert not self.is_alive(), f"{self.name} did not finish"
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+@pytest.fixture
+def pg_make() -> Iterator[sessionmaker]:
+    require_postgres()
+    with pg_database("sn_w4bc") as url:  # pragma: no cover - gated on PostgreSQL
+        engine = create_engine(
+            url,
+            future=True,
+            pool_size=10,
+            max_overflow=5,
+            connect_args={"options": "-c lock_timeout=30000 -c statement_timeout=60000"},
+        )
+        Base.metadata.create_all(engine)
+        make = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+        with make() as s:
+            _seed(s)
+            s.commit()
+        try:
+            yield make
+        finally:
+            engine.dispose()
+
+
+class TestCaptureLockIsPerOpportunity:
+    """PostgreSQL, READ COMMITTED. Kills W4A-M03 (``_next_version`` locks every opportunity
+    row, not this one): one tenant's capture in flight would then stall every other
+    tenant's. That mutant survives ``test_briefs_postgres.py``, whose captures share one
+    opportunity, so a global lock still yields the same linear chain."""
+
+    @pytest.mark.parametrize(
+        ("opp", "record", "author", "ws"),
+        [
+            ("opp-a2", "sir-a2", "a-owner", "ws-a2"),
+            ("opp-b1", "sir-b1", "b-owner", "ws-b1"),
+            ("opp-a1s", "sir-a1s", "a-marketer", "ws-a1"),
+        ],
+        ids=["sibling-workspace", "other-organization", "sibling-opportunity"],
+    )
+    def test_a_capture_in_flight_never_blocks_another_opportunitys(
+        self, pg_make, mock_llm_recorder, opp, record, author, ws
+    ):
+        llm = LLMService(mock_llm_recorder, sleep=lambda _s: None, settings=offline_settings())
+        with capture_hold("held-capture") as hold:
+            held = _Runner("held-capture", _pg_capture, pg_make, llm, "opp-a1", "sir-a1",
+                           "a-owner")
+            held.start()
+            assert hold.holding.wait(HOLD_SECONDS), "the held capture never flushed its brief"
+            other = _Runner("other-capture", _pg_capture, pg_make, llm, opp, record, author)
+            other.start()
+            # It completes while the held capture still holds opp-a1's lock.
+            other.join(20.0)
+            assert not other.is_alive(), "another opportunity's capture waited on this one"
+            hold.release.set()
+        assert other.outcome() == (ws, 1)
+        assert held.outcome() == ("ws-a1", 1)
+        # Each capture reached the provider once, under its own tenant's opaque reference.
+        refs = [r.tenant_ref for r in mock_llm_recorder.requests]
+        assert len(refs) == 2 and all(refs)
+        if ws != "ws-a1":
+            assert len(set(refs)) == 2
