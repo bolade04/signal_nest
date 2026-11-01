@@ -10,7 +10,8 @@ approval of the draft, and in B a brief and draft by BOB.
   nothing (before the deletion it finds the draft).
 * **Organization deletion (A).** A's drafts and their reviews are deleted with its scope;
   DAVE's approval of the draft is retained with ``draft_id`` cleared (the verifier requires
-  it); B's draft is untouched; the verifier passes.
+  it); B's draft is untouched; the verifier passes. **Negative control** (CF-2 review DATA
+  C1): a retained A approval whose ``draft_id`` still names a draft is a finding.
 * **Account export.** CAROL's export lists the drafts she generated — ids, version, channel
   and her own snapshot — never the generated text, provenance or the usage-ledger link, and
   never another account's drafts.
@@ -25,13 +26,14 @@ import json
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import insert, update
 
 from app.approvals.models import Approval
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import ERASED_ACTOR_SNAPSHOT
 from app.core.config import Settings
 from app.creative.models import ContentReview, CreativeDraft
+from app.privacy import erasure
 from app.privacy.inventory import TABLES, Category, RetentionClass
 from app.privacy.verification import verify_organization_erased, verify_subject_erased
 from app.tests._privacy_support import (
@@ -167,6 +169,32 @@ def test_organization_deletion_deletes_drafts_and_reviews_and_keeps_decisions(en
             s, organization_id=ORG_A, workspace_ids=WORKSPACES[ORG_A]
         )
     assert full.verified, full.as_dict()
+
+
+def test_the_verifier_flags_a_retained_approval_that_still_names_a_draft(env):
+    """Negative control (CF-2 review DATA C1): after A's deletion, a retained A approval whose
+    ``draft_id`` still names a draft -- here B's live draft, a cross-scope link the schema
+    allows -- is a finding, not a pass (``draft_id`` is in ``_APPROVAL_IDENTIFYING``)."""
+    _add_creative_rows(env)
+    with env.session() as s:
+        erasure.erase_organization(s, organization_id=ORG_A)
+        s.commit()
+    with env.engine.begin() as conn:
+        table = Approval.__table__
+        # Satisfies ck_approval_draft_subject (subject_type creative_draft, draft_id =
+        # subject_id), and B's draft is live, so the foreign key holds.
+        conn.execute(
+            update(table)
+            .where(table.c.id == "cf2-appr-dave")
+            .values(subject_id="cf2-draft-b", draft_id="cf2-draft-b")
+        )
+    with env.session() as s:
+        report = verify_organization_erased(
+            s, organization_id=ORG_A, workspace_ids=WORKSPACES[ORG_A], content=False
+        )
+    assert not report.verified
+    flagged = {(f.table, f.column) for f in report.reference_findings}
+    assert ("approvals", "draft_id") in flagged
 
 
 def test_the_account_export_lists_the_accounts_drafts_only(env):
