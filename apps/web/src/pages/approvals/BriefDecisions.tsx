@@ -21,34 +21,45 @@ import { isApprovalsDark, useBriefDecisions } from './useApprovals';
 
 /**
  * One brief version's decision history, newest first, with the controlling decision
- * marked. Built to drop into the 5A brief panel at integration as well as the queue.
+ * marked. Used by the approval queue and, since the I-5B integration, by the 5A brief panel
+ * (`pages/opportunities/BriefPanel.tsx`) for the version it shows.
  *
  * Shown only to the roles the history route admits (every role but viewer). A reviewer
  * who did not write the brief may revoke a controlling approval here; nobody else is
- * offered it. Renders nothing while approvals are dark or the role cannot read history.
+ * offered it. Renders nothing while approvals are dark or the role cannot read history —
+ * including the optional `title`, so a host never shows a heading over an absent history.
  */
 export function BriefDecisions({
   target,
   brief,
+  title,
 }: {
   target: DecisionTarget;
   brief: { created_by: string | null; created_by_snapshot: string };
+  title?: string;
 }) {
   const { organizationId } = useWorkspace();
   const actor = useActorRole(organizationId);
   if (!canReadApprovalHistory(actor.role)) return null;
   return (
-    <DecisionsInner target={target} brief={brief} mayDecide={canDecideApprovals(actor.role)} />
+    <DecisionsInner
+      target={target}
+      brief={brief}
+      title={title}
+      mayDecide={canDecideApprovals(actor.role)}
+    />
   );
 }
 
 function DecisionsInner({
   target,
   brief,
+  title,
   mayDecide,
 }: {
   target: DecisionTarget;
   brief: { created_by: string | null; created_by_snapshot: string };
+  title?: string;
   mayDecide: boolean;
 }) {
   const { user } = useAuth();
@@ -76,6 +87,7 @@ function DecisionsInner({
 
   return (
     <section aria-label={`Decisions on version ${target.briefVersion}`} className="space-y-2">
+      {title ? <h4 className="text-sm font-semibold">{title}</h4> : null}
       {items.length === 0 ? (
         <p className="text-xs text-muted-foreground">No decision recorded for this version yet.</p>
       ) : (

@@ -30,14 +30,18 @@ export function isBriefsDark(error: unknown): boolean {
  */
 export type BriefCapabilityStatus = 'loading' | 'enabled' | 'disabled';
 
-export function useBriefCapability(workspaceId: string): {
+export function useBriefCapability(
+  workspaceId: string,
+  // I-5A/I-5B: the sidebar asks only for a member who could use the approval queue.
+  { enabled = true }: { enabled?: boolean } = {},
+): {
   status: BriefCapabilityStatus;
   isEnabled: boolean;
 } {
   const query = useQuery({
     queryKey: queryKeys.briefCapability(workspaceId),
     queryFn: ({ signal }) => api.getBriefCapability(workspaceId, signal),
-    enabled: Boolean(workspaceId),
+    enabled: enabled && Boolean(workspaceId),
     staleTime: 60_000,
     retry: false,
   });

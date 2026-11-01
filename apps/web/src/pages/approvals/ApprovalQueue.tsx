@@ -1,5 +1,6 @@
 import { ClipboardCheck, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { ApprovalDecision, RecommendationBriefOut } from '@/api/types';
 import { useAuth } from '@/auth/AuthContext';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
@@ -19,9 +20,11 @@ import { isApprovalsDark, useApprovalQueue } from './useApprovals';
  * the latest version of each opportunity's brief that has no controlling approval or
  * rejection — oldest first, with the decision controls.
  *
- * NOT MOUNTED on any route in this lane: the route and its nav entry are added at the
- * I-5B integration cycle (Phase 5 plan §6.3). Until then it is exercised by its own test
- * harness (`__tests__/approval-queue.test.tsx`).
+ * Mounted at `/approvals` by the I-5B integration cycle (Phase 5 plan §6.3) through
+ * `ApprovalsRoute`, which renders the not-found page while briefs are dark for the
+ * workspace; the sidebar entry is shown only to a reviewer where briefs resolve enabled.
+ * Each queued brief links to its opportunity, where the 5A brief panel shows the brief and
+ * its decisions.
  *
  * Only the reviewer role decides (exact set, operator decision O-2); every other role
  * sees why, and no queue request is made for it. The server also refuses the brief's
@@ -202,6 +205,10 @@ function QueueItem({
             onClick={() => setShowHistory((v) => !v)}
           >
             {showHistory ? 'Hide decision history' : 'Show decision history'}
+          </Button>
+          {/* I-5A/I-5B: the opportunity page holds the evidence and the brief panel. */}
+          <Button size="sm" variant="ghost" asChild>
+            <Link to={`/opportunities/${brief.opportunity_id}`}>Open opportunity</Link>
           </Button>
         </div>
         {showHistory ? (

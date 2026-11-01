@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
+import { BriefDecisions } from '@/pages/approvals/BriefDecisions';
 import { formatDateTime } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import {
@@ -154,7 +155,23 @@ function BriefPanelBody({
         ) : briefs.isError ? (
           <ErrorState error={briefs.error} onRetry={() => briefs.refetch()} />
         ) : shown ? (
-          <BriefView brief={shown} total={total} />
+          <>
+            <BriefView brief={shown} total={total} />
+            {/* Phase 5B (mounted at I-5B): the shown version's decisions. BriefDecisions
+                renders nothing for a viewer (the history route refuses that role) and
+                nothing while approvals answer dark. */}
+            <BriefDecisions
+              key={shown.id}
+              title="Approval"
+              brief={shown}
+              target={{
+                workspaceId,
+                opportunityId,
+                briefId: shown.id,
+                briefVersion: shown.brief_version,
+              }}
+            />
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">No brief has been generated yet.</p>
         )}

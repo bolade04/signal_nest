@@ -1120,6 +1120,19 @@ const BRIEFS_DARK = () =>
     { status: 503 },
   );
 
+// Phase 5B (I-5A/I-5B integration): the dark answer of every approval endpoint
+// (app/approvals/routes.py) — one switch with the briefs, its own message.
+const APPROVALS_DARK = () =>
+  HttpResponse.json(
+    {
+      error: {
+        code: 'capability_unavailable',
+        message: 'Recommendation briefs and approvals are not available yet.',
+      },
+    },
+    { status: 503 },
+  );
+
 export const handlers = [
   // ---- Tenant gate for every workspace-scoped route (runs first, then falls through) ----
   http.all(P('/workspaces/:ws'), tenantGate),
@@ -1922,6 +1935,20 @@ export const handlers = [
     http.get(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
     http.post(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
     http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId'), () => BRIEFS_DARK()),
+  ],
+
+  // ---- Approval decisions (Phase 5B; same dark switch as the briefs; I-5A/I-5B) ----
+  // The shipped answer of every approval endpoint while the capability is off (the message is
+  // the server's, app/approvals/routes.py APPROVALS_DARK); tests opt in with server.use(...).
+  // The queue must precede the greedy campaign-context `/workspaces/:ws/:kind` match below.
+  ...[
+    http.get(P('/workspaces/:ws/approval-queue'), () => APPROVALS_DARK()),
+    http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId/approvals'), () =>
+      APPROVALS_DARK(),
+    ),
+    http.post(P('/workspaces/:ws/opportunities/:id/briefs/:briefId/approvals'), () =>
+      APPROVALS_DARK(),
+    ),
   ],
 
   // ---- Campaign context (all kinds return an empty list by default) ----
