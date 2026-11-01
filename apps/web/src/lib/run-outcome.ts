@@ -66,8 +66,10 @@ export function rawRunCodes(job: Pick<JobOut, 'status' | 'result_summary' | 'las
 // panel (pages/scouts/RunResultPanel.tsx) is in this module, with the run labels above, so a
 // wording ruling is a one-file change. The facts come typed from `ScoutRequestOut.run_outcome`
 // (apps/api/app/scouting_requests/schemas.py); the counts from `stats` through the `RunStats`
-// keys (lib/scout-stats.ts). Each next step names something a customer can do in the product
-// today: Edit (source types, keywords) and Run now.
+// keys (lib/scout-stats.ts). Each next step names something the viewing customer can do in the
+// product today: an editor gets Edit (source types, keywords) or Run now; a member who cannot edit
+// or run the Scout (the EDITORS gate, lib/roles.ts canEditWorkspace) is asked to turn to someone
+// who can (runNextActionsForNonEditors).
 // ---------------------------------------------------------------------------------------------
 export type RunResult = NonNullable<ScoutRequestOut['run_outcome']>;
 export type RunResultKind = RunResult['kind'];
@@ -125,10 +127,20 @@ export const runResultSummaries: Record<RunResultKind, string> = {
   refused: 'The run was refused before anything was analysed.',
 };
 
+/** The next step for a member who can edit and run the Scout (the EDITORS gate). */
 export const runNextActions: Record<RunNextAction, string> = {
   narrow_request: 'Narrow this scout: edit it to use fewer source types or keywords, then run it again.',
   run_again_later: 'Run this scout again later. A source that failed may be available then.',
   no_action: "No action needed: the results come from the items read within each source's limit.",
+};
+
+/** The next step for a member who cannot edit or run the Scout (Edit and Run now are hidden). */
+export const runNextActionsForNonEditors: Record<RunNextAction, string> = {
+  narrow_request:
+    'Ask someone who can edit this scout to use fewer source types or keywords, then run it again.',
+  run_again_later:
+    'Ask someone who can run this scout to run it again later. A source that failed may be available then.',
+  no_action: runNextActions.no_action,
 };
 
 export const sourceFailureReasons: Record<SourceFailureReason, string> = {

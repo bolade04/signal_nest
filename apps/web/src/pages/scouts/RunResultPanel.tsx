@@ -9,14 +9,21 @@ import { runResultLines } from '@/lib/run-result';
  * run read, what it did not read and the one next step, from the API's typed `run_outcome`.
  * A complete run says so explicitly, so a partial run never looks like a complete one. Nothing
  * is shown when the API records no outcome (no result yet, or a run recorded before per-source
- * facts existed). Read-only: the next step points at controls the page already has (Edit,
- * Run now).
+ * facts existed). Read-only: for a member who can edit the Scout (`canEdit`, the page's EDITORS
+ * gate) the next step points at controls the page shows (Edit, Run now); anyone else is asked to
+ * turn to someone who can.
  */
-export function RunResultPanel({ request }: { request: Pick<ScoutRequestOut, 'run_outcome' | 'stats'> }) {
+export function RunResultPanel({
+  request,
+  canEdit,
+}: {
+  request: Pick<ScoutRequestOut, 'run_outcome' | 'stats'>;
+  canEdit: boolean;
+}) {
   const headingId = useId();
   const result = request.run_outcome;
   if (!result) return null;
-  const lines = runResultLines(result, request.stats);
+  const lines = runResultLines(result, request.stats, canEdit);
   const attention = result.kind !== 'complete';
   return (
     <section

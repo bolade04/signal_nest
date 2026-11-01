@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
-import { formatStat, statValue } from '@/lib/scout-stats';
+import { formatCount, statValue } from '@/lib/scout-stats';
 import { isExecutionInProgress } from '@/lib/scout-execution';
 import { editAvailability } from '@/lib/scout-actions';
 import { zeroResult } from '@/lib/zero-result';
@@ -144,8 +144,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             </div>
             <h1 className="text-2xl font-semibold tracking-tight">{r.name}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {formatStat(statValue(r.stats, 'opportunities'))} opportunities ·{' '}
-              {formatStat(statValue(r.stats, 'signals_analyzed'))} signals ·{' '}
+              {formatCount(statValue(r.stats, 'opportunities'), 'opportunity', 'opportunities')} ·{' '}
+              {formatCount(statValue(r.stats, 'signals_analyzed'), 'signal', 'signals')} ·{' '}
               {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
             </p>
           </div>
@@ -188,7 +188,7 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
 
       {/* W21 FU-Q1-1 (PROPOSED): what the latest recorded run read, what it did not, one next
           step; from the typed `run_outcome`. It replaces the zero-result panel's partial note. */}
-      <RunResultPanel request={r} />
+      <RunResultPanel request={r} canEdit={canEdit} />
 
       {empty ? (
         <div role="status" data-zero-result={empty.code} className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm">

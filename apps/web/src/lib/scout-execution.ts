@@ -46,12 +46,16 @@ export function executionNotice(
         case 'run_cancelled':
           return { tone: 'info', title: 'The last run was cancelled', body: 'Run now to start a new run.' };
         case 'admission_unresolved':
+          // W21 FU-Q1-2 follow-up (PROPOSED, pending the copy owner's sign-off): neutral wording.
+          // The run may have been refused at once or after a wait, at its first external operation
+          // or a later one; `execution` does not carry the job's recorded wait, so this says
+          // neither "could not start" nor "timed out".
           return {
             tone: 'info',
-            title: 'The last run could not start',
+            title: 'The last run could not continue',
             body:
-              "An earlier operation's outcome was unknown when it ran. That operation has since " +
-              'been confirmed as ended; you can run this scout again.',
+              'The last run could not continue because an earlier operation had no confirmed ' +
+              'outcome. That operation has since been confirmed as ended, so this scout can run again.',
           };
         case 'run_interrupted':
           return {

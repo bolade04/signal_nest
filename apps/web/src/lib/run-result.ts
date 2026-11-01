@@ -1,5 +1,11 @@
 import type { ScoutRequestOut } from '@/api/types';
-import { runNextActions, runResultCopy, sourceLabel, type RunResult } from '@/lib/run-outcome';
+import {
+  runNextActions,
+  runNextActionsForNonEditors,
+  runResultCopy,
+  sourceLabel,
+  type RunResult,
+} from '@/lib/run-outcome';
 import { formatStat, statValue } from '@/lib/scout-stats';
 
 /**
@@ -10,7 +16,9 @@ import { formatStat, statValue } from '@/lib/scout-stats';
  * `ScoutRequestOut.run_outcome` (lifted by the API from what the run recorded); the counts come
  * from `stats` through the generated `RunStats` keys only (lib/scout-stats.ts), so an absent
  * count reads "—", never a confident zero. No untyped `stats` key is read here. The wording is
- * lib/run-outcome.ts's (PROPOSED, pending the copy owner's sign-off).
+ * lib/run-outcome.ts's (PROPOSED, pending the copy owner's sign-off). The next step depends on
+ * whether the viewer can edit and run the Scout (`canEdit`, the same gate that shows Edit and
+ * Run now): a member who cannot is never told to edit or run it.
  */
 export interface RunResultLines {
   ran: string[];
@@ -21,6 +29,7 @@ export interface RunResultLines {
 export function runResultLines(
   result: RunResult,
   stats: ScoutRequestOut['stats'] | null | undefined,
+  canEdit: boolean,
 ): RunResultLines {
   const stat = (key: 'scanned' | 'signals_analyzed' | 'opportunities') =>
     formatStat(statValue(stats, key));
@@ -49,5 +58,6 @@ export function runResultLines(
       if (source.failed) didNot.push(runResultCopy.failed(label, source.failure_reason));
     }
   }
-  return { ran, didNot, next: result.next_action ? runNextActions[result.next_action] : null };
+  const nextSteps = canEdit ? runNextActions : runNextActionsForNonEditors;
+  return { ran, didNot, next: result.next_action ? nextSteps[result.next_action] : null };
 }

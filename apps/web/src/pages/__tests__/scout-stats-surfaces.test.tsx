@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
+import { formatCount } from '@/lib/scout-stats';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
 import { server } from '@/test/server';
@@ -85,5 +86,25 @@ describe('Scout Request detail — signal statistics', () => {
     seedDetail({ status: 'draft', stats: {}, last_run_at: null });
     const screen = renderApp(<App />, { route: '/scout-requests/scout-x' });
     expect(await screen.findByText(/— opportunities · — signals/)).toBeInTheDocument();
+  });
+});
+
+describe('Scout Request detail — counts in the header are singular only for one (W21 Q1 fix pass)', () => {
+  it('formatCount: plural for 0, singular for 1, plural for 2 and for "not reported"', () => {
+    expect(formatCount(0, 'opportunity', 'opportunities')).toBe('0 opportunities');
+    expect(formatCount(1, 'opportunity', 'opportunities')).toBe('1 opportunity');
+    expect(formatCount(2, 'opportunity', 'opportunities')).toBe('2 opportunities');
+    expect(formatCount(null, 'opportunity', 'opportunities')).toBe('— opportunities');
+  });
+
+  it.each([
+    [0, '0 opportunities · 0 signals'],
+    [1, '1 opportunity · 1 signal'],
+    [2, '2 opportunities · 2 signals'],
+  ])('%i: the header reads "%s"', async (n, text) => {
+    seedDetail({ stats: { scanned: n, noise_filtered: 0, signals_analyzed: n, opportunities: n } });
+    const screen = renderApp(<App />, { route: '/scout-requests/scout-x' });
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Dallas specialty-coffee scout' });
+    expect(h1.nextElementSibling?.textContent).toMatch(new RegExp(`^${text} · `));
   });
 });

@@ -6,6 +6,7 @@ import { API_PREFIX } from '@/api/config';
 import type { JobOut, ScoutRequestOut } from '@/api/types';
 import {
   runNextActions,
+  runNextActionsForNonEditors,
   runOutcomeReasons,
   runResultCopy,
   runResultLabels,
@@ -123,7 +124,7 @@ function sections(panel: HTMLElement): Record<string, string[]> {
 describe('the run-result lines say what ran, what did not and one next step (FU-Q1-1)', () => {
   it('complete: the counts and the source read, nothing missing, no next step', () => {
     const c = cases.complete;
-    expect(runResultLines(c.run_outcome!, c.stats)).toEqual({
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
       ran: ['9 items collected, 7 signals analysed, 3 opportunities.', 'Read 1 source.', 'Sample library: 9 items read.'],
       didNot: [],
       next: null,
@@ -132,7 +133,7 @@ describe('the run-result lines say what ran, what did not and one next step (FU-
 
   it('partial, clipped: the clip is named, and nothing is asked of the customer', () => {
     const c = cases.partial_fetch_limit_reached;
-    expect(runResultLines(c.run_outcome!, c.stats)).toEqual({
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
       ran: ['100 items collected, 100 signals analysed, 1 opportunity.', 'Read 1 source.', 'replay-big: 100 items read.'],
       didNot: ['replay-big: held more than its limit of 100 items; the rest were not read.'],
       next: runNextActions.no_action,
@@ -141,7 +142,7 @@ describe('the run-result lines say what ran, what did not and one next step (FU-
 
   it('partial, a failed source: the failure and its reason, and run again later', () => {
     const c = cases.partial_source_failed;
-    expect(runResultLines(c.run_outcome!, c.stats)).toEqual({
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
       ran: ['3 items collected, 3 signals analysed, 1 opportunity.', 'Read 1 of 2 sources.', 'replay-ok: 3 items read.'],
       didNot: [`replay-bad: could not be read (${sourceFailureReasons.xml_unsafe}).`],
       next: runNextActions.run_again_later,
@@ -150,7 +151,7 @@ describe('the run-result lines say what ran, what did not and one next step (FU-
 
   it('refused at the bound: what was collected, the bound, and narrow the scout', () => {
     const c = cases.refused_at_bound;
-    expect(runResultLines(c.run_outcome!, c.stats)).toEqual({
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
       ran: [
         '120 items collected; none were analysed.',
         'Read 2 sources.',
@@ -164,13 +165,27 @@ describe('the run-result lines say what ran, what did not and one next step (FU-
 
   it('an absent count reads "not reported", never a confident zero', () => {
     const c = cases.partial_source_failed;
-    expect(runResultLines(c.run_outcome!, {}).ran[0]).toBe('— items collected, — signals analysed, — opportunities.');
+    expect(runResultLines(c.run_outcome!, {}, true).ran[0]).toBe('— items collected, — signals analysed, — opportunities.');
   });
 
   it('every next step is something the product offers today: Edit or Run now', () => {
     expect(runNextActions.narrow_request).toMatch(/edit it/i);
     expect(runNextActions.run_again_later).toMatch(/^Run this scout again later/);
     expect(runNextActions.no_action).toMatch(/^No action needed/);
+  });
+
+  it('a member who cannot edit or run the scout is never told to edit or run it', () => {
+    for (const name of ['refused_at_bound', 'partial_source_failed', 'partial_fetch_limit_reached'] as const) {
+      const c = cases[name];
+      const action = c.run_outcome!.next_action!;
+      expect(runResultLines(c.run_outcome!, c.stats, false).next).toBe(runNextActionsForNonEditors[action]);
+    }
+    expect(runNextActionsForNonEditors.narrow_request).toMatch(/^Ask someone who can edit this scout/);
+    expect(runNextActionsForNonEditors.run_again_later).toMatch(/^Ask someone who can run this scout/);
+    for (const text of Object.values(runNextActionsForNonEditors)) {
+      expect(text).not.toMatch(/^(Narrow|Run|Edit)\b/);
+      expect(text).not.toMatch(/: edit it/);
+    }
   });
 });
 
@@ -192,7 +207,7 @@ describe('the Scout page presents each outcome (FU-Q1-1)', () => {
     expect(within(panel).getByRole('heading', { name: runResultCopy.heading })).toBeInTheDocument();
     const status = within(panel).getByRole('status');
     expect(status).toHaveTextContent(`${label}${runResultSummaries[kind]}`);
-    const lines = runResultLines(c.run_outcome!, c.stats);
+    const lines = runResultLines(c.run_outcome!, c.stats, true);
     const expected: Record<string, string[]> = { [runResultCopy.whatRan]: lines.ran };
     if (lines.didNot.length) expected[runResultCopy.whatDidNot] = lines.didNot;
     if (lines.next) expected[runResultCopy.nextStep] = [lines.next];
@@ -252,5 +267,32 @@ describe('the wait-expiry reason says only what the job recorded (FU-Q1-2)', () 
     expect(runOutcomeReasons.earlier_operation_unresolved).not.toMatch(/wait|timed out/i);
     const rows = Array.from(document.querySelectorAll('[data-job-outcome="failed"]'));
     expect(rows).toHaveLength(3);
+  });
+});
+
+describe('the next step follows the viewer\'s role (fix pass: every next step is doable by this viewer)', () => {
+  afterEach(() => orgModel.reset());
+
+  it.each([
+    ['refused_at_bound', 'narrow_request'],
+    ['partial_source_failed', 'run_again_later'],
+  ] as const)('%s: an editor is pointed at Edit or Run now, which the page shows', async (name, action) => {
+    orgModel.setMembership('org-1', 'user-1', 'marketer');
+    const { screen, panel } = await openPanel(scout(cases[name]));
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([runNextActions[action]]);
+    expect(await screen.findAllByRole('button', { name: 'Run now' })).not.toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['refused_at_bound', 'narrow_request'],
+    ['partial_source_failed', 'run_again_later'],
+  ] as const)('%s: a viewer, who has no Edit or Run now, is asked to turn to someone who can', async (name, action) => {
+    orgModel.setMembership('org-1', 'user-1', 'viewer');
+    const { screen, panel } = await openPanel(scout(cases[name]));
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([runNextActionsForNonEditors[action]]);
+    expect(within(panel).queryByText(runNextActions[action])).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 });
