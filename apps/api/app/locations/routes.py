@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands.service import get_primary_brand
@@ -143,7 +144,7 @@ def create_location(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="location.created",
+        action=AuditAction.LOCATION_CREATED,
         entity_type="business_location",
         entity_id=location.id,
     )
@@ -169,7 +170,7 @@ def update_location(
 
 
 def _record_lifecycle(
-    db: Session, ctx: TenantContext, location: BusinessLocation, action: str
+    db: Session, ctx: TenantContext, location: BusinessLocation, action: AuditAction
 ) -> None:
     record_audit(
         db,
@@ -199,7 +200,7 @@ def deactivate_location(
     """
     location = _get_scoped(db, workspace_id, location_id)
     if location_service.deactivate(db, location):
-        _record_lifecycle(db, ctx, location, "location.deactivated")
+        _record_lifecycle(db, ctx, location, AuditAction.LOCATION_DEACTIVATED)
     return location
 
 
@@ -216,7 +217,7 @@ def reactivate_location(
     """Return a deactivated location to service; a no-op (200) when already active."""
     location = _get_scoped(db, workspace_id, location_id)
     if location_service.reactivate(db, location):
-        _record_lifecycle(db, ctx, location, "location.reactivated")
+        _record_lifecycle(db, ctx, location, AuditAction.LOCATION_REACTIVATED)
     return location
 
 
@@ -276,7 +277,7 @@ def upsert_geo_coverage(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="geo_coverage.updated",
+        action=AuditAction.GEO_COVERAGE_UPDATED,
         entity_type="geo_coverage_rule",
         entity_id=rule.id,
     )

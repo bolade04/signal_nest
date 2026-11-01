@@ -95,6 +95,32 @@ PROMPTS: dict[str, Prompt] = {
         version="1.0.0",
         template="Resolve the market from evidence. Return strict JSON.\n\n{evidence}\n",
     ),
+    # Project Phase 5C (W21 CF-2): text creative generation from an approved brief. Frozen
+    # at CF-2; any change bumps the version. Every field is an untrusted data block. The
+    # 5C seam lane wires the call (and the mock's output); nothing calls it yet.
+    "generate_creative": Prompt(
+        name="generate_creative",
+        version="1.0.0",
+        template=(
+            "Write marketing text for the channel named in the untrusted_data block named "
+            "channel, from the recommendation brief in the blocks named summary, rationale, "
+            "recommended_actions and suggested_angles, in the brand voice in the block named "
+            "brand_voice. Use only claims from the block named approved_claims, include "
+            "every text in the block named required_disclaimers verbatim, and do NOT invent "
+            "unsupported product claims, attack competitors, promise outcomes, or include "
+            "links, contact details or markup. Return strict JSON with keys headline (at most "
+            "200 characters, or empty), body (at most 4000 characters) and call_to_action "
+            "(at most 200 characters, or empty).\n\n"
+            "{channel}\n"
+            "{summary}\n"
+            "{rationale}\n"
+            "{recommended_actions}\n"
+            "{suggested_angles}\n"
+            "{brand_voice}\n"
+            "{approved_claims}\n"
+            "{required_disclaimers}\n"
+        ),
+    ),
 }
 
 

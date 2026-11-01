@@ -2162,12 +2162,24 @@ export interface components {
          * @description Everything stored about the signed-in account (schema version 1).
          */
         AccountExportOut: {
+            /** Approvals Decided */
+            approvals_decided: {
+                [key: string]: unknown;
+            }[];
             /** Audit Events Performed */
             audit_events_performed: {
                 [key: string]: unknown;
             }[];
+            /** Briefs Authored */
+            briefs_authored: {
+                [key: string]: unknown;
+            }[];
             /** Capability Overrides Set */
             capability_overrides_set: {
+                [key: string]: unknown;
+            }[];
+            /** Drafts Authored */
+            drafts_authored: {
                 [key: string]: unknown;
             }[];
             email_keyed_data: components["schemas"]["EmailKeyedDataOut"];
@@ -2453,7 +2465,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -2960,8 +2972,12 @@ export interface components {
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
             connector_rss_enabled: boolean;
+            /** Creative Generation Enabled */
+            creative_generation_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
+            /** Recommendation Briefs Enabled */
+            recommendation_briefs_enabled: boolean;
             /** Scout Scheduling Enabled */
             scout_scheduling_enabled: boolean;
         };
@@ -3662,7 +3678,7 @@ export interface components {
          *     error), so an unknown/renamed type can never silently no-op.
          * @enum {string}
          */
-        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge";
+        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge" | "creative.generate";
         /** JobsOverviewOut */
         JobsOverviewOut: {
             /** Dead Letter Count */

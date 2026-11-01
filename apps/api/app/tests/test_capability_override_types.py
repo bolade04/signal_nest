@@ -149,7 +149,16 @@ _DECISION_SITES = {
 }
 #: The raw global flags. Reading one directly is how a gate bypasses the resolver.
 _RAW_FLAGS = frozenset(
-    {"opportunity_feedback_enabled", "scout_scheduling_enabled", "connector_rss_enabled"}
+    {
+        "opportunity_feedback_enabled",
+        "scout_scheduling_enabled",
+        "connector_rss_enabled",
+        # Project Phase 5 CF-1: no gate exists yet; when 5A adds one it must decide
+        # through the resolver, and this guard already forbids it the raw flag.
+        "recommendation_briefs_enabled",
+        # Project Phase 5 CF-2: likewise for the 5C gate when it lands.
+        "creative_generation_enabled",
+    }
 )
 #: The only production module allowed to read them: the deliberately raw-global
 #: ``FeatureFlagsOut`` reflection on ``GET /system/capabilities`` (P6-CAP-2).

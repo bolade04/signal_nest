@@ -58,12 +58,18 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (W16 customer repairs, PROPOSED: adds ``opportunities.finding_key``, its
+#: The code head (Project Phase 5 CF-2, W21: adds ``creative_drafts``, ``content_reviews``,
+#: ``approvals.draft_id``, ``claims_library.retired_at`` and widens two CHECKs).
+HEAD = "a7d2e9f4c1b8"
+#: One below head (Project Phase 5 CF-1, W21: adds ``recommendation_briefs`` and
+#: ``approvals`` and widens the capability-override CHECK).
+BELOW_HEAD = "f3a9c1e7b2d5"
+#: Two below head (W16 customer repairs, PROPOSED: adds ``opportunities.finding_key``, its
 #: partial unique index and the ``opportunity_observations`` table).
-HEAD = "e7b3c5a9d1f4"
-#: One below head (D-25 blocked-Scout recovery candidate, PROPOSED: adds the persisted
+FINDING = "e7b3c5a9d1f4"
+#: Two below head (D-25 blocked-Scout recovery candidate, PROPOSED: adds the persisted
 #: ``scout_admissions.deadline_at`` and its basis).
-BELOW_HEAD = "d4a8f2c6b9e1"
+RECOVERY = "d4a8f2c6b9e1"
 #: Two below head (D-25 execution-control candidate, PROPOSED: adds the ``scout_requests``
 #: owner columns and the ``scout_admissions`` ledger).
 EXECCTL = "c6f1d8e2a4b7"
@@ -278,6 +284,8 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert {"deadline_at", "deadline_rule"} <= _columns(pg_url, "scout_admissions")
     assert "finding_key" in _columns(pg_url, "opportunities")
     assert "opportunity_observations" in _tables(pg_url)
+    assert {"recommendation_briefs", "approvals"} <= _tables(pg_url)
+    assert {"creative_drafts", "content_reviews"} <= _tables(pg_url)
 
     # One guarded step down undoes exactly the head revision; the spent token does not
     # authorize the next step.
@@ -285,9 +293,13 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert "finding_key" not in _columns(pg_url, "opportunities")
-    assert "opportunity_observations" not in _tables(pg_url)
-    # The revision below: untouched.
+    assert not {"creative_drafts", "content_reviews"} & _tables(pg_url)
+    assert "draft_id" not in _columns(pg_url, "approvals")
+    assert "retired_at" not in _columns(pg_url, "claims_library")
+    # The revisions below: untouched.
+    assert {"recommendation_briefs", "approvals"} <= _tables(pg_url)
+    assert "finding_key" in _columns(pg_url, "opportunities")
+    assert "opportunity_observations" in _tables(pg_url)
     assert {"deadline_at", "deadline_rule"} <= _columns(pg_url, "scout_admissions")
     assert "scout_admissions" in _tables(pg_url)
     assert "owner_job_id" in _columns(pg_url, "scout_requests")

@@ -33,6 +33,10 @@ def test_capability_value_set_is_closed_and_exact() -> None:
         "opportunity_feedback",
         "scout_scheduling",
         "connector_rss",
+        # Project Phase 5A, added at W21 CF-1 (O-3).
+        "recommendation_briefs",
+        # Project Phase 5C, added at W21 CF-2 (O-3).
+        "creative_generation",
     }
 
 
@@ -46,6 +50,8 @@ def test_iter_capabilities_is_deterministic_declaration_order() -> None:
         Capability.OPPORTUNITY_FEEDBACK,
         Capability.SCOUT_SCHEDULING,
         Capability.CONNECTOR_RSS,
+        Capability.RECOMMENDATION_BRIEFS,
+        Capability.CREATIVE_GENERATION,
     )
     # Stable across repeated calls.
     assert iter_capabilities() == iter_capabilities()
@@ -69,6 +75,12 @@ def test_global_flag_bindings_are_exact() -> None:
     )
     assert get_policy(Capability.CONNECTOR_RSS).global_flag_attr == (
         "connector_rss_enabled"
+    )
+    assert get_policy(Capability.RECOMMENDATION_BRIEFS).global_flag_attr == (
+        "recommendation_briefs_enabled"
+    )
+    assert get_policy(Capability.CREATIVE_GENERATION).global_flag_attr == (
+        "creative_generation_enabled"
     )
 
 
@@ -104,18 +116,38 @@ def test_rss_is_not_workspace_enableable_but_is_disableable() -> None:
 
 
 def test_route_guarded_capabilities_are_workspace_enableable() -> None:
-    for capability in (Capability.OPPORTUNITY_FEEDBACK, Capability.SCOUT_SCHEDULING):
+    # RECOMMENDATION_BRIEFS: operator decision O-3 (2026-09-01,
+    # REC_all_three_workspace_enableable_default_false), encoded at W21 CF-1.
+    for capability in (
+        Capability.OPPORTUNITY_FEEDBACK,
+        Capability.SCOUT_SCHEDULING,
+        Capability.RECOMMENDATION_BRIEFS,
+        Capability.CREATIVE_GENERATION,
+    ):
         policy = get_policy(capability)
         assert policy.workspace_enableable is True
         assert policy.workspace_disableable is True
 
 
+#: Milestone-grained planned activation phase per capability. The Phase 4 members are
+#: "4B"; the Project Phase 5A member is "5A" (5A exit criterion 2: an explicit, reviewed
+#: extension of this assertion, made in the same CF-1 commit as the member).
+_ACTIVATION_PHASE = {
+    Capability.OPPORTUNITY_FEEDBACK: "4B",
+    Capability.SCOUT_SCHEDULING: "4B",
+    Capability.CONNECTOR_RSS: "4B",
+    Capability.RECOMMENDATION_BRIEFS: "5A",
+    Capability.CREATIVE_GENERATION: "5C",
+}
+
+
 def test_every_capability_is_ceiling_subject_and_workspace_scoped() -> None:
+    assert set(_ACTIVATION_PHASE) == set(Capability)
     for capability in iter_capabilities():
         policy = get_policy(capability)
         assert policy.subject_to_safety_ceiling is True
         assert policy.requires_workspace_context is True
-        assert policy.future_activation_phase == "4B"
+        assert policy.future_activation_phase == _ACTIVATION_PHASE[capability]
         assert policy.label and not policy.label.startswith(" ")
 
 
@@ -138,6 +170,12 @@ def test_is_known_capability_reflects_closed_set() -> None:
 
 def test_persisted_values_are_sorted_and_match_enum() -> None:
     values = persisted_values()
-    assert values == ("connector_rss", "opportunity_feedback", "scout_scheduling")
+    assert values == (
+        "connector_rss",
+        "creative_generation",
+        "opportunity_feedback",
+        "recommendation_briefs",
+        "scout_scheduling",
+    )
     assert list(values) == sorted(values)
     assert set(values) == {c.value for c in Capability}

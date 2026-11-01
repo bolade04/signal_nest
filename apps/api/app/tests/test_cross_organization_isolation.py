@@ -729,7 +729,11 @@ class TestContextEntities:
         # Positive: deleting one of A's own items works.
         mine = pov.send("POST", _ws_path(world, a, f"/{path}"), body).json()["id"]
         assert pov.send("DELETE", _ws_path(world, a, f"/{path}/{mine}")).status_code == 204
-        assert world.row(model, mine) is None
+        if "retired_at" in model.__table__.c:
+            # The claims library (W21 CF-2) soft-retires: the row stays, marked retired.
+            assert world.row(model, mine)["retired_at"] is not None
+        else:
+            assert world.row(model, mine) is None
 
     def test_patch_with_foreign_item_id_404_and_row_unchanged(self, world, pov, path, model, body):
         a, b = pov.a, pov.b
@@ -1307,7 +1311,12 @@ def _own_row_ids(world: World, tenant: Tenant, path: str) -> set[str]:
         "scout-requests": ScoutRequest,
         **{p: m for p, m, _b in CONTEXT},
     }[path]
-    return {r["id"] for r in _rows(world, model) if r["workspace_id"] == tenant.ws_id}
+    # A retired claims-library entry (W21 CF-2 soft retirement) is no longer listed.
+    return {
+        r["id"]
+        for r in _rows(world, model)
+        if r["workspace_id"] == tenant.ws_id and r.get("retired_at") is None
+    }
 
 
 def _ensure_two_rows(world: World, tenant: Tenant, path: str) -> list[tuple[type, str]]:

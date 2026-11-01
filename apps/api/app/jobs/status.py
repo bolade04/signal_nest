@@ -159,6 +159,10 @@ class JobType(StrEnum):
     #: inside the job's own workspace; a full batch enqueues its successor. Refuses a
     #: class whose duration is not configured (``app.privacy.retention``).
     RETENTION_PURGE = "retention.purge"
+    #: Project Phase 5C text creative generation (W21 CF-2). The handler registered at CF-2
+    #: is a stub that refuses every attempt (``app.jobs.creative_handlers``); the 5C lanes
+    #: replace its body. Nothing enqueues it while ``creative_generation_enabled`` is dark.
+    CREATIVE_GENERATE = "creative.generate"
 
 
 #: Job types no customer role may cancel. A retention purge applies the operator's retention

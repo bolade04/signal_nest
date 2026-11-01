@@ -40,10 +40,19 @@ class GeoReasoningOut(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class GenerateCreativeOut(BaseModel):
+    """Project Phase 5C (W21 CF-2): one generated marketing-text draft, bounded."""
+
+    headline: str = Field(default="", max_length=200)
+    body: str = Field(min_length=1, max_length=4000)
+    call_to_action: str = Field(default="", max_length=200)
+
+
 TASK_SCHEMAS: dict[str, type[BaseModel]] = {
     "classify_signal": ClassifySignalOut,
     "explain_opportunity": ExplainOpportunityOut,
     "check_claim_safety": ClaimRiskReviewOut,
     "summarize_website": SummarizeOut,
     "geo_reasoning": GeoReasoningOut,
+    "generate_creative": GenerateCreativeOut,
 }

@@ -98,6 +98,10 @@ class ClaimsLibraryEntry(Base, _WorkspaceScoped):
     category: Mapped[str | None] = mapped_column(String(80))  # health, financial, comparative...
     risk_level: Mapped[str] = mapped_column(String(20), default="low")
     notes: Mapped[str | None] = mapped_column(Text)
+    #: Soft retirement (Project Phase 5C, W21 CF-2): the claims library is a protected
+    #: safety control once generation reads it, so an entry is never hard-deleted through
+    #: the API; ``DELETE`` sets this, and a retired entry is no longer listed or applied.
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SourcePreference(Base, _WorkspaceScoped):

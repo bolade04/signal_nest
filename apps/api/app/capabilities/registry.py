@@ -43,6 +43,11 @@ class Capability(StrEnum):
     OPPORTUNITY_FEEDBACK = "opportunity_feedback"
     SCOUT_SCHEDULING = "scout_scheduling"
     CONNECTOR_RSS = "connector_rss"
+    #: Project Phase 5A recommendation briefs and the 5B approvals that act on them
+    #: (one dark switch for the whole 5A+5B customer surface). Added at CF-1.
+    RECOMMENDATION_BRIEFS = "recommendation_briefs"
+    #: Project Phase 5C text creative generation. Added at CF-2.
+    CREATIVE_GENERATION = "creative_generation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +121,34 @@ _POLICIES: tuple[CapabilityPolicy, ...] = (
         subject_to_safety_ceiling=True,
         requires_workspace_context=True,
         future_activation_phase="4B",
+    ),
+    CapabilityPolicy(
+        capability=Capability.RECOMMENDATION_BRIEFS,
+        label="Recommendation Briefs",
+        global_flag_attr="recommendation_briefs_enabled",
+        # Operator decision O-3 (2026-09-01,
+        # ``REC_all_three_workspace_enableable_default_false``): enableable per
+        # workspace, global default False. Activation itself stays operator-gated
+        # (Project Phase 5 plan §10).
+        workspace_enableable=True,
+        workspace_disableable=True,
+        subject_to_safety_ceiling=True,
+        requires_workspace_context=True,
+        # Milestone-grained, matching the "4B" granularity (5A exit criterion 2).
+        future_activation_phase="5A",
+    ),
+    CapabilityPolicy(
+        capability=Capability.CREATIVE_GENERATION,
+        label="Creative Generation",
+        global_flag_attr="creative_generation_enabled",
+        # Operator decision O-3: enableable per workspace, global default False.
+        # Activation additionally needs O-5, O-7 and the 5C threat-model gates
+        # (Project Phase 5 plan §10); nothing here activates it.
+        workspace_enableable=True,
+        workspace_disableable=True,
+        subject_to_safety_ceiling=True,
+        requires_workspace_context=True,
+        future_activation_phase="5C",
     ),
 )
 

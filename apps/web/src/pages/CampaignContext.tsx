@@ -34,7 +34,7 @@ import { TagInput } from '@/components/ui/tag-input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { sourceTypeLabels } from '@/lib/labels';
-import { canEditWorkspace, useActorRole } from '@/lib/roles';
+import { canEditWorkspace, canManageClaims, useActorRole } from '@/lib/roles';
 import { titleCase } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 
@@ -394,9 +394,12 @@ function KindPanel({ workspaceId, config }: { workspaceId: string; config: KindC
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { organizationId } = useWorkspace();
-  // Adding and removing context are editor actions (EDITORS gate); every member
-  // keeps the list. An unresolved role is denied until it resolves.
-  const canEdit = canEditWorkspace(useActorRole(organizationId).role);
+  // Adding and removing context are editor actions (EDITORS gate), except on the claims
+  // library: a protected safety control whose /claims writes are steward-only (owner,
+  // admin, compliance_reviewer; CLAIMS_STEWARDS, W21 CF-2). Every member keeps the list.
+  // An unresolved role is denied until it resolves.
+  const role = useActorRole(organizationId).role;
+  const canEdit = config.kind === 'claims' ? canManageClaims(role) : canEditWorkspace(role);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [toDelete, setToDelete] = useState<ContextRow | null>(null);
 

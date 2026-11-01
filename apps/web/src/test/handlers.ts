@@ -389,6 +389,24 @@ const capabilityRegistryItems = [
     workspace_disableable: true,
     future_activation_phase: '4B',
   },
+  {
+    // Project Phase 5A (W21 CF-1): enableable per workspace (O-3), dark by default.
+    capability: 'recommendation_briefs',
+    label: 'Recommendation Briefs',
+    global_flag_attr: 'recommendation_briefs_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5A',
+  },
+  {
+    // Project Phase 5C (W21 CF-2): enableable per workspace (O-3), dark by default.
+    capability: 'creative_generation',
+    label: 'Creative Generation',
+    global_flag_attr: 'creative_generation_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5C',
+  },
 ] as const;
 
 interface OverrideRow {
@@ -1239,7 +1257,7 @@ export const handlers = [
       is_local_mode: true,
       all_configured: true,
       // Every registered capability ships dark by default, mirroring the server
-      // flags (`config.py`: all three default False). Tests that need a
+      // flags (`config.py`: all five default False). Tests that need a
       // capability ON install a per-test `server.use(...)` override rather than
       // changing this shared default — so the dark path is what renders unless a
       // test explicitly opts out of it.
@@ -1247,6 +1265,8 @@ export const handlers = [
         opportunity_feedback_enabled: false,
         scout_scheduling_enabled: false,
         connector_rss_enabled: false,
+        recommendation_briefs_enabled: false,
+        creative_generation_enabled: false,
       },
     }),
   ),

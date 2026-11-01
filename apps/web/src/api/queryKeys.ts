@@ -92,6 +92,45 @@ export const queryKeys = {
       intelligenceRecordId,
     ] as const,
 
+  // Project Phase 5A/5B (W21 CF-1; the routes land with the 5A/5B build lanes). Briefs are
+  // keyed under their opportunity's detail prefix, so invalidating an opportunity reaches
+  // its briefs, and a brief's approval history under that brief: workspace, opportunity and
+  // brief all embedded, so no entry is ever shared across tenants or subjects.
+  opportunityBriefs: (workspaceId: string, opportunityId: string) =>
+    ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId, 'briefs'] as const,
+  opportunityBrief: (workspaceId: string, opportunityId: string, briefId: string) =>
+    ['workspaces', workspaceId, 'opportunities', 'detail', opportunityId, 'briefs', briefId] as const,
+  briefApprovals: (workspaceId: string, opportunityId: string, briefId: string) =>
+    [
+      'workspaces',
+      workspaceId,
+      'opportunities',
+      'detail',
+      opportunityId,
+      'briefs',
+      briefId,
+      'approvals',
+    ] as const,
+  // The workspace's approval queue (5B). Workspace-scoped: approver authority is
+  // organization-wide, but each workspace's queue is its own cache entry.
+  approvalQueue: (workspaceId: string) => ['workspaces', workspaceId, 'approvals'] as const,
+  // Workspace-effective briefs availability (5A; the feedbackCapability reasoning): a
+  // per-workspace answer, never the raw-global runtimeSummary entry.
+  briefCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'brief-capability'] as const,
+
+  // Project Phase 5C (W21 CF-2; the routes land with the 5C build lanes). A brief's drafts
+  // follow the 5C routes (`/workspaces/{ws}/briefs/{brief}/drafts`): workspace and brief are
+  // embedded, so no entry is shared across tenants or briefs. One draft is keyed by
+  // workspace and draft id (`/workspaces/{ws}/drafts/{draft}`). Workspace-effective
+  // generation availability has its own per-workspace key (the feedbackCapability reasoning).
+  briefDrafts: (workspaceId: string, briefId: string) =>
+    ['workspaces', workspaceId, 'briefs', briefId, 'drafts'] as const,
+  creativeDraft: (workspaceId: string, draftId: string) =>
+    ['workspaces', workspaceId, 'drafts', draftId] as const,
+  creativeCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'creative-capability'] as const,
+
   // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
   // `runtimeSummary`: that key carries the raw global flags, has no workspace in
   // it, and is shared at a 60s staleTime — putting a per-workspace answer there

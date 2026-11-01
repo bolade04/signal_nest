@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import opportunity_status_action
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.core.enums import OpportunityStatus, Role
@@ -217,7 +218,7 @@ def update_opportunity_status(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action=f"opportunity.{body.status}",
+        action=opportunity_status_action(body.status),
         entity_type="opportunity",
         entity_id=opp.id,
     )

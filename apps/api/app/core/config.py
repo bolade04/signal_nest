@@ -15,6 +15,7 @@ when required credentials or services are not configured.
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 from functools import lru_cache
 from typing import Literal
@@ -26,6 +27,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 AppMode = Literal["local", "full"]
 Environment = Literal["development", "staging", "production", "test"]
 LLMProvider = Literal["mock", "openai", "anthropic"]
+
+#: The Project Phase 5C cost and quota ceiling settings (W21 CF-2). Each defaults to None
+#: (not configured); 5C generation refuses while any is unset.
+CREATIVE_GENERATION_CEILINGS: tuple[str, ...] = (
+    "llm_daily_cost_ceiling_usd_global",
+    "llm_daily_cost_ceiling_usd_per_workspace",
+    "llm_max_calls_per_workspace_per_day",
+    "llm_max_output_tokens_per_call",
+)
 MailBackend = Literal["memory", "console", "ses"]
 GeocoderBackend = Literal["fixture", "aws_location"]
 
@@ -484,6 +494,39 @@ class Settings(BaseSettings):
     #: foundation ships fully inert behind this flag. Capture-only by design -
     #: enabling this never influences scoring, ranking, or model training.
     opportunity_feedback_enabled: bool = False
+
+    # --- Project Phase 5A: recommendation briefs (W21 CF-1) — BEGIN ----------
+    #: Master switch for recommendation briefs and their approvals (dark by
+    #: default). Bound to ``Capability.RECOMMENDATION_BRIEFS``, which is
+    #: ``workspace_enableable`` (operator decision O-3), so availability is the
+    #: capability resolver's per-workspace decision, never this raw flag. CF-1 adds
+    #: the flag, the capability and the contracts only: no route, service or model
+    #: call consumes it yet.
+    recommendation_briefs_enabled: bool = False
+    # --- Project Phase 5A: recommendation briefs (W21 CF-1) — END ------------
+
+    # --- Project Phase 5C: creative generation (W21 CF-2) — BEGIN -------------
+    #: Master switch for text creative generation (dark by default). Bound to
+    #: ``Capability.CREATIVE_GENERATION``, which is ``workspace_enableable`` (O-3), so
+    #: availability is the capability resolver's per-workspace decision. CF-2 adds the
+    #: flag, the capability and the contracts only: nothing consumes it yet.
+    creative_generation_enabled: bool = False
+    #: The four 5C cost and quota ceilings. **None has an approved value**: ``None``
+    #: means "not configured", and the 5C generation service must refuse every
+    #: generation while any of them is unset (fail closed; coordinator decision, W21
+    #: CF-2). Values wait for the operator's cost evidence and D-LLM-5. When set, each
+    #: must be a finite number greater than 0 (NaN would compare false against every
+    #: spend and fail open; infinity is no ceiling). ``creative_generation_ceilings_unset()``
+    #: names the unset ones.
+    #: Daily (UTC) model-spend ceiling across every workspace, in USD.
+    llm_daily_cost_ceiling_usd_global: float | None = None
+    #: Daily (UTC) model-spend ceiling per workspace, in USD.
+    llm_daily_cost_ceiling_usd_per_workspace: float | None = None
+    #: Model calls one workspace may make per UTC day (generation).
+    llm_max_calls_per_workspace_per_day: int | None = None
+    #: Upper bound on generated tokens for one generation call.
+    llm_max_output_tokens_per_call: int | None = None
+    # --- Project Phase 5C: creative generation (W21 CF-2) — END ---------------
 
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
@@ -1150,6 +1193,29 @@ class Settings(BaseSettings):
         if errors:
             raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
         return self
+
+    # --- Project Phase 5C ceilings (W21 CF-2) ----------------------------------
+    @model_validator(mode="after")
+    def _validate_creative_ceilings(self) -> Settings:
+        """A configured 5C ceiling must be a finite number greater than 0. ``value <= 0``
+        alone would let ``nan`` through (every comparison with NaN is false, so a NaN
+        ceiling would never refuse: fail open) and ``inf`` (no ceiling at all). Unset (None)
+        is valid everywhere: it means "not configured", and the 5C service refuses
+        generation until all are set."""
+        errors = [
+            f"{name} must be a finite number greater than 0 when set"
+            for name in CREATIVE_GENERATION_CEILINGS
+            if (value := getattr(self, name)) is not None
+            and not (math.isfinite(value) and value > 0)
+        ]
+        if errors:
+            raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
+        return self
+
+    def creative_generation_ceilings_unset(self) -> tuple[str, ...]:
+        """The 5C ceiling settings that are not configured. Generation must refuse while
+        this is non-empty (fail closed)."""
+        return tuple(name for name in CREATIVE_GENERATION_CEILINGS if getattr(self, name) is None)
 
     # --- Privacy: retention validation (P6-PRIV-1) — privacy block ------------
     @model_validator(mode="after")

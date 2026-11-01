@@ -74,6 +74,17 @@ class FeatureFlagsOut(BaseModel):
     #: connector and performs no fetch.
     connector_rss_enabled: bool
 
+    #: The RAW global recommendation-briefs flag (Project Phase 5A, CF-1), reflected
+    #: per operator decision O-4 (``ALT_expose_all``). Like the others it does NOT
+    #: decide availability for a workspace: the briefs/approvals gate will decide
+    #: through the capability resolver, where a workspace override outranks it.
+    recommendation_briefs_enabled: bool
+
+    #: The RAW global creative-generation flag (Project Phase 5C, CF-2), reflected per
+    #: operator decision O-4 (``ALT_expose_all``). It does not decide availability for a
+    #: workspace: the 5C gate will decide through the capability resolver.
+    creative_generation_enabled: bool
+
 
 class RuntimeSummaryOut(BaseModel):
     app_mode: str
@@ -129,6 +140,8 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
             opportunity_feedback_enabled=settings.opportunity_feedback_enabled,
             scout_scheduling_enabled=settings.scout_scheduling_enabled,
             connector_rss_enabled=settings.connector_rss_enabled,
+            recommendation_briefs_enabled=settings.recommendation_briefs_enabled,
+            creative_generation_enabled=settings.creative_generation_enabled,
         ),
     )
 

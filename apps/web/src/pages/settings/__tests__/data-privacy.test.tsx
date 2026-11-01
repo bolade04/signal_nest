@@ -98,6 +98,9 @@ const EXPORT: AccountExportOut = {
   feedback_submitted: [],
   capability_overrides_set: [],
   audit_events_performed: [],
+  briefs_authored: [],
+  approvals_decided: [],
+  drafts_authored: [],
 };
 
 function RoleProbe() {
