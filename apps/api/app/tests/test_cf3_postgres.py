@@ -24,7 +24,7 @@ from collections.abc import Iterator
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 from app.tests._auth2_support import pg_database, require_postgres
 from app.tests.test_postgres_migration_proof import (
@@ -190,8 +190,15 @@ def test_the_constraints_hold_on_postgresql(pg_url: str) -> None:
     export = {"organization_id": "o", "workspace_id": "w", "draft_version": 1,
               "format": "text/plain", "exported_by_snapshot": "s", "is_simulated": False}
     _insert(pg_url, EXPORTS, [{"id": "e-ok", **export, "jurisdiction_code": "NG-LA"}])
-    for n, code in enumerate(("UNRESOLVED", "us-tx", "USA", None)):
-        with pytest.raises(IntegrityError):
+    # The 10-character sentinel already exceeds VARCHAR(6) on PostgreSQL, so the length bound
+    # refuses it (DataError) before the CHECK is evaluated; SQLite, which does not enforce
+    # VARCHAR lengths, refuses it by the CHECK (test_cf3_contract_migration). Either way the
+    # database never stores it.
+    with pytest.raises(DataError):
+        sentinel = {"id": "e-sentinel", **export, "jurisdiction_code": "UNRESOLVED"}
+        _insert(pg_url, EXPORTS, [sentinel])
+    for n, code in enumerate(("us-tx", "USA", "US_TX", None)):
+        with pytest.raises(IntegrityError):  # the shape CHECK, or NOT NULL
             _insert(pg_url, EXPORTS, [{"id": f"e-bad-{n}", **export, "jurisdiction_code": code}])
     # Deleting the campaign removes its membership (the composite key cascades).
     engine = create_engine(pg_url)
