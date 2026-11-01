@@ -42,6 +42,14 @@ Phase 5A seam (always live, un-flagged; disclosed in the Phase 5 plan section 9)
   nothing and can assert every back-off.
 * :func:`get_llm_service` is the accessor call sites use; the module-level
   ``llm_service`` stays the default instance it returns.
+* **Metrics** (names and closed label values frozen at the W21 CF-1 amendment,
+  :mod:`app.core.metrics`): every provider attempt counts ``llm_calls_total`` (``outcome``
+  success|failure, ``error_class`` none or its class in the ``app.llm`` taxonomy) and
+  observes ``llm_call_duration_ms``; a reply's usage adds to ``llm_input_tokens_total`` /
+  ``llm_output_tokens_total``; an attempt the meter refuses counts as a failure
+  ``budget_exceeded`` with no duration. Labels are the provider (``dependency``) and the task
+  (``operation``) only - never a tenant, request or free-text value; a provider or task
+  outside the closed vocabularies (a test double) emits nothing.
 """
 
 from __future__ import annotations
@@ -50,24 +58,35 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from pydantic import BaseModel, ValidationError
 
+from app.core.config import LLMProvider as ConfiguredProvider
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger, trace_id_ctx
+from app.core.metrics import (
+    LLM_CALL_DURATION_MS,
+    LLM_CALLS_TOTAL,
+    LLM_INPUT_TOKENS_TOTAL,
+    LLM_OUTPUT_TOKENS_TOTAL,
+    get_metrics,
+)
 from app.llm.base import (
     LLMError,
     LLMMalformedError,
     LLMProvider,
+    LLMProviderError,
     LLMRateLimitError,
+    LLMRefusalError,
     LLMRequest,
     LLMResponse,
     LLMTenantError,
     LLMTimeoutError,
     LLMUnavailableError,
+    LLMUsage,
 )
-from app.llm.metering import cost_usd, tenant_reference
+from app.llm.metering import LLMBudgetExceededError, cost_usd, tenant_reference
 from app.llm.mock import MockLLMProvider
 from app.llm.prompts import Prompt, get_prompt
 from app.llm.schemas import TASK_SCHEMAS
@@ -121,6 +140,64 @@ def compute_input_hash(task: str, prompt: Prompt, inputs: dict[str, Any]) -> str
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+#: ``dependency`` label values: the configured providers (CF-1 closed vocabulary).
+_METRIC_DEPENDENCIES = frozenset(get_args(ConfiguredProvider))
+#: ``error_class`` label of each ``app.llm`` error class, most specific first (CF-1 closed
+#: vocabulary, ``app.core.metrics.LLM_METRIC_ERROR_CLASSES``); anything else is "other".
+_METRIC_ERROR_CLASSES: tuple[tuple[type[Exception], str], ...] = (
+    (LLMBudgetExceededError, "budget_exceeded"),
+    (LLMTimeoutError, "timeout"),
+    (LLMRateLimitError, "rate_limit"),
+    (LLMRefusalError, "refusal"),
+    (LLMMalformedError, "malformed"),
+    (LLMUnavailableError, "unavailable"),
+    (LLMProviderError, "provider_error"),
+)
+
+
+def _metric_error_class(error: Exception | None) -> str:
+    if error is None:
+        return "none"
+    for cls, code in _METRIC_ERROR_CLASSES:
+        if isinstance(error, cls):
+            return code
+    return "other"
+
+
+def _record_call(
+    provider: str,
+    task: str,
+    *,
+    error: Exception | None = None,
+    duration_ms: float | None = None,
+    usage: LLMUsage | None = None,
+) -> None:
+    """Count one model attempt (closed labels only; see the module docstring)."""
+    if provider not in _METRIC_DEPENDENCIES or task not in TASK_SCHEMAS:
+        return  # never emit a label value outside the frozen vocabularies
+    metrics = get_metrics()
+    outcome = "success" if error is None else "failure"
+    metrics.increment(
+        LLM_CALLS_TOTAL,
+        dependency=provider,
+        operation=task,
+        outcome=outcome,
+        error_class=_metric_error_class(error),
+    )
+    if duration_ms is not None:
+        metrics.observe(
+            LLM_CALL_DURATION_MS, duration_ms, dependency=provider, operation=task,
+            outcome=outcome,
+        )
+    if usage is not None:
+        if usage.input_tokens > 0:
+            metrics.increment(LLM_INPUT_TOKENS_TOTAL, amount=usage.input_tokens,
+                              dependency=provider, operation=task)
+        if usage.output_tokens > 0:
+            metrics.increment(LLM_OUTPUT_TOKENS_TOTAL, amount=usage.output_tokens,
+                              dependency=provider, operation=task)
+
+
 def _require_tenant(
     organization_id: str, workspace_id: str, meter: LLMMeter | None
 ) -> None:
@@ -158,9 +235,13 @@ class LLMService:
         *,
         sleep: Callable[[float], None] = time.sleep,
         settings: Settings | None = None,
+        clock: Callable[[], float] = time.perf_counter,
     ):
         self._provider = provider or _build_provider()
+        #: The injectable clock: ``sleep`` waits between attempts, ``clock`` (seconds,
+        #: monotonic) times each attempt for ``llm_call_duration_ms``.
         self._sleep = sleep
+        self._clock = clock
         self._settings = settings
 
     @property
@@ -218,13 +299,24 @@ class LLMService:
         last_error: Exception | None = None
         for attempt in range(attempts):
             if meter is not None:
-                meter.before_attempt(provider_name, model, self._wire_bytes(request))
+                try:
+                    meter.before_attempt(provider_name, model, self._wire_bytes(request))
+                except LLMBudgetExceededError as exc:
+                    _record_call(provider_name, task, error=exc)  # not made: no duration
+                    raise
+            started = self._clock()
             try:
                 response = self._provider.generate(request, prompt.name, prompt.version)
-            except _TRANSIENT as exc:
+            except LLMError as exc:
+                _record_call(
+                    provider_name, task, error=exc,
+                    duration_ms=(self._clock() - started) * 1000,
+                    usage=getattr(exc, "usage", None),
+                )
                 charge(error=exc)
                 last_error = exc
-                if attempt + 1 >= attempts:
+                # A permanent failure (rejected, refused, malformed) is never retried.
+                if not isinstance(exc, _TRANSIENT) or attempt + 1 >= attempts:
                     break
                 backoff = _backoff_seconds(attempt, exc, settings.llm_retry_after_cap_seconds)
                 logger.warning(
@@ -241,10 +333,7 @@ class LLMService:
                 )
                 self._sleep(backoff)
                 continue
-            except LLMError as exc:
-                charge(error=exc)
-                last_error = exc
-                break
+            duration_ms = (self._clock() - started) * 1000
             response.usage.estimated_cost_usd = cost_usd(
                 settings,
                 provider_name,
@@ -259,8 +348,11 @@ class LLMService:
             try:
                 validated = self._validate(task, response)
             except LLMMalformedError as exc:
+                _record_call(provider_name, task, error=exc, duration_ms=duration_ms,
+                             usage=response.usage)
                 last_error = exc
                 break
+            _record_call(provider_name, task, duration_ms=duration_ms, usage=response.usage)
             self._log(response, attempt)
             return validated, response
 

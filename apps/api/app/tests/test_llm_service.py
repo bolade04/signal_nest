@@ -394,3 +394,149 @@ class TestUsageLinkAndAccessor:
         replacement = LLMService(_Recording(), settings=offline_settings())
         monkeypatch.setattr(service_module, "llm_service", replacement)
         assert get_llm_service() is replacement
+
+
+# --------------------------------------------------------------------------- #
+# Metrics: call count, duration and tokens; closed labels, no tenant label
+# --------------------------------------------------------------------------- #
+class _Clock:
+    """An injected monotonic clock: every reading advances 0.25 s."""
+
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        self.now += 0.25
+        return self.now
+
+
+@pytest.fixture
+def metrics():
+    from app.core.metrics import InMemoryMetrics, configure_metrics, get_metrics
+
+    previous = get_metrics()
+    backend = InMemoryMetrics()
+    configure_metrics(backend)
+    try:
+        yield backend
+    finally:
+        configure_metrics(previous)
+
+
+def _labels(provider="mock", task="classify_signal", outcome="success", error_class="none"):
+    return {"dependency": provider, "operation": task, "outcome": outcome,
+            "error_class": error_class}
+
+
+class TestMetrics:
+    def test_a_successful_call_counts_times_and_adds_its_tokens(self, metrics):
+        from app.core.metrics import (
+            LLM_CALL_DURATION_MS,
+            LLM_CALLS_TOTAL,
+            LLM_INPUT_TOKENS_TOTAL,
+            LLM_OUTPUT_TOKENS_TOTAL,
+        )
+
+        bodies: list[dict] = []
+        LLMService(_anthropic(bodies), settings=offline_settings(), clock=_Clock()).run(
+            "classify_signal", CLEAN, **TEST_TENANT
+        )
+        assert metrics.counter_value(LLM_CALLS_TOTAL, **_labels("anthropic")) == 1
+        assert metrics.observations(
+            LLM_CALL_DURATION_MS, dependency="anthropic", operation="classify_signal",
+            outcome="success",
+        ) == [250.0]
+        assert metrics.counter_value(LLM_INPUT_TOKENS_TOTAL, dependency="anthropic",
+                                     operation="classify_signal") == 10
+        assert metrics.counter_value(LLM_OUTPUT_TOKENS_TOTAL, dependency="anthropic",
+                                     operation="classify_signal") == 5
+
+    def test_each_attempt_counts_with_its_error_class(self, metrics):
+        from app.core.metrics import LLM_CALL_DURATION_MS, LLM_CALLS_TOTAL
+
+        provider = _Flaky(LLMTimeoutError("t"), LLMRateLimitError("r"))
+        LLMService(provider, sleep=lambda _s: None, settings=offline_settings(),
+                   clock=_Clock()).run("classify_signal", CLEAN, **TEST_TENANT)
+        assert metrics.counter_value(
+            LLM_CALLS_TOTAL, **_labels(outcome="failure", error_class="timeout")) == 1
+        assert metrics.counter_value(
+            LLM_CALLS_TOTAL, **_labels(outcome="failure", error_class="rate_limit")) == 1
+        assert metrics.counter_value(LLM_CALLS_TOTAL, **_labels()) == 1
+        assert len(metrics.observations(LLM_CALL_DURATION_MS, dependency="mock",
+                                        operation="classify_signal", outcome="failure")) == 2
+
+    def test_a_schema_invalid_reply_is_a_malformed_failure(self, metrics):
+        from app.core.metrics import LLM_CALLS_TOTAL
+
+        with pytest.raises(LLMMalformedError):
+            LLMService(_anthropic([], output={"sentiment": 3}),
+                       settings=offline_settings()).run("classify_signal", CLEAN,
+                                                        **TEST_TENANT)
+        assert metrics.counter_value(
+            LLM_CALLS_TOTAL, **_labels("anthropic", outcome="failure", error_class="malformed")
+        ) == 1
+        assert metrics.counter_value(LLM_CALLS_TOTAL, **_labels("anthropic")) == 0
+
+    def test_a_refused_attempt_counts_budget_exceeded_without_a_duration(self, metrics, ledger):
+        from app.core.metrics import LLM_CALL_DURATION_MS, LLM_CALLS_TOTAL
+        from app.llm.metering import LLMBudgetExceededError
+
+        settings = offline_settings(llm_provider="anthropic", llm_api_key="fixture-key",
+                                    llm_model="claude-sonnet-4-6",
+                                    llm_workspace_monthly_budget_usd=0.0)
+        meter = LLMMeter(settings).bind(ledger, organization_id="org-a", workspace_id="ws-a",
+                                        scout_request_id=None)
+        bodies: list[dict] = []
+        with pytest.raises(LLMBudgetExceededError):
+            LLMService(_anthropic(bodies), settings=settings).run(
+                "classify_signal", CLEAN, organization_id="org-a", workspace_id="ws-a",
+                meter=meter,
+            )
+        assert bodies == []
+        assert metrics.counter_value(
+            LLM_CALLS_TOTAL,
+            **_labels("anthropic", outcome="failure", error_class="budget_exceeded"),
+        ) == 1
+        assert metrics.observations(LLM_CALL_DURATION_MS, dependency="anthropic",
+                                    operation="classify_signal", outcome="failure") == []
+
+    def test_every_label_value_is_from_a_closed_vocabulary_and_none_names_a_tenant(
+        self, metrics
+    ):
+        from typing import get_args
+
+        from app.core.config import LLMProvider as ConfiguredProvider
+        from app.core.metrics import (
+            LLM_METRIC_ERROR_CLASSES,
+            LLM_METRIC_LABELS,
+            LLM_METRIC_OUTCOMES,
+        )
+        from app.llm.schemas import TASK_SCHEMAS
+
+        tenant = {"organization_id": "org-secret-7", "workspace_id": "ws-secret-7"}
+        for provider, inputs in ((_Flaky(LLMTimeoutError("t")), CLEAN),
+                                 (_anthropic([]), NESTED_MARKERS)):
+            LLMService(provider, sleep=lambda _s: None, settings=offline_settings()).run(
+                "classify_signal", inputs, **tenant
+            )
+        allowed = {
+            "dependency": set(get_args(ConfiguredProvider)),
+            "operation": set(TASK_SCHEMAS),
+            "outcome": set(LLM_METRIC_OUTCOMES),
+            "error_class": set(LLM_METRIC_ERROR_CLASSES),
+        }
+        series = [*metrics._counters, *metrics._histograms]
+        assert series
+        for name, labels in series:
+            assert {k for k, _v in labels} == LLM_METRIC_LABELS[name], name
+            for key, value in labels:
+                assert value in allowed[key], (name, key, value)
+                assert "secret" not in value
+
+    def test_a_provider_outside_the_vocabulary_emits_nothing(self, metrics):
+        class Odd(_Recording):
+            name = "not-a-configured-provider"
+
+        LLMService(Odd(), settings=offline_settings()).run("classify_signal", CLEAN,
+                                                           **TEST_TENANT)
+        assert not metrics._counters and not metrics._histograms
