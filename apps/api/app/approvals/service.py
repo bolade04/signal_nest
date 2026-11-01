@@ -200,28 +200,33 @@ def is_approved(db: Session, *, brief: RecommendationBrief) -> bool:
 # decision_seq: lock, read, insert (a clash is a 409)
 # --------------------------------------------------------------------------- #
 def subject_lock_select(brief_id: str) -> Select:
-    """``SELECT … FOR UPDATE`` on the subject's brief row (the per-subject serializer).
+    """``SELECT id, brief_version … FOR UPDATE`` on the subject's brief row (the per-subject
+    serializer).
 
     Factored out so a test can compile it against the PostgreSQL dialect and prove it
-    emits ``FOR UPDATE`` (the ``_workspace_lock_select`` convention). Selects the id column,
-    not the entity, so the identity map is untouched.
+    emits ``FOR UPDATE`` (the ``_workspace_lock_select`` convention). Selects columns, not
+    the entity, so the identity map is untouched; the version is read under the lock.
     """
     return (
-        select(RecommendationBrief.id).where(RecommendationBrief.id == brief_id).with_for_update()
+        select(RecommendationBrief.id, RecommendationBrief.brief_version)
+        .where(RecommendationBrief.id == brief_id)
+        .with_for_update()
     )
 
 
-def _lock_subject(db: Session, brief_id: str) -> None:
-    """Hold the subject's row lock until the caller's transaction ends.
+def _lock_subject(db: Session, brief_id: str) -> int:
+    """Hold the subject's row lock until the caller's transaction ends; return its version.
 
     Taken before ``max(decision_seq)`` is read. On SQLite ``FOR UPDATE`` compiles to a plain
     read (the single-writer engine serializes writers); correctness there rests on the
     unique key, whose clash is a 409.
     """
-    if db.execute(subject_lock_select(brief_id)).first() is None:
+    row = db.execute(subject_lock_select(brief_id)).first()
+    if row is None:
         # The brief vanished between the scoped read and the lock (deleted with its
         # workspace or opportunity): the same non-enumerating answer.
         raise NotFoundError(BRIEF_NOT_FOUND)
+    return int(row.brief_version)
 
 
 def _next_decision_seq(db: Session, *, subject_id: str, subject_version: int) -> int:
@@ -290,9 +295,9 @@ def record_decision(
     """Append one decision on ``brief``'s exact version, with its audit row; flush only.
 
     Order of checks (each refusal writes nothing): the approver role (403), the brief's
-    tenant scope (404), separation of duties (403), the exact version (409), reason
-    polarity (422); then the subject lock, the transition rule against the controlling
-    decision read under that lock (409), the sequenced insert and the audit row.
+    tenant scope (404), separation of duties (403), reason polarity (422); then, under the
+    subject lock: the row still exists (404), the exact version (409), the transition rule
+    against the controlling decision (409); then the sequenced insert and the audit row.
     """
     decision = ApprovalDecision(decision)
     role = Role(ctx.role)
@@ -303,13 +308,16 @@ def record_decision(
         raise NotFoundError(BRIEF_NOT_FOUND)
     if is_brief_author(brief, ctx.user.id):
         raise PermissionDeniedError(AUTHOR_CANNOT_DECIDE, code="approval_author_conflict")
-    if subject_version != brief.brief_version:
-        raise ConflictError(STALE_VERSION, code="approval_stale_version")
     reason = None if reason_code is None else ApprovalReason(reason_code)
     if not reason_allowed(decision, reason):
         raise ValidationDomainError(REASON_MISMATCH)
 
-    _lock_subject(db, brief.id)
+    # Everything that decides the sequence is read under the subject's row lock, in this
+    # transaction (review rule W21-REV-CF1-DATA): the row's existence (404 if it is gone),
+    # the exact version, the controlling decision, then max(decision_seq).
+    version = _lock_subject(db, brief.id)
+    if subject_version != version:
+        raise ConflictError(STALE_VERSION, code="approval_stale_version")
     latest = controlling_decision(
         db, subject_type=BRIEF_SUBJECT, subject_id=brief.id, subject_version=brief.brief_version
     )
