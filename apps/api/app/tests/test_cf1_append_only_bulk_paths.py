@@ -20,8 +20,8 @@ three of CF-1 and, since CF-2, ``creative_drafts`` and ``content_reviews``), and
   (function, attribute-call or method form, or ``Query``), an upsert or a prefixed insert
   over these models or their tables, writes a literal unqualified UPDATE [ONLY] / UPDATE OR
   <algorithm> / DELETE FROM [ONLY] / INSERT OR <algorithm> INTO / REPLACE INTO / INSERT …
-  DO UPDATE string on the guarded tables (bare, ``"…"``, ``[…]`` or backticks), calls the
-  bulk API or calls ``delete_rows``,
+  DO UPDATE string on the guarded tables (bare, ``"…"``, ``'…'``, ``[…]`` or backticks),
+  calls the bulk API or calls ``delete_rows``,
   following model import aliases and annotated, tuple, list and walrus aliases — with an
   in-test control per form and look-alikes that must pass. It is a backstop to the runtime
   guard; what it does not pin is listed on the production-scan test and in
@@ -444,8 +444,9 @@ _UPSERTS = {"on_conflict_do_update", "on_duplicate_key_update"}
 #: runtime guard refuses (FU-CF1-H1).
 _PREFIXES = {"prefix_with"}
 _TABLE_ALT = "|".join(sorted(_TABLES))
-#: A guarded table name, bare or quoted with "...", [...] or backticks (SQLite takes all three).
-_T = rf"[\"\[`]?(?:{_TABLE_ALT})[\"\]`]?(?![\w])"
+#: A guarded table name, bare or quoted with "...", '...', [...] or backticks (SQLite takes
+#: all four: a single-quoted string in a table position is read as the table's name).
+_T = rf"[\"'\[`]?(?:{_TABLE_ALT})[\"'\]`]?(?![\w])"
 #: SQLite's conflict algorithms (``UPDATE OR <alg>``, ``INSERT OR <alg>``).
 _ALG = r"(?:ROLLBACK|ABORT|REPLACE|FAIL|IGNORE)"
 _SQL_WRITE = re.compile(
@@ -669,6 +670,14 @@ FLAGGED_FORMS = {
     "prefix_with through a variable": (
         "stmt = insert(ContentReview).values(**r)\ndb.execute(stmt.prefix_with('OR REPLACE'))"
     ),
+    # CF2-FIX2 (W21-REV-CF2-DATA r2 C4): SQLite 3.45 executes these as writes.
+    "SQLite single-quoted UPDATE": """db.execute(text("UPDATE 'approvals' SET note = NULL"))""",
+    "SQLite single-quoted INSERT OR REPLACE": (
+        """db.execute(text("INSERT OR REPLACE INTO 'approvals' (id) VALUES (:i)"))"""
+    ),
+    "SQLite single-quoted DELETE FROM": (
+        """db.execute(text("DELETE FROM 'audit_logs' WHERE id = :i"))"""
+    ),
 }
 #: Look-alikes the pin must not flag.
 CLEAN_FORMS = {
@@ -689,6 +698,12 @@ CLEAN_FORMS = {
     "INSERT OR REPLACE into another table": "SQL = 'INSERT OR REPLACE INTO jobs (id) VALUES (:i)'",
     "UPDATE ONLY a similar table name": "SQL = 'UPDATE ONLY approvals_archive SET x = 1'",
     "prose naming a table": "MSG = 'You cannot update or delete approvals.'",
+    "a string literal that is not in a table position": (
+        "SQL = \"UPDATE jobs SET kind = 'approvals' WHERE id = :i\""
+    ),
+    "a quoted value in a DELETE on another table": (
+        "SQL = \"DELETE FROM jobs WHERE note = 'audit_logs'\""
+    ),
 }
 
 
@@ -707,9 +722,9 @@ def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert()
     aliases and annotated, tuple and walrus aliases, and matches only literal, unqualified
     SQL strings on the guarded tables: ``UPDATE [ONLY]``, SQLite's ``UPDATE OR <algorithm>``,
     ``DELETE FROM [ONLY]``, ``INSERT OR <algorithm> INTO``, ``REPLACE INTO`` and ``INSERT …
-    DO UPDATE``, the table name bare or quoted with ``"…"``, ``[…]`` or backticks. It flags a
-    ``prefix_with`` on a guarded insert (function or method form), as the runtime guard
-    refuses every prefix on a guarded ORM insert.
+    DO UPDATE``, the table name bare or quoted with ``"…"``, ``'…'``, ``[…]`` or backticks.
+    It flags a ``prefix_with`` on a guarded insert (function or method form), as the runtime
+    guard refuses every prefix on a guarded ORM insert.
 
     Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts,
     ``prefix_with``) imported or called under another name (e.g. the ``Insert`` class or an
@@ -718,8 +733,10 @@ def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert()
     ``Table("approvals", …)``) or reached through ``Base.metadata``, ``getattr``,
     ``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as
     parameters; SQL that schema-qualifies the table (``public.approvals``,
-    ``main.approvals``), puts a comment between the keywords and the table name, or uses
-    TRUNCATE or MERGE; a conflict clause declared in DDL (pinned absent separately, by
+    ``main.approvals``), puts a comment between the keywords and the table name, names the
+    table as a PostgreSQL Unicode-escape identifier (``U&"…"``), or uses TRUNCATE or MERGE;
+    DDL on a guarded table (``DROP TABLE``, ``ALTER TABLE … DROP COLUMN``); SQL given as a
+    ``bytes`` literal; a conflict clause declared in DDL (pinned absent separately, by
     ``test_no_guarded_table_declares_a_sqlite_conflict_clause``); and SQL assembled at run
     time. (The guarded, development-only demo reset in ``app.db.seed`` writes through
     ``Base.metadata`` and is the one sanctioned writer outside ``app/privacy/``.)"""

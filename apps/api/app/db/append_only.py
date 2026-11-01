@@ -79,16 +79,19 @@ insert (``.prefix_with(...)``, function or method form) over these models or the
 writes a literal SQL string naming one of the guarded tables unqualified — ``UPDATE
 [ONLY] <table>``, SQLite's ``UPDATE OR <algorithm> <table>``, ``DELETE FROM [ONLY]
 <table>``, ``INSERT OR <algorithm> INTO <table>``, ``REPLACE INTO <table>`` or ``INSERT INTO
-<table> … DO UPDATE``, the name bare or quoted with ``"…"``, ``[…]`` or backticks — calls the
-bulk API or calls ``delete_rows``, following **model** import aliases and annotated, tuple and
-walrus aliases. **Not pinned:** the statement functions (``update``, ``delete``, ``insert``,
+<table> … DO UPDATE``, the name bare or quoted with ``"…"``, ``'…'`` (SQLite takes a
+single-quoted table name), ``[…]`` or backticks — calls the bulk API or calls
+``delete_rows``, following **model** import aliases and annotated, tuple and walrus aliases.
+**Not pinned:** the statement functions (``update``, ``delete``, ``insert``,
 dialect inserts, ``prefix_with``) imported or called under another name (e.g. the
 ``Insert`` class or an unbound ``Insert.prefix_with(stmt, …)``); models referenced through a
 module (``models.Approval``); tables built or reflected by name (``table("approvals")``,
 ``Table("approvals", …, autoload_with=…)``) or reached through ``Base.metadata``, ``getattr``,
 ``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as parameters;
 SQL that schema-qualifies the table (``public.approvals``, ``main.approvals``), puts a comment
-between the keywords and the table name, or uses ``TRUNCATE`` or ``MERGE``; a conflict clause
+between the keywords and the table name, names the table as a PostgreSQL Unicode-escape
+identifier (``U&"…"``), or uses ``TRUNCATE`` or ``MERGE``; DDL on a guarded table (``DROP
+TABLE``, ``ALTER TABLE … DROP COLUMN``); SQL given as a ``bytes`` literal; a conflict clause
 declared in DDL (``sqlite_on_conflict…``); and SQL assembled at run time.
 
 **Enforcement level (operator decision O-10,
