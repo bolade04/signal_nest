@@ -1311,6 +1311,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/briefs/{brief_id}/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a brief's drafts, newest version first
+         * @description A bounded page of the brief's immutable draft versions, reviews embedded.
+         */
+        get: operations["list_drafts_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_get"];
+        put?: never;
+        /**
+         * Generate a new draft version from an approved brief (a durable job)
+         * @description Enqueue (or join) the generation of one draft version; poll the returned job.
+         */
+        post: operations["generate_brief_draft_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/business-profile": {
         parameters: {
             query?: never;
@@ -1471,6 +1495,47 @@ export interface paths {
         head?: never;
         /** Update Competitors */
         patch: operations["update_competitors_api_v1_workspaces__workspace_id__competitors__item_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/creative-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether creative generation is available for this workspace
+         * @description Customer-facing, workspace-effective availability (any member). Advisory only: every
+         *     draft endpoint re-decides and answers 503 while disabled.
+         */
+        get: operations["read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch one draft version with its content review
+         * @description One draft version (any member; gated); unknown or foreign ids answer 404.
+         */
+        get: operations["get_draft_api_v1_workspaces__workspace_id__drafts__draft_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
@@ -2994,6 +3059,11 @@ export interface components {
             /** Text */
             text?: string;
         };
+        /**
+         * ClaimRisk
+         * @enum {string}
+         */
+        ClaimRisk: "low" | "medium" | "high" | "blocked";
         /** CompetitorIn */
         CompetitorIn: {
             /** Known Weaknesses */
@@ -3016,6 +3086,46 @@ export interface components {
             /** Website */
             website?: string | null;
         };
+        /** ContentFindingOut */
+        ContentFindingOut: {
+            /** Category */
+            category: string;
+            /** Excerpt */
+            excerpt: string;
+            risk: components["schemas"]["ClaimRisk"];
+        };
+        /**
+         * ContentReviewOut
+         * @description The output-side review of one draft version.
+         */
+        ContentReviewOut: {
+            /** Blocked Claim Ids */
+            blocked_claim_ids: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disclaimers Resolved */
+            disclaimers_resolved: boolean;
+            /** Draft Id */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            /** Findings */
+            findings: components["schemas"]["ContentFindingOut"][];
+            /** Id */
+            id: string;
+            /** Is Blocked */
+            is_blocked: boolean;
+            /** Passed */
+            passed: boolean;
+            /** Required Disclaimers */
+            required_disclaimers: string[];
+            risk_level: components["schemas"]["ClaimRisk"];
+            /** Warnings */
+            warnings: string[];
+        };
         /**
          * CoverageReason
          * @enum {string}
@@ -3026,6 +3136,100 @@ export interface components {
          * @enum {string}
          */
         CoverageStatus: "covered" | "not_covered" | "unavailable";
+        /**
+         * CreativeChannel
+         * @description The text channel a creative draft is written for (Phase 5C; text-first: no image,
+         *     video or audio channel exists). The list is a CF-2 proposal recorded for review.
+         * @enum {string}
+         */
+        CreativeChannel: "social_post" | "email" | "search_ad" | "sms" | "landing_page";
+        /**
+         * CreativeDraftCreate
+         * @description Strict request body to generate one draft version from a brief.
+         */
+        CreativeDraftCreate: {
+            channel: components["schemas"]["CreativeChannel"];
+            /** Parent Draft Id */
+            parent_draft_id?: string | null;
+        };
+        /**
+         * CreativeDraftListOut
+         * @description Bounded, newest-version-first page of a brief's drafts.
+         */
+        CreativeDraftListOut: {
+            /** Items */
+            items: components["schemas"]["CreativeDraftOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * CreativeDraftOut
+         * @description Customer-safe projection of one stored draft version, with its review.
+         */
+        CreativeDraftOut: {
+            /** Body */
+            body: string;
+            /** Brief Id */
+            brief_id: string;
+            /** Call To Action */
+            call_to_action?: string | null;
+            /** Campaign Id */
+            campaign_id: string | null;
+            channel: components["schemas"]["CreativeChannel"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Created By Snapshot */
+            created_by_snapshot: string;
+            /** Draft Version */
+            draft_version: number;
+            /** Headline */
+            headline?: string | null;
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Location Id */
+            location_id: string | null;
+            /** Model Identifier */
+            model_identifier: string;
+            /** Opportunity Id */
+            opportunity_id: string;
+            /** Parent Draft Id */
+            parent_draft_id: string | null;
+            /** Prompt Name */
+            prompt_name: string;
+            /** Prompt Version */
+            prompt_version: string;
+            review?: components["schemas"]["ContentReviewOut"] | null;
+        };
+        /**
+         * CreativeGenerationCapabilityOut
+         * @description Customer-visible creative-generation availability for one workspace.
+         *
+         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata
+         *     reaches a customer.
+         */
+        CreativeGenerationCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * CreativeGenerationQueuedOut
+         * @description The generate route's answer: the durable job to poll.
+         */
+        CreativeGenerationQueuedOut: {
+            /** Job Id */
+            job_id: string;
+        };
         /** DataSourceOut */
         DataSourceOut: {
             /** Activatable */
@@ -7715,6 +7919,81 @@ export interface operations {
             };
         };
     };
+    list_drafts_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeDraftListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_brief_draft_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreativeDraftCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeGenerationQueuedOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_business_profile_api_v1_workspaces__workspace_id__business_profile_get: {
         parameters: {
             query?: never;
@@ -8384,6 +8663,73 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeGenerationCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_api_v1_workspaces__workspace_id__drafts__draft_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeDraftOut"];
                 };
             };
             /** @description Validation Error */

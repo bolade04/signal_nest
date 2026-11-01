@@ -1315,6 +1315,168 @@ class TestOpportunities:
 
 
 # --------------------------------------------------------------------------- #
+# 8a. Creative drafts (Project Phase 5C, W21 lane P5C)
+# --------------------------------------------------------------------------- #
+@dataclass
+class CreativeRows:
+    brief_id: str
+    draft_id: str
+
+
+@pytest.fixture(scope="module")
+def creative_rows(world: World) -> dict[str, CreativeRows]:
+    """Per tenant: an approved brief on a real evidence chain, and one draft with its review,
+    written directly (generation itself is proven in ``test_creative_generation``)."""
+    from app.approvals.models import Approval
+    from app.briefs.models import RecommendationBrief
+    from app.creative.models import ContentReview, CreativeDraft
+    from app.intelligence.records import SignalIntelligenceRecord
+    from app.signals.models import NormalizedSignal, RawSignal
+
+    rows: dict[str, CreativeRows] = {}
+    factory = sessionmaker(bind=world.witness, autoflush=False, expire_on_commit=False)
+    with factory() as s:
+        for t in (world.a, world.b):
+            k = f"c5{t.key}"
+            req = {"organization_id": t.org_id, "workspace_id": t.ws_id,
+                   "scout_request_id": t.request_id}
+            snapshot = f"{t.owner_id} {t.key} owner <ci3-{t.key}-owner@example.com>"
+            s.add(RawSignal(id=f"{k}raw", source_type="rss", content="c", **req))
+            s.flush()
+            s.add(NormalizedSignal(id=f"{k}norm", raw_signal_id=f"{k}raw", source_type="rss",
+                                   excerpt="c", content_hash="0" * 64, **req))
+            s.flush()
+            s.add(SignalIntelligenceRecord(
+                id=f"{k}intel", normalized_signal_id=f"{k}norm", opportunity_id=t.opportunity_id,
+                analysis_version="1", scoring_version="1", fingerprint="f" * 64,
+                enricher="test", accepted=True, classification="x", **req,
+            ))
+            s.flush()
+            scoped = {"organization_id": t.org_id, "workspace_id": t.ws_id}
+            s.add(RecommendationBrief(
+                id=f"{k}brief", opportunity_id=t.opportunity_id,
+                intelligence_record_id=f"{k}intel", brief_version=1, analysis_version="1",
+                scoring_version="1", prompt_name="explain_opportunity", prompt_version="1.2.0",
+                model_identifier="mock-1", input_hash="0" * 64, is_simulated=True,
+                created_by=t.marketer_id, created_by_snapshot=snapshot, summary="s",
+                rationale="r", recommended_actions=[], suggested_angles=[], risk_notes=[],
+                evidence_refs=[], **scoped,
+            ))
+            s.flush()
+            s.add(Approval(
+                subject_type="recommendation_brief", subject_id=f"{k}brief", subject_version=1,
+                brief_id=f"{k}brief", decision="approved", decision_seq=1,
+                decided_by=t.owner_id, decided_by_snapshot=snapshot, decided_role="reviewer",
+                is_simulated=False, **scoped,
+            ))
+            s.add(CreativeDraft(
+                id=f"{k}draft", brief_id=f"{k}brief", opportunity_id=t.opportunity_id,
+                draft_version=1, channel="email", body=f"Draft {t.key}",
+                prompt_name="generate_creative", prompt_version="1.0.0",
+                model_identifier="mock-1", input_hash="0" * 64, is_simulated=True,
+                input_tokens=1, output_tokens=1, estimated_cost_usd=0,
+                created_by=t.marketer_id, created_by_snapshot=snapshot, **scoped,
+            ))
+            s.flush()
+            s.add(ContentReview(
+                draft_id=f"{k}draft", draft_version=1, risk_level="low", is_blocked=False,
+                findings=[], warnings=[], blocked_claim_ids=[], required_disclaimers=[],
+                disclaimers_resolved=True, passed=True, **scoped,
+            ))
+            rows[t.key] = CreativeRows(f"{k}brief", f"{k}draft")
+        s.commit()
+    return rows
+
+
+@pytest.fixture
+def creative_on() -> Iterator[None]:
+    """The global flag and every generation ceiling on for one probe (the shipped state is
+    the flag off with every ceiling unset)."""
+    settings = get_settings()
+    names = (
+        "creative_generation_enabled",
+        "llm_daily_cost_ceiling_usd_global",
+        "llm_daily_cost_ceiling_usd_per_workspace",
+        "llm_max_calls_per_workspace_per_day",
+        "llm_max_output_tokens_per_call",
+    )
+    saved = {n: getattr(settings, n) for n in names}
+    for n, v in zip(names, (True, 10.0, 1.0, 10, 400), strict=True):
+        setattr(settings, n, v)
+    try:
+        yield
+    finally:
+        for n, v in saved.items():
+            setattr(settings, n, v)
+
+
+class TestCreativeDrafts:
+    def test_capability_and_draft_reads(self, world: World, pov: Pov, creative_rows, creative_on):
+        a, b = pov.a, pov.b
+        mine, theirs = creative_rows[a.key], creative_rows[b.key]
+        own = pov.send("GET", _ws_path(world, a, "/creative-capability"))
+        assert own.status_code == 200 and own.json() == {"enabled": True}
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/creative-capability")))
+        # List: own brief lists only its own draft; the foreign brief id is a scoped 404.
+        listed = pov.send("GET", _ws_path(world, a, f"/briefs/{mine.brief_id}/drafts"))
+        assert listed.status_code == 200
+        assert [d["id"] for d in listed.json()["items"]] == [mine.draft_id]
+        _assert_404(
+            pov.send("GET", _ws_path(world, a, f"/briefs/{theirs.brief_id}/drafts")),
+            "Brief not found in this workspace.",
+        )
+        _assert_membership_403(
+            pov.send("GET", _ws_path(world, b, f"/briefs/{theirs.brief_id}/drafts"))
+        )
+        # Fetch one: the foreign draft id is a scoped 404, the same answer as a missing id.
+        got = pov.send("GET", _ws_path(world, a, f"/drafts/{mine.draft_id}"))
+        assert got.status_code == 200 and got.json()["id"] == mine.draft_id
+        assert got.json()["review"]["draft_id"] == mine.draft_id
+        for draft_id in (theirs.draft_id, "x" * 32):
+            _assert_404(
+                pov.send("GET", _ws_path(world, a, f"/drafts/{draft_id}")),
+                "Draft not found in this workspace.",
+            )
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, f"/drafts/{theirs.draft_id}")))
+
+    def test_generate_with_foreign_brief_or_parent_404_and_nothing_enqueued(
+        self, world: World, pov: Pov, creative_rows, creative_on
+    ):
+        from app.creative.models import CreativeDraft
+
+        a, b = pov.a, pov.b
+        mine, theirs = creative_rows[a.key], creative_rows[b.key]
+        jobs_before = world.count(Job)
+        drafts_before = world.count(CreativeDraft)
+        _assert_404(
+            pov.send("POST", _ws_path(world, a, f"/briefs/{theirs.brief_id}/drafts"),
+                     {"channel": "email"}),
+            "Brief not found in this workspace.",
+        )
+        _assert_404(
+            pov.send("POST", _ws_path(world, a, f"/briefs/{mine.brief_id}/drafts"),
+                     {"channel": "email", "parent_draft_id": theirs.draft_id}),
+            "Draft not found in this workspace.",
+        )
+        _assert_membership_403(
+            pov.send("POST", _ws_path(world, b, f"/briefs/{theirs.brief_id}/drafts"),
+                     {"channel": "email"})
+        )
+        assert world.count(Job) == jobs_before
+        assert world.count(CreativeDraft) == drafts_before
+        # Positive control: the own brief and own parent enqueue one generation job.
+        own = pov.send("POST", _ws_path(world, a, f"/briefs/{mine.brief_id}/drafts"),
+                       {"channel": "email", "parent_draft_id": mine.draft_id})
+        assert own.status_code == 202, own.text
+        job = world.row(Job, own.json()["job_id"])
+        assert (job["organization_id"], job["workspace_id"]) == (a.org_id, a.ws_id)
+        assert job["payload"]["brief_id"] == mine.brief_id
+        with world.witness.begin() as conn:  # leave the shared world as it was
+            conn.execute(Job.__table__.delete().where(Job.__table__.c.id == job["id"]))
+        assert world.count(Job) == jobs_before
+
+
+# --------------------------------------------------------------------------- #
 # 9. Jobs
 # --------------------------------------------------------------------------- #
 class TestJobs:
@@ -1900,6 +2062,14 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", f"{W}/feedback-capability"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
+    ("GET", f"{W}/creative-capability"): ("TestCreativeDrafts::test_capability_and_draft_reads",),
+    ("GET", f"{W}/briefs/{{brief_id}}/drafts"): (
+        "TestCreativeDrafts::test_capability_and_draft_reads",
+    ),
+    ("POST", f"{W}/briefs/{{brief_id}}/drafts"): (
+        "TestCreativeDrafts::test_generate_with_foreign_brief_or_parent_404_and_nothing_enqueued",
+    ),
+    ("GET", f"{W}/drafts/{{draft_id}}"): ("TestCreativeDrafts::test_capability_and_draft_reads",),
     ("GET", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
@@ -2051,8 +2221,9 @@ class TestCoverageCompleteness:
         # Project Phase 5A +4 (the recommendation-brief list, capture and read, and the
         # brief-capability reflection); 90 -> 93: Phase 5B (W21 P5B) +3 (decide on a brief,
         # its decision history, the approval queue); the equalities above prove no other
-        # operation came or went.
-        assert len(served) == 93
+        # operation came or went. 93 -> 97 (W21 P5C): the creative-capability reflection,
+        # list/generate a brief's drafts and fetch one draft (TestCreativeDrafts).
+        assert len(served) == 97
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

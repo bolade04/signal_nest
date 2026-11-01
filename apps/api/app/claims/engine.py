@@ -7,12 +7,26 @@ Two responsibilities used by Phase 2 reasoning:
 
 Core rule: use competitor complaints as market insight, not as proof the user's
 product is better.
+
+**The workspace claims library (Project Phase 5C).** :func:`review_against_library` is the
+output-side content review of a generated draft: ``check_claim_safety`` over the text with the
+workspace's **active** ``blocked`` entries as ``blocked_claims``, the ids of the entries the
+text hits, and the resolution of every required disclaimer (the library's active
+``required_disclaimer`` entries plus any the caller threads in, e.g. the offer calendar's).
+**A retired entry is ignored** (:func:`active_entries`): retiring a claim (``retired_at``,
+the CF-2 soft retirement) removes it from every review from then on, whichever caller loaded
+the library. The scouting pipeline's claim check (``app.jobs.pipeline``) runs on third-party
+discussion text and passes no library at all, so no library entry — active or retired — can
+reach it.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from app.core.enums import ClaimRisk
 
@@ -41,6 +55,12 @@ _FLAGS: list[tuple[str, str, ClaimRisk]] = [
 ]
 
 _RISK_ORDER = {ClaimRisk.LOW: 0, ClaimRisk.MEDIUM: 1, ClaimRisk.HIGH: 2, ClaimRisk.BLOCKED: 3}
+
+
+def contains_phrase(text: str, phrase: str | None) -> bool:
+    """Whether ``text`` contains the non-empty ``phrase`` (case-insensitive substring) — the
+    one matching rule for blocked claims and required disclaimers."""
+    return bool(phrase) and phrase.lower() in text.lower()
 
 
 @dataclass
@@ -81,7 +101,7 @@ def check_claim_safety(
             warnings.append(f"Detected {category.replace('_', ' ')}: '{m.group(0)}'")
 
     for claim in blocked_claims or []:
-        if claim and claim.lower() in text.lower():
+        if contains_phrase(text, claim):
             blocked_hit.append(claim)
             highest = ClaimRisk.BLOCKED
             warnings.append(f"Contains a blocked claim: '{claim}'")
@@ -98,6 +118,105 @@ def check_claim_safety(
         warnings=warnings,
         blocked_terms=blocked_hit,
     )
+
+
+# --------------------------------------------------------------------------- #
+# The workspace claims library (Project Phase 5C output-side content review)
+# --------------------------------------------------------------------------- #
+#: The library kinds the review reads (``ClaimsLibraryEntry.kind``).
+BLOCKED_KIND = "blocked"
+APPROVED_KIND = "approved"
+DISCLAIMER_KIND = "required_disclaimer"
+
+_WHITESPACE = re.compile(r"\s+")
+
+
+def fold(text: str) -> str:
+    """The matching form of a text: NFKC, case-folded, whitespace runs collapsed, trimmed.
+
+    Both sides of every library match are folded, so a line break, a doubled space or a
+    compatibility form ("ｃｕｒｅ") cannot hide a blocked claim or fake a disclaimer."""
+    return _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", text)).strip().casefold()
+
+
+@dataclass(frozen=True)
+class LibraryEntry:
+    """One claims-library entry as the engine reads it (a plain projection of the row)."""
+
+    id: str
+    text: str
+    kind: str
+    retired_at: datetime | None = None
+
+
+def active_entries(entries: Iterable[LibraryEntry]) -> list[LibraryEntry]:
+    """The entries a review applies: every entry that is not retired (CF-2 soft retirement).
+
+    A retired entry blocks nothing, requires nothing and approves nothing."""
+    return [e for e in entries if e.retired_at is None]
+
+
+def _unique(texts: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    kept: list[str] = []
+    for text in texts:
+        key = fold(text or "")
+        if key and key not in seen:
+            seen.add(key)
+            kept.append(text.strip())
+    return kept
+
+
+@dataclass(frozen=True)
+class LibraryReview:
+    """The output-side review of one generated text against one workspace's library."""
+
+    safety: ClaimSafetyResult
+    #: Ids of the active ``blocked`` entries the text contains.
+    blocked_claim_ids: list[str]
+    #: Every disclaimer the text had to carry (library entries first, then the caller's).
+    required_disclaimers: list[str]
+    #: The required disclaimers the text does not carry.
+    missing_disclaimers: list[str]
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.safety.is_blocked
+
+    @property
+    def disclaimers_resolved(self) -> bool:
+        return not self.missing_disclaimers
+
+    @property
+    def passed(self) -> bool:
+        """Nothing blocks and every required disclaimer is carried."""
+        return not self.is_blocked and self.disclaimers_resolved
+
+
+def review_against_library(
+    text: str,
+    industry: str | None,
+    entries: Iterable[LibraryEntry],
+    extra_disclaimers: Sequence[str] = (),
+) -> LibraryReview:
+    """Review generated ``text`` against the workspace's claims library (Phase 5C §2).
+
+    ``check_claim_safety`` runs over the folded text with every **active** ``blocked`` entry
+    as a blocked claim (one hit makes the result ``blocked``); the hit entries' ids are
+    returned. Required disclaimers are the active ``required_disclaimer`` entries plus
+    ``extra_disclaimers`` (the offer calendar's), each resolved when the text contains it.
+    Retired entries are ignored (:func:`active_entries`).
+    """
+    active = active_entries(entries)
+    folded = fold(text)
+    blocked = [e for e in active if e.kind == BLOCKED_KIND and fold(e.text)]
+    safety = check_claim_safety(folded, industry, blocked_claims=[fold(e.text) for e in blocked])
+    hit_ids = [e.id for e in blocked if contains_phrase(folded, fold(e.text))]
+    disclaimers = _unique(
+        [*(e.text for e in active if e.kind == DISCLAIMER_KIND), *extra_disclaimers]
+    )
+    missing = [d for d in disclaimers if not contains_phrase(folded, fold(d))]
+    return LibraryReview(safety, hit_ids, disclaimers, missing)
 
 
 # Competitor pain point -> safe positioning translation table.

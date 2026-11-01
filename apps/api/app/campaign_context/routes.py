@@ -83,6 +83,7 @@ from app.campaign_context.schemas import (
     SourcePrefIn,
     SourcePrefPatch,
 )
+from app.claims.library import CLAIMS_STEWARD_ROLES
 from app.core.enums import Role
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
@@ -92,10 +93,8 @@ from app.db.session import get_db
 router = APIRouter(tags=["campaign-context"])
 
 EDITORS = require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)
-#: The claims library's stewards (W21 CF-2): exact roles, no rank inheritance.
-CLAIMS_STEWARD_ROLES: frozenset[Role] = frozenset(
-    {Role.OWNER, Role.ADMIN, Role.COMPLIANCE_REVIEWER}
-)
+#: The claims library's stewards (W21 CF-2): exact roles, no rank inheritance. The set lives
+#: in :mod:`app.claims.library`, the one authority the onboarding claims input shares (R1).
 CLAIMS_STEWARDS = require_exact_roles(*sorted(CLAIMS_STEWARD_ROLES))
 
 
