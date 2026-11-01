@@ -233,8 +233,17 @@ def test_organization_deletion_retains_exports_anonymised_and_deletes_the_rest(e
     }
 
 
-def test_the_verifier_reports_a_retained_export_whose_exporter_was_not_cleared(env):
-    """Negative control for the O-6 exception: retained is not the same as anonymised."""
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("exported_by_snapshot", "leftover snapshot"),
+        ("exported_by", BOB),  # an existing account, so the foreign key holds
+        ("draft_id", "cf3-draft-b"),  # an existing draft, so the foreign key holds
+    ],
+)
+def test_the_verifier_reports_a_retained_export_that_still_identifies(env, column, value):
+    """Negative controls for the O-6 exception: retained is not the same as anonymised, for
+    every identifying column of a retained export."""
     _add_rows(env)
     r = env.client.post(
         f"{API}/organizations/{ORG_A}/delete",
@@ -244,19 +253,13 @@ def test_the_verifier_reports_a_retained_export_whose_exporter_was_not_cleared(e
     assert r.status_code == 200, r.text
     table = Export.__table__
     with env.engine.begin() as conn:
-        conn.execute(
-            update(table)
-            .where(table.c.id == "cf3-export-a")
-            .values(exported_by_snapshot="leftover snapshot")
-        )
+        conn.execute(update(table).where(table.c.id == "cf3-export-a").values({column: value}))
     with env.session() as s:
         report = verify_organization_erased(
             s, organization_id=ORG_A, workspace_ids=WORKSPACES[ORG_A], content=False
         )
     assert not report.verified
-    assert ("exports", "exported_by_snapshot") in {
-        (f.table, f.column) for f in report.reference_findings
-    }
+    assert ("exports", column) in {(f.table, f.column) for f in report.reference_findings}
 
 
 # --------------------------------------------------------------------------- #
