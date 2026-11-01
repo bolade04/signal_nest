@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -61,14 +63,19 @@ def _session(db: Session, user: User, auth_session: AuthSession) -> SessionOut:
     )
 
 
-def _fresh_session(db: Session, user: User) -> SessionOut:
+def _fresh_session(
+    db: Session, user: User, *, before_commit: Callable[[], object] | None = None
+) -> SessionOut:
     """A fresh-credential boundary (P6-AUTH-4): open a new session, COMMIT it, then mint.
 
     Only login, register and invitation register reach here. The commit happens before
     the token exists, so a returned token always belongs to a committed session, and a
-    failed commit returns no token.
+    failed commit returns no token. ``before_commit`` (login's audit rows) runs after the
+    session row is inserted and before the COMMIT, so its writes commit with the session.
     """
     auth_session = service.create_session(db, user)
+    if before_commit is not None:
+        before_commit()
     db.commit()
     return _session(db, user, auth_session)
 
@@ -135,11 +142,17 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
     * **Success:** one ``auth.login_succeeded`` row per organization of the account,
       committed in the same transaction as the new session (``_fresh_session``), so a
       session never exists without its audit rows and vice versa.
+    * **Lock order:** the success rows are written after the session row, not before it.
+      Each row references the account (``actor_user_id``), so its foreign-key check locks
+      the user row (``FOR KEY SHARE``). Until it opens its session, a sign-in that has
+      verified the password must hold no lock on that row, because a concurrent password
+      change locks it ``FOR UPDATE`` and must be able to complete in that window (U17-C03).
     * **Refusal:** the answer is the unchanged 401. When the address belongs to an account,
       one ``auth.login_failed`` row per organization of that account (no actor: the caller
-      is not authenticated) records the closed failure reason, and is committed before the
-      401 is raised (``get_db`` rolls back on an error, so it would otherwise be lost). An
-      address that belongs to no account has no organization to record against.
+      is not authenticated, so no user row is locked) records the closed failure reason,
+      and is committed before the 401 is raised (``get_db`` rolls back on an error, so it
+      would otherwise be lost). An address that belongs to no account has no organization
+      to record against.
     """
     try:
         user = service.authenticate(db, email=body.email, password=body.password)
@@ -158,14 +171,17 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
         else:
             log_event(logger, "security.login", outcome="refused")
         raise
-    _audit_login(
+    session = _fresh_session(
         db,
-        user_id=user.id,
-        action=AuditAction.AUTH_LOGIN_SUCCEEDED,
-        actor_user_id=user.id,
-        context={"method": "password"},
+        user,
+        before_commit=lambda: _audit_login(
+            db,
+            user_id=user.id,
+            action=AuditAction.AUTH_LOGIN_SUCCEEDED,
+            actor_user_id=user.id,
+            context={"method": "password"},
+        ),
     )
-    session = _fresh_session(db, user)
     log_event(logger, "security.login", outcome="success", user_id=user.id)
     return session
 
