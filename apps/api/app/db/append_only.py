@@ -1,15 +1,17 @@
 """Application-layer append-only enforcement for ORM models (Project Phase 5, W21 CF-1).
 
-:func:`append_only` marks a model whose rows are written once. Every ORM path that would
-UPDATE or DELETE such a row raises :class:`AppendOnlyViolation` before any statement is sent
-(or, inside a flush, before the flush completes; the caller's transaction is then rolled
-back). A revision is a new row; a change of mind is a new row.
+:func:`append_only` marks a model whose rows are written once. Every ORM path through a
+``Session`` that would UPDATE or DELETE such a row — for the model or any mapped subclass of
+it — raises :class:`AppendOnlyViolation` before any statement is sent (or, inside a flush,
+before the flush completes; the caller's transaction is then rolled back). A revision is a
+new row; a change of mind is a new row.
 
 **What is refused (every ORM write path except INSERT):**
 
 * the unit of work: an attribute change or ``Session.delete()`` followed by a flush, including
   ``Session.merge()`` of a modified copy and a no-net-change assignment — the mapper's
-  ``before_update`` / ``before_delete`` events;
+  ``before_update`` / ``before_delete`` events, registered with ``propagate=True`` so a
+  mapped subclass inherits them;
 * ORM-enabled statements run through a ``Session``: ``session.execute(update(Model)…)``
   (with WHERE criteria or with per-row parameter sets by primary key),
   ``session.execute(delete(Model)…)``, ``Query.update()``, ``Query.delete()``, and an ORM
@@ -19,11 +21,18 @@ back). A revision is a new row; a change of mind is a new row.
   ``Session.bulk_save_objects()`` with an instance of it that already has an identity (an
   update). These methods emit no event, so this module wraps them on the ``Session`` class.
 
+The statement listener and both wrappers test the class's MRO, so a mapped subclass of a
+guarded model is guarded too (:func:`is_append_only` itself stays exact, for enumeration).
+
 **What is not refused, by design.** Statements built on the table rather than the model —
-``update(Model.__table__)``, ``delete(table)``, ``table.delete()`` — and raw SQL are Core:
-they carry no mapper and reach the database unchanged, whether run through a ``Session`` or a
-``Connection``. So does an ORM statement executed on a bare ``Connection``. Exactly three
-places write these tables that way after insert, all sanctioned:
+``update(Model.__table__)``, ``delete(table)``, ``table.delete()``, a Core upsert
+(``insert(Model.__table__).on_conflict_do_update(...)``) — and raw SQL are Core: they carry no
+mapper and reach the database unchanged, whether run through a ``Session`` or a
+``Connection``. So does an ORM statement executed on a bare ``Connection``
+(``session.connection().execute(update(Model))``), and so do the database's own ``ON DELETE
+CASCADE`` / ``SET NULL`` actions when a parent row is deleted (a brief goes with its
+workspace, opportunity or evidence; ``approvals.brief_id`` and the actor columns are nulled).
+Exactly three places write these tables through Core after insert, all sanctioned:
 
 1. :mod:`app.privacy.erasure` — the O-6 anonymisation that clears values naming an erased
    account or a deleted organization, and the foreign-key walk (``delete_rows``) that deletes
@@ -32,8 +41,19 @@ places write these tables that way after insert, all sanctioned:
 3. :func:`app.db.seed._reset` — the guarded, development-only demo reset that empties every
    table.
 
-``test_cf1_append_only_models.py`` pins that no other production module builds an UPDATE or
-DELETE over these models or their tables, or calls the bulk API on them.
+``test_cf1_append_only_bulk_paths.py`` is a static **backstop**, not the enforcement layer
+(the runtime guard above is): it checks that no other production module builds an UPDATE or
+DELETE (function or attribute-call form, method form, ``Query``) or an upsert over these
+models or their tables, writes a literal ``UPDATE <table>`` / ``DELETE FROM <table>`` /
+``INSERT INTO <table> … DO UPDATE`` string naming one of the three tables unqualified, calls
+the bulk API or calls ``delete_rows`` — following **model** import aliases and annotated,
+tuple and walrus aliases. **Not pinned:** the statement functions (``update``, ``delete``,
+``insert``, dialect inserts) imported under another name; models referenced through a module
+(``models.Approval``); tables built or reflected by name (``table("approvals")``,
+``Table("approvals", …, autoload_with=…)``) or reached through ``Base.metadata``, ``getattr``,
+``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as parameters;
+SQL that schema-qualifies the table (``public.approvals``) or uses ``TRUNCATE`` or ``MERGE``;
+and SQL assembled at run time.
 
 **Enforcement level (operator decision O-10,
 ``REC_app_layer_append_only_document_db_level_as_separate_infra``).** This is an
@@ -77,15 +97,21 @@ def _refuse(operation: str):
 
 def append_only(cls: T) -> T:
     """Class decorator: every ORM path that would update or delete a ``cls`` row raises."""
-    event.listen(cls, "before_update", _refuse("update"))
-    event.listen(cls, "before_delete", _refuse("delete"))
+    event.listen(cls, "before_update", _refuse("update"), propagate=True)
+    event.listen(cls, "before_delete", _refuse("delete"), propagate=True)
     setattr(cls, APPEND_ONLY_MARKER, True)
     return cls
 
 
 def is_append_only(cls: type) -> bool:
-    """Whether ``cls`` was decorated with :func:`append_only` (inheritance ignored)."""
+    """Whether ``cls`` was decorated with :func:`append_only` (inheritance ignored, so the set
+    of decorated models enumerates exactly)."""
     return bool(cls.__dict__.get(APPEND_ONLY_MARKER, False))
+
+
+def is_guarded(cls: type) -> bool:
+    """Whether ``cls`` or any class in its MRO is append-only (a mapped subclass included)."""
+    return any(is_append_only(k) for k in cls.__mro__)
 
 
 def _is_upsert(statement: Any) -> bool:
@@ -102,7 +128,7 @@ def _refuse_orm_statements(state: ORMExecuteState) -> None:
     the table (the sanctioned Core paths) has none and passes.
     """
     mapper = state.bind_mapper
-    if mapper is None or not is_append_only(mapper.class_):
+    if mapper is None or not is_guarded(mapper.class_):
         return
     name = mapper.class_.__name__
     if state.is_update:
@@ -123,7 +149,7 @@ def _install_bulk_guard() -> None:
     @wraps(original_update_mappings)
     def bulk_update_mappings(self: Session, mapper: Any, mappings: Any, *args, **kwargs):
         cls = inspect(mapper).class_
-        if is_append_only(cls):
+        if is_guarded(cls):
             raise _refusal(cls.__name__, "bulk_update_mappings")
         return original_update_mappings(self, mapper, mappings, *args, **kwargs)
 
@@ -131,7 +157,7 @@ def _install_bulk_guard() -> None:
     def bulk_save_objects(self: Session, objects: Any, *args, **kwargs):
         objects = list(objects)
         for obj in objects:
-            if is_append_only(type(obj)) and inspect(obj).key is not None:
+            if is_guarded(type(obj)) and inspect(obj).key is not None:
                 raise _refusal(type(obj).__name__, "bulk_save_objects update")
         return original_save_objects(self, objects, *args, **kwargs)
 
@@ -143,4 +169,10 @@ def _install_bulk_guard() -> None:
 _install_bulk_guard()
 
 
-__all__ = ["APPEND_ONLY_MARKER", "AppendOnlyViolation", "append_only", "is_append_only"]
+__all__ = [
+    "APPEND_ONLY_MARKER",
+    "AppendOnlyViolation",
+    "append_only",
+    "is_append_only",
+    "is_guarded",
+]

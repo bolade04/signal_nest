@@ -6,9 +6,11 @@ An :class:`Approval` row is one **append-only** decision — ``approved``, ``rej
 * **Append-only.** A change of mind is a new row (the ``OpportunityFeedback``
   discipline). Every ORM path that would update or delete a row raises (unit of work, ORM
   UPDATE/DELETE statements and ``Query.update/delete``, the bulk API, upserts;
-  :func:`app.db.append_only.append_only`). Core statements on the table are not refused:
-  only :mod:`app.privacy` (erasure, retention) and the development-only demo reset write that
-  way, pinned by a static test. The table carries ``created_at`` only.
+  :func:`app.db.append_only.append_only`; a mapped subclass included). Not refused: Core
+  statements and Core upserts on the table, ORM statements on a bare ``Connection``, raw SQL
+  and the database's own FK actions; only :mod:`app.privacy` (erasure, retention) and the
+  development-only demo reset write that way, pinned by a static test whose limits
+  ``app.db.append_only`` states. The table carries ``created_at`` only.
 * **Bound to an exact version.** ``subject_type`` / ``subject_id`` / ``subject_version``
   name the decided version without a foreign key, so the binding survives the subject's
   deletion. For a ``recommendation_brief`` subject, ``brief_id`` is the live foreign key
