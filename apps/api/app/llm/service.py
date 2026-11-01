@@ -1,6 +1,7 @@
 """LLM service: provider selection, retries/backoff, timeout, schema validation, metadata.
 
-Callers use ``llm_service.run(task, inputs)`` and receive a validated Pydantic model.
+Callers use ``get_llm_service().run(task, inputs, organization_id=..., workspace_id=...)``
+and receive a validated Pydantic model and the response metadata.
 The service never silently falls back from a real provider to mock unless
 ``LLM_ALLOW_DEV_FALLBACK`` is explicitly enabled (and never in staging/production).
 
@@ -17,13 +18,38 @@ against the run cap and the workspace budget - a disallowed attempt is not made 
 fallback) - and then charged: a reply by its reported usage (even one that later
 fails schema validation), a timeout by its worst case, a refused HTTP call nothing.
 The meter's opaque tenant reference is sent to the provider.
+
+Phase 5A seam (always live, un-flagged; disclosed in the Phase 5 plan section 9):
+
+* **Tenant on every call.** ``run`` requires ``organization_id`` and ``workspace_id``.
+  A missing tenant, or one that differs from the bound meter's, raises
+  :class:`~app.llm.base.LLMTenantError` before anything is sent. An unmetered call
+  derives the opaque tenant reference from the workspace, so every request carries one.
+* **Sanitized at the boundary.** Every string input, at any depth, is defanged
+  (:func:`app.llm.untrusted.sanitize_inputs`) before any provider - the mock included -
+  sees it. The real adapters' prompt blocks remain the stronger layer.
+* **``input_hash`` computed here**, never by a provider: SHA-256 of the canonical JSON of
+  the task, the prompt name and version and the sanitized inputs
+  (:func:`compute_input_hash`). Every response, the dev fallback's included, carries it.
+* **Fail-closed rendering.** A prompt that cannot be rendered raises
+  :class:`~app.llm.base.LLMPromptRenderError` before any attempt is made, reserved or
+  charged; it is never retried and never falls back to the mock.
+* **Usage link.** A metered response carries ``usage_event_id``, the usage-ledger row of
+  the attempt that produced it (Phase 5A brief provenance).
+* **Injectable clock.** ``sleep`` (the retry wait) is injectable, so retry tests wait for
+  nothing and can assert every back-off.
+* :func:`get_llm_service` is the accessor call sites use; the module-level
+  ``llm_service`` stays the default instance it returns.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
 
@@ -32,17 +58,20 @@ from app.core.logging import get_logger, trace_id_ctx
 from app.llm.base import (
     LLMError,
     LLMMalformedError,
+    LLMPromptRenderError,
     LLMProvider,
     LLMRateLimitError,
     LLMRequest,
     LLMResponse,
+    LLMTenantError,
     LLMTimeoutError,
     LLMUnavailableError,
 )
-from app.llm.metering import cost_usd
+from app.llm.metering import cost_usd, tenant_reference
 from app.llm.mock import MockLLMProvider
-from app.llm.prompts import get_prompt
+from app.llm.prompts import Prompt, get_prompt
 from app.llm.schemas import TASK_SCHEMAS
+from app.llm.untrusted import sanitize_inputs
 
 if TYPE_CHECKING:
     from app.llm.metering import LLMMeter
@@ -72,6 +101,39 @@ def _backoff_seconds(attempt: int, exc: Exception, retry_after_cap: float) -> fl
     if retry_after is not None:
         return min(retry_after, retry_after_cap)
     return min(_BACKOFF_BASE_SECONDS * 2**attempt, _BACKOFF_CAP_SECONDS)
+
+
+def compute_input_hash(task: str, prompt: Prompt, inputs: dict[str, Any]) -> str:
+    """SHA-256 hex of what the model is asked: task, prompt identity and inputs.
+
+    Canonical JSON (sorted keys, no whitespace, UTF-8); a value JSON cannot represent is
+    hashed by its ``str()``. Computed by the service from the sanitized inputs, so it does
+    not depend on a provider remembering to set it.
+    """
+    payload = {
+        "task": task,
+        "prompt": f"{prompt.name}@{prompt.version}",
+        "inputs": inputs,
+    }
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _require_tenant(
+    organization_id: str, workspace_id: str, meter: LLMMeter | None
+) -> None:
+    """Refuse a call that names no tenant, or a tenant other than its meter's."""
+    for name, value in (("organization_id", organization_id), ("workspace_id", workspace_id)):
+        if not isinstance(value, str) or not value:
+            raise LLMTenantError(f"an LLM call needs a {name}")
+    if meter is None:
+        return
+    if meter.workspace_id is None or meter.organization_id is None:
+        raise LLMTenantError("an LLM call's meter must be bound to its tenant first")
+    if (meter.organization_id, meter.workspace_id) != (organization_id, workspace_id):
+        raise LLMTenantError("an LLM call's tenant differs from its meter's tenant")
 
 
 def _schema_errors(schema: type[BaseModel], exc: ValidationError) -> str:
@@ -106,21 +168,49 @@ class LLMService:
         return self._provider.name
 
     def run(
-        self, task: str, inputs: dict, *, meter: LLMMeter | None = None
+        self,
+        task: str,
+        inputs: dict,
+        *,
+        organization_id: str,
+        workspace_id: str,
+        meter: LLMMeter | None = None,
     ) -> tuple[BaseModel, LLMResponse]:
+        """Run ``task`` for the tenant ``(organization_id, workspace_id)``.
+
+        Raises :class:`LLMTenantError` (nothing sent) for a missing tenant or one that
+        differs from the bound ``meter``'s; :class:`LLMPromptRenderError` (nothing sent,
+        nothing charged) when the prompt cannot be rendered; otherwise the provider's
+        normalized :class:`LLMError` after the bounded retries.
+        """
+        _require_tenant(organization_id, workspace_id, meter)
         settings = self._settings or get_settings()
         prompt = get_prompt(task)
+        inputs = sanitize_inputs(inputs)
+        input_hash = compute_input_hash(task, prompt, inputs)
         request = LLMRequest(
             task=task,
             inputs=inputs,
             seed=settings.llm_mock_seed,
             temperature=settings.llm_temperature,
             max_tokens=settings.llm_max_output_tokens,
-            tenant_ref=meter.tenant_ref if meter is not None else None,
+            tenant_ref=(
+                meter.tenant_ref
+                if meter is not None
+                else tenant_reference(settings, workspace_id)
+            ),
             max_untrusted_chars=settings.llm_max_untrusted_chars,
         )
         provider_name = self._provider.name
         model = getattr(self._provider, "model", "") or ""
+        # Fail-closed rendering: a provider that renders a prompt shows its request before
+        # any attempt, so a render failure raises here - nothing reserved, sent or charged.
+        # A body that cannot be encoded (TypeError / ValueError) is handled per attempt, as
+        # before: the metered path refuses it as unbounded.
+        prepare = getattr(self._provider, "prepare", None)
+        if prepare is not None:
+            with suppress(TypeError, ValueError):
+                prepare(request)
 
         def charge(response: LLMResponse | None = None, error: Exception | None = None):
             if meter is not None:
@@ -172,6 +262,8 @@ class LLMService:
             )
             charge(response=response)
             response.trace_id = trace_id_ctx.get()
+            response.input_hash = input_hash
+            response.usage_event_id = meter.last_usage_event_id if meter is not None else None
             try:
                 validated = self._validate(task, response)
             except LLMMalformedError as exc:
@@ -193,10 +285,16 @@ class LLMService:
         )
 
         # Explicit dev-only fallback (never enabled in staging/production by config validation).
-        if settings.llm_allow_dev_fallback and not isinstance(self._provider, MockLLMProvider):
+        if (
+            settings.llm_allow_dev_fallback
+            and not isinstance(self._provider, MockLLMProvider)
+            and not isinstance(last_error, LLMPromptRenderError)
+        ):
             logger.warning("llm.dev_fallback_to_mock", extra={"extra_fields": {"task": task}})
             mock = MockLLMProvider(seed=settings.llm_mock_seed)
             response = mock.generate(request, prompt.name, prompt.version)
+            response.trace_id = trace_id_ctx.get()
+            response.input_hash = input_hash
             return self._validate(task, response), response
 
         raise last_error or LLMError("LLM call failed")
@@ -247,3 +345,13 @@ class LLMService:
 
 
 llm_service = LLMService()
+
+
+def get_llm_service() -> LLMService:
+    """The process's LLM service: the module-level ``llm_service`` at call time.
+
+    Call sites use this rather than binding the singleton at import, so the instance
+    the process (or a test) installs as ``app.llm.service.llm_service`` is the one every
+    call site uses. It is also a FastAPI dependency (``Depends(get_llm_service)``).
+    """
+    return llm_service

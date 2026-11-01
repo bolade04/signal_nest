@@ -54,6 +54,27 @@ class LLMUnavailableError(LLMProviderError):
     """Transient provider-side failure (5xx, 529 overloaded, connection error)."""
 
 
+class LLMPromptRenderError(LLMError):
+    """The prompt could not be rendered from its template and inputs (Phase 5A).
+
+    Raised before anything is sent: a template field with no input key, or a template
+    the formatter cannot fill. Rendering is fail-closed - there is no fallback that sends
+    an unrendered or partly rendered template - and the service neither retries this
+    error nor falls back to the mock on it. Nothing was sent, so nothing is charged.
+    Deliberately not a ``ValueError``: the metered path's wire-size probe treats a
+    ``ValueError`` as "cost cannot be bounded", which would misreport this as a budget
+    refusal.
+    """
+
+
+class LLMTenantError(RuntimeError):
+    """A model call named no tenant, or a tenant other than its meter's (Phase 5A).
+
+    A programming error, not an LLM outcome: like ``LLMMeterBindingError`` it is not an
+    ``LLMError``, so no LLM failure handling (degraded marking, dev fallback) absorbs it.
+    """
+
+
 class LLMRequest(BaseModel):
     task: str
     inputs: dict[str, Any]
@@ -85,6 +106,10 @@ class LLMResponse(BaseModel):
     status: str = "ok"  # ok | low_confidence | refused | error
     is_simulated: bool = False
     trace_id: str | None = None
+    #: Set by the service, never by a provider: the usage-ledger row
+    #: (``llm_usage_events.id``) of the metered attempt that produced this response, or
+    #: ``None`` when no meter recorded it (an unmetered call, the dev fallback).
+    usage_event_id: str | None = None
 
 
 class LLMProvider(Protocol):

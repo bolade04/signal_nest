@@ -57,6 +57,10 @@ SYNTHETIC_EXPLAIN = {
     "safe_positioning": "Lead with proven convenience.",
 }
 REPLAY_COVERAGE = "app/tests/test_llm_provider_replay.py"
+#: The tenant the service calls name (Phase 5A: every call names one). Synthetic, like the
+#: inputs: the probe runs for no customer, so it names no customer's organization or
+#: workspace; the provider receives only the opaque reference derived from it.
+PROBE_TENANT = {"organization_id": "e6-live-probe", "workspace_id": "e6-live-probe"}
 
 Emit = Callable[[dict[str, Any]], None]
 ClientFactory = Callable[[float], httpx.Client]
@@ -98,7 +102,9 @@ def run_probe(
     def via_service(task: str, inputs: dict[str, Any]) -> dict[str, Any]:
         timeout = settings.llm_timeout_seconds
         provider = _provider(settings, model, timeout, client_factory(timeout))
-        validated, response = LLMService(provider, settings=no_retry).run(task, inputs)
+        validated, response = LLMService(provider, settings=no_retry).run(
+            task, inputs, **PROBE_TENANT
+        )
         return {
             "provider": response.provider,
             "model": response.model,

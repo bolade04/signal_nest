@@ -5,6 +5,9 @@
 * Can simulate failure scenarios for tests via an ``inputs["_simulate"]`` marker:
   ``low_confidence | malformed | timeout | rate_limit | refusal | provider_error``.
 * Outputs are marked ``is_simulated=True`` so the UI/metadata can flag demo results.
+
+The mock's own input hash only seeds its RNG. The ``input_hash`` a caller sees is the
+service's (:func:`app.llm.service.compute_input_hash`, Phase 5A), which replaces it.
 """
 
 from __future__ import annotations

@@ -57,7 +57,10 @@ from app.scouting_requests import routes as scout_routes
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal
 from app.tests._auth2_support import live_bearer
-from app.tests._llm_offline import offline_llm, offline_settings
+from app.tests._llm_offline import TEST_TENANT, offline_llm, offline_settings, tenant_of
+
+#: Complete classify inputs (rendering is fail-closed: every template field is a key).
+CLASSIFY_X = {"content": "x", "audiences": None}
 
 API = get_settings().api_prefix
 KEY = "fixture-key"
@@ -147,7 +150,9 @@ class TestPricing:
 
     def test_reply_cost_reaches_the_response_and_the_log(self, caplog):
         caplog.set_level("INFO", logger="signalnest.llm")
-        _, response = Recorder().service(_settings()).run("classify_signal", {"content": "x"})
+        _, response = Recorder().service(_settings()).run(
+            "classify_signal", CLASSIFY_X, **TEST_TENANT
+        )
         assert response.usage.estimated_cost_usd == pytest.approx(0.0105)
         [call] = [r for r in caplog.records if r.getMessage() == "llm.call"]
         assert call.extra_fields["estimated_cost_usd"] == pytest.approx(0.0105)
@@ -208,7 +213,7 @@ class TestMeteredAttempts:
         meter = _meter(ledger_db, s)
         with pytest.raises(LLMMalformedError):
             LLMService(provider, sleep=lambda _s: None, settings=s).run(
-                "classify_signal", {"content": "x"}, meter=meter
+                "classify_signal", CLASSIFY_X, meter=meter, **tenant_of(meter)
             )
         meter.flush(ledger_db)
         ledger_db.commit()
@@ -235,7 +240,9 @@ class TestMeteredAttempts:
         meter = _meter(ledger_db, s)
         recorder = Recorder(classify=lambda: _reply({"sentiment": "negative"}))
         with pytest.raises(LLMMalformedError):
-            recorder.service(s).run("classify_signal", {"content": "x"}, meter=meter)
+            recorder.service(s).run(
+                "classify_signal", CLASSIFY_X, meter=meter, **tenant_of(meter)
+            )
         assert meter.spent == pytest.approx(0.0105)
 
     def test_run_cap_stops_attempts_before_they_are_made(self, ledger_db):
@@ -245,22 +252,36 @@ class TestMeteredAttempts:
         )
         meter = _meter(ledger_db, s)
         with pytest.raises(LLMBudgetExceededError) as exc:
-            recorder.service(s).run("classify_signal", {"content": "x"}, meter=meter)
+            recorder.service(s).run(
+                "classify_signal", CLASSIFY_X, meter=meter, **tenant_of(meter)
+            )
         assert exc.value.reason == "run_call_cap"
         assert len(recorder.bodies) == 1 and meter.refusals == {"run_call_cap": 1}
 
     def test_budget_stops_an_attempt_whose_worst_case_would_cross_it(self, ledger_db):
         s = _settings(llm_workspace_monthly_budget_usd=0.001)
         recorder = Recorder()
+        meter = _meter(ledger_db, s)
         with pytest.raises(LLMBudgetExceededError) as exc:
-            recorder.service(s).run("classify_signal", {"content": "x"}, meter=_meter(ledger_db, s))
+            recorder.service(s).run(
+                "classify_signal",
+                CLASSIFY_X,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
+                meter=meter,
+            )
         assert exc.value.reason == "workspace_budget" and recorder.bodies == []
 
     def test_budget_refusal_never_falls_back_to_the_mock(self, ledger_db):
         s = _settings(llm_workspace_monthly_budget_usd=0.0, llm_allow_dev_fallback=True)
+        meter = _meter(ledger_db, s)
         with pytest.raises(LLMBudgetExceededError):
             Recorder().service(s).run(
-                "classify_signal", {"content": "x"}, meter=_meter(ledger_db, s)
+                "classify_signal",
+                CLASSIFY_X,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
+                meter=meter,
             )
 
     def test_mock_provider_is_never_limited(self, ledger_db):
@@ -270,7 +291,8 @@ class TestMeteredAttempts:
         meter = _meter(ledger_db, s)
         service = LLMService(MockLLMProvider(), settings=s)
         for _ in range(3):
-            service.run("classify_signal", {"content": "slow"}, meter=meter)
+            slow = {**CLASSIFY_X, "content": "slow"}
+            service.run("classify_signal", slow, meter=meter, **tenant_of(meter))
         assert meter.attempts == 3 and meter.spent == 0.0 and meter.refusals == {}
 
     def test_month_to_date_counts_only_this_workspace_and_month(self, ledger_db):
@@ -309,7 +331,7 @@ def _first_request(factory) -> ScoutRequest:
 
 def _run_with(factory, monkeypatch, settings: Settings, recorder: Recorder):
     monkeypatch.setattr(pipeline, "get_settings", lambda: settings)
-    monkeypatch.setattr(pipeline, "llm_service", recorder.service(settings))
+    monkeypatch.setattr("app.llm.service.llm_service", recorder.service(settings))
     request = _first_request(factory)
     with factory() as db:
         before_opps = set(db.scalars(select(Opportunity.id)))
@@ -384,7 +406,7 @@ def test_exhausted_workspace_budget_makes_no_calls(seeded, monkeypatch):
     request = _first_request(seeded)
     with seeded() as db:
         db.add(LLMUsageEvent(
-            organization_id=request.organization_id, workspace_id=request.workspace_id,
+            **tenant_of(request),
             task="classify_signal", provider="anthropic", model=MODEL, cost_usd=5.0,
             outcome="ok",
         ))
@@ -444,7 +466,7 @@ def _failing_worker_run(monkeypatch, settings: Settings, *, fail: bool = True) -
     ``fail`` the pipeline raises after its classification calls (a non-LLM error)."""
     recorder = Recorder()
     monkeypatch.setattr(job_handlers, "get_settings", lambda: settings)
-    monkeypatch.setattr(pipeline, "llm_service", recorder.service(settings))
+    monkeypatch.setattr("app.llm.service.llm_service", recorder.service(settings))
     if fail:
         def boom(*_a, **_k):
             raise RuntimeError("opportunity build failed")
@@ -797,7 +819,7 @@ def client(seeded):
 def _spend(factory, request: ScoutRequest, usd: float) -> None:
     with factory() as db:
         db.add(LLMUsageEvent(
-            organization_id=request.organization_id, workspace_id=request.workspace_id,
+            **tenant_of(request),
             task="explain_opportunity", provider="anthropic", model=MODEL, cost_usd=usd,
             outcome="ok",
         ))
