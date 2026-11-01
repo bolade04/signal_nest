@@ -94,6 +94,8 @@ EDITORS = (OWNER, ADMIN, MARKETER)  # require_role(OWNER, ADMIN, MARKETER): a ra
 ORG_ADMINS = (OWNER, ADMIN)  # require_exact_organization_roles(OWNER, ADMIN)
 ORG_OWNER = (OWNER,)  # require_exact_organization_roles(OWNER) -- P6-PRIV-1
 AUDIT_READERS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- P6-AUTH-3
+#: W21 CF-2: the claims library is a protected control -- exact roles, marketers excluded.
+CLAIMS_STEWARDS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- CF-2
 
 # Categories.
 RANK_FLOOR = "role_gated_workspace_rank_floor"
@@ -180,31 +182,40 @@ _CONTEXT = (
 _W = "/workspaces/{workspace_id}"
 _O = "/organizations/{organization_id}"
 
+
+def _writers(collection: str) -> tuple[tuple[str, ...], str]:
+    """Who may write a context collection, and the gate's category. The claims library is
+    the W21 CF-2 protected control (exact OWNER/ADMIN/COMPLIANCE_REVIEWER); every other
+    collection keeps the OWNER/ADMIN/MARKETER rank floor."""
+    if collection == "claims":
+        return CLAIMS_STEWARDS, WS_EXACT
+    return EDITORS, RANK_FLOOR
+
 #: The explicit policy table. 57 role-gated rows (39 that existed before 6B-3A + 5 new
 #: OWNER/ADMIN routes + 9 context-collection PATCH routes from P6-PLAT-9 + the location
 #: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
 #: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route; P6-PRIV-1 adds
 #: 2 OWNER-only organization routes, counted in ORG_EXACT), and
-#: the 2 GET routes whose membership check is inside the handler.
+#: the 2 GET routes whose membership check is inside the handler. W21 CF-2 moves the three
+#: claims write routes (POST, PATCH, DELETE) from the rank floor to an exact set.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
     _row("PUT", f"{_W}/business-profile", "workspace", EDITORS, RANK_FLOOR, _body_422()),
-    *(_row("POST", f"{_W}/{c}", "workspace", EDITORS, RANK_FLOOR, _body_422()) for c in _CONTEXT),
+    *(_row("POST", f"{_W}/{c}", "workspace", *_writers(c), _body_422()) for c in _CONTEXT),
     *(
         _row(
             "DELETE",
             f"{_W}/{c}/{{item_id}}",
             "workspace",
-            EDITORS,
-            RANK_FLOOR,
+            *_writers(c),
             _handler_404(ITEM_404),
         )
         for c in _CONTEXT
     ),
     # P6-PLAT-9: the body is validated after the gate, so an admitted role's ``[]`` is a 422.
     *(
-        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", EDITORS, RANK_FLOOR, _body_422())
+        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", *_writers(c), _body_422())
         for c in _CONTEXT
     ),
     _row("POST", f"{_W}/locations", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -568,8 +579,9 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            RANK_FLOOR: 48,
-            WS_EXACT: 1,
+            # W21 CF-2: the three claims write routes moved from RANK_FLOOR to WS_EXACT.
+            RANK_FLOOR: 45,
+            WS_EXACT: 4,
             ORG_EXACT: 9,
             MEMBER_WS: 25,
             MEMBER_ORG: 1,
@@ -629,7 +641,9 @@ class TestPolicyTableCompleteness:
         assert diff["membership_missing_from_table"] == [victim_member.key]
 
     def test_completeness_check_fails_when_a_role_set_drifts(self):
-        audit = next(p for p in E7_POLICY if p.category == WS_EXACT)
+        audit = next(
+            p for p in E7_POLICY if p.category == WS_EXACT and p.path.endswith("/audit-logs")
+        )
         drifted = tuple(
             _row(p.method, p.path, p.scope, (OWNER, ADMIN), p.category, p.probe)
             if p is audit

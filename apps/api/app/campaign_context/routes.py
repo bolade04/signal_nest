@@ -7,10 +7,27 @@ server-side; the update route (PATCH, P6-PLAT-9) changes only the fields the cli
 and never those three or the row's ``id``. Campaign and offer location lists are checked
 against the workspace's own active locations on create and update (P6-PLAT-8,
 :mod:`app.campaign_context.location_refs`).
+
+**The claims library is a protected safety control** (Project Phase 5C plan §2, W21 CF-2):
+5C's output-side review blocks a generated draft on the workspace's ``blocked`` claims, so a
+marketer whose draft is blocked must not be able to remove the claim that blocks it. For
+``/claims`` only:
+
+* create, update and delete are gated by ``require_exact_roles(OWNER, ADMIN,
+  COMPLIANCE_REVIEWER)`` — **marketers lose claims write access** (a disclosed, live
+  behaviour change; every other collection keeps the ``OWNER``/``ADMIN``/``MARKETER``
+  editors);
+* ``DELETE`` soft-retires the entry (``retired_at``) instead of deleting it; a retired entry
+  is no longer listed, updated or retired again (404, as a missing one);
+* every create, update and retirement writes an audit record
+  (``claims_library_entry.created`` / ``.updated`` / ``.retired``) naming the changed field
+  names, never their values.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -18,7 +35,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import TenantContext, get_tenant_context, require_role
+from app.audit.actions import AuditAction
+from app.audit.service import record_audit
+from app.auth.dependencies import (
+    TenantContext,
+    get_tenant_context,
+    require_exact_roles,
+    require_role,
+)
 from app.brands.service import get_primary_brand
 from app.campaign_context.location_refs import validate_location_ids
 from app.campaign_context.models import (
@@ -55,11 +79,38 @@ from app.campaign_context.schemas import (
 from app.core.enums import Role
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
+from app.db.clock import database_now
 from app.db.session import get_db
 
 router = APIRouter(tags=["campaign-context"])
 
 EDITORS = require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)
+#: The claims library's stewards (W21 CF-2): exact roles, no rank inheritance.
+CLAIMS_STEWARD_ROLES: frozenset[Role] = frozenset(
+    {Role.OWNER, Role.ADMIN, Role.COMPLIANCE_REVIEWER}
+)
+CLAIMS_STEWARDS = require_exact_roles(*sorted(CLAIMS_STEWARD_ROLES))
+
+
+@dataclass(frozen=True)
+class ProtectedCollection:
+    """A collection whose writes are a safety control: exact-role writers, soft retirement
+    (the model has ``retired_at``) and audited mutations."""
+
+    writers: Callable[..., TenantContext]
+    entity_type: str
+    created: AuditAction
+    updated: AuditAction
+    retired: AuditAction
+
+
+CLAIMS_PROTECTION = ProtectedCollection(
+    writers=CLAIMS_STEWARDS,
+    entity_type="claims_library_entry",
+    created=AuditAction.CLAIMS_LIBRARY_ENTRY_CREATED,
+    updated=AuditAction.CLAIMS_LIBRARY_ENTRY_UPDATED,
+    retired=AuditAction.CLAIMS_LIBRARY_ENTRY_RETIRED,
+)
 
 
 def _serialize(obj: Any) -> dict:
@@ -74,7 +125,30 @@ def _get_scoped(db: Session, model: type, workspace_id: str, item_id: str) -> An
     obj = db.get(model, item_id)
     if not obj or obj.workspace_id != workspace_id:
         raise NotFoundError("Item not found in this workspace.")
+    # A retired (soft-deleted) entry of a protected collection is gone for every route.
+    if getattr(obj, "retired_at", None) is not None:
+        raise NotFoundError("Item not found in this workspace.")
     return obj
+
+
+def _audit(
+    db: Session,
+    ctx: TenantContext,
+    protection: ProtectedCollection,
+    action: AuditAction,
+    obj: Any,
+    fields: list[str],
+) -> None:
+    record_audit(
+        db,
+        organization_id=ctx.organization.id,
+        workspace_id=obj.workspace_id,
+        actor_user_id=ctx.user.id,
+        action=action,
+        entity_type=protection.entity_type,
+        entity_id=obj.id,
+        context={"fields": sorted(fields)},
+    )
 
 
 def register_context_entity(
@@ -85,12 +159,15 @@ def register_context_entity(
     patch_schema: type[BaseModel],
     tag: str,
     location_field: str | None = None,
+    protection: ProtectedCollection | None = None,
 ) -> None:
     """Attach list/create/update/delete routes for a workspace-scoped context entity.
 
     ``location_field`` names the entity's list of location ids, if it has one; every
-    write of that list goes through :func:`validate_location_ids`.
+    write of that list goes through :func:`validate_location_ids`. ``protection`` makes the
+    collection a protected control (exact-role writers, soft retirement, audit).
     """
+    writers = protection.writers if protection else EDITORS
 
     @router.get(
         f"/workspaces/{{workspace_id}}/{path}",
@@ -107,9 +184,12 @@ def register_context_entity(
         db: Session = Depends(get_db),
         ctx: TenantContext = Depends(get_tenant_context),
     ) -> list[dict]:
+        query = select(model).where(model.workspace_id == workspace_id)
+        if protection:
+            query = query.where(model.retired_at.is_(None))
         page = paginate(
             db,
-            select(model).where(model.workspace_id == workspace_id),
+            query,
             order=(model.created_at, model.id),
             descending=False,
             scope=f"context:{path}",
@@ -131,7 +211,7 @@ def register_context_entity(
         workspace_id: str,
         body,  # annotation bound below to the concrete schema class
         db: Session = Depends(get_db),
-        ctx: TenantContext = Depends(EDITORS),
+        ctx: TenantContext = Depends(writers),
     ) -> dict:
         brand = get_primary_brand(db, workspace_id)
         if not brand:
@@ -147,6 +227,8 @@ def register_context_entity(
         )
         db.add(obj)
         db.flush()
+        if protection:
+            _audit(db, ctx, protection, protection.created, obj, list(values))
         return _serialize(obj)
 
     # ``from __future__ import annotations`` would stringify a ``body: schema`` hint
@@ -164,7 +246,7 @@ def register_context_entity(
         item_id: str,
         body,  # annotation bound below, as for ``_create``
         db: Session = Depends(get_db),
-        ctx: TenantContext = Depends(EDITORS),
+        ctx: TenantContext = Depends(writers),
     ) -> dict:
         obj = _get_scoped(db, model, workspace_id, item_id)
         changes = body.model_dump(exclude_unset=True)
@@ -180,6 +262,8 @@ def register_context_entity(
             setattr(obj, key, value)
         db.add(obj)
         db.flush()
+        if protection and changes:
+            _audit(db, ctx, protection, protection.updated, obj, list(changes))
         return _serialize(obj)
 
     _update.__annotations__["body"] = patch_schema
@@ -194,10 +278,20 @@ def register_context_entity(
         workspace_id: str,
         item_id: str,
         db: Session = Depends(get_db),
-        ctx: TenantContext = Depends(EDITORS),
+        ctx: TenantContext = Depends(writers),
     ) -> None:
-        db.delete(_get_scoped(db, model, workspace_id, item_id))
+        obj = _get_scoped(db, model, workspace_id, item_id)
+        if not protection:
+            db.delete(obj)
+            return
+        obj.retired_at = database_now(db)  # soft retirement: never a hard delete
+        db.add(obj)
+        db.flush()
+        _audit(db, ctx, protection, protection.retired, obj, ["retired_at"])
 
+
+#: Collections that are protected controls (W21 CF-2): only the claims library.
+_PROTECTED: dict[str, ProtectedCollection] = {"claims": CLAIMS_PROTECTION}
 
 # (path, model, create schema, patch schema, tag, location-id list field)
 _ENTITIES: list[tuple[str, type, type[BaseModel], type[BaseModel], str, str | None]] = [
@@ -220,4 +314,5 @@ for _path, _model, _schema, _patch, _tag, _location_field in _ENTITIES:
         patch_schema=_patch,
         tag=_tag,
         location_field=_location_field,
+        protection=_PROTECTED.get(_path),
     )

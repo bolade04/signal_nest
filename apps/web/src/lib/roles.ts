@@ -92,6 +92,11 @@ const ORGANIZATION_ADMIN_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'adm
 // `require_exact_roles(OWNER, ADMIN, COMPLIANCE_REVIEWER)` — exact membership.
 const AUDIT_LOG_READER_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'admin', 'compliance_reviewer']);
 
+// The claims library's stewards (W21 CF-2): `require_exact_roles(OWNER, ADMIN,
+// COMPLIANCE_REVIEWER)` on the claims write routes — exact membership, the same set as the
+// audit-log readers but a different question, so a separate constant.
+const CLAIMS_STEWARD_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'admin', 'compliance_reviewer']);
+
 /** Whether `value` is one of the six contract roles. Unknown strings are not roles. */
 export function isRole(value: unknown): value is Role {
   return typeof value === 'string' && KNOWN_ROLES.has(value);
@@ -158,6 +163,18 @@ export function canManageOrganizationData(role: RoleInput): boolean {
  */
 export function canReadAuditLogs(role: RoleInput): boolean {
   return isRole(role) && AUDIT_LOG_READER_ROLES.has(role);
+}
+
+/**
+ * Claims-library writes: `POST`, `PATCH` and `DELETE` (soft retirement) on
+ * `/workspaces/{workspace_id}/claims` — exactly owner, admin or compliance_reviewer
+ * (`require_exact_roles`, `CLAIMS_STEWARDS` in `apps/api/app/campaign_context/routes.py`).
+ * The claims library is a protected safety control (Project Phase 5C, W21 CF-2): a
+ * marketer edits every other campaign-context collection but may not change the claims a
+ * generated draft is checked against. Reading the library stays membership-only.
+ */
+export function canManageClaims(role: RoleInput): boolean {
+  return isRole(role) && CLAIMS_STEWARD_ROLES.has(role);
 }
 
 /**
