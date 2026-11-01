@@ -297,12 +297,15 @@ def factory(tmp_path_factory):
         # DESC with no secondary key, so equal timestamps would make order engine-
         # dependent and these assertions flaky.
         base = datetime(2026, 1, 1, tzinfo=UTC)
+        #
+        # Every action is a member of the closed AuditAction registry (Phase 5B): the typed
+        # read (AuditLogOut) admits nothing else, exactly as record_audit writes nothing else.
         rows = (
-            (A_WS, ORG_A, WS_A, "workspace.scoped", 0),
-            (A_NULL, ORG_A, None, "org.wide.a", 1),
-            (A_SIBLING, ORG_A, WS_A2, "workspace.sibling", 2),
-            (B_WS, ORG_B, WS_B, "other.org", 3),
-            (B_NULL, ORG_B, None, "org.wide.b", 4),
+            (A_WS, ORG_A, WS_A, "location.created", 0),
+            (A_NULL, ORG_A, None, "organization_member.role_changed", 1),
+            (A_SIBLING, ORG_A, WS_A2, "scout_request.created", 2),
+            (B_WS, ORG_B, WS_B, "location.created", 3),
+            (B_NULL, ORG_B, None, "organization_member.role_changed", 4),
         )
         for row_id, org, ws, action, offset in rows:
             s.add(
@@ -782,15 +785,20 @@ class TestAuditDataIsolation:
         r = client.get(_url(WS_A), headers=_auth(_uid(ORG_A, Role.OWNER)), params={"limit": 501})
         assert r.status_code == 422
 
-    def test_response_fields_are_the_documented_eight(self, client):
+    def test_response_fields_are_the_typed_audit_log_out(self, client):
+        # Phase 5B typed read (W21 P5B): the eight untyped fields plus workspace_id and the
+        # surfaced previous_state / new_state; never organization_id or updated_at.
         r = client.get(_url(WS_A), headers=_auth(_uid(ORG_A, Role.OWNER)))
         assert set(r.json()[0]) == {
             "id",
+            "workspace_id",
             "action",
             "actor_user_id",
             "entity_type",
             "entity_id",
             "reason",
-            "created_at",
+            "previous_state",
+            "new_state",
             "context",
+            "created_at",
         }

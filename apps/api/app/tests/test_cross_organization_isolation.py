@@ -66,8 +66,10 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 import app.auth.dependencies as deps
+from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.brands.models import Brand, BusinessProfile
+from app.briefs.models import RecommendationBrief
 from app.campaign_context.models import (
     AudienceProfile,
     BrandVoiceProfile,
@@ -79,6 +81,7 @@ from app.campaign_context.models import (
     ProductProfile,
     SourcePreference,
 )
+from app.core.actor_snapshot import actor_snapshot
 from app.core.config import get_settings
 from app.core.enums import OpportunityStatus, ScoutRequestStatus
 from app.core.middleware import RateLimitMiddleware
@@ -87,6 +90,7 @@ from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
 from app.geography.geocoder import get_geocoding_service
 from app.infra.cache import tenant_cache_key
+from app.intelligence.records import SignalIntelligenceRecord
 from app.jobs.models import Job
 from app.jobs.status import JobStatus
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -95,10 +99,12 @@ from app.opportunities.models import Opportunity
 from app.organizations.models import (
     OrganizationInvitation,
     OrganizationMember,
+    User,
     Workspace,
 )
 from app.privacy.verification import verify_organization_erased
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
+from app.signals.models import NormalizedSignal, RawSignal
 
 API = get_settings().api_prefix
 W = "/workspaces/{workspace_id}"
@@ -1543,6 +1549,146 @@ class TestOrganizationPrivacy:
 
 
 # --------------------------------------------------------------------------- #
+# 11b. Approvals (Phase 5B, W21 P5B): dark switch ON for these probes
+# --------------------------------------------------------------------------- #
+APPROVAL_BRIEF_404 = "Brief not found in this workspace."
+
+
+@pytest.fixture(scope="module")
+def approval_briefs(world: World) -> dict[str, str]:
+    """One brief per organization, authored by its owner, on that tenant's opportunity.
+
+    No brief-creation route exists on this lane's base (the 5A service lands separately), so
+    the brief and its evidence chain are witness rows like the opportunity and the job. The
+    intelligence record is left unattached to the opportunity (``opportunity_id`` NULL) so
+    the opportunity's own intelligence read is exactly as the rest of this module expects.
+    """
+    out: dict[str, str] = {}
+    with sessionmaker(bind=world.witness, expire_on_commit=False, future=True)() as s:
+        for t in (world.a, world.b):
+            raw = RawSignal(
+                organization_id=t.org_id, workspace_id=t.ws_id, scout_request_id=t.request_id,
+                source_type="rss_news", content="ci3 brief evidence",
+            )  # fmt: skip
+            s.add(raw)
+            s.flush()
+            normalized = NormalizedSignal(
+                organization_id=t.org_id, workspace_id=t.ws_id, scout_request_id=t.request_id,
+                raw_signal_id=raw.id, source_type="rss_news", excerpt="e",
+                content_hash=f"ci3-brief-{t.key}",
+            )  # fmt: skip
+            s.add(normalized)
+            s.flush()
+            record = SignalIntelligenceRecord(
+                organization_id=t.org_id, workspace_id=t.ws_id, scout_request_id=t.request_id,
+                normalized_signal_id=normalized.id, analysis_version="3c",
+                scoring_version="3c.1", fingerprint=f"ci3-brief-{t.key}",
+                enricher="deterministic", accepted=True, classification="emerging",
+            )  # fmt: skip
+            s.add(record)
+            s.flush()
+            owner = s.get(User, t.owner_id)
+            brief = RecommendationBrief(
+                organization_id=t.org_id, workspace_id=t.ws_id, opportunity_id=t.opportunity_id,
+                intelligence_record_id=record.id, brief_version=1, analysis_version="3c",
+                scoring_version="3c.1", prompt_name="recommendation_brief",
+                prompt_version="1.0.0", model_identifier="mock-model", input_hash="0" * 64,
+                is_simulated=True, created_by=owner.id,
+                created_by_snapshot=actor_snapshot(
+                    user_id=owner.id, full_name=owner.full_name, email=owner.email
+                ),
+                summary=f"Brief {t.key}", rationale="r", evidence_refs=[record.id],
+            )  # fmt: skip
+            s.add(brief)
+            s.flush()
+            out[t.key] = brief.id
+        s.commit()
+    return out
+
+
+@pytest.fixture
+def briefs_on() -> Iterator[None]:
+    settings = get_settings()
+    saved = settings.recommendation_briefs_enabled
+    settings.recommendation_briefs_enabled = True
+    try:
+        yield
+    finally:
+        settings.recommendation_briefs_enabled = saved
+
+
+class _AsReviewer:
+    """The tenant's marketer, made a REVIEWER through the real role endpoint for the probe and
+    restored afterwards (so the module's membership assumptions hold for every other test).
+    The brief's author is the owner, so the reviewer is not its author."""
+
+    def __init__(self, pov: Pov):
+        self.pov = pov
+
+    def __enter__(self) -> str:
+        a = self.pov.a
+        r = self.pov.send("PUT", f"/organizations/{a.org_id}/members/{a.marketer_id}/role",
+                          {"role": "reviewer"})  # fmt: skip
+        assert r.status_code == 200, r.text
+        return a.marketer_token
+
+    def __exit__(self, *_exc) -> None:
+        a = self.pov.a
+        r = self.pov.send("PUT", f"/organizations/{a.org_id}/members/{a.marketer_id}/role",
+                          {"role": "marketer"})  # fmt: skip
+        assert r.status_code == 200, r.text
+
+
+def _approvals_path(t: Tenant, brief_id: str, opportunity_id: str | None = None) -> str:
+    opp = opportunity_id or t.opportunity_id
+    return f"/workspaces/{t.ws_id}/opportunities/{opp}/briefs/{brief_id}/approvals"
+
+
+class TestApprovals:
+    def test_decide_and_history_with_foreign_brief_id_404_unchanged(
+        self, world: World, pov: Pov, approval_briefs, briefs_on
+    ):
+        a, b = pov.a, pov.b
+        mine, theirs = approval_briefs[a.key], approval_briefs[b.key]
+        body = {"decision": "approved", "subject_version": 1}
+        before_b = [r for r in _rows(world, Approval) if r["subject_id"] == theirs]
+        with _AsReviewer(pov) as reviewer:
+            # B's brief id under A's workspace path, with A's or B's opportunity id: 404.
+            for path in (_approvals_path(a, theirs), _approvals_path(a, theirs, b.opportunity_id)):
+                _assert_404(world.send("POST", API + path, reviewer, body), APPROVAL_BRIEF_404)
+                _assert_404(pov.send("GET", path), APPROVAL_BRIEF_404)
+            # The same identifiers through B's workspace path: the membership gate (403).
+            foreign = _approvals_path(b, theirs)
+            _assert_membership_403(world.send("POST", API + foreign, reviewer, body))
+            _assert_membership_403(pov.send("GET", foreign))
+            assert [r for r in _rows(world, Approval) if r["subject_id"] == theirs] == before_b
+            # Positive control: A's reviewer decides on A's brief; A's owner reads it.
+            own = world.send("POST", API + _approvals_path(a, mine), reviewer, body)
+            assert own.status_code == 201, own.text
+            assert own.json()["workspace_id"] == a.ws_id
+        history = pov.send("GET", _approvals_path(a, mine))
+        assert history.status_code == 200
+        assert own.json()["id"] in {i["id"] for i in history.json()["items"]}
+        decided = {r["organization_id"] for r in _rows(world, Approval) if r["subject_id"] == mine}
+        assert decided == {a.org_id}
+
+    def test_queue_own_workspace_only_foreign_403(
+        self, world: World, pov: Pov, approval_briefs, briefs_on
+    ):
+        a, b = pov.a, pov.b
+        with _AsReviewer(pov) as reviewer:
+            own = world.send("GET", f"{API}/workspaces/{a.ws_id}/approval-queue", reviewer)
+            assert own.status_code == 200, own.text
+            ids = {i["id"] for i in own.json()["items"]}
+            assert approval_briefs[b.key] not in ids
+            assert ids <= {r["id"] for r in _rows(world, RecommendationBrief)
+                           if r["workspace_id"] == a.ws_id}  # fmt: skip
+            _assert_membership_403(
+                world.send("GET", f"{API}/workspaces/{b.ws_id}/approval-queue", reviewer)
+            )
+
+
+# --------------------------------------------------------------------------- #
 # 12. Completeness against the served application
 # --------------------------------------------------------------------------- #
 #: Every customer-facing tenant-scoped operation -> the tests in THIS module that prove it.
@@ -1700,6 +1846,13 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         "TestAuditLogs::test_own_200_own_organization_rows_only_foreign_403",
         *_PAGED_TEST,
     ),
+    ("POST", f"{W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals"): (
+        "TestApprovals::test_decide_and_history_with_foreign_brief_id_404_unchanged",
+    ),
+    ("GET", f"{W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals"): (
+        "TestApprovals::test_decide_and_history_with_foreign_brief_id_404_unchanged",
+    ),
+    ("GET", f"{W}/approval-queue"): ("TestApprovals::test_queue_own_workspace_only_foreign_403",),
     ("GET", f"{ORG}/export"): ("TestOrganizationPrivacy::test_export_own_200_scoped_foreign_403",),
     ("GET", f"{ORG}/export/{{table}}"): (
         "TestOrganizationPrivacy::test_export_page_own_scoped_foreign_403_and_non_owner_refused",
@@ -1717,6 +1870,10 @@ PROVEN_ELSEWHERE: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {
     ("POST", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         ("test_opportunity_feedback_api.py", "test_cross_workspace_record_404"),
         ("test_opportunity_feedback_api.py", "test_cross_market_record_is_rejected"),
+    ),
+    ("POST", f"{W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals"): (
+        ("test_approvals_api.py", "test_entity_level_mismatch_is_one_non_enumerating_404"),
+        ("test_approvals_api.py", "test_the_organization_membership_gate_is_403"),
     ),
     ("GET", f"{W}/audit-logs"): (
         ("test_audit_logs_role_matrix.py", "test_allowed_role_cannot_reach_another_orgs_workspace"),
@@ -1789,9 +1946,10 @@ class TestCoverageCompleteness:
         assert served - covered == set(), sorted(served - covered)
         assert covered - served == set(), sorted(covered - served)
         # 71 -> 85: P6-PLAT-9 +9, P6-UI-023 +2, P6-UI-006 +1 (83), P6-PRIV-1 +2 (organization
-        # export and deletion); 85 -> 86: D-9f +1 (organization export table page); the
-        # equalities above prove no other operation came or went.
-        assert len(served) == 86
+        # export and deletion); 85 -> 86: D-9f +1 (organization export table page); 86 -> 89:
+        # Phase 5B (W21 P5B) +3 (decide on a brief, its decision history, the approval
+        # queue); the equalities above prove no other operation came or went.
+        assert len(served) == 89
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
