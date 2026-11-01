@@ -244,6 +244,33 @@ def test_a_failed_job_does_not_block_a_new_request(world, monkeypatch):
     assert world.job(retry)["status"] == "succeeded"
 
 
+def test_the_generate_route_commits_its_job_before_answering(world):
+    """The 202 names a job that is already committed: with a request session whose teardown
+    rolls back instead of committing, the job is still there (the scout-run route's rule;
+    the teardown commit runs after the response is sent, O9 audit)."""
+    from app.db.session import get_db
+
+    ws = world.workspace("commit")
+    brief_id = world.seed_brief(ws)
+    committed = app.dependency_overrides[get_db]
+
+    def rollback_teardown():
+        s = world.factory()
+        try:
+            yield s
+            s.rollback()
+        finally:
+            s.close()
+
+    app.dependency_overrides[get_db] = rollback_teardown
+    try:
+        r = world.generate(brief_id, ws=ws)
+    finally:
+        app.dependency_overrides[get_db] = committed
+    assert r.status_code == 202, r.text
+    assert world.row(Job, r.json()["job_id"]) is not None
+
+
 @pytest.mark.parametrize(
     "body",
     [{}, {"channel": "fax"}, {"channel": "email", "body": "free text"},

@@ -31,7 +31,9 @@ capability decision; the feedback- and brief-capability precedent):
   job is queued or running answers the same job. The draft — never updated; a revision is a new
   version — carries its content review.
 
-Transaction ownership follows the house rule: the request-scoped ``get_db`` commits.
+Transaction ownership follows the house rule (the request-scoped ``get_db`` commits), with
+one exception: ``POST`` commits its job before answering 202, as the scout-run route does, so
+the job it names exists when the client polls it.
 """
 
 from __future__ import annotations
@@ -157,6 +159,10 @@ def generate_brief_draft(
     job = request_generation(
         db, brief=brief, body=body, requested_by=ctx.user, settings=get_settings()
     )
+    # Committed before the 202 (the scout-run route's rule): the request-scoped teardown commit
+    # runs after the response is sent, so a client polling this job id at once could miss it,
+    # and a failing teardown commit would leave a false 202 (O9 audit, item I-O9-1).
+    db.commit()
     return CreativeGenerationQueuedOut(job_id=job.id)
 
 
