@@ -20,7 +20,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
@@ -58,17 +58,31 @@ def metrics():
         configure_metrics(None)
 
 
-def test_on_sqlite_the_signal_is_absent_never_zero(factory, s, metrics):
+def test_on_sqlite_the_signal_is_absent_never_zero(factory, s, metrics, caplog):
     """An eligible row exists (inserted directly) and the CLI lists it, yet the signal is
     absent: SQLite keeps no ledger, so its count would be a claim about a bound that does not
-    exist there."""
+    exist there. The sweep runs no statement at all on SQLite - in particular no PostgreSQL
+    ``set_config`` bound (review r2 N3, mutant MR14) - and so logs no failed sweep."""
     row = _adm(s, _req(s), end_kind="unknown")
     s.commit()
+    executed: list[str] = []
+
+    def _record(_conn, _cursor, statement, _parameters, _context, _many):
+        executed.append(statement)
+
+    engine = factory.kw["bind"]
     try:
         assert [i["admission_id"] for i in blocked(s)["blocked"]] == [row.id]
         assert ledger_kept(s) is False
         assert blocked_scouts(s) is None
-        assert record_blocked_scouts(factory) is None
+        event.listen(engine, "before_cursor_execute", _record)
+        try:
+            with caplog.at_level(logging.WARNING, logger="signalnest.jobs.blocked_signal"):
+                assert record_blocked_scouts(factory) is None
+        finally:
+            event.remove(engine, "before_cursor_execute", _record)
+        assert executed == []
+        assert "worker.blocked_scouts_sweep_failed" not in [r.getMessage() for r in caplog.records]
         assert metrics.gauge_value(SCOUTS_BLOCKED) is None
         assert metrics.gauge_value(SCOUTS_BLOCKED_OLDEST_AGE_SECONDS) is None
         assert internal_overview(db=s, _operator=None).scouts.model_dump() == {

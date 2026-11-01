@@ -263,10 +263,12 @@ Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
   and alert 13 is endpoint-based, so neither can back an alarm. A gauge that stops while
   workers are healthy means metrics are off or the read is failing
   (`worker.blocked_scouts_sweep_failed` warnings, class name only).
-- **Read bound:** on PostgreSQL each sweep's read sets `SET LOCAL lock_timeout` and
-  `SET LOCAL statement_timeout` (2 s and 5 s by default; at most a quarter of
-  `WORKER_STALE_AFTER_SECONDS − WORKER_HEARTBEAT_SECONDS`), because the read shares the
-  registry heartbeat's loop. A read that hits the bound (for example while a migration holds
+- **Read bound:** on PostgreSQL each sweep's read sets a transaction-scoped `lock_timeout`
+  and `statement_timeout` (`set_config(…, true)`, the function form of `SET LOCAL`): 2 s and
+  5 s by default, and at most a quarter of
+  `WORKER_STALE_AFTER_SECONDS − WORKER_HEARTBEAT_SECONDS` for any such margin of at least
+  0.4 s (below that a 100 ms floor applies, because `0` would mean no timeout), because the
+  read shares the registry heartbeat's loop. A read that hits the bound (for example while a migration holds
   a lock on `scout_admissions`, `scout_requests` or `jobs`) is logged as
   `worker.blocked_scouts_sweep_failed` and sets no gauge for that interval; the next beat is
   late by at most about the bound. Sustained, it shows as missing data.

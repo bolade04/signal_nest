@@ -14,7 +14,8 @@ produced, with ledger rows written by the real admission path (``RunAdmission``)
 * healthy in-flight operations are never counted (every non-eligible shape);
 * the gauges carry no label and pass ``validate_metric``;
 * the worker's heartbeat sets them on its own schedule, with no request at all;
-* one sweep is two ``SET LOCAL`` bounds, one clock reading and ONE listing statement, whatever
+* one sweep is two transaction-scoped bounds (``set_config(..., true)``), one clock reading and
+  ONE listing statement, whatever
   the number of rows, and that statement reads the partial index
   ``uq_scout_admission_unresolved``;
 * a lock on the ledger (a migration's ``ACCESS EXCLUSIVE``) costs the heartbeat at most the
@@ -424,7 +425,8 @@ def _listings(seen) -> list[tuple[str, object]]:
 
 @pytest.mark.parametrize("blocked_scouts_n", [0, 1, 4])
 def test_one_sweep_is_one_clock_reading_and_one_statement(world, metrics, blocked_scouts_n):
-    """Two ``SET LOCAL`` bounds, one clock reading, ONE listing - whatever the row count; the
+    """Two ``set_config(..., true)`` bounds (bound parameters, never SQL text: review r2
+    MAJOR-1), one clock reading, ONE listing - whatever the row count; the
     bounds end with the read's transaction (the pooled connection keeps the engine's own)."""
     w = world
     tenants = [w, *(_scout(w) for _ in range(max(blocked_scouts_n - 1, 0)))]
@@ -439,12 +441,16 @@ def test_one_sweep_is_one_clock_reading_and_one_statement(world, metrics, blocke
     assert metrics.gauge_value(SCOUTS_BLOCKED) == float(blocked_scouts_n)
     statements = [statement for statement, _ in seen]
     assert len(statements) == 4, statements
-    assert statements[0] == "SET LOCAL lock_timeout = '2000ms'"
-    assert statements[1] == "SET LOCAL statement_timeout = '5000ms'"
+    for (statement, parameters), expected in zip(
+        seen[:2], (("lock_timeout", "2000ms"), ("statement_timeout", "5000ms")), strict=True
+    ):
+        assert statement.startswith("SELECT set_config("), statement
+        assert expected[0] not in statement and expected[1] not in statement  # bound, not text
+        assert list(parameters.values()) == [*expected, True], parameters
     assert "clock_timestamp" in statements[2]
     [(listing, _)] = _listings(seen)
     assert listing == statements[3] and "resolved_at IS NULL" in listing
-    with w.factory() as s:  # SET LOCAL did not outlive the read's transaction
+    with w.factory() as s:  # the bounds did not outlive the read's transaction
         assert s.execute(text("show lock_timeout")).scalar_one() == "30s"
         assert s.execute(text("show statement_timeout")).scalar_one() == "30s"
 

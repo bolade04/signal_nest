@@ -887,10 +887,13 @@ class Worker:
         read that FAILS is contained: it is logged by class name and the beat it
         follows has already committed. A read that WAITS (a lock held by a
         migration, a slow statement) does delay the next beat, because both share
-        this loop. On PostgreSQL that wait is bounded by the read's ``SET LOCAL``
+        this loop. On PostgreSQL that wait is bounded by the read's transaction-scoped
         ``lock_timeout`` / ``statement_timeout`` (``read_timeouts_ms``: at most 2 s /
-        5 s and a quarter of ``stale_after - interval``), so a beat is late by at most
-        about that bound and never long enough for peers to flag this worker stale.
+        5 s, and at most a quarter of ``stale_after - interval`` for any such margin of
+        at least 0.4 s; below that a 100 ms floor applies). So a beat is late by at most
+        about that bound, which for a margin of at least 0.4 s is never long enough for
+        peers to flag this worker stale. Obtaining a pooled connection is shared with
+        the heartbeat's own and is not bounded by it.
         """
         stop = threading.Event()
         interval = self._settings.worker_heartbeat_seconds
