@@ -8,8 +8,10 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   invitee's address, which is someone else's data), feedback it submitted, capability
   overrides it set, the audit events it performed and — Project Phase 5 (W21 CF-1) — the
   recommendation briefs it authored and the approval decisions it made (ids, versions,
-  decision, its own reason and note, its own snapshot; never the brief's model-derived content
-  and never another person's identity). No credential, token or digest.
+  decision, reason code, its own snapshot, and the account's own free-text note, which may
+  name other people, as ``capability_overrides_set.reason`` may; never the brief's
+  model-derived content and never another account's records). No credential, token or
+  digest.
   The invitations it accepted are bound to it by id and always listed; the others addressed
   to its email address are found by that address, so they are listed only when it is
   verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says which, in

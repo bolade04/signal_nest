@@ -18,9 +18,11 @@ approvals in organization A before acting:
   ``audit_logs`` retention class (no new duration setting) and its purge removes an approval
   past the cut-off and keeps a newer one and the brief (review r1 DATA-C3); the erased
   markers agree.
-* **Account export** (review r1 DATA-C2). The account's export lists the briefs it authored
-  and the approvals it decided — its own ids, versions, decision, reason, note and snapshot —
-  and never the brief's model-derived content or another person's identity.
+* **Account export** (review r1 DATA-C2; review r2 DATA-C5). The account's export lists the
+  briefs it authored and the approvals it decided — its own ids, versions, decision, reason
+  code and snapshot, and its own free-text note verbatim, which may name other people (as
+  ``capability_overrides_set.reason`` may) — and never the brief's model-derived content or
+  another account's records.
 """
 
 from __future__ import annotations
@@ -250,6 +252,11 @@ def test_the_account_export_lists_the_accounts_briefs_and_decisions_only(env):
     dave = env.client.get(f"{API}/account/export", headers=env.auth(DAVE)).json()
     assert dave["briefs_authored"] == []
     assert [a["id"] for a in dave["approvals_decided"]] == ["cf1-appr-dave"]
+    # DAVE's own free-text note is exported verbatim, although it names CAROL (review r2
+    # DATA-C5, option (i)): it is his own text, like a capability override's reason.
+    assert dave["approvals_decided"][0]["note"] == f"Agreed with {EMAIL[CAROL]} on a call"
+    assert dave["approvals_decided"][0]["decided_by_snapshot"] == _snapshot(DAVE)
+    assert _snapshot(CAROL) not in json.dumps(dave)  # her records are not his
     alice = env.client.get(f"{API}/account/export", headers=env.auth(ALICE)).json()
     assert alice["briefs_authored"] == [] and alice["approvals_decided"] == []
 

@@ -2,11 +2,13 @@
 
 Append-only (Project Phase 5B audit spine, W21 CF-1): every ORM path that would update or
 delete a row raises — the unit of work, ORM UPDATE/DELETE statements and
-``Query.update/delete``, the bulk API and ORM upserts (:func:`app.db.append_only.
-append_only`). Statements on the table (Core) and raw SQL are not refused; only
-:mod:`app.privacy` (erasure, retention) and the development-only demo reset write that way,
-and a static test pins it. The only constructor is :func:`app.audit.service.record_audit`,
-which admits only the closed :class:`app.audit.actions.AuditAction` registry. See
+``Query.update/delete``, the bulk API and ORM upserts, a mapped subclass included
+(:func:`app.db.append_only.append_only`). Not refused: Core statements and Core upserts on
+the table, ORM statements on a bare ``Connection``, raw SQL and the database's own FK
+actions; only :mod:`app.privacy` (erasure, retention) and the development-only demo reset
+write that way, pinned by a static test whose limits :mod:`app.db.append_only` states.
+The only constructor is :func:`app.audit.service.record_audit`, which admits only the closed
+:class:`app.audit.actions.AuditAction` registry. See
 :mod:`app.db.append_only` for the exact enforcement level: application layer only;
 database-level immutability is a separate infrastructure change (O-10).
 
