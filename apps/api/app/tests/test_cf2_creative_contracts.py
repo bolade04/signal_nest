@@ -11,16 +11,19 @@
   mutation-check target) and is reflected, required, in ``FeatureFlagsOut`` (O-4); the
   capability is workspace-enableable (O-3); the four cost/quota ceilings default ``None`` and
   ``creative_generation_ceilings_unset()`` names all four, so the 5C service's fail-closed
-  check has its input; a configured ceiling must be positive.
+  check has its input; a configured ceiling must be a finite number greater than 0.
 * **Job and LLM contracts.** ``creative.generate`` is a known, built-in job type whose
   registered handler is a stub that refuses every attempt with a non-retryable ``POLICY``
   error and touches nothing; the ``generate_creative`` prompt renders every field as an
-  untrusted data block and its output schema is registered and bounded. No
+  untrusted data block, its safety clauses are asserted one by one and its 1.0.0 template
+  is pinned by digest (a change must bump the version), and its output schema is
+  registered and bounded. No
   ``llm_usage_records`` table: the draft links the Phase 6 usage ledger (I-4).
 """
 
 from __future__ import annotations
 
+import hashlib
 import typing
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -370,9 +373,30 @@ def test_the_handler_stub_refuses_non_retryably_and_touches_nothing() -> None:
     assert is_retryable(JobErrorCode.POLICY) is False
 
 
+#: The frozen ``generate_creative`` 1.0.0 template (CF-2 review CONTROLS C-3). The prompt's
+#: rule is "any change bumps the version": a template change must come with a new version
+#: and a new digest here, in the same commit.
+GENERATE_CREATIVE_1_0_0_SHA256 = "219609b1b883413210715ca9ab058776f50ecc313df3de806c088e56f7ddd348"
+#: The safety clauses (explain_opportunity's discipline plus 5C's own), each asserted on its
+#: own so a dropped clause names itself.
+GENERATE_CREATIVE_SAFETY_CLAUSES = (
+    "do NOT invent unsupported product claims",
+    "attack competitors",
+    "promise outcomes",
+    "links, contact details or markup",
+    "Use only claims from the block named approved_claims",
+    "include every text in the block named required_disclaimers verbatim",
+)
+
+
 def test_the_prompt_renders_every_field_as_untrusted_data() -> None:
     prompt = PROMPTS["generate_creative"]
     assert (prompt.name, prompt.version) == ("generate_creative", "1.0.0")
+    for clause in GENERATE_CREATIVE_SAFETY_CLAUSES:
+        assert clause in prompt.template, f"generate_creative lost a safety clause: {clause!r}"
+    assert hashlib.sha256(prompt.template.encode("utf-8")).hexdigest() == (
+        GENERATE_CREATIVE_1_0_0_SHA256
+    ), "the generate_creative template changed: bump its version and re-pin the digest"
     fields = template_fields(prompt.template)
     assert fields == [
         "channel", "summary", "rationale", "recommended_actions", "suggested_angles",
