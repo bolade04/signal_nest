@@ -15,6 +15,10 @@ from app.core.metrics import (
     JOB_EXECUTION_DURATION_MS,
     JOBS_ENQUEUED_TOTAL,
     JOBS_QUEUE_DEPTH,
+    LLM_CALL_DURATION_MS,
+    LLM_CALLS_TOTAL,
+    LLM_INPUT_TOKENS_TOTAL,
+    LLM_OUTPUT_TOKENS_TOTAL,
     METRIC_NAMES,
     InMemoryMetrics,
     MetricError,
@@ -155,6 +159,11 @@ def test_validation_error_is_not_swallowed_even_on_failing_backend() -> None:
 # --------------------------------------------------------------------------- #
 def test_catalog_contains_expected_families() -> None:
     for name in (JOBS_ENQUEUED_TOTAL, JOB_EXECUTION_DURATION_MS, JOBS_QUEUE_DEPTH):
+        assert name in METRIC_NAMES
+    # Project Phase 5A LLM call family (W21 CF-1 amendment; contract in test_cf1_llm_metrics).
+    for name in (
+        LLM_CALLS_TOTAL, LLM_CALL_DURATION_MS, LLM_INPUT_TOKENS_TOTAL, LLM_OUTPUT_TOKENS_TOTAL
+    ):
         assert name in METRIC_NAMES
 
 

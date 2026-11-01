@@ -6,7 +6,12 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
 * **Account export** — the signed-in account's own data: profile, memberships, sessions,
   account-token history, invitations addressed to it, invitations it sent (without the
   invitee's address, which is someone else's data), feedback it submitted, capability
-  overrides it set and the audit events it performed. No credential, token or digest.
+  overrides it set, the audit events it performed and — Project Phase 5 (W21 CF-1) — the
+  recommendation briefs it authored and the approval decisions it made (ids, versions,
+  decision, reason code, its own snapshot, and the account's own free-text note, which may
+  name other people, as ``capability_overrides_set.reason`` may; never the brief's
+  model-derived content and never another account's records). No credential, token or
+  digest.
   The invitations it accepted are bound to it by id and always listed; the others addressed
   to its email address are found by that address, so they are listed only when it is
   verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says which, in
@@ -35,8 +40,10 @@ from typing import Any
 from sqlalchemy import Table, and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetToken
+from app.briefs.models import RecommendationBrief
 from app.capabilities.models import WorkspaceCapabilityOverride
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.db.clock import as_utc
@@ -243,6 +250,42 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             )
             .where(AuditLog.actor_user_id == uid)
             .order_by(AuditLog.created_at, AuditLog.id),
+        ),
+        # Project Phase 5 (W21 CF-1). The account's own records only: identifiers, versions
+        # and its own snapshot; the brief's content is model output over collected data, not
+        # the account's, and is in the organization export.
+        "briefs_authored": _rows(
+            db,
+            select(
+                RecommendationBrief.id,
+                RecommendationBrief.organization_id,
+                RecommendationBrief.workspace_id,
+                RecommendationBrief.opportunity_id,
+                RecommendationBrief.brief_version,
+                RecommendationBrief.created_by_snapshot,
+                RecommendationBrief.created_at,
+            )
+            .where(RecommendationBrief.created_by == uid)
+            .order_by(RecommendationBrief.created_at, RecommendationBrief.id),
+        ),
+        "approvals_decided": _rows(
+            db,
+            select(
+                Approval.id,
+                Approval.organization_id,
+                Approval.workspace_id,
+                Approval.subject_type,
+                Approval.subject_id,
+                Approval.subject_version,
+                Approval.decision,
+                Approval.reason_code,
+                Approval.note,
+                Approval.decided_role,
+                Approval.decided_by_snapshot,
+                Approval.created_at,
+            )
+            .where(Approval.decided_by == uid)
+            .order_by(Approval.created_at, Approval.id),
         ),
     }
 

@@ -265,7 +265,8 @@ creates no role or policy.**
 The contract **requires**, throughout INFRA implementation and environment setup:
 
 - `opportunity_feedback_enabled=False`, `scout_scheduling_enabled=False`,
-  `connector_rss_enabled=False` (all three global flags remain `False`).
+  `connector_rss_enabled=False`, `recommendation_briefs_enabled=False` (all four global
+  flags remain `False`; the fourth was added by Project Phase 5 CF-1 and defaults `False`).
 - **No capability override** created or cleared during infrastructure implementation.
 - Opportunity feedback remains **dark and fail-closed** (the gate opens only on an explicit
   `effective_enabled is True` — `app/feedback/routes.py`).

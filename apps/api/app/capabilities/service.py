@@ -45,6 +45,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.capabilities.errors import (
     CapabilityOverrideNotPermittedError,
@@ -285,7 +286,7 @@ def _apply_update(
         organization_id=organization_id,
         workspace_id=workspace_id,
         actor_user_id=actor_user_id,
-        action="workspace_capability_override.updated",
+        action=AuditAction.WORKSPACE_CAPABILITY_OVERRIDE_UPDATED,
         entity_type="workspace_capability_override",
         entity_id=row.id,
         reason=reason,
@@ -348,7 +349,7 @@ def set_capability_override(
             organization_id=organization_id,
             workspace_id=workspace_id,
             actor_user_id=actor_user_id,
-            action="workspace_capability_override.rejected",
+            action=AuditAction.WORKSPACE_CAPABILITY_OVERRIDE_REJECTED,
             entity_type="workspace_capability_override",
             entity_id=None,
             new_state=_state(capability, enabled, None),
@@ -417,7 +418,7 @@ def set_capability_override(
         organization_id=organization_id,
         workspace_id=workspace_id,
         actor_user_id=actor_user_id,
-        action="workspace_capability_override.created",
+        action=AuditAction.WORKSPACE_CAPABILITY_OVERRIDE_CREATED,
         entity_type="workspace_capability_override",
         entity_id=row.id,
         reason=reason,
@@ -502,7 +503,7 @@ def clear_capability_override(
         organization_id=organization_id,
         workspace_id=workspace_id,
         actor_user_id=actor_user_id,
-        action="workspace_capability_override.cleared",
+        action=AuditAction.WORKSPACE_CAPABILITY_OVERRIDE_CLEARED,
         entity_type="workspace_capability_override",
         entity_id=previous["override_id"],
         previous_state=previous,

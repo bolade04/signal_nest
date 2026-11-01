@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands.service import get_primary_brand
@@ -246,7 +247,7 @@ def create_scout_request(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="scout_request.created",
+        action=AuditAction.SCOUT_REQUEST_CREATED,
         entity_type="scout_request",
         entity_id=request.id,
     )
@@ -315,7 +316,7 @@ def update_scout_request(
             organization_id=ctx.organization.id,
             workspace_id=workspace_id,
             actor_user_id=ctx.user.id,
-            action="scout_request.updated",
+            action=AuditAction.SCOUT_REQUEST_UPDATED,
             entity_type="scout_request",
             entity_id=request.id,
             # Field names only: keywords, names and notes are customer text.
@@ -367,7 +368,7 @@ def pause_scout_request(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="scout_request.paused",
+        action=AuditAction.SCOUT_REQUEST_PAUSED,
         entity_type="scout_request",
         entity_id=request.id,
     )
@@ -400,7 +401,7 @@ def resume_scout_request(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="scout_request.resumed",
+        action=AuditAction.SCOUT_REQUEST_RESUMED,
         entity_type="scout_request",
         entity_id=request.id,
     )
@@ -482,7 +483,7 @@ def run_scout_request_endpoint(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="scout_request.run",
+        action=AuditAction.SCOUT_REQUEST_RUN,
         entity_type="scout_request",
         entity_id=request.id,
     )

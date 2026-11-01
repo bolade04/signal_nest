@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.core.enums import (
     NEGATIVE_FEEDBACK_REASONS,
@@ -131,7 +132,7 @@ def create_feedback(
         organization_id=feedback.organization_id,
         workspace_id=feedback.workspace_id,
         actor_user_id=submitted_by_user_id,
-        action="opportunity_feedback.created",
+        action=AuditAction.OPPORTUNITY_FEEDBACK_CREATED,
         entity_type="opportunity_feedback",
         entity_id=feedback.id,
     )
