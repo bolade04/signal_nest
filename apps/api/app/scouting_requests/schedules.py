@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.capabilities.registry import Capability
 from app.capabilities.resolver import CapabilityResolution, resolve_capability
@@ -663,7 +664,7 @@ def create_schedule(
         organization_id=schedule.organization_id,
         workspace_id=schedule.workspace_id,
         actor_user_id=actor_user_id,
-        action="scout_schedule.created",
+        action=AuditAction.SCOUT_SCHEDULE_CREATED,
         entity_type="scout_schedule",
         entity_id=schedule.id,
     )
@@ -703,7 +704,7 @@ def pause_schedule(
         organization_id=schedule.organization_id,
         workspace_id=schedule.workspace_id,
         actor_user_id=actor_user_id,
-        action="scout_schedule.paused",
+        action=AuditAction.SCOUT_SCHEDULE_PAUSED,
         entity_type="scout_schedule",
         entity_id=schedule.id,
     )
@@ -774,7 +775,7 @@ def resume_schedule(
         organization_id=schedule.organization_id,
         workspace_id=schedule.workspace_id,
         actor_user_id=actor_user_id,
-        action="scout_schedule.resumed",
+        action=AuditAction.SCOUT_SCHEDULE_RESUMED,
         entity_type="scout_schedule",
         entity_id=schedule.id,
     )
@@ -806,7 +807,7 @@ def delete_schedule(
         organization_id=schedule.organization_id,
         workspace_id=workspace_id,
         actor_user_id=actor_user_id,
-        action="scout_schedule.deleted",
+        action=AuditAction.SCOUT_SCHEDULE_DELETED,
         entity_type="scout_schedule",
         entity_id=schedule.id,
     )

@@ -130,15 +130,18 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
     assert body["is_local_mode"] is True
     assert "capabilities" not in body
     # Read-only product-capability reflections are exposed (never backend
-    # topology). All three registered capabilities ship dark, so all reflect
+    # topology). All four registered capabilities ship dark, so all reflect
     # False. This stays EXACT-EQUALITY on purpose: it is the closed-set
     # disclosure control for a customer-facing endpoint, and it is what fails
-    # loudly if a fourth value is ever reflected into `features`. Do not relax
-    # it to a subset or per-key check.
+    # loudly if a fifth value is ever reflected into `features`. Do not relax
+    # it to a subset or per-key check. The fourth key,
+    # `recommendation_briefs_enabled`, was added at Project Phase 5 CF-1 per
+    # operator decision O-4 (ALT_expose_all), in the same commit as the flag.
     assert body["features"] == {
         "opportunity_feedback_enabled": False,
         "scout_scheduling_enabled": False,
         "connector_rss_enabled": False,
+        "recommendation_briefs_enabled": False,
     }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
@@ -147,7 +150,12 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
 
 @pytest.mark.parametrize(
     "setting_attr",
-    ["opportunity_feedback_enabled", "scout_scheduling_enabled", "connector_rss_enabled"],
+    [
+        "opportunity_feedback_enabled",
+        "scout_scheduling_enabled",
+        "connector_rss_enabled",
+        "recommendation_briefs_enabled",
+    ],
 )
 def test_system_capabilities_reflects_each_flag_independently(
     client: TestClient, auth: dict[str, str], monkeypatch, setting_attr: str

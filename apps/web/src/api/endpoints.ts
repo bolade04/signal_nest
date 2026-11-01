@@ -1,5 +1,8 @@
 import { apiRequest, apiRequestPage } from './client';
 import type {
+  ApprovalDecisionCreate,
+  ApprovalHistoryOut,
+  ApprovalOut,
   FeedbackCapability,
   AccountDeletionOut,
   AccountDeletionPreviewOut,
@@ -27,6 +30,10 @@ import type {
   FeedbackCreate,
   FeedbackHistoryOut,
   FeedbackOut,
+  RecommendationBriefCapability,
+  RecommendationBriefCreate,
+  RecommendationBriefListOut,
+  RecommendationBriefOut,
   GeoCoverageBase,
   GeoCoverageOut,
   GeocodeRequest,
@@ -552,3 +559,92 @@ export const submitOpportunityFeedback = (
   opportunityId: string,
   body: FeedbackCreate,
 ) => apiRequest<FeedbackOut>(feedbackPath(workspaceId, opportunityId), { method: 'POST', body });
+
+// ---- Project Phase 5A recommendation briefs (lane P5A) ----
+// Every brief endpoint is capability-gated: while `recommendation_briefs` resolves
+// disabled FOR THAT WORKSPACE it answers 503 (capability_unavailable). Reads are open
+// to every workspace member; capture is editor-only (403 otherwise). Briefs are
+// immutable versions: there is no update or delete call.
+const briefsPath = (workspaceId: string, opportunityId: string) =>
+  `/workspaces/${workspaceId}/opportunities/${opportunityId}/briefs`;
+
+// Workspace-effective brief availability, decided by the same resolver call the brief gate
+// enforces with. Member-gated and deliberately NOT capability-gated: it answers 200
+// {enabled:false} while dark rather than 503.
+export const getBriefCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<RecommendationBriefCapability>(`/workspaces/${workspaceId}/brief-capability`, {
+    signal,
+  });
+
+export const listOpportunityBriefs = (
+  workspaceId: string,
+  opportunityId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<RecommendationBriefListOut>(briefsPath(workspaceId, opportunityId), {
+    query: { ...params },
+    signal,
+  });
+
+export const getOpportunityBrief = (
+  workspaceId: string,
+  opportunityId: string,
+  briefId: string,
+  signal?: AbortSignal,
+) =>
+  apiRequest<RecommendationBriefOut>(`${briefsPath(workspaceId, opportunityId)}/${briefId}`, {
+    signal,
+  });
+
+export const createOpportunityBrief = (
+  workspaceId: string,
+  opportunityId: string,
+  body: RecommendationBriefCreate,
+) =>
+  apiRequest<RecommendationBriefOut>(briefsPath(workspaceId, opportunityId), {
+    method: 'POST',
+    body,
+  });
+// ---- end Phase 5A recommendation briefs ----
+
+// ---- Phase 5B approvals (W21 lane P5B) — begin -------------------------------------
+// Dark behind `recommendation_briefs_enabled` (503 capability_unavailable while the
+// capability resolves disabled for the workspace). Recording a decision and reading the
+// queue are for the REVIEWER role exactly; a brief's history for every role but viewer.
+const briefDecisionsPath = (workspaceId: string, opportunityId: string, briefId: string) =>
+  `/workspaces/${workspaceId}/opportunities/${opportunityId}/briefs/${briefId}/approvals`;
+
+export const listBriefDecisions = (
+  workspaceId: string,
+  opportunityId: string,
+  briefId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<ApprovalHistoryOut>(briefDecisionsPath(workspaceId, opportunityId, briefId), {
+    query: { ...params },
+    signal,
+  });
+
+export const recordBriefDecision = (
+  workspaceId: string,
+  opportunityId: string,
+  briefId: string,
+  body: ApprovalDecisionCreate,
+) =>
+  apiRequest<ApprovalOut>(briefDecisionsPath(workspaceId, opportunityId, briefId), {
+    method: 'POST',
+    body,
+  });
+
+export const getApprovalQueue = (
+  workspaceId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<RecommendationBriefListOut>(`/workspaces/${workspaceId}/approval-queue`, {
+    query: { ...params },
+    signal,
+  });
+// ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------

@@ -223,8 +223,12 @@ def test_pin_state_no_provider_credential_and_mock_service():
     assert os.environ["LLM_PROVIDER"] == "mock"
     assert not [k for k in os.environ if k.upper().startswith(("LLM_API", "ANTHROPIC_", "OPENAI_"))]
     assert get_settings().llm_provider == "mock" and not get_settings().llm_api_key
-    assert pipeline.llm_service.provider_name == "mock"
-    assert service_module.llm_service is pipeline.llm_service
+    assert service_module.get_llm_service().provider_name == "mock"
+    assert service_module.get_llm_service() is service_module.llm_service
+    # Phase 5A: the pipeline reaches the service only through the accessor; it holds no
+    # binding of its own that the pin could miss.
+    assert not hasattr(pipeline, "llm_service")
+    assert pipeline.get_llm_service is service_module.get_llm_service
 
 
 def test_an_ambient_real_provider_environment_is_pinned_to_the_mock():

@@ -675,7 +675,13 @@ def test_a_deadlock_or_serialization_failure_is_retried_and_records_the_call_onc
 
     monkeypatch.setattr(ledger, "settle", flaky)
     monkeypatch.setattr("app.llm.metering.time.sleep", lambda _s: None)
-    _service(s, lambda r: _reply(CLASSIFIED)).run("classify_signal", {"content": "x"}, meter=meter)
+    _service(s, lambda r: _reply(CLASSIFIED)).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     assert len(calls) == 3
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
@@ -709,7 +715,11 @@ def test_a_retried_violating_settlement_emits_its_metric_and_error_exactly_once(
     try:
         with caplog.at_level("ERROR", logger="signalnest.llm"):
             _service(s, lambda r: _reply(CLASSIFIED, tokens=(200_000, 1_000))).run(
-                "classify_signal", {"content": "x"}, meter=meter
+                "classify_signal",
+                {"content": "x", "audiences": None},
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
             )
     finally:
         configure_metrics(None)
@@ -834,7 +844,11 @@ def test_a_conflict_is_retried_a_bounded_number_of_times_and_other_errors_not_at
         monkeypatch.setattr(ledger, "settle", always)
         with pytest.raises(OperationalError):
             _service(s, lambda r: _reply(CLASSIFIED)).run(
-                "classify_signal", {"content": "x"}, meter=meter
+                "classify_signal",
+                {"content": "x", "audiences": None},
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
             )
         assert len(calls) == expected_calls
 
@@ -881,7 +895,13 @@ def test_a_call_that_outlives_its_tenant_finishes_without_error_or_rows(tenant_d
             peek.commit()
         return _reply(CLASSIFIED)
 
-    _service(s, handler).run("classify_signal", {"content": "x"}, meter=meter)
+    _service(s, handler).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     with make() as db:
         assert _row_counts(db) == (0, 0, 0)
         meter.flush(db)  # nothing to add on the shared path
@@ -963,7 +983,13 @@ def test_shared_path_reserves_before_the_call_and_settles_with_the_usage_row(fac
     meter = _bound(factory, s, shared=True, job_id="job-shared", attempt=3)
     assert meter.shared_ledger
     worst = _worst(meter)
-    _service(s, handler).run("classify_signal", {"content": "x"}, meter=meter)
+    _service(s, handler).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     assert len(seen) == 1 and seen[0]["states"] == ["reserved"] and seen[0]["usage_rows"] == 0
     assert seen[0]["reserved"] == worst  # the full bound of the call, before it was made
     with factory() as db:
@@ -992,11 +1018,19 @@ def test_shared_path_refuses_across_meters_once_the_ledger_is_full(factory):
     assert w <= Decimal(str(s.llm_workspace_monthly_budget_usd)) < 2 * w  # exactly one fits
     calls = []
     _service(s, lambda r: calls.append(1) or _reply(CLASSIFIED)).run(
-        "classify_signal", {"content": "x"}, meter=first
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=first,
+        organization_id=first.organization_id,
+        workspace_id=first.workspace_id,
     )
     with pytest.raises(LLMBudgetExceededError) as exc:
         _service(s, lambda r: calls.append(1) or _reply(CLASSIFIED)).run(
-            "classify_signal", {"content": "x"}, meter=second
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=second,
+            organization_id=second.organization_id,
+            workspace_id=second.workspace_id,
         )
     assert exc.value.reason == "workspace_budget" and len(calls) == 1
     assert second.refusals == {"workspace_budget": 1} and second.spent == 0.0
@@ -1015,7 +1049,13 @@ def test_shared_path_releases_an_earlier_attempts_leak_at_rebind(factory):
     with factory() as db:
         row = _reservation(db, f"{job}:1:0")
         assert (row.state, row.settled_usd) == ("released", Decimal("0.02"))
-    _service(s, lambda r: _reply(CLASSIFIED)).run("classify_signal", {"content": "x"}, meter=meter)
+    _service(s, lambda r: _reply(CLASSIFIED)).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     with factory() as db:
         rows = {r.attempt_key: r for r in db.scalars(select(LLMBudgetReservation))}
         assert {k: r.state for k, r in rows.items()} == {
@@ -1030,7 +1070,13 @@ def test_shared_path_releases_an_earlier_attempts_leak_at_rebind(factory):
 def test_same_session_path_writes_the_ledger_at_flush(factory):
     s = _settings(llm_workspace_monthly_budget_usd=1.0)
     meter = _bound(factory, s, shared=False, job_id="job-same", attempt=1)
-    _service(s, lambda r: _reply(CLASSIFIED)).run("classify_signal", {"content": "x"}, meter=meter)
+    _service(s, lambda r: _reply(CLASSIFIED)).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(LLMBudgetReservation)) == 0  # not yet
         meter.flush(db)
@@ -1060,7 +1106,11 @@ def test_same_session_path_is_only_a_per_session_guarantee(factory):
     calls = []
     for meter in (first, second):
         _service(s, lambda r: calls.append(1) or _reply(CLASSIFIED, tokens=(1000, 1000))).run(
-            "classify_signal", {"content": "x"}, meter=meter
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=meter,
+            organization_id=meter.organization_id,
+            workspace_id=meter.workspace_id,
         )
     assert len(calls) == 2  # together above the budget that admits a single call
     with factory() as db:
@@ -1072,7 +1122,11 @@ def test_same_session_path_is_only_a_per_session_guarantee(factory):
     third = _bound(factory, s, shared=False)
     with pytest.raises(LLMBudgetExceededError):
         _service(s, lambda r: _reply(CLASSIFIED)).run(
-            "classify_signal", {"content": "x"}, meter=third
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=third,
+            organization_id=third.organization_id,
+            workspace_id=third.workspace_id,
         )
 
 
@@ -1094,7 +1148,13 @@ def test_a_call_reserved_before_the_month_boundary_is_charged_to_that_month(
         scenario_clock.move_to(first)  # the provider answers after midnight UTC
         return _reply(CLASSIFIED)
 
-    _service(s, handler).run("classify_signal", {"content": "x"}, meter=meter)
+    _service(s, handler).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     with factory() as db:
         row = db.scalar(select(LLMBudgetReservation))
         assert (row.attempt_key, row.state, row.reserved_usd, row.settled_usd) == (
@@ -1159,10 +1219,22 @@ def test_conservative_cost_basis(factory, shared):
             return step
 
         if error is None:
-            _service(s, handler).run("classify_signal", {"content": ""}, meter=meter)
+            _service(s, handler).run(
+                "classify_signal",
+                {"content": "", "audiences": None},
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
+            )
         else:
             with pytest.raises(error):
-                _service(s, handler).run("classify_signal", {"content": ""}, meter=meter)
+                _service(s, handler).run(
+                    "classify_signal",
+                    {"content": "", "audiences": None},
+                    meter=meter,
+                    organization_id=meter.organization_id,
+                    workspace_id=meter.workspace_id,
+                )
         charged = meter.spent
         if expected == "worst":
             assert charged == pytest.approx(float(w)), name
@@ -1193,7 +1265,11 @@ def test_a_provider_reporting_more_than_the_bound_is_charged_the_bound_and_flagg
         with caplog.at_level("ERROR", logger="signalnest.llm"):
             # 200 000 input tokens at USD 3/Mtok alone is 0.6 > w (the r1 measurement)
             _service(s, lambda r: _reply(CLASSIFIED, tokens=(200_000, 1_000))).run(
-                "classify_signal", {"content": "x"}, meter=meter
+                "classify_signal",
+                {"content": "x", "audiences": None},
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
             )
             with factory() as db:
                 meter.flush(db)
@@ -1216,7 +1292,11 @@ def test_a_provider_reporting_more_than_the_bound_is_charged_the_bound_and_flagg
     again = _bound(factory, s, shared=shared)
     with pytest.raises(LLMBudgetExceededError):  # w + w > 1.5 w: refused by the ledger
         _service(s, lambda r: _reply(CLASSIFIED)).run(
-            "classify_signal", {"content": "x"}, meter=again
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=again,
+            organization_id=again.organization_id,
+            workspace_id=again.workspace_id,
         )
 
 
@@ -1225,7 +1305,13 @@ def test_the_mock_provider_reserves_nothing(factory):
 
     s = _settings(llm_workspace_monthly_budget_usd=0.0)
     meter = _bound(factory, s, shared=True)
-    LLMService(MockLLMProvider(), settings=s).run("classify_signal", {"content": "x"}, meter=meter)
+    LLMService(MockLLMProvider(), settings=s).run(
+        "classify_signal",
+        {"content": "x", "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(LLMBudgetReservation)) == 0
 

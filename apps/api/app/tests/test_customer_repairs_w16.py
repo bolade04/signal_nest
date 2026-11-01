@@ -86,10 +86,12 @@ def seeded_scouts(factory, _as_seeded):
                 req = session.get(ScoutRequest, rid)
                 for name, value in fields.items():
                     setattr(req, name, copy.deepcopy(value))
+            # Core on the table: audit records are append-only to the ORM (W21 CF-1).
+            logs = AuditLog.__table__
             session.execute(
-                delete(AuditLog).where(
-                    AuditLog.entity_id.in_(list(_as_seeded["fields"])),
-                    AuditLog.id.not_in(sorted(_as_seeded["audit"])),
+                delete(logs).where(
+                    logs.c.entity_id.in_(list(_as_seeded["fields"])),
+                    logs.c.id.not_in(sorted(_as_seeded["audit"])),
                 )
             )
             session.commit()
