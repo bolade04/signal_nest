@@ -87,17 +87,18 @@ sanctioned:
    table.
 
 ``test_cf1_append_only_bulk_paths.py`` is a static **backstop**, not the enforcement layer
-(the runtime guard above is): it checks that no other production module builds an UPDATE or
+(the runtime guard above is). It checks that no other production module builds an UPDATE or
 DELETE (function or attribute-call form, method form, ``Query``), an upsert or a prefixed
-insert (``.prefix_with(...)``, function or method form) over these models or their tables,
-writes a literal SQL string naming one of the guarded tables unqualified — ``UPDATE
-[ONLY] <table>``, SQLite's ``UPDATE OR <algorithm> <table>``, ``DELETE FROM [ONLY]
+insert (``.prefix_with(...)``, function or method form) over these models or their tables —
+the model given bare, as ``Model.__table__``, as ``aliased(Model)`` or ``inspect(Model)``, or
+through an alias of any of these, following model import aliases and annotated, tuple and
+walrus aliases — writes a literal SQL string naming one of the guarded tables unqualified
+(``UPDATE [ONLY] <table>``, SQLite's ``UPDATE OR <algorithm> <table>``, ``DELETE FROM [ONLY]
 <table>``, ``INSERT OR <algorithm> INTO <table>``, ``REPLACE INTO <table>`` or ``INSERT INTO
-<table> … DO UPDATE``, the name bare or quoted with ``"…"``, ``'…'`` (SQLite takes a
-single-quoted table name), ``[…]`` or backticks — calls the bulk API or calls
-``delete_rows``, following **model** import aliases and annotated, tuple and walrus aliases.
-**Not pinned:** the statement functions (``update``, ``delete``, ``insert``,
-dialect inserts, ``prefix_with``) imported or called under another name (e.g. the
+<table> … DO UPDATE``, the name bare or quoted with ``"…"``, ``'…'`` — SQLite takes a
+single-quoted table name — ``[…]`` or backticks), calls the bulk API or calls ``delete_rows``.
+**Not pinned:** the statement functions (``update``, ``delete``, ``insert``, dialect inserts,
+``prefix_with``, ``aliased``, ``inspect``) imported or called under another name (e.g. the
 ``Insert`` class or an unbound ``Insert.prefix_with(stmt, …)``); models referenced through a
 module (``models.Approval``); tables built or reflected by name (``table("approvals")``,
 ``Table("approvals", …, autoload_with=…)``) or reached through ``Base.metadata``, ``getattr``,

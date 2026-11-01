@@ -23,7 +23,8 @@ such a CTE), for each append-only model (the three of CF-1 and, since CF-2,
   clause;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
   (function, attribute-call or method form, or ``Query``), an upsert or a prefixed insert
-  over these models or their tables, writes a literal unqualified UPDATE [ONLY] / UPDATE OR
+  over these models (bare, ``aliased()`` or ``inspect()``) or their tables, writes a
+  literal unqualified UPDATE [ONLY] / UPDATE OR
   <algorithm> / DELETE FROM [ONLY] / INSERT OR <algorithm> INTO / REPLACE INTO / INSERT …
   DO UPDATE string on the guarded tables (bare, ``"…"``, ``'…'``, ``[…]`` or backticks),
   calls the bulk API or calls ``delete_rows``,
@@ -581,12 +582,20 @@ def _callee(node: ast.Call) -> str | None:
     return getattr(node.func, "id", getattr(node.func, "attr", None))
 
 
+#: Calls that stand for the model in an ORM statement: ``aliased(Model)``, ``inspect(Model)``
+#: (the Mapper), plain or attribute-called (``sa.orm.aliased``).
+_MODEL_WRAPPERS = {"aliased", "inspect"}
+
+
 def _is_guarded(node: ast.AST, names: set[str]) -> bool:
-    """``Model``, ``Model.__table__`` or an alias of either."""
+    """``Model``, ``Model.__table__``, ``aliased(Model)`` / ``inspect(Model)``, or an alias of
+    any of them."""
     if isinstance(node, ast.Name):
         return node.id in names
     if isinstance(node, ast.NamedExpr):
         return _is_guarded(node.value, names)
+    if isinstance(node, ast.Call) and _callee(node) in _MODEL_WRAPPERS and node.args:
+        return _is_guarded(node.args[0], names)
     return (
         isinstance(node, ast.Attribute)
         and node.attr == "__table__"
@@ -791,6 +800,27 @@ FLAGGED_FORMS = {
     "SQLite single-quoted DELETE FROM": (
         """db.execute(text("DELETE FROM 'audit_logs' WHERE id = :i"))"""
     ),
+    # FU-CF1-H2 as extended (W21-REV-CF1-DESC r3 D3): the model through aliased() / inspect().
+    "update(aliased(Model))": "db.execute(update(aliased(AuditLog)).values(reason=None))",
+    "update(inspect(Model))": "db.execute(update(inspect(Approval)).values(note=None))",
+    "delete(aliased(Model)) in a CTE": (
+        "db.execute(select(literal_column('1')).add_cte(delete(aliased(AuditLog)).cte('d')))"
+    ),
+    "update(inspect(Model)) in a CTE": (
+        "u = update(inspect(Approval)).values(note=None).cte('u')\n"
+        "db.execute(select(literal_column('1')).add_cte(u))"
+    ),
+    "aliased model through a variable": (
+        "a = aliased(CreativeDraft)\ndb.execute(update(a).values(body='x'))"
+    ),
+    "attribute-called sa.orm.aliased": (
+        "db.execute(sa.update(sa.orm.aliased(ContentReview)).values(passed=False))"
+    ),
+    "Query on aliased(Model)": "db.query(aliased(RecommendationBrief)).filter(x).delete()",
+    "upsert on inspect(Model)": (
+        "db.execute(pg_insert(inspect(Approval)).values(**r)"
+        ".on_conflict_do_update(index_elements=['id'], set_={'note': 'n'}))"
+    ),
 }
 #: Look-alikes the pin must not flag.
 CLEAN_FORMS = {
@@ -817,6 +847,9 @@ CLEAN_FORMS = {
     "a quoted value in a DELETE on another table": (
         "SQL = \"DELETE FROM jobs WHERE note = 'audit_logs'\""
     ),
+    "a select of aliased(Model)": "db.execute(select(aliased(AuditLog)).where(x))",
+    "another model's aliased update": "db.execute(update(aliased(Job)).values(status='x'))",
+    "inspect(Model) for its columns": "cols = inspect(Approval).columns",
 }
 
 
@@ -837,11 +870,13 @@ def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert()
     ``DELETE FROM [ONLY]``, ``INSERT OR <algorithm> INTO``, ``REPLACE INTO`` and ``INSERT …
     DO UPDATE``, the table name bare or quoted with ``"…"``, ``'…'``, ``[…]`` or backticks.
     It flags a ``prefix_with`` on a guarded insert (function or method form), as the runtime
-    guard refuses every prefix on a guarded ORM insert.
+    guard refuses every prefix on a guarded ORM insert, and takes ``aliased(Model)`` and
+    ``inspect(Model)`` for the model, inside a CTE too.
 
     Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts,
-    ``prefix_with``) imported or called under another name (e.g. the ``Insert`` class or an
-    unbound ``Insert.prefix_with(stmt, …)``); models referenced through a module
+    ``prefix_with``, ``aliased``, ``inspect``) imported or called under another name (e.g.
+    the ``Insert`` class or an unbound ``Insert.prefix_with(stmt, …)``); models referenced
+    through a module
     (``models.Approval``); tables built or reflected by name (``table("approvals")``,
     ``Table("approvals", …)``) or reached through ``Base.metadata``, ``getattr``,
     ``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as
