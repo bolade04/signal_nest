@@ -108,6 +108,12 @@ export type FeedbackOut = S['FeedbackOut'];
 export type FeedbackHistoryOut = S['FeedbackHistoryOut'];
 export type FeedbackReason = S['FeedbackReason'];
 
+// ---- Project Phase 5A recommendation briefs (lane P5A; generated contract types) ----
+export type RecommendationBriefCreate = S['RecommendationBriefCreate'];
+export type RecommendationBriefOut = S['RecommendationBriefOut'];
+export type RecommendationBriefListOut = S['RecommendationBriefListOut'];
+// ---- end Phase 5A recommendation briefs ----
+
 export type ProductIn = S['ProductIn'];
 export type AudienceIn = S['AudienceIn'];
 export type CompetitorIn = S['CompetitorIn'];
