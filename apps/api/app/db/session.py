@@ -11,6 +11,8 @@ SQLite and PostgreSQL branches configure disjoint, dialect-appropriate pools:
 * **PostgreSQL** uses a bounded ``QueuePool`` (``pool_size``/``max_overflow``/
   ``pool_timeout``/``pool_recycle``), ``pool_pre_ping`` to defeat stale
   connections, and a bounded ``connect_timeout`` + non-secret ``application_name``.
+  Every session is pinned to UTC at connect and a session that is not in UTC is
+  refused (:mod:`app.db.utc_session`), so a ``timestamptz`` always comes back in UTC.
 
 The database URL is treated as secret-bearing: it is never logged, and any
 failure surfaced elsewhere reports the exception *class name* only.
@@ -25,6 +27,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
+from app.db.utc_session import create_utc_engine
 
 
 def build_engine(settings: Settings) -> Engine:
@@ -34,7 +37,10 @@ def build_engine(settings: Settings) -> Engine:
     that is meaningful for one dialect is never passed to the other.
     """
     if settings.is_postgres:
-        engine = create_engine(
+        # The session time zone is pinned to UTC ('-c timezone=UTC', after the connect
+        # args below) and each new connection is verified: psycopg returns timestamptz in
+        # the session's zone, and same-zone datetimes compare by wall time (W21 TZPIN).
+        engine = create_utc_engine(
             settings.database_url,
             future=True,
             # Bound parameters never appear in SQLAlchemy's own log lines or error text:

@@ -98,6 +98,19 @@ exposes `8000` and declares a `HEALTHCHECK` against `GET /health` (liveness only
 - **Liveness vs readiness.** `GET /health` is liveness (process is up). Readiness is
   the operator/probe surface (`app/system/probes.py`) that actively verifies
   backends; wire your orchestrator's readiness probe to that, not to `/health`.
+- **PostgreSQL sessions run in UTC** *(2026-11-01, W21 TZPIN)*. Every engine that reads or
+  writes application rows (the process engine of the API, the worker and the operator CLIs
+  that use it; Alembic's online migrations; `app.campaign_context.location_refs`) opens
+  its connections with the libpq startup option `-c timezone=UTC`, and refuses a new session
+  whose server-reported `TimeZone` is not `UTC` (`app/db/utc_session.py`). The server's, the
+  database's and the role's default time zones therefore do not matter. `PGTZ` in a task's
+  environment outranks the startup option (measured), so leave it unset or `UTC`: any other
+  value makes every connection fail with `SessionTimezoneError`, which the API's startup
+  schema gate, the worker's startup validation and the readiness probe report (exception
+  class only). *Why:* psycopg returns a `timestamptz` in the session's zone, and Python
+  compares and subtracts two datetimes in one zone by wall time, ignoring `fold`. In a zone
+  with daylight saving time the repeated autumn hour reorders instants, so lease and deadline
+  checks could misjudge by an hour.
 - **Request rate limiting (P6-PLAT-3).** `RATE_LIMIT_BACKEND=redis` counts requests
   per resolved client address in the shared Redis (`REDIS_URL`), so the limit (240
   requests per 60-second window) holds across every API replica; production refuses

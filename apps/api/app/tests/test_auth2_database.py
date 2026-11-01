@@ -57,12 +57,14 @@ from app.core.config import get_settings
 from app.core.errors import SignalNestError
 from app.core.security import hash_password, verify_password
 from app.db.models import Base
+from app.db.utc_session import create_utc_engine
 from app.organizations.models import User
 from app.tests._auth2_support import (
     RESET_COLUMNS,
     RESET_OPEN_INDEX,
     VERIFICATION_COLUMNS,
     VERIFICATION_OPEN_INDEX,
+    as_utc,
     pg_database,
     reset_digest,
 )
@@ -540,7 +542,8 @@ PASSWORD_HASH = hash_password("seeded-password-1")
 @contextmanager
 def _pg_factory() -> Iterator[sessionmaker]:  # pragma: no cover - gated on live PG
     with pg_database("sn_a2c") as url:
-        engine = create_engine(
+        # Built as the app's engine is: UTC sessions (app.db.utc_session).
+        engine = create_utc_engine(
             url,
             future=True,
             pool_size=WORKERS + 2,
@@ -765,6 +768,17 @@ SKEW = timedelta(days=1)
 DAY = timedelta(hours=24)
 
 
+def _db_now(s) -> datetime:  # pragma: no cover - gated on live PG
+    """The transaction's ``now()`` as a UTC instant.
+
+    psycopg returns it in the session's zone, and Python adds to, subtracts from and compares
+    datetimes in one zone by WALL time, ignoring ``fold`` (PEP 495). Across a daylight-saving
+    change ``now() - 1 day`` would then be 23 or 25 hours, and inside the repeated hour two
+    instants compare wrongly. Every reading and comparison below is on UTC instants.
+    """
+    return as_utc(s.scalar(text("SELECT now()")))
+
+
 @contextmanager
 def _app_clock_skewed(offset: timedelta) -> Iterator[None]:  # pragma: no cover
     """Shift the application host's clock by ``offset``; PostgreSQL's ``now()`` is untouched.
@@ -809,7 +823,7 @@ def test_minted_tokens_are_stamped_by_the_database_clock(
     with _pg_factory() as factory:
         user_id, email = _new_user(factory)
         with _app_clock_skewed(offset), factory() as s:
-            t_db = s.scalar(text("SELECT now()"))  # the transaction's start: the service's reading
+            t_db = _db_now(s)  # the transaction's start: the service's reading
             app_now = account_tokens.datetime.now(UTC)
             if purpose == "reset":
                 issued = account_tokens.request_password_reset(s, email=email)
@@ -821,8 +835,8 @@ def test_minted_tokens_are_stamped_by_the_database_clock(
         assert issued is not None
         with factory() as s:
             row = s.get(model, issued.token_id)
-        assert row.created_at == row.updated_at == t_db
-        assert row.expires_at == t_db + ttl
+        assert as_utc(row.created_at) == as_utc(row.updated_at) == t_db
+        assert as_utc(row.expires_at) == t_db + ttl
         assert issued.expires_at == t_db + ttl
 
 
@@ -836,7 +850,7 @@ def test_the_cooldown_is_measured_on_the_database_clock() -> None:  # pragma: no
             s.commit()
         assert first is not None
         with _app_clock_skewed(SKEW), factory() as s:
-            t_db = s.scalar(text("SELECT now()"))
+            t_db = _db_now(s)
             app_now = account_tokens.datetime.now(UTC)
             again = account_tokens.request_password_reset(s, email=email)
             s.commit()
@@ -885,7 +899,7 @@ def test_the_daily_cap_window_is_measured_on_the_database_clock() -> None:  # pr
             ).all()
         assert len(seeded) == cap
         with _app_clock_skewed(SKEW), factory() as s:
-            t_db = s.scalar(text("SELECT now()"))
+            t_db = _db_now(s)
             app_now = account_tokens.datetime.now(UTC)
             refused = account_tokens.request_password_reset(s, email=email)
             s.commit()
@@ -927,7 +941,7 @@ def test_claim_expiry_is_decided_on_the_database_clock(
             )
             s.commit()
         with _app_clock_skewed(offset), factory() as s:
-            t_db = s.scalar(text("SELECT now()"))
+            t_db = _db_now(s)
             app_now = account_tokens.datetime.now(UTC)
             try:
                 account_tokens.confirm_password_reset(s, token=raw, new_password=new_password)
@@ -944,7 +958,7 @@ def test_claim_expiry_is_decided_on_the_database_clock(
         assert (row.expires_at > t_db) is (expected == "ok")
         assert outcome == expected
         if expected == "ok":
-            assert row.used_at == t_db
+            assert as_utc(row.used_at) == t_db
             assert user.auth_epoch == 1
             assert verify_password(new_password, user.hashed_password)
         else:
