@@ -1,14 +1,15 @@
 """Application-layer append-only enforcement for ORM models (Project Phase 5, W21 CF-1).
 
 :func:`append_only` marks a model whose rows are written once. Every ORM-enabled write
-through a ``Session`` that would UPDATE or DELETE such a row — a flush, an ORM statement passed
-to ``Session.execute`` (at the top level, through ``from_statement``, or nested anywhere inside
-another statement, e.g. as a data-modifying CTE), ``Query.update/delete`` or the legacy bulk
-API, for the model or any mapped subclass of it — raises :class:`AppendOnlyViolation` before
-any statement is sent (or, inside a flush, before the flush completes; the caller's
-transaction is then rolled back). Writes that are not ORM-enabled, or not made through the
-``Session``, are listed under "What is not refused, by design". A revision is a new row; a
-change of mind is a new row.
+through a ``Session`` that would UPDATE or DELETE such a row, for the model or any mapped
+subclass of it, raises :class:`AppendOnlyViolation` before any statement is sent (or, inside a
+flush, before the flush completes; the caller's transaction is then rolled back). That is a
+flush, the legacy bulk API, and an ORM UPDATE, DELETE, upsert or prefixed INSERT built on the
+model (or ``aliased(Model)`` / ``inspect(Model)``) anywhere in a statement passed to
+``Session.execute`` (``Query.update/delete`` included): as the statement itself, inside a
+``from_statement()`` under any entity, or as a CTE attached anywhere. Writes that are not
+ORM-enabled, or not made through the ``Session``, are listed under "What is not refused, by
+design". A revision is a new row; a change of mind is a new row.
 
 **What is refused (every ORM write path except INSERT):**
 
@@ -16,26 +17,37 @@ change of mind is a new row.
   ``Session.merge()`` of a modified copy and a no-net-change assignment — the mapper's
   ``before_update`` / ``before_delete`` events, registered with ``propagate=True`` so a
   mapped subclass inherits them;
-* ORM-enabled statements run through a ``Session``: ``session.execute(update(Model)…)``
-  (with WHERE criteria or with per-row parameter sets by primary key),
-  ``session.execute(delete(Model)…)``, ``Query.update()``, ``Query.delete()``, an ORM
-  ``insert(Model)`` carrying an upsert clause (``ON CONFLICT DO UPDATE`` or the like), and
-  an ORM ``insert(Model)`` carrying **any statement prefix** (``prefix_with(...)``, e.g.
-  SQLite's ``OR REPLACE``, which deletes the conflicting row and inserts a new one) — each
-  also as ``select(Model).from_statement(...)``, which runs the inner statement — and **any
-  ORM-enabled INSERT, UPDATE or DELETE on the model nested inside another statement**: a
-  data-modifying CTE (``WITH u AS (UPDATE …)``, which PostgreSQL executes), attached with
-  ``add_cte`` or selected from, at any depth (subquery, scalar subquery, ``union``,
-  ``exists``, ``INSERT … FROM SELECT``, a lambda statement), a plain INSERT included
-  (CF2-FIX2, W21-REV-CF2-DATA r2 C3) — a ``Session`` ``do_orm_execute`` listener registered
-  for every ``Session``, which sees every statement passed to ``Session.execute`` before it is
-  compiled and walks it with ``sqlalchemy.sql.visitors.iterate``;
+* ORM-enabled statements run through a ``Session`` — a ``Session`` ``do_orm_execute``
+  listener registered for every ``Session``, which sees every statement passed to
+  ``Session.execute`` (ORM-enabled or not) before it is compiled. **One rule, wherever the
+  element stands** (CF2-FIX2: W21-REV-CF2-DATA r2 C3 and FU-CF1-H2 as extended by the
+  coordinator after W21-REV-CF1-DESC r3): the listener walks the whole statement with
+  ``sqlalchemy.sql.visitors.iterate`` and refuses every DML element (``UpdateBase``) whose
+  plugin subject is a guarded mapper — the model, ``aliased(Model)`` or ``inspect(Model)``, or
+  a mapped subclass — that is an ``update(Model)``, a ``delete(Model)``, an ``insert(Model)``
+  carrying an upsert clause (``ON CONFLICT DO UPDATE`` or the like), or an ``insert(Model)``
+  carrying **any statement prefix** (``prefix_with(...)``, e.g. SQLite's ``OR REPLACE``,
+  which deletes the conflicting row and inserts a new one). Covered positions: the statement
+  itself (WHERE criteria or per-row parameter sets by primary key, ``Query.update()`` /
+  ``Query.delete()``, ``lambda_stmt``); the element of ``select(<any entity>).from_statement(…)``
+  (the outer entity is not consulted: ``bind_mapper`` names the outer entity, so deciding by it
+  let ``select(Other.id).from_statement(update(Model))`` through); and a data-modifying CTE
+  (``WITH u AS (UPDATE …)``, which PostgreSQL executes) wherever it is attached — to a
+  ``select()``, or to an outer INSERT, UPDATE or DELETE of another table — or selected from at
+  any depth (subquery, scalar subquery, ``union``, ``exists``, ``INSERT … FROM SELECT``), and
+  any combination of these. A plain ``insert(Model)`` (``ON CONFLICT DO NOTHING`` included)
+  is not refused in any position: append-only means insert-only;
 * the legacy bulk API: ``Session.bulk_update_mappings()`` for the model, and
   ``Session.bulk_save_objects()`` with an instance of it that already has an identity (an
   update). These methods emit no event, so this module wraps them on the ``Session`` class.
 
 The statement listener and both wrappers test the class's MRO, so a mapped subclass of a
 guarded model is guarded too (:func:`is_append_only` itself stays exact, for enumeration).
+
+The walk reaches what SQLAlchemy's own traversal exposes. A DML statement that has already
+been turned into SQL text before execution (``text(str(stmt.compile()))``), or that is held
+by a custom ``ClauseElement`` which does not expose it to traversal, is raw SQL to the guard
+(see below).
 
 **Why every prefix, not only ``OR REPLACE`` (FU-CF1-H1).** A prefix is free dialect text
 (``"OR REPLACE"``, ``"or  replace"``, ``text("OR REPLACE")``, a dialect-restricted prefix), so
@@ -54,12 +66,14 @@ allowed because it never touches a stored row.
 (``insert(Model.__table__).prefix_with("OR REPLACE")``), a Core DML statement on the table
 used as a CTE (``update(Model.__table__).cte()``) — and raw SQL (``INSERT OR REPLACE``,
 ``REPLACE INTO``, ``WITH u AS (UPDATE …)`` as text) are Core: they carry no mapper and reach
-the database unchanged, whether run through a ``Session`` or a ``Connection``. So does DDL
-(``DROP TABLE``, ``ALTER TABLE … DROP COLUMN``, ``TRUNCATE``), as text or as a SQLAlchemy DDL
-construct. So does an ORM statement executed on a bare ``Connection``
-(``session.connection().execute(update(Model))``), and so do the database's own ``ON DELETE
-CASCADE`` / ``SET NULL`` actions when a parent row is deleted (a brief goes with its
-workspace, opportunity or evidence; ``approvals.brief_id`` and the actor columns are nulled).
+the database unchanged, whether run through a ``Session`` or a ``Connection``, and in any
+position (a Core DML statement on the table inside ``from_statement()`` or as a CTE on
+another statement included). So does DDL (``DROP TABLE``, ``ALTER TABLE … DROP COLUMN``,
+``TRUNCATE``), as text or as a SQLAlchemy DDL construct. So does an ORM statement executed
+on a bare ``Connection`` (``session.connection().execute(update(Model))``), and so do the
+database's own ``ON DELETE CASCADE`` / ``SET NULL`` actions when a parent row is deleted (a
+brief goes with its workspace, opportunity or evidence; ``approvals.brief_id`` and the actor
+columns are nulled).
 Nor is a conflict clause declared in the table's own DDL (SQLite's ``ON CONFLICT REPLACE``
 through ``sqlite_on_conflict…``), which would make a plain INSERT replace; no guarded table
 declares one. Exactly three places write these tables through Core after insert, all
@@ -108,7 +122,6 @@ from typing import Any, TypeVar
 
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import ORMExecuteState, Session
-from sqlalchemy.orm.context import FromStatement
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.dml import UpdateBase
 
@@ -169,70 +182,67 @@ def _has_prefix(statement: Any) -> bool:
     return bool(getattr(statement, "_prefixes", ()))
 
 
-def _outer_statement(statement: Any) -> Any:
-    """The statement SQLAlchemy runs as the outer one. ``select(M).from_statement(X)`` runs
-    ``X`` (``ORMExecuteState.is_insert`` / ``is_update`` / ``is_delete`` follow ``X``), so the
-    upsert and prefix checks must read ``X`` too (CF2-FIX2: a ``from_statement`` upsert or
-    prefixed insert passed before)."""
-    return statement.element if isinstance(statement, FromStatement) else statement
-
-
 def _guarded_dml_class(element: UpdateBase) -> type | None:
     """The guarded class (a decorated model or a mapped subclass) an ORM-enabled INSERT,
-    UPDATE or DELETE is built on, else None. Core DML on the table carries no
-    ``plugin_subject`` and is never matched (the sanctioned Core paths)."""
+    UPDATE or DELETE is built on — through the model, ``aliased(Model)`` or
+    ``inspect(Model)`` — else None. Core DML on the table carries no ``plugin_subject`` and
+    is never matched (the sanctioned Core paths)."""
     subject = element._propagate_attrs.get("plugin_subject")
     cls = getattr(getattr(subject, "mapper", None), "class_", None)
     return cls if cls is not None and is_guarded(cls) else None
 
 
-def _nested_guarded_dml(statement: Any) -> str | None:
-    """The name of the guarded class of an ORM-enabled INSERT, UPDATE or DELETE nested
-    anywhere inside ``statement`` — a data-modifying CTE (``WITH u AS (UPDATE …)``, attached
-    with ``add_cte`` or selected from, at any depth: a subquery, a scalar subquery, a
-    ``union``, ``exists``, an ``INSERT … FROM SELECT``, a lambda statement) — else None. The
-    outer statement (see :func:`_outer_statement`) is judged by the top-level rules instead.
+def _refused_operation(element: UpdateBase) -> str | None:
+    """What the guard refuses about a DML element: an UPDATE, a DELETE, or an INSERT carrying
+    an upsert clause or any statement prefix. A plain INSERT (``ON CONFLICT DO NOTHING``
+    included) is not refused: append-only means insert-only."""
+    if element.is_update:
+        return "update"
+    if element.is_delete:
+        return "delete"
+    if element.is_insert and _is_upsert(element):
+        return "upsert"
+    if element.is_insert and _has_prefix(element):
+        return "insert with a statement prefix (e.g. SQLite OR REPLACE)"
+    return None
 
-    Every DML kind is refused when nested, a plain INSERT included (coordinator ruling,
-    CF2-FIX2, W21-REV-CF2-DATA r2 C3): the guard sees only the outer statement's kind, so it
-    refuses a guarded model's DML wherever else it appears rather than re-judging each nested
-    one; nothing in the code nests DML, and a plain INSERT keeps its top-level forms."""
-    outer = _outer_statement(statement)
+
+def _guarded_dml(statement: Any) -> tuple[str, str] | None:
+    """The first refused ORM-enabled DML element on a guarded model anywhere in
+    ``statement``, as (class name, operation), else None.
+
+    One rule for every position (CF2-FIX2, W21-REV-CF2-DATA r2 C3 and the coordinator's
+    FU-CF1-H2 ruling): ``visitors.iterate`` walks the whole statement — the statement itself,
+    a ``from_statement()`` element whatever the outer ``select()``'s entity, and every CTE
+    wherever it is attached (on a ``select()``, or on an outer INSERT, UPDATE or DELETE of
+    another table; selected from at any depth) — and each ``UpdateBase`` element is judged on
+    its own plugin subject and kind. The outer statement's ``bind_mapper`` is not consulted:
+    for ``select(Other).from_statement(update(Model))`` it names ``Other``."""
     for element in visitors.iterate(statement):
-        if element is statement or element is outer or not isinstance(element, UpdateBase):
+        if not isinstance(element, UpdateBase):
             continue
         cls = _guarded_dml_class(element)
-        if cls is not None:
-            return cls.__name__
+        operation = _refused_operation(element) if cls is not None else None
+        if operation is not None:
+            if element is not statement:
+                operation += " nested in another statement (a CTE or from_statement)"
+            return cls.__name__, operation
     return None
 
 
 @event.listens_for(Session, "do_orm_execute")
 def _refuse_orm_statements(state: ORMExecuteState) -> None:
-    """Refuse ORM-enabled UPDATE / DELETE / upsert / prefixed-INSERT statements on an
-    append-only model, and any ORM-enabled DML on one nested inside another statement.
+    """Refuse an ORM-enabled UPDATE, DELETE, upsert or prefixed INSERT on an append-only
+    model wherever it stands in the statement (see :func:`_guarded_dml`).
 
-    ``bind_mapper`` is set only for statements built on a mapped class; a statement built on
-    the table (the sanctioned Core paths) has none and passes. This listener runs for every
-    statement passed to ``Session.execute`` (ORM-enabled or not) before it is compiled, so the
-    nested walk is dialect-independent.
+    This listener runs for every statement passed to ``Session.execute`` (ORM-enabled or
+    not), before it is compiled, so the walk is dialect-independent. A statement built on the
+    table (the sanctioned Core paths) has no plugin subject and passes.
     """
-    nested = _nested_guarded_dml(state.statement)
-    if nested is not None:
-        raise _refusal(nested, "INSERT/UPDATE/DELETE nested in another statement (e.g. a CTE)")
-    mapper = state.bind_mapper
-    if mapper is None or not is_guarded(mapper.class_):
-        return
-    name = mapper.class_.__name__
-    outer = _outer_statement(state.statement)
-    if state.is_update:
-        raise _refusal(name, "bulk update")
-    if state.is_delete:
-        raise _refusal(name, "bulk delete")
-    if state.is_insert and _is_upsert(outer):
-        raise _refusal(name, "upsert")
-    if state.is_insert and _has_prefix(outer):
-        raise _refusal(name, "insert with a statement prefix (e.g. SQLite OR REPLACE)")
+    found = _guarded_dml(state.statement)
+    if found is not None:
+        name, operation = found
+        raise _refusal(name, operation)
 
 
 def _install_bulk_guard() -> None:
