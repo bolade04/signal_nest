@@ -376,6 +376,10 @@ def at_cf2_with_campaigns(tmp_path) -> Path:
               status="running")
     _campaign(db_path, "camp-empty", "ws-b1", "org-b", [], mode="bogus", status="archived")
     _campaign(db_path, "camp-b", "ws-b1", "org-b", ["loc-b1"])
+    # Unknown statuses that CONTAIN a member's text: never read as that member (review DATA C3).
+    _campaign(db_path, "camp-inactive", "ws-b1", "org-b", [], mode="grouped", status="inactive")
+    _campaign(db_path, "camp-not-active", "ws-b1", "org-b", [], mode="grouped",
+              status="not active")
     return db_path
 
 
@@ -428,6 +432,8 @@ def test_the_campaign_vocabularies_are_normalised_and_every_rewrite_reported(
         "camp-malformed": ("same_for_all", "paused"),  # unknown status: never 'active'
         "camp-empty": ("per_location", "archived"),  # unknown mode: the column default
         "camp-b": ("per_location", "active"),  # already valid: untouched
+        "camp-inactive": ("grouped", "paused"),  # contains "active": still never active
+        "camp-not-active": ("grouped", "paused"),
     }
     out = up.stdout + up.stderr
     for line in (
@@ -436,7 +442,9 @@ def test_the_campaign_vocabularies_are_normalised_and_every_rewrite_reported(
         "campaign mode: campaign=camp-malformed stored='SAME FOR ALL' rewritten_to=same_for_all",
         "campaign status: campaign=camp-malformed stored='running' rewritten_to=paused",
         "campaign mode: campaign=camp-empty stored='bogus' rewritten_to=per_location",
-        "CF-3 campaign vocabularies: 5 value(s) rewritten",
+        "campaign status: campaign=camp-inactive stored='inactive' rewritten_to=paused",
+        "campaign status: campaign=camp-not-active stored='not active' rewritten_to=paused",
+        "CF-3 campaign vocabularies: 7 value(s) rewritten",
     ):
         assert line in out, out
     assert "campaign=camp-b" not in out.split("back-fill")[0]
