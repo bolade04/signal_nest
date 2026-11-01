@@ -2,8 +2,10 @@
 
 * **Nothing activates.** ``content_export_enabled`` ships ``False``, is bound to
   ``Capability.CONTENT_EXPORT`` (workspace-enableable, O-3, ``future_activation_phase="5E"``)
-  and is reflected in ``FeatureFlagsOut`` (O-4). No route exists for any CF-3 table: the
-  contract keeps its operation count, and no new path names a 5D/5E surface.
+  and is reflected in ``FeatureFlagsOut`` (O-4). CF-3 mounts no export, notification,
+  analytics, jurisdiction or campaign-membership surface: no path names one. (The operation
+  count is owned by the canonical pins, ``test_auth2_leakage`` and
+  ``test_e7_role_policy_matrix``, which every route-adding change recomputes.)
 * **Vocabularies.** ``CampaignStatus``, ``NotificationEventCode`` (each code names its subject
   table, read-only) and ``ExportFormat``; the jurisdiction grammar (``UNRESOLVED`` is never a
   code; the Pydantic type refuses it).
@@ -84,14 +86,10 @@ def test_the_capability_is_workspace_enableable_and_bound_to_the_flag() -> None:
 
 
 def test_no_route_serves_a_cf3_surface() -> None:
-    """CF-3 mounts nothing: the contract keeps its 127 operations, and no path names an
-    export, notification, analytics, jurisdiction or campaign-membership surface."""
+    """CF-3 mounts no export, notification, analytics, jurisdiction or campaign-membership
+    surface: no path names one. Deliberately not an operation count (the canonical pins own
+    it; a third copy would break every merge with a route-adding head — review CONTROLS C-2)."""
     paths = app.openapi()["paths"]
-    operations = sum(
-        1 for item in paths.values() for method in item
-        if method in {"get", "post", "put", "patch", "delete"}
-    )
-    assert operations == 127
     privacy_exports = ("/account/export", "/export", "/export/{table}")  # Phase 6 (P6-PRIV-1)
     for path in paths:
         for word in ("export", "notification", "analytics", "jurisdiction", "campaign-location"):
