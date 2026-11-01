@@ -50,10 +50,14 @@ The inventory is derived **only** from repository evidence, not assumption:
 - The single source of truth is the Pydantic settings model
   `Settings` in [`apps/api/app/core/config.py`](../../apps/api/app/core/config.py).
   There is **no `env_prefix`**, so every environment-variable name is the field name
-  **UPPERCASED** (`SettingsConfigDict(case_sensitive=False)`).
-- Field enumeration was taken directly from the model's annotated assignments. As of
-  this document the model declares **87 fields**, of which **9** are marked
-  `repr=False` (secret-bearing or host-identifying) and **0** use `SecretStr`.
+  **UPPERCASED** (`SettingsConfigDict(case_sensitive=False)`). The one exception is
+  `migration_mode`, whose `validation_alias` also admits `SN_MIGRATION_MODE` (§3.5).
+- Field enumeration is taken mechanically from `Settings.model_fields`. As of this
+  document the model declares **145 fields**, of which **10** are marked
+  `repr=False` (secret-bearing, host-identifying or internal) and **0** use `SecretStr`.
+  *(Recounted 2026-11-01 on `main` `102393fa`: the previous figure, 87 fields and 9
+  `repr=False`, dated from 2026-07-21 and had drifted as settings were added; the 48
+  fields it did not classify are classified below.)*
 - Secret sensitivity is read from the `repr=False` markers plus the field semantics
   documented in `config.py` and the runtime contract.
 - Staging requirement/forbidden conditions are read from the unconditional
@@ -62,8 +66,8 @@ The inventory is derived **only** from repository evidence, not assumption:
 - The SPA exclusion is read from [`apps/web/src/api/config.ts`](../../apps/web/src/api/config.ts):
   the browser build reads **only** `VITE_API_BASE_URL` and no backend setting.
 
-The nine `repr=False` fields are: `otlp_endpoint`, `secret_key`, `database_url`,
-`redis_url`, `s3_bucket`, `s3_endpoint_url`, `s3_access_key_id`,
+The ten `repr=False` fields are: `migration_mode`, `otlp_endpoint`, `secret_key`,
+`database_url`, `redis_url`, `s3_bucket`, `s3_endpoint_url`, `s3_access_key_id`,
 `s3_secret_access_key`, `llm_api_key`. Every one is assigned a disposition in §3 (see
 the reconciliation in §3.7).
 
@@ -95,15 +99,16 @@ that the one-disposition-per-field rule is auditable; §3.7 reconciles the count
 | `otlp_endpoint` | `OTLP_ENDPOINT` | yes | The staging observability path is CloudWatch, not OTLP; tracing exporter is not `otlp`, so this host-identifying endpoint is unset. If OTLP is ever enabled it becomes a managed non-secret host endpoint under a future tranche — not in the INFRA-3 profile. |
 | `s3_endpoint_url` | `S3_ENDPOINT_URL` | yes | Only for a local/custom S3 endpoint (e.g. MinIO). Native AWS S3 uses the default endpoint, so this is unset in staging. |
 
-### 3.4 Local-development-only (unset / safe default in staging) — 3 fields
+### 3.4 Local-development-only (unset / safe default in staging) — 4 fields
 
 | Field | Env var | `repr=False` | Rationale |
 | --- | --- | --- | --- |
 | `local_storage_dir` | `LOCAL_STORAGE_DIR` | no | Local-filesystem object storage; staging uses `storage_backend=s3`. |
 | `llm_mock_seed` | `LLM_MOCK_SEED` | no | Only affects the mock LLM provider, which staging forbids. |
 | `llm_allow_dev_fallback` | `LLM_ALLOW_DEV_FALLBACK` | no | Developer fallback; validator rejects `true` in staging, so it stays at its `False` default. |
+| `connector_rss_replay_origin` | `CONNECTOR_RSS_REPLAY_ORIGIN` | no | Development/test only: a loopback origin serving recorded feed captures; refused in staging/production, so it stays unset. |
 
-### 3.5 Non-secret configuration — 76 fields
+### 3.5 Non-secret configuration — 133 fields
 
 Safe as plaintext task-definition environment (or the model default). Grouped by
 concern; every row's disposition is **non-secret configuration**.
@@ -115,16 +120,20 @@ concern; every row's disposition is **non-secret configuration**.
 | `opportunity_feedback_enabled` | `OPPORTUNITY_FEEDBACK_ENABLED` | Must remain `False`; activation is a separate authorized gate, not INFRA-3. |
 | `scout_scheduling_enabled` | `SCOUT_SCHEDULING_ENABLED` | Must remain `False`. |
 | `connector_rss_enabled` | `CONNECTOR_RSS_ENABLED` | Must remain `False`. |
+| `connector_rss_live_enabled` | `CONNECTOR_RSS_LIVE_ENABLED` | Live RSS egress master switch; must remain `False` (first-source decision P6-D03). |
 
 **General / API:** `app_name` (`APP_NAME`), `app_mode` (`APP_MODE`, staging=`full`),
 `environment` (`ENVIRONMENT`, staging=`staging`), `debug` (`DEBUG`),
 `api_prefix` (`API_PREFIX`).
 
+**Migration actor (internal):** `migration_mode` (`MIGRATION_MODE` or
+`SN_MIGRATION_MODE`; `repr=False` but not a credential — a Boolean set only in the
+one-shot migration actor's task definition, never for the API or worker).
+
 **Observability / tracing:** `service_name` (`SERVICE_NAME`), `log_format`
 (`LOG_FORMAT`), `metrics_enabled` (`METRICS_ENABLED`), `metrics_exporter`
 (`METRICS_EXPORTER`), `metrics_namespace` (`METRICS_NAMESPACE`),
-`metrics_flush_interval_seconds` (`METRICS_FLUSH_INTERVAL_SECONDS`; the three P6-INF-5
-exporter fields, added after the §3.7 count was taken), `tracing_enabled`
+`metrics_flush_interval_seconds` (`METRICS_FLUSH_INTERVAL_SECONDS`), `tracing_enabled`
 (`TRACING_ENABLED`), `tracing_exporter` (`TRACING_EXPORTER`), `tracing_sample_ratio`
 (`TRACING_SAMPLE_RATIO`), `tracing_export_timeout_seconds`
 (`TRACING_EXPORT_TIMEOUT_SECONDS`), `tracing_shutdown_flush_seconds`
@@ -133,6 +142,21 @@ exporter fields, added after the §3.7 count was taken), `tracing_enabled`
 
 **Security (non-secret):** `access_token_expire_minutes`
 (`ACCESS_TOKEN_EXPIRE_MINUTES`), `cors_origins` (`CORS_ORIGINS`).
+
+**Sessions and account tokens:** `session_absolute_lifetime_minutes`
+(`SESSION_ABSOLUTE_LIFETIME_MINUTES`), `invitation_expire_hours`
+(`INVITATION_EXPIRE_HOURS`), `password_reset_token_ttl_minutes`
+(`PASSWORD_RESET_TOKEN_TTL_MINUTES`), `email_verification_token_ttl_hours`
+(`EMAIL_VERIFICATION_TOKEN_TTL_HOURS`), `auth_mail_cooldown_seconds`
+(`AUTH_MAIL_COOLDOWN_SECONDS`), `auth_mail_daily_cap` (`AUTH_MAIL_DAILY_CAP`).
+
+**Transactional mail (no mail credential setting exists; SES uses the task role):**
+`mail_backend` (`MAIL_BACKEND`, staging=`ses`), `public_web_origin`
+(`PUBLIC_WEB_ORIGIN`), `mail_from_address` (`MAIL_FROM_ADDRESS`), `mail_from_name`
+(`MAIL_FROM_NAME`), `mail_reply_to_address` (`MAIL_REPLY_TO_ADDRESS`),
+`mail_support_contact` (`MAIL_SUPPORT_CONTACT`), `mail_ses_region`
+(`MAIL_SES_REGION`), `mail_ses_configuration_set` (`MAIL_SES_CONFIGURATION_SET`),
+`mail_send_timeout_seconds` (`MAIL_SEND_TIMEOUT_SECONDS`).
 
 **PostgreSQL pool:** `db_pool_size` (`DB_POOL_SIZE`), `db_max_overflow`
 (`DB_MAX_OVERFLOW`), `db_pool_timeout_seconds` (`DB_POOL_TIMEOUT_SECONDS`),
@@ -180,6 +204,26 @@ exporter fields, added after the §3.7 count was taken), `tracing_enabled`
 `connector_rss_rate_refill_per_second` (`CONNECTOR_RSS_RATE_REFILL_PER_SECOND`),
 `connector_rss_max_attempts` (`CONNECTOR_RSS_MAX_ATTEMPTS`).
 
+**Live RSS egress (dark):** `connector_rss_kill_switch` (`CONNECTOR_RSS_KILL_SWITCH`),
+`connector_egress_contact_url` (`CONNECTOR_EGRESS_CONTACT_URL`),
+`connector_egress_connect_timeout_seconds` (`CONNECTOR_EGRESS_CONNECT_TIMEOUT_SECONDS`),
+`connector_egress_read_timeout_seconds` (`CONNECTOR_EGRESS_READ_TIMEOUT_SECONDS`),
+`connector_egress_total_timeout_seconds` (`CONNECTOR_EGRESS_TOTAL_TIMEOUT_SECONDS`),
+`connector_egress_max_response_bytes` (`CONNECTOR_EGRESS_MAX_RESPONSE_BYTES`),
+`connector_egress_max_redirects` (`CONNECTOR_EGRESS_MAX_REDIRECTS`),
+`connector_rss_min_fetch_interval_seconds` (`CONNECTOR_RSS_MIN_FETCH_INTERVAL_SECONDS`),
+`connector_fixture_fallback_enabled` (`CONNECTOR_FIXTURE_FALLBACK_ENABLED`).
+
+**Geocoding (no geocoder key setting exists; `aws_location` uses the task role):**
+`geocoder_backend` (`GEOCODER_BACKEND`; unset in staging until a provider is chosen),
+`geocoder_aws_region` (`GEOCODER_AWS_REGION`), `geocoder_timeout_seconds`
+(`GEOCODER_TIMEOUT_SECONDS`), `geocoder_cache_ttl_seconds`
+(`GEOCODER_CACHE_TTL_SECONDS`), `geocoder_workspace_requests_per_minute`
+(`GEOCODER_WORKSPACE_REQUESTS_PER_MINUTE`), `geocoder_provider_burst`
+(`GEOCODER_PROVIDER_BURST`), `geocoder_provider_requests_per_second`
+(`GEOCODER_PROVIDER_REQUESTS_PER_SECOND`), `geocoder_min_match_score`
+(`GEOCODER_MIN_MATCH_SCORE`).
+
 **LLM (non-secret):** `llm_provider` (`LLM_PROVIDER`, staging=`openai`|`anthropic`),
 `llm_model` (`LLM_MODEL`), `llm_timeout_seconds` (`LLM_TIMEOUT_SECONDS`),
 `llm_max_retries` (`LLM_MAX_RETRIES`), `llm_temperature` (`LLM_TEMPERATURE`),
@@ -192,6 +236,24 @@ exporter fields, added after the §3.7 count was taken), `tracing_enabled`
 **Readiness probes:** `readiness_probe_timeout_seconds`
 (`READINESS_PROBE_TIMEOUT_SECONDS`), `readiness_total_timeout_seconds`
 (`READINESS_TOTAL_TIMEOUT_SECONDS`).
+
+**Privacy retention (durations are undecided, O-5 / P6-D05; unset means the purge refuses
+the class):** `retention_auth_sessions_days` (`RETENTION_AUTH_SESSIONS_DAYS`),
+`retention_account_tokens_days` (`RETENTION_ACCOUNT_TOKENS_DAYS`),
+`retention_invitations_days` (`RETENTION_INVITATIONS_DAYS`),
+`retention_signal_evidence_days` (`RETENTION_SIGNAL_EVIDENCE_DAYS`),
+`retention_opportunities_days` (`RETENTION_OPPORTUNITIES_DAYS`),
+`retention_job_history_days` (`RETENTION_JOB_HISTORY_DAYS`),
+`retention_audit_logs_days` (`RETENTION_AUDIT_LOGS_DAYS`),
+`retention_purge_batch_size` (`RETENTION_PURGE_BATCH_SIZE`),
+`retention_purge_max_batches` (`RETENTION_PURGE_MAX_BATCHES`).
+
+**Request rate limiting:** `rate_limit_backend` (`RATE_LIMIT_BACKEND`),
+`rate_limit_redis_failure_mode` (`RATE_LIMIT_REDIS_FAILURE_MODE`).
+
+**Bounded in-process similarity:** `vector_inprocess_max_signals_per_run`
+(`VECTOR_INPROCESS_MAX_SIGNALS_PER_RUN`), `vector_inprocess_production_approved`
+(`VECTOR_INPROCESS_PRODUCTION_APPROVED`).
 
 ### 3.6 `s3_bucket` classification note
 
@@ -207,15 +269,16 @@ resource name into logs, but it is safe to supply as plaintext task environment.
 | AWS Secrets Manager | 4 |
 | IAM-derived | 2 |
 | Absent in staging | 2 |
-| Local-development-only | 3 |
-| Non-secret configuration | 76 |
-| **Total** | **87** |
+| Local-development-only | 4 |
+| Non-secret configuration | 133 |
+| **Total** | **145** |
 
-`4 + 2 + 2 + 3 + 76 = 87`, equal to the model's declared field count. **Zero fields
-are unclassified**, and **all 9 `repr=False` fields** (`secret_key`, `database_url`,
+`4 + 2 + 2 + 4 + 133 = 145`, equal to the model's declared field count
+(`len(Settings.model_fields)`, recounted mechanically on 2026-11-01). **Zero fields
+are unclassified**, and **all 10 `repr=False` fields** (`secret_key`, `database_url`,
 `redis_url`, `llm_api_key` → Secrets Manager; `s3_access_key_id`,
 `s3_secret_access_key` → IAM-derived; `otlp_endpoint`, `s3_endpoint_url` → absent;
-`s3_bucket` → non-secret) carry exactly one disposition. There are **0** `SecretStr`
+`s3_bucket`, `migration_mode` → non-secret) carry exactly one disposition. There are **0** `SecretStr`
 fields to reconcile. If a future field is added to `Settings`, this table's total and
 this reconciliation MUST be updated in the same change, and G5 fails closed until it is.
 
