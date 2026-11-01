@@ -1793,12 +1793,23 @@ PROVEN_ELSEWHERE: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {
         ("test_opportunity_feedback_api.py", "test_cross_workspace_record_404"),
         ("test_opportunity_feedback_api.py", "test_cross_market_record_is_rejected"),
     ),
+    # Briefs: test_briefs_api puts each market in its own organization; test_briefs_isolation
+    # adds another workspace of the SAME organization (Phase 5A EC6).
     ("GET", f"{W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}"): (
         ("test_briefs_api.py", "test_a_foreign_brief_id_is_indistinguishable_from_a_missing_one"),
+        ("test_briefs_isolation.py", "test_foreign_brief_is_byte_identical_to_missing"),
     ),
     ("POST", f"{W}/opportunities/{{opportunity_id}}/briefs"): (
         ("test_briefs_api.py", "test_a_foreign_record_is_a_404_and_a_sibling_record_a_422"),
         ("test_briefs_api.py", "test_the_campaign_is_validated_against_the_workspace"),
+        (
+            "test_briefs_isolation.py",
+            "test_foreign_record_is_byte_identical_to_missing_and_calls_nothing",
+        ),
+        (
+            "test_briefs_isolation.py",
+            "test_campaign_of_another_workspace_in_the_same_org_is_refused",
+        ),
     ),
     ("GET", f"{W}/audit-logs"): (
         ("test_audit_logs_role_matrix.py", "test_allowed_role_cannot_reach_another_orgs_workspace"),
