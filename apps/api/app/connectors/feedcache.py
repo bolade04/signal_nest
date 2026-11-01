@@ -16,7 +16,8 @@ One entry per source key holds the last good feed body with its ``ETag`` /
   failure, up to :data:`MAX_FAILURE_BACKOFF_DOUBLINGS` doublings (bounded back-off); a
   ``Retry-After`` can only lengthen it. A good read or a ``304`` ends the streak. So a
   failing publisher costs at most one fetch (``connector_rss_max_attempts`` requests)
-  per interval, never one per scout run (#255 review r2-MINOR-1);
+  per interval, never one per scout run, when those runs do not overlap (see
+  ``docs/operations/live-data-sources.md`` §6) (#255 review r2-MINOR-1);
 * while a source cools down, its last good body (if any) is served; a body the
   connector cannot read is never stored, so it is neither re-served nor re-fetched on
   every run.

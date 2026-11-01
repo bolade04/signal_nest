@@ -66,8 +66,8 @@ sources together would index more than N_max = 100 signals is refused
   is required (https) whenever live egress is enabled.
 * Politeness: at most one fetch per source per `CONNECTOR_RSS_MIN_FETCH_INTERVAL_SECONDS`
   (default 900; a source record may only raise it) per process, **whether the source
-  answers or fails**; conditional `If-None-Match` / `If-Modified-Since` with the body reused
-  on `304`.
+  answers or fails**, when the process's runs do not overlap (see §6); conditional
+  `If-None-Match` / `If-Modified-Since` with the body reused on `304`.
   * Within one fetch, transient failures (a timeout, a connection failure, a `5xx` without
     `Retry-After`) are retried with a short backoff, `CONNECTOR_RSS_MAX_ATTEMPTS` requests
     in all (default 3). A `429`, a permanent `4xx` such as `404`, any answer carrying
@@ -86,8 +86,9 @@ sources together would index more than N_max = 100 signals is refused
     `failure_reason` as the run that met the failure (`rate_limited` during a
     `Retry-After` hold-off).
   * So a failing publisher receives at most `CONNECTOR_RSS_MAX_ATTEMPTS` requests per
-    interval from each process, however many scout runs its market has. A source that
-    recovers is read again when its current hold-off ends (at most four intervals later).
+    interval from each process, however many scout runs its market has, when those runs
+    do not overlap; see §6. A source that recovers is read again when its current hold-off
+    ends (at most four intervals later, or when a longer `Retry-After` ends).
 * Parsing: size cap, DOCTYPE/entity refusal and `defusedxml`; RSS 2.0, RSS 1.0 and Atom.
   Text is reduced to bounded plain text (markup, script/style bodies and control characters
   removed; instruction-override phrases bracketed as quoted data); only plain `http(s)`
@@ -227,6 +228,10 @@ data:
   consecutive failures) are per process (in memory); several workers each keep their own,
   and a restarted process starts without them, so its first run may contact a failing
   source again.
+* Runs that overlap in time inside one process (`WORKER_CONCURRENCY` > 1) can each fetch a
+  source whose entry is stale before the first of them records its read or its cool-down.
+  In that interval the source can receive up to `WORKER_CONCURRENCY` ×
+  `CONNECTOR_RSS_MAX_ATTEMPTS` requests from that process.
 * While a held good body is served during a cool-down, the run counts the source as read
   (`sources_failed` does not include it). Only the run that met the failure reports it,
   and the `connector.source_failed` log event records it.

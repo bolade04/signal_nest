@@ -318,10 +318,13 @@ class LiveRssConnector(SourceConnector):
         served again from the cache.
 
         Politeness floor (#255 review r2-MINOR-1): a source is contacted at most once per
-        interval, failing or not. Every failed fetch - once its bounded retries are spent,
-        whatever the failure - starts a cool-down (:meth:`FeedCache.fetch_failed`: one
-        interval, doubling per consecutive failure up to a bound; a ``Retry-After`` can only
-        lengthen it). Meanwhile the last good body, if any, is served without a request."""
+        interval, failing or not, when runs do not overlap (see
+        ``docs/operations/live-data-sources.md`` §6). Every failed fetch - once its bounded
+        retries are spent, whatever the failure - starts a cool-down
+        (:meth:`FeedCache.fetch_failed`: one interval, doubling per consecutive failure up
+        to a bound; a ``Retry-After`` can only lengthen it). Meanwhile the last good body,
+        if any, is served without a request. A D-25 stop (``RunStopped`` /
+        ``AdmissionUnresolved``) is not a source failure and starts no cool-down."""
         key = target.source.source_key
         interval = max(self._interval, target.source.min_fetch_interval_seconds or 0.0)
         fresh = self._cache.fresh(key, interval)

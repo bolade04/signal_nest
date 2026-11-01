@@ -38,6 +38,7 @@ from app.connectors.sources import (
     registry_problems,
 )
 from app.core.config import Settings
+from app.jobs.admission import AdmissionUnresolved, RunStopped
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 
@@ -416,6 +417,89 @@ def test_a_503_with_retry_after_is_not_retried_and_holds_off_at_least_an_interva
     assert len(wire.requests) == 1
     clock.t += 1
     assert conn.collect(SCOPE).failures == [] and len(wire.requests) == 2
+
+
+def _d25_stop(kind: str, operation: str) -> Exception:
+    if kind == "run-stopped":
+        return RunStopped("stopped_request_paused", operation, "request_paused")
+    return AdmissionUnresolved("blocking-admission", operation)
+
+
+@pytest.mark.parametrize("kind", ["run-stopped", "admission-unresolved"])
+@pytest.mark.parametrize("stop_at", [1, 2], ids=["before-attempt-1", "before-attempt-2"])
+def test_a_d25_stop_during_a_fetch_is_not_a_source_failure(monkeypatch, kind, stop_at) -> None:
+    """A D-25 stop (pause, cancel, lease loss, an unresolved admission) refused before an
+    attempt - the first, or the retry after a 500 - ends the run; it is not a failure of
+    the source. It propagates, starts no cool-down and no failure streak, so the next run
+    (this tenant's or another's) contacts the source instead of reporting a hold-off."""
+    import app.connectors.live as live_mod
+
+    src, clock = record(), Clock()
+    wire = Wire({src.host: [httpx.Response(500) for _ in range(6)]})
+    cache = FeedCache(clock=clock)
+    conn = connector([target(src)], wire, clock, cache=cache, max_attempts=3)
+    admissions = []
+
+    def admit(operation):
+        admissions.append(operation)
+        if len(admissions) == stop_at:
+            raise _d25_stop(kind, operation)
+
+    stop = RunStopped if kind == "run-stopped" else AdmissionUnresolved
+    with monkeypatch.context() as mp:
+        mp.setattr(live_mod, "admit_external_operation", admit)
+        with pytest.raises(stop):
+            conn.collect(SCOPE)
+    assert admissions == ["fetch"] * stop_at
+    assert len(wire.requests) == stop_at - 1  # the refused attempt sent nothing
+    assert not cache.cooling(src.source_key)
+    assert cache.consecutive_failures(src.source_key) == 0
+    clock.t += 1
+    after = conn.collect(SCOPE)  # not held off by the stop: a fresh fetch, its own result
+    assert len(wire.requests) == stop_at - 1 + 3
+    assert after.reports[0].failure_reason == "retries_exhausted"
+    assert cache.consecutive_failures(src.source_key) == 1
+
+
+def test_a_304_ends_the_failure_streak() -> None:
+    """good read -> 500 (streak 1, held off 900 s) -> 304 (the streak ends) -> 500 again:
+    held off one interval again, not two."""
+    src, clock = record(), Clock()
+    wire = Wire(
+        {
+            src.host: [
+                feed_response(etag='"e1"'),
+                httpx.Response(500),
+                httpx.Response(304, headers={"etag": '"e1"'}),
+                httpx.Response(500),
+                feed_response(etag='"e2"'),
+            ]
+        }
+    )
+    cache = FeedCache(clock=clock)
+    conn = connector([target(src)], wire, clock, cache=cache, max_attempts=1)
+    good = conn.collect(SCOPE).signals
+    clock.t += 901
+    assert [f.kind for f in conn.collect(SCOPE).failures] == [FailureKind.UPSTREAM_ERROR]
+    assert cache.consecutive_failures(src.source_key) == 1
+    clock.t += 900
+    revalidated = conn.collect(SCOPE)  # the conditional request is answered 304
+    assert wire.requests[2].headers["if-none-match"] == '"e1"'
+    assert revalidated.failures == [] and len(wire.requests) == 3
+    assert cache.consecutive_failures(src.source_key) == 0
+    clock.t += 900
+    conn.collect(SCOPE)  # 500 again: the first failure of a new streak
+    assert cache.consecutive_failures(src.source_key) == 1
+    clock.t += 899
+    held = conn.collect(SCOPE)
+    assert len(wire.requests) == 4  # held off, the held body served
+    assert held.failures == [] and [s.content for s in held.signals] == [
+        s.content for s in good
+    ]
+    clock.t += 1
+    conn.collect(SCOPE)
+    assert len(wire.requests) == 5  # contacted again after exactly one interval
+    assert cache.consecutive_failures(src.source_key) == 0
 
 
 def test_the_hold_off_is_bounded_and_never_below_the_interval() -> None:
