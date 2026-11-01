@@ -340,6 +340,9 @@ def _creative_world(request_engine: Engine, witness: Engine, key: str) -> Iterat
         finally:
             s.close()
 
+    # A PostgreSQL world opened inside a test of a module whose SQLite world is still live
+    # must hand that world's override back on exit, not leave the app without one.
+    saved = dict(app.dependency_overrides)
     app.dependency_overrides[get_db] = _override_get_db
     try:
         w = CreativeWorld(TestClient(app), request_engine, witness, factory)
@@ -356,6 +359,7 @@ def _creative_world(request_engine: Engine, witness: Engine, key: str) -> Iterat
         yield w
     finally:
         app.dependency_overrides.clear()
+        app.dependency_overrides.update(saved)
         _rate_limiter()._hits.clear()
 
 
