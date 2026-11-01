@@ -46,7 +46,11 @@ an engine of its own, barrier-synchronised):
   record every call.
 
 Everything is offline: the provider is a fixed-cost fake. Every connection carries a
-``statement_timeout``/``lock_timeout``; every join is bounded. Gate:
+``statement_timeout``/``lock_timeout``; every join is bounded. Every test runs on a scenario
+clock anchored at ``T0`` (:mod:`app.tests._llm_scenario_clock`): the meter's accounting
+clock in this process, the instants handed to the ledger, and - rebuilt from its spec -
+every spawned child's, so no period depends on the calendar date of the run; a boundary
+scenario names its month boundary explicitly. Gate:
 :func:`require_postgres` - with ``TEST_POSTGRES_URL`` unset these tests FAIL in CI and
 skip only on a developer machine.
 """
@@ -60,7 +64,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -93,6 +97,7 @@ from app.organizations.models import Organization, Workspace
 from app.tests import _llm_reserve_child as child
 from app.tests._auth2_support import pg_database, require_postgres
 from app.tests._llm_offline import offline_settings
+from app.tests._llm_scenario_clock import ScenarioClock
 
 API_DIR = Path(__file__).resolve().parents[2]
 ORG = "org-llmpg-001"
@@ -107,6 +112,14 @@ N_PROCESSES = 8
 @pytest.fixture(autouse=True)
 def _postgres_required() -> None:
     require_postgres()
+
+
+@pytest.fixture(autouse=True)
+def scenario_clock() -> Iterator[ScenarioClock]:
+    """This test's clock: ``T0``'s month for the meter here, and for every child it spawns."""
+    clock = ScenarioClock(T0)
+    with clock.installed():
+        yield clock
 
 
 def _migrate(url: str) -> None:
@@ -152,11 +165,12 @@ def factory(engine: Engine) -> sessionmaker:
     return child.make_factory(engine)
 
 
-def _period(db: Session, ws: str = WS, now: datetime | None = None) -> LLMBudgetPeriod | None:
+def _period(db: Session, ws: str = WS, *, now: datetime) -> LLMBudgetPeriod | None:
+    """The period row of ``ws`` for the UTC month of ``now`` (an explicit instant)."""
     return db.scalar(
         select(LLMBudgetPeriod).where(
             LLMBudgetPeriod.workspace_id == ws,
-            LLMBudgetPeriod.period_start == ledger.period_start_for(now or datetime.now(UTC)),
+            LLMBudgetPeriod.period_start == ledger.period_start_for(now),
         )
     )
 
@@ -220,7 +234,9 @@ def _crash_worst_case() -> Decimal:
 # --------------------------------------------------------------------------- #
 # P1 - multi-process concurrency: the sum of worst cases never exceeds the budget
 # --------------------------------------------------------------------------- #
-def test_p1_eight_processes_never_reserve_more_than_the_budget_together(pg_url, factory):
+def test_p1_eight_processes_never_reserve_more_than_the_budget_together(
+    pg_url, factory, scenario_clock
+):
     budget = 0.10
     w = _run_worst_case()
     fits = int(Decimal(str(budget)) // w)
@@ -241,6 +257,7 @@ def test_p1_eight_processes_never_reserve_more_than_the_budget_together(pg_url, 
                 job_id=None,
                 attempt=0,
                 results=results,
+                clock=scenario_clock.spec(),
             )
             for _ in range(N_PROCESSES)
         ],
@@ -256,7 +273,7 @@ def test_p1_eight_processes_never_reserve_more_than_the_budget_together(pg_url, 
         assert len(rows) == calls and {r.state for r in rows} == {"settled"}
         worst_sum = sum((r.reserved_usd for r in rows), Decimal(0))
         assert worst_sum == w * calls <= Decimal(str(budget))  # the guarantee
-        period = _period(db)
+        period = _period(db, now=T0)
         assert period.reserved_usd == worst_sum  # consumed on the worst-case basis, exactly
         assert period.settled_usd == child.FIXED_COST * calls  # charged the actual, exactly
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == calls
@@ -270,7 +287,7 @@ def test_p1_eight_processes_never_reserve_more_than_the_budget_together(pg_url, 
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("make_call", [True, False], ids=["after-the-call", "before-the-call"])
 def test_p2_a_crashed_process_leaves_its_reservation_which_recovery_charges_at_worst(
-    pg_url, factory, make_call
+    pg_url, factory, make_call, scenario_clock
 ):
     budget = 0.10
     w = _crash_worst_case()
@@ -288,6 +305,7 @@ def test_p2_a_crashed_process_leaves_its_reservation_which_recovery_charges_at_w
                 attempt=0,
                 reserved_event=reserved,
                 make_call=make_call,
+                clock=scenario_clock.spec(),
             )
         ],
     )
@@ -296,17 +314,17 @@ def test_p2_a_crashed_process_leaves_its_reservation_which_recovery_charges_at_w
     with factory() as db:
         (row,) = _reservations(db)
         assert row.state == "reserved" and row.settled_usd is None
-        assert _period(db).reserved_usd == w  # the reservation is the record of the call
+        assert _period(db, now=T0).reserved_usd == w  # the reservation is the record of the call
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 0
         # Not yet expired: the sweep leaves it (the process might be alive and slow).
-        assert ledger.sweep(db, now=datetime.now(UTC)) == {"expired": 0, "terminal": 0}
+        assert ledger.sweep(db, now=scenario_clock.now()) == {"expired": 0, "terminal": 0}
         # Past its expiry the sweep charges it its worst case.
         later = row.expires_at + timedelta(seconds=1)
         assert ledger.sweep(db, now=later) == {"expired": 1, "terminal": 0}
         db.commit()
         db.refresh(row)
         assert (row.state, row.settled_usd) == ("expired", w)
-        period = _period(db)
+        period = _period(db, now=T0)
         assert (period.reserved_usd, period.settled_usd) == (w, w)
         # A later run can spend the rest of the budget - and no more.
         rest = Decimal(str(budget)) - w
@@ -319,7 +337,7 @@ def test_p2_a_crashed_process_leaves_its_reservation_which_recovery_charges_at_w
             worst_usd=rest,
             budget_usd=Decimal(str(budget)),
             expires_at=later,
-            now=datetime.now(UTC),
+            now=scenario_clock.now(),
         )
         assert not ledger.reserve(
             db,
@@ -330,12 +348,14 @@ def test_p2_a_crashed_process_leaves_its_reservation_which_recovery_charges_at_w
             worst_usd=Decimal("0.000001"),
             budget_usd=Decimal(str(budget)),
             expires_at=later,
-            now=datetime.now(UTC),
+            now=scenario_clock.now(),
         )
         db.commit()
 
 
-def test_p2_a_crashed_attempt_of_a_job_is_released_when_the_job_ends(pg_url, factory):
+def test_p2_a_crashed_attempt_of_a_job_is_released_when_the_job_ends(
+    pg_url, factory, scenario_clock
+):
     budget = 0.10
     w = _crash_worst_case()
     with factory() as db:
@@ -354,6 +374,7 @@ def test_p2_a_crashed_attempt_of_a_job_is_released_when_the_job_ends(pg_url, fac
                 attempt=1,
                 reserved_event=reserved,
                 make_call=True,
+                clock=scenario_clock.spec(),
             )
         ],
     )
@@ -371,13 +392,15 @@ def test_p2_a_crashed_attempt_of_a_job_is_released_when_the_job_ends(pg_url, fac
     with factory() as db:
         (row,) = _reservations(db)
         assert (row.state, row.settled_usd) == ("released", w)
-        assert _period(db).settled_usd == w
+        assert _period(db, now=T0).settled_usd == w
 
 
 # --------------------------------------------------------------------------- #
 # P3 - retry after a lost attempt
 # --------------------------------------------------------------------------- #
-def test_p3_a_retried_attempt_reserves_anew_and_the_lost_one_is_released(pg_url, factory):
+def test_p3_a_retried_attempt_reserves_anew_and_the_lost_one_is_released(
+    pg_url, factory, scenario_clock
+):
     w_lost, w_run = _crash_worst_case(), _run_worst_case()
     # The lost attempt's worst case plus the re-run's first call fit; a second call of
     # the re-run would not.
@@ -399,6 +422,7 @@ def test_p3_a_retried_attempt_reserves_anew_and_the_lost_one_is_released(pg_url,
                 attempt=1,
                 reserved_event=reserved,
                 make_call=True,
+                clock=scenario_clock.spec(),
             )
         ],
     )
@@ -419,6 +443,7 @@ def test_p3_a_retried_attempt_reserves_anew_and_the_lost_one_is_released(pg_url,
                 job_id=job_id,
                 attempt=2,
                 results=results,
+                clock=scenario_clock.spec(),
             )
         ],
     )
@@ -433,7 +458,7 @@ def test_p3_a_retried_attempt_reserves_anew_and_the_lost_one_is_released(pg_url,
         assert (retried.state, retried.settled_usd) == ("settled", child.FIXED_COST)
         worst_sum = sum((r.reserved_usd for r in rows.values()), Decimal(0))
         assert worst_sum == w_lost + w_run <= Decimal(str(budget))
-        period = _period(db)
+        period = _period(db, now=T0)
         assert (period.reserved_usd, period.settled_usd) == (worst_sum, w_lost + child.FIXED_COST)
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
 
@@ -441,9 +466,26 @@ def test_p3_a_retried_attempt_reserves_anew_and_the_lost_one_is_released(pg_url,
 # --------------------------------------------------------------------------- #
 # P4 - duplicate settlement
 # --------------------------------------------------------------------------- #
-def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(pg_url, factory):
+#: A call reserved in the last minute of ``T0``'s month and settled after midnight UTC.
+BOUNDARY_RESERVED = datetime(2026, 10, 31, 23, 59, 30, tzinfo=UTC)
+BOUNDARY_SETTLED = datetime(2026, 11, 1, 0, 0, 30, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("reserved_at", "settled_from"),
+    [(T0, T0 + timedelta(minutes=1)), (BOUNDARY_RESERVED, BOUNDARY_SETTLED)],
+    ids=["same-month", "across-the-month-boundary"],
+)
+def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(
+    pg_url, factory, reserved_at, settled_from
+):
+    """Reserved at ``reserved_at``; four processes then settle the key at once from
+    ``settled_from`` on. Charged once, one usage row. Across the boundary the charge stays
+    in the reservation's month (the guarantee counts a call in the month it started in)
+    and the settlement's month gets no row."""
     budget = 1.0
     w = Decimal("0.05")
+    settle_clock = ScenarioClock(settled_from)
     with factory() as db:
         assert ledger.reserve(
             db,
@@ -453,8 +495,8 @@ def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(pg_
             attempt_key="dup:1:0",
             worst_usd=w,
             budget_usd=Decimal(str(budget)),
-            expires_at=T0 + timedelta(hours=1),
-            now=T0,
+            expires_at=reserved_at + timedelta(hours=1),
+            now=reserved_at,
         )
         db.commit()
     ctx = mp.get_context("spawn")
@@ -469,6 +511,7 @@ def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(pg_
                 settled_usd=str(child.FIXED_COST),
                 barrier=barrier,
                 results=results,
+                clock=settle_clock.spec(),
             )
             for _ in range(4)
         ],
@@ -482,14 +525,19 @@ def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(pg_
             db,
             attempt_key="dup:1:0",
             settled_usd=child.FIXED_COST,
-            now=datetime.now(UTC),
+            now=settle_clock.now(),
             usage=None,
         )
         db.commit()
-        period = _period(db)
+        period = _period(db, now=reserved_at)
         assert (period.reserved_usd, period.settled_usd) == (w, child.FIXED_COST)
         (row,) = _reservations(db)
         assert (row.state, row.settled_usd) == ("settled", child.FIXED_COST)
+        assert row.period_start == ledger.period_start_for(reserved_at)
+        # Settled at the children's scenario instant (not the calendar's): within the minute.
+        assert settled_from <= row.settled_at < settled_from + timedelta(minutes=1)
+        # One period row: the settlement's own month is charged nothing.
+        assert db.scalar(select(func.count()).select_from(LLMBudgetPeriod)) == 1
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
 
 
@@ -499,7 +547,7 @@ def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(pg_
 def test_p5_the_sweep_releases_expired_and_terminal_reservations_and_nothing_else(pg_url, factory):
     budget = Decimal("1")
     w = Decimal("0.01")
-    now = datetime.now(UTC)
+    now = T0  # mid-month: "now - 1 day" is the same UTC month (the boundary: the next test)
     with factory() as db:
         live = _enqueue(db, "live")
         done = _enqueue(db, "done")
@@ -537,6 +585,82 @@ def test_p5_the_sweep_releases_expired_and_terminal_reservations_and_nothing_els
         assert ledger.sweep(db, now=now) == {"expired": 0, "terminal": 0}  # idempotent
 
 
+def test_p5_across_the_month_boundary_recovery_charges_each_reservation_to_its_own_month(
+    pg_url, factory
+):
+    """The sweep at 00:30 UTC on 1 November, a day after reservations made in October: what
+    it releases is charged to the month each reservation started in, never to the sweep's
+    month. An expired October reservation is charged to October; one whose job still
+    holds a live lease is left alone across the boundary; a terminal job's November
+    reservation is charged to November; once that lease lapses, recovery still charges
+    October, not the month it runs in."""
+    budget = Decimal("1")
+    w = Decimal("0.01")
+    now = datetime(2026, 11, 1, 0, 30, tzinfo=UTC)
+    october, november = now - timedelta(days=1), now
+    with factory() as db:
+        queued = _enqueue(db, "queued")
+        leased = _enqueue(db, "leased")
+        done = _enqueue(db, "done")
+        for key, when, job in (
+            ("old:1:0", october, queued),
+            ("leased:1:0", october, leased),
+            ("fresh:1:0", november, queued),
+            ("done:1:0", november, done),
+            ("nojob:0:0", november, None),
+        ):
+            assert ledger.reserve(
+                db,
+                workspace_id=WS,
+                organization_id=ORG,
+                job_id=job,
+                attempt_key=key,
+                worst_usd=w,
+                budget_usd=budget,
+                expires_at=when + timedelta(seconds=90),
+                now=when,
+            )
+        db.execute(update(Job).where(Job.id == done).values(status=JobStatus.SUCCEEDED.value))
+        db.execute(
+            update(Job)
+            .where(Job.id == leased)
+            .values(status=JobStatus.RUNNING.value, lease_expires_at=now + timedelta(days=1))
+        )
+        db.commit()
+    runner = JobRunner(settings=offline_settings(), session_factory=factory, clock=lambda: now)
+    assert runner.poll_once(worker_id="w-llmpg") is False
+    with factory() as db:
+        rows = {r.attempt_key: r for r in _reservations(db)}
+        assert {k: r.state for k, r in rows.items()} == {
+            "old:1:0": "expired",
+            "leased:1:0": "reserved",  # its job's lease is live: left alone
+            "fresh:1:0": "reserved",
+            "done:1:0": "released",
+            "nojob:0:0": "reserved",
+        }
+        assert {k: r.period_start for k, r in rows.items()} == {
+            "old:1:0": date(2026, 10, 1),
+            "leased:1:0": date(2026, 10, 1),
+            "fresh:1:0": date(2026, 11, 1),
+            "done:1:0": date(2026, 11, 1),
+            "nojob:0:0": date(2026, 11, 1),
+        }
+        oct_period, nov_period = _period(db, now=october), _period(db, now=november)
+        assert (oct_period.reserved_usd, oct_period.settled_usd) == (2 * w, w)
+        assert (nov_period.reserved_usd, nov_period.settled_usd) == (3 * w, w)
+        assert ledger.sweep(db, now=now) == {"expired": 0, "terminal": 0}  # idempotent
+        # Two days on, the lease has lapsed: every reservation left is charged to its own month.
+        later = now + timedelta(days=2)
+        assert ledger.sweep(db, now=later) == {"expired": 3, "terminal": 0}
+        db.commit()
+    with factory() as db:  # a fresh session: the sweep's updates, not the rows loaded above
+        oct_period, nov_period = _period(db, now=october), _period(db, now=november)
+        assert (oct_period.reserved_usd, oct_period.settled_usd) == (2 * w, 2 * w)
+        assert (nov_period.reserved_usd, nov_period.settled_usd) == (3 * w, 3 * w)
+        assert db.scalar(select(func.count()).select_from(LLMBudgetPeriod)) == 2
+        assert ledger.sweep(db, now=later) == {"expired": 0, "terminal": 0}  # idempotent
+
+
 # --------------------------------------------------------------------------- #
 # P6 - recovery racing a live call
 # --------------------------------------------------------------------------- #
@@ -556,10 +680,10 @@ class _BlockingProvider(child.FixedCostProvider):
 
 @pytest.mark.parametrize("lease_live", [True, False], ids=["live-lease", "lease-gone"])
 def test_p6_the_sweep_defers_to_a_live_lease_and_a_late_settlement_still_records_the_call(
-    pg_url, factory, lease_live
+    pg_url, factory, lease_live, scenario_clock
 ):
     settings = child.settings_for(1.0)
-    now = datetime.now(UTC)
+    now = scenario_clock.now()
     with factory() as db:
         job_id = _enqueue(db, "inflight")
         db.execute(
@@ -610,7 +734,7 @@ def test_p6_the_sweep_defers_to_a_live_lease_and_a_late_settlement_still_records
     with factory() as db:
         (row,) = _reservations(db)
         usage = db.scalar(select(LLMUsageEvent))
-        period = _period(db)
+        period = _period(db, now=T0)
         assert (usage.job_id, usage.cost_usd, usage.outcome) == (
             job_id,
             0.0105,
@@ -649,8 +773,8 @@ def test_two_workspaces_periods_are_independent_on_postgresql(pg_url, factory):
         assert not ledger.reserve(db, workspace_id=WS, attempt_key="a:1", **kw)
         assert ledger.reserve(db, workspace_id=WS2, attempt_key="b:0", **kw)
         db.commit()
-        assert _period(db, WS, T0).reserved_usd == Decimal("0.03")
-        assert _period(db, WS2, T0).reserved_usd == Decimal("0.03")
+        assert _period(db, WS, now=T0).reserved_usd == Decimal("0.03")
+        assert _period(db, WS2, now=T0).reserved_usd == Decimal("0.03")
 
 
 def test_the_month_rolls_over_on_postgresql(pg_url, factory):
@@ -669,7 +793,9 @@ def test_the_month_rolls_over_on_postgresql(pg_url, factory):
         assert ledger.reserved_month_to_date_usd(db, WS, first) == budget
 
 
-def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(pg_url, factory):
+def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(
+    pg_url, factory, scenario_clock
+):
     """Eight concurrent callers on independent connections, the month at budget - 1.5 w:
     the read-only API gate admits every one (it only refuses at or over budget), and
     the reservations behind them admit exactly the one call that still fits."""
@@ -686,7 +812,7 @@ def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(pg_url, f
             worst_usd=budget - w - w / 2,
             budget_usd=budget,
             expires_at=T0,
-            now=datetime.now(UTC),
+            now=scenario_clock.now(),
         )
         db.commit()
     barrier = threading.Barrier(N_PROCESSES)
@@ -714,7 +840,7 @@ def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(pg_url, f
                     worst_usd=w,
                     budget_usd=budget,
                     expires_at=T0,
-                    now=datetime.now(UTC),
+                    now=scenario_clock.now(),
                 )
                 db.commit()
             finally:
@@ -735,7 +861,7 @@ def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(pg_url, f
     assert gate == ["allowed"] * N_PROCESSES  # the gate alone would admit all eight
     assert sum(reserved) == 1  # the ledger admits exactly the one that fits
     with factory() as db:
-        assert _period(db).reserved_usd == budget - w / 2
+        assert _period(db, now=T0).reserved_usd == budget - w / 2
         ensure_run_allowed(db, settings, WS)  # still under budget: a new run may start ...
         assert not ledger.reserve(  # ... but no call of it can be made
             db,
@@ -746,7 +872,7 @@ def test_the_run_gate_is_a_read_and_the_reservation_is_the_enforcement(pg_url, f
             worst_usd=w,
             budget_usd=budget,
             expires_at=T0,
-            now=datetime.now(UTC),
+            now=scenario_clock.now(),
         )
 
 
@@ -766,9 +892,10 @@ def _usage(cost: Decimal, outcome: str = "ok") -> dict:
     }
 
 
-def _reserve(db: Session, key: str, w: Decimal, *, job_id: str | None, expired: bool) -> None:
-    """Reserve ``key``; ``expired`` makes it already past ``expires_at`` (sweepable)."""
-    now = datetime.now(UTC)
+def _reserve(
+    db: Session, key: str, w: Decimal, *, job_id: str | None, expired: bool, now: datetime
+) -> None:
+    """Reserve ``key`` at ``now``; ``expired`` makes it already past ``expires_at`` (sweepable)."""
     assert ledger.reserve(
         db,
         workspace_id=WS,
@@ -783,9 +910,9 @@ def _reserve(db: Session, key: str, w: Decimal, *, job_id: str | None, expired: 
     db.commit()
 
 
-def _assert_period_invariants(db: Session, budget: Decimal) -> None:
-    """Accounting invariants that must hold after EVERY interleaving."""
-    period = _period(db)
+def _assert_period_invariants(db: Session, budget: Decimal, at: datetime = T0) -> None:
+    """Accounting invariants that must hold after EVERY interleaving (``at``'s period)."""
+    period = _period(db, now=at)
     rows = _reservations(db)
     if period is None:
         assert not rows
@@ -800,17 +927,26 @@ def _assert_period_invariants(db: Session, budget: Decimal) -> None:
 
 
 @pytest.mark.parametrize("after", ["released", "expired"])
-def test_p7_racing_late_settlements_record_the_call_exactly_once(pg_url, factory, after):
+def test_p7_racing_late_settlements_record_the_call_exactly_once(
+    pg_url, factory, after, scenario_clock
+):
     """Four processes settle the same key at once after recovery charged it its worst
     case, then the same process settles twice more: one usage row, no money moved."""
     w, budget = Decimal("0.05"), Decimal("1")
     with factory() as db:
         job_id = _enqueue(db, f"late-{after}") if after == "released" else None
-        _reserve(db, f"late:{after}:0", w, job_id=job_id, expired=after == "expired")
+        _reserve(
+            db,
+            f"late:{after}:0",
+            w,
+            job_id=job_id,
+            expired=after == "expired",
+            now=scenario_clock.now(),
+        )
         if after == "released":
-            assert ledger.release_for_job(db, job_id=job_id, now=datetime.now(UTC), outcome="t")
+            assert ledger.release_for_job(db, job_id=job_id, now=scenario_clock.now(), outcome="t")
         else:
-            assert ledger.release_expired(db, now=datetime.now(UTC)) == 1
+            assert ledger.release_expired(db, now=scenario_clock.now()) == 1
         db.commit()
     ctx = mp.get_context("spawn")
     barrier = ctx.Barrier(4)
@@ -824,6 +960,7 @@ def test_p7_racing_late_settlements_record_the_call_exactly_once(pg_url, factory
                 settled_usd=str(child.FIXED_COST),
                 barrier=barrier,
                 results=results,
+                clock=scenario_clock.spec(),
             )
             for _ in range(4)
         ],
@@ -837,19 +974,21 @@ def test_p7_racing_late_settlements_record_the_call_exactly_once(pg_url, factory
                 db,
                 attempt_key=f"late:{after}:0",
                 settled_usd=child.FIXED_COST,
-                now=datetime.now(UTC),
+                now=scenario_clock.now(),
                 usage=_usage(child.FIXED_COST),
             )
             db.commit()
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
         (row,) = _reservations(db)
         assert (row.state, row.settled_usd) == (after, w)  # the worst case stands
-        period = _period(db)
+        period = _period(db, now=T0)
         assert (period.reserved_usd, period.settled_usd, period.bound_violations) == (w, w, 0)
         _assert_period_invariants(db, budget)
 
 
-def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(pg_url, engine):
+def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
+    pg_url, engine, scenario_clock
+):
     """Deterministic interleaving: the settlement has read the row as ``reserved`` when
     recovery commits its release (before the settlement's period lock); the settlement
     re-reads the row under the lock and takes the late path. Its usage row must still be
@@ -860,7 +999,7 @@ def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
     w = Decimal("0.05")
     with factory() as db:
         job_id = _enqueue(db, "lost-race")
-        _reserve(db, "race:1:0", w, job_id=job_id, expired=False)
+        _reserve(db, "race:1:0", w, job_id=job_id, expired=False, now=scenario_clock.now())
     fired: list[int] = []
 
     @event.listens_for(engine, "before_cursor_execute")
@@ -871,7 +1010,7 @@ def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
             fired.append(1)
             other = factory()
             try:
-                ledger.release_for_job(other, job_id=job_id, now=datetime.now(UTC), outcome="t")
+                ledger.release_for_job(other, job_id=job_id, now=scenario_clock.now(), outcome="t")
                 other.commit()
             finally:
                 other.close()
@@ -882,7 +1021,7 @@ def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
                 db,
                 attempt_key="race:1:0",
                 settled_usd=child.FIXED_COST,
-                now=datetime.now(UTC),
+                now=scenario_clock.now(),
                 usage=_usage(child.FIXED_COST),
             )
             db.commit()
@@ -898,7 +1037,7 @@ def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
             db,
             attempt_key="race:1:0",
             settled_usd=child.FIXED_COST,
-            now=datetime.now(UTC),
+            now=scenario_clock.now(),
             usage=_usage(child.FIXED_COST),
         )
         db.commit()
@@ -907,27 +1046,34 @@ def test_p7_a_settlement_that_loses_the_race_to_recovery_still_records_the_call(
 
 @pytest.mark.parametrize("after", ["released", "expired"])
 def test_p7_usage_above_the_reservation_after_recovery_keeps_the_bound_as_the_charge(
-    pg_url, factory, after
+    pg_url, factory, after, scenario_clock
 ):
     w, budget = Decimal("0.05"), Decimal("1")
     with factory() as db:
         job_id = _enqueue(db, f"over-{after}") if after == "released" else None
-        _reserve(db, f"over:{after}:0", w, job_id=job_id, expired=after == "expired")
+        _reserve(
+            db,
+            f"over:{after}:0",
+            w,
+            job_id=job_id,
+            expired=after == "expired",
+            now=scenario_clock.now(),
+        )
         if after == "released":
-            ledger.release_for_job(db, job_id=job_id, now=datetime.now(UTC), outcome="t")
+            ledger.release_for_job(db, job_id=job_id, now=scenario_clock.now(), outcome="t")
         else:
-            ledger.release_expired(db, now=datetime.now(UTC))
+            ledger.release_expired(db, now=scenario_clock.now())
         db.commit()
         for _ in range(3):
             ledger.settle(
                 db,
                 attempt_key=f"over:{after}:0",
                 settled_usd=Decimal("0.9"),
-                now=datetime.now(UTC),
+                now=scenario_clock.now(),
                 usage=_usage(Decimal("0.9")),
             )
             db.commit()
-        period = _period(db)
+        period = _period(db, now=T0)
         assert (period.reserved_usd, period.settled_usd) == (w, w)
         assert period.bound_violations == 1  # counted once, not once per repeat
         usage = db.scalars(select(LLMUsageEvent)).all()
@@ -935,7 +1081,9 @@ def test_p7_usage_above_the_reservation_after_recovery_keeps_the_bound_as_the_ch
         _assert_period_invariants(db, budget)
 
 
-def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(pg_url, factory):
+def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(
+    pg_url, factory, scenario_clock
+):
     """Per attempt: one process settles (with a usage row) while another recovers the
     same key and two more settle it late. Whatever the interleaving, there is exactly one
     usage row per attempt and the period's accounting is consistent."""
@@ -946,7 +1094,7 @@ def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(p
         for i in range(attempts):
             job_id = _enqueue(db, f"stress-{i}")
             key = f"stress:{i}:0"
-            _reserve(db, key, w, job_id=job_id, expired=False)
+            _reserve(db, key, w, job_id=job_id, expired=False, now=scenario_clock.now())
             keys.append((key, job_id))
     ctx = mp.get_context("spawn")
     for key, job_id in keys:
@@ -961,12 +1109,22 @@ def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(p
                     settled_usd=str(child.FIXED_COST),
                     barrier=barrier,
                     results=results,
+                    clock=scenario_clock.spec(),
                 )
                 for _ in range(3)
             ],
         ) + _spawn(
             child.recover_once,
-            [dict(url=pg_url, job_id=job_id, mode="job", barrier=barrier, results=results)],
+            [
+                dict(
+                    url=pg_url,
+                    job_id=job_id,
+                    mode="job",
+                    barrier=barrier,
+                    results=results,
+                    clock=scenario_clock.spec(),
+                )
+            ],
         )
         _drain(results, 4)
         assert _join(procs) == [0] * 4
@@ -980,7 +1138,7 @@ def test_p7_settlement_races_recovery_across_processes_and_the_invariants_hold(p
 # --------------------------------------------------------------------------- #
 # P8 - one lock order: a settlement never deadlocks with a multi-row recovery release
 # --------------------------------------------------------------------------- #
-def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url):
+def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url, scenario_clock):
     """Review r3 MAJOR-1, deterministic. Two overdue reservations of one workspace. The
     settlement of the second takes its first lock and pauses; the sweep then runs, taking
     the first reservation, the period and (on the old order) waiting for the second. When
@@ -995,7 +1153,7 @@ def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url):
     e_settle, e_sweep = child.make_engine(pg_url), child.make_engine(pg_url)
     f_settle, f_sweep = child.make_factory(e_settle), child.make_factory(e_sweep)
     w = Decimal("0.020000")
-    now = datetime.now(UTC)
+    now = scenario_clock.now()
     with f_settle() as db:
         for key, age in (("dl:a:0", 20), ("dl:b:0", 10)):
             assert ledger.reserve(
@@ -1030,7 +1188,7 @@ def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url):
                 session,
                 attempt_key="dl:b:0",
                 settled_usd=Decimal("0.01"),
-                now=datetime.now(UTC),
+                now=scenario_clock.now(),
                 usage=child.usage_for("dl:b:0", Decimal("0.01")),
             )
             session.commit()
@@ -1044,7 +1202,7 @@ def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url):
         assert first_lock.wait(20)
         session = f_sweep()
         try:
-            outcome["sweep"] = ledger.release_expired(session, now=datetime.now(UTC))
+            outcome["sweep"] = ledger.release_expired(session, now=scenario_clock.now())
             session.commit()
         except DBAPIError as exc:
             session.rollback()
@@ -1070,7 +1228,9 @@ def test_p8_a_settlement_and_a_multi_row_release_do_not_deadlock(pg_url):
 
 
 @pytest.mark.parametrize("run", [1, 2, 3])
-def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factory, run):
+def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(
+    pg_url, factory, run, scenario_clock
+):
     """Six processes run 80 random ledger operations each against 30 shared reservations
     (settle, over-bound settle, release by job, expiry, sweep, reserve at a tight budget),
     then four processes late-settle every key twice. No operation may fail (no deadlock),
@@ -1081,7 +1241,7 @@ def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factor
         for i in range(30):
             job = _enqueue(db, f"chaos-{run}-{i}")
             key = f"chaos:{i}:0"
-            now = datetime.now(UTC)
+            now = scenario_clock.now()
             assert ledger.reserve(
                 db,
                 workspace_id=WS,
@@ -1110,6 +1270,7 @@ def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factor
                 rounds=80,
                 barrier=start,
                 results=results,
+                clock=scenario_clock.spec(),
             )
             for seed in range(6)
         ],
@@ -1130,6 +1291,7 @@ def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factor
                 cost="0.010000",
                 barrier=barrier,
                 results=results,
+                clock=scenario_clock.spec(),
             )
             for _ in range(4)
         ],
@@ -1137,7 +1299,7 @@ def test_p8_six_process_chaos_loses_no_usage_row_and_no_operation(pg_url, factor
     _drain(results, 4)
     assert _join(procs) == [0] * 4
     with factory() as db:
-        period, rows = _period(db), _reservations(db)
+        period, rows = _period(db, now=T0), _reservations(db)
         per_key: dict[str, int] = {}
         for u in db.scalars(select(LLMUsageEvent)):
             per_key[u.task] = per_key.get(u.task, 0) + 1
@@ -1164,6 +1326,7 @@ def _record(
     *,
     ws: str = WS,
     worst: Decimal | None = None,
+    now: datetime,
 ) -> bool:
     return ledger.record_settled(
         db,
@@ -1172,7 +1335,7 @@ def _record(
         job_id=None,
         attempt_key=key,
         settled_usd=cost,
-        now=datetime.now(UTC),
+        now=now,
         usage=_usage(cost),
         worst_usd=worst,
     )
@@ -1186,8 +1349,9 @@ def _ledger_counts(db: Session, ws: str = WS) -> tuple[int, int, int]:
     )
 
 
-def _assert_recorded_once(db: Session, key: str, charge: Decimal) -> None:
-    """One settled reservation, the period's totals counted once, one usage row."""
+def _assert_recorded_once(db: Session, key: str, charge: Decimal, at: datetime = T0) -> None:
+    """One settled reservation, the period's totals (``at``'s month) counted once, one usage
+    row."""
     assert _ledger_counts(db) == (1, 1, 1)
     (row,) = _reservations(db)
     assert (row.attempt_key, row.state, row.reserved_usd, row.settled_usd) == (
@@ -1197,9 +1361,9 @@ def _assert_recorded_once(db: Session, key: str, charge: Decimal) -> None:
         charge,
     )
     assert row.usage_recorded_at is not None
-    period = _period(db)
+    period = _period(db, now=at)
     assert (period.reserved_usd, period.settled_usd) == (charge, charge)
-    _assert_period_invariants(db, Decimal("1"))
+    _assert_period_invariants(db, Decimal("1"), at)
 
 
 def _wait_until_lock_waiting(observer: Engine, pid: int) -> str:
@@ -1217,15 +1381,17 @@ def _wait_until_lock_waiting(observer: Engine, pid: int) -> str:
     raise AssertionError(f"backend {pid} never waited on a lock")
 
 
-def test_p9_a_same_session_record_writes_the_reservation_the_period_and_the_usage_row(factory):
+def test_p9_a_same_session_record_writes_the_reservation_the_period_and_the_usage_row(
+    factory, scenario_clock
+):
     """FU-269-R7: the record's ``INSERT ... ON CONFLICT DO NOTHING`` must report the row it
     inserted, or the call keeps only its reservation row (no period, no usage row)."""
     with factory() as db:
-        assert _record(db, "same:0:0") is True
+        assert _record(db, "same:0:0", now=scenario_clock.now()) is True
         db.commit()
     with factory() as db:
         _assert_recorded_once(db, "same:0:0", child.FIXED_COST)
-        assert _period(db).bound_violations == 0
+        assert _period(db, now=T0).bound_violations == 0
         (usage,) = db.scalars(select(LLMUsageEvent)).all()
         assert (usage.organization_id, usage.workspace_id, usage.provider) == (
             ORG,
@@ -1235,13 +1401,13 @@ def test_p9_a_same_session_record_writes_the_reservation_the_period_and_the_usag
         assert usage.cost_usd == pytest.approx(float(child.FIXED_COST))
 
 
-def test_p9_a_repeated_attempt_key_adds_nothing_and_returns_false(factory):
+def test_p9_a_repeated_attempt_key_adds_nothing_and_returns_false(factory, scenario_clock):
     with factory() as db:
-        assert _record(db, "same:0:0") is True
-        assert _record(db, "same:0:0") is False  # the same transaction
+        assert _record(db, "same:0:0", now=scenario_clock.now()) is True
+        assert _record(db, "same:0:0", now=scenario_clock.now()) is False  # the same transaction
         db.commit()
     with factory() as db:
-        assert _record(db, "same:0:0") is False  # a later transaction
+        assert _record(db, "same:0:0", now=scenario_clock.now()) is False  # a later transaction
         db.commit()
     with factory() as db:
         _assert_recorded_once(db, "same:0:0", child.FIXED_COST)
@@ -1249,7 +1415,7 @@ def test_p9_a_repeated_attempt_key_adds_nothing_and_returns_false(factory):
 
 @pytest.mark.parametrize("first_ends", ["commit", "rollback"])
 def test_p9_a_duplicate_racing_on_another_connection_waits_then_counts_once(
-    pg_url, factory, first_ends
+    pg_url, factory, first_ends, scenario_clock
 ):
     """A real race on PostgreSQL: the second record of the key blocks on the first's
     uncommitted row (the unique index's wait). If the first commits, the second inserts
@@ -1261,13 +1427,15 @@ def test_p9_a_duplicate_racing_on_another_connection_waits_then_counts_once(
 
     def record_second() -> None:
         try:
-            outcome.append(_record(second, "race:0:0"))
+            outcome.append(_record(second, "race:0:0", now=scenario_clock.now()))
             second.commit()
         except BaseException as exc:  # noqa: BLE001 - surfaced to the test
             outcome.append(exc)
 
     try:
-        assert _record(first, "race:0:0") is True  # holds the new row, uncommitted
+        assert (
+            _record(first, "race:0:0", now=scenario_clock.now()) is True
+        )  # holds the new row, uncommitted
         pid = second.execute(text("select pg_backend_pid()")).scalar_one()
         racer = threading.Thread(target=record_second, daemon=True)
         racer.start()
@@ -1285,7 +1453,9 @@ def test_p9_a_duplicate_racing_on_another_connection_waits_then_counts_once(
         _assert_recorded_once(db, "race:0:0", child.FIXED_COST)
 
 
-def test_p9_concurrent_records_of_one_key_on_separate_connections_count_it_once(factory):
+def test_p9_concurrent_records_of_one_key_on_separate_connections_count_it_once(
+    factory, scenario_clock
+):
     n = 6
     barrier = threading.Barrier(n)
     returned: list[bool] = []
@@ -1297,7 +1467,7 @@ def test_p9_concurrent_records_of_one_key_on_separate_connections_count_it_once(
             db = factory()
             try:
                 barrier.wait(JOIN_SECONDS)
-                ok = _record(db, "storm:0:0")
+                ok = _record(db, "storm:0:0", now=scenario_clock.now())
                 db.commit()
             finally:
                 db.close()
@@ -1318,7 +1488,9 @@ def test_p9_concurrent_records_of_one_key_on_separate_connections_count_it_once(
         _assert_recorded_once(db, "storm:0:0", child.FIXED_COST)
 
 
-def test_p9_a_caller_rollback_after_a_same_session_record_leaves_no_accounting(factory):
+def test_p9_a_caller_rollback_after_a_same_session_record_leaves_no_accounting(
+    factory, scenario_clock
+):
     """The record writes in the caller's transaction and commits nothing itself: a rollback
     takes the reservation, the period row and the usage row with it, and drops the queued
     violation effect."""
@@ -1326,12 +1498,20 @@ def test_p9_a_caller_rollback_after_a_same_session_record_leaves_no_accounting(f
     configure_metrics(metrics)
     try:
         with factory() as db:
-            assert _record(db, "rb:0:0", Decimal("0.030000"), worst=Decimal("0.020000"))
+            assert _record(
+                db,
+                "rb:0:0",
+                Decimal("0.030000"),
+                worst=Decimal("0.020000"),
+                now=scenario_clock.now(),
+            )
             assert _ledger_counts(db) == (1, 1, 1)  # visible inside the transaction
             db.rollback()
         with factory() as db:
             assert _ledger_counts(db) == (0, 0, 0)
-            assert _record(db, "rb:0:0") is True  # nothing left behind to collide with
+            assert (
+                _record(db, "rb:0:0", now=scenario_clock.now()) is True
+            )  # nothing left behind to collide with
             db.commit()
             _assert_recorded_once(db, "rb:0:0", child.FIXED_COST)
     finally:
@@ -1341,43 +1521,50 @@ def test_p9_a_caller_rollback_after_a_same_session_record_leaves_no_accounting(f
 
 def test_p9_a_same_session_report_above_the_bound_is_charged_the_bound_and_counted_once(
     factory,
+    scenario_clock,
 ):
     bound, reported = Decimal("0.020000"), Decimal("0.030000")
     metrics = InMemoryMetrics()
     configure_metrics(metrics)
     try:
         with factory() as db:
-            assert _record(db, "over:0:0", reported, worst=bound) is True
+            assert _record(db, "over:0:0", reported, worst=bound, now=scenario_clock.now()) is True
             db.commit()
         with factory() as db:
-            assert _record(db, "over:0:0", reported, worst=bound) is False  # a repeat
+            assert (
+                _record(db, "over:0:0", reported, worst=bound, now=scenario_clock.now()) is False
+            )  # a repeat
             db.commit()
     finally:
         configure_metrics(None)
     with factory() as db:
         _assert_recorded_once(db, "over:0:0", bound)  # the bound is the charge
-        assert _period(db).bound_violations == 1
+        assert _period(db, now=T0).bound_violations == 1
         (usage,) = db.scalars(select(LLMUsageEvent)).all()
         assert usage.cost_usd == pytest.approx(float(reported))  # the report, on record
     assert metrics.counter_value(LLM_COST_BOUND_VIOLATIONS_TOTAL, outcome="same_session") == 1
 
 
-def test_p9_erasing_the_workspace_or_organization_removes_the_same_session_rows(factory):
+def test_p9_erasing_the_workspace_or_organization_removes_the_same_session_rows(
+    factory, scenario_clock
+):
     """The #246 erasure walk (the primitive the organization deletion uses) removes what
     the same-session record wrote, leaves the other workspace's rows alone, and a late
     record for the erased workspace recreates nothing."""
     from app.privacy.erasure import delete_rows
 
     with factory() as db:
-        assert _record(db, "ws1:0:0")
-        assert _record(db, "ws2:0:0", ws=WS2)
+        assert _record(db, "ws1:0:0", now=scenario_clock.now())
+        assert _record(db, "ws2:0:0", ws=WS2, now=scenario_clock.now())
         db.commit()
         assert _ledger_counts(db, WS) == _ledger_counts(db, WS2) == (1, 1, 1)
         delete_rows(db, Workspace.__table__, [WS])
         db.commit()
         assert _ledger_counts(db, WS) == (0, 0, 0)
         assert _ledger_counts(db, WS2) == (1, 1, 1)
-        assert _record(db, "ws1:0:1") is False  # the tenant is gone: nothing recreated
+        assert (
+            _record(db, "ws1:0:1", now=scenario_clock.now()) is False
+        )  # the tenant is gone: nothing recreated
         db.commit()
         assert _ledger_counts(db, WS) == (0, 0, 0)
         delete_rows(db, Organization.__table__, [ORG])
@@ -1417,7 +1604,7 @@ def test_p9_mock_provider_calls_of_the_handlers_meter_are_recorded_in_full(facto
             ("settled", Decimal(0), Decimal(0))
         }
         assert all(r.usage_recorded_at is not None for r in rows)
-        period = _period(db)
+        period = _period(db, now=T0)
         assert (period.reserved_usd, period.settled_usd) == (Decimal(0), Decimal(0))
         usage = db.scalars(select(LLMUsageEvent)).all()
         assert {(u.job_id, u.provider, u.cost_usd) for u in usage} == {(job_id, "mock", 0.0)}
@@ -1441,7 +1628,7 @@ def test_p9_the_bare_meter_without_a_session_factory_records_priced_calls(factor
     spent = 2 * child.FIXED_COST
     with factory() as db:
         assert _ledger_counts(db) == (2, 1, 2)
-        assert (_period(db).reserved_usd, _period(db).settled_usd) == (spent, spent)
+        assert (_period(db, now=T0).reserved_usd, _period(db, now=T0).settled_usd) == (spent, spent)
         _assert_period_invariants(db, Decimal("1"))
         assert month_to_date_usd(db, WS) == pytest.approx(float(spent))
         with pytest.raises(LLMBudgetExhaustedError):

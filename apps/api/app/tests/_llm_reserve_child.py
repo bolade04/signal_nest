@@ -4,13 +4,20 @@
 child, so each child builds its own engine from the URL it is handed (no connection,
 session or lock is inherited). Everything here is offline: the provider is a fixed-cost
 fake, never a network client, and the settings are built explicitly from code defaults.
+
+Every body takes the parent test's scenario clock as ``clock`` (a
+:meth:`~app.tests._llm_scenario_clock.ScenarioClock.spec`). A patch made in the parent
+does not reach a spawned child, so each child rebuilds that clock, installs it for the
+meter's own reads and hands its instants to the ledger explicitly: no child takes a
+reservation, settlement, recovery or period instant from the calendar. (Row timestamps
+the ORM fills in, such as a usage row's ``created_at``, keep the real clock.)
 """
 
 from __future__ import annotations
 
 import os
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -25,6 +32,7 @@ from app.llm import budget as ledger
 from app.llm.base import LLMRequest, LLMResponse, LLMUsage
 from app.llm.metering import LLMBudgetExceededError, LLMMeter
 from app.llm.service import LLMService
+from app.tests._llm_scenario_clock import ClockSpec, ScenarioClock
 
 MODEL = "claude-sonnet-4-6"
 KEY = "fixture-key"
@@ -132,44 +140,47 @@ def run_until_refused(
     job_id: str | None,
     attempt: int,
     results,
+    clock: ClockSpec,
 ) -> None:
     """P1 body: a run of its own process, making metered calls until one is refused.
 
     Binds first, waits at the barrier with every other process, then calls until the
     budget refuses. Reports (pid, calls made, worst case reserved per call, spent, reason).
+    The meter runs on the parent's scenario clock.
     """
     engine = make_engine(url)
     try:
-        factory = make_factory(engine)
-        settings = settings_for(budget)
-        provider = FixedCostProvider()
-        service = LLMService(provider, sleep=lambda _s: None, settings=settings)
-        meter = LLMMeter(settings, job_id=job_id, attempt=attempt, session_factory=factory)
-        with factory() as run_session:
-            meter.bind(
-                run_session,
-                organization_id=organization_id,
-                workspace_id=workspace_id,
-                scout_request_id=None,
+        with ScenarioClock.from_spec(clock).installed():
+            factory = make_factory(engine)
+            settings = settings_for(budget)
+            provider = FixedCostProvider()
+            service = LLMService(provider, sleep=lambda _s: None, settings=settings)
+            meter = LLMMeter(settings, job_id=job_id, attempt=attempt, session_factory=factory)
+            with factory() as run_session:
+                meter.bind(
+                    run_session,
+                    organization_id=organization_id,
+                    workspace_id=workspace_id,
+                    scout_request_id=None,
+                )
+                assert meter.shared_ledger, "the proof needs the shared-ledger path"
+            barrier.wait(timeout=60)
+            reason = None
+            for _ in range(1000):
+                try:
+                    service.run("classify_signal", RUN_INPUTS, meter=meter)
+                except LLMBudgetExceededError as exc:
+                    reason = exc.reason
+                    break
+            results.put(
+                {
+                    "pid": os.getpid(),
+                    "calls": provider.calls,
+                    "spent": meter.spent,
+                    "reason": reason,
+                    "attempts": meter.attempts,
+                }
             )
-            assert meter.shared_ledger, "the proof needs the shared-ledger path"
-        barrier.wait(timeout=60)
-        reason = None
-        for _ in range(1000):
-            try:
-                service.run("classify_signal", RUN_INPUTS, meter=meter)
-            except LLMBudgetExceededError as exc:
-                reason = exc.reason
-                break
-        results.put(
-            {
-                "pid": os.getpid(),
-                "calls": provider.calls,
-                "spent": meter.spent,
-                "reason": reason,
-                "attempts": meter.attempts,
-            }
-        )
     finally:
         engine.dispose()
 
@@ -184,25 +195,28 @@ def reserve_then_die(
     attempt: int,
     reserved_event,
     make_call: bool,
+    clock: ClockSpec,
 ) -> None:
     """P2/P3 body: reserve one call (and optionally make it), then die before settling.
 
     ``os._exit(1)`` skips every ``finally`` and atexit handler, like a SIGKILL would:
     the reservation committed before the call is the only trace this process leaves.
+    The meter binds and reserves on the parent's scenario clock.
     """
     engine = make_engine(url)
     factory = make_factory(engine)
     settings = settings_for(budget)
     provider = FixedCostProvider()
     meter = LLMMeter(settings, job_id=job_id, attempt=attempt, session_factory=factory)
-    with factory() as run_session:
-        meter.bind(
-            run_session,
-            organization_id=organization_id,
-            workspace_id=workspace_id,
-            scout_request_id=None,
-        )
-    meter.before_attempt("anthropic", MODEL, wire_payload(CRASH_CONTENT))
+    with ScenarioClock.from_spec(clock).installed():
+        with factory() as run_session:
+            meter.bind(
+                run_session,
+                organization_id=organization_id,
+                workspace_id=workspace_id,
+                scout_request_id=None,
+            )
+        meter.before_attempt("anthropic", MODEL, wire_payload(CRASH_CONTENT))
     if make_call:
         provider.generate(LLMRequest(task="classify_signal", inputs={"content": "x"}), "p", "v")
     reserved_event.set()
@@ -210,8 +224,12 @@ def reserve_then_die(
     os._exit(1)
 
 
-def settle_once(url: str, *, attempt_key: str, settled_usd: str, barrier, results) -> None:
-    """P4 body: settle one key from an independent process (duplicate settlement race)."""
+def settle_once(
+    url: str, *, attempt_key: str, settled_usd: str, barrier, results, clock: ClockSpec
+) -> None:
+    """P4 body: settle one key from an independent process (duplicate settlement race),
+    at the parent's scenario instant."""
+    scenario = ScenarioClock.from_spec(clock)
     engine = make_engine(url)
     try:
         factory = make_factory(engine)
@@ -222,7 +240,7 @@ def settle_once(url: str, *, attempt_key: str, settled_usd: str, barrier, result
                 session,
                 attempt_key=attempt_key,
                 settled_usd=Decimal(settled_usd),
-                now=datetime.now(UTC),
+                now=scenario.now(),
                 usage={
                     "scout_request_id": None,
                     "task": "classify_signal",
@@ -242,19 +260,23 @@ def settle_once(url: str, *, attempt_key: str, settled_usd: str, barrier, result
         engine.dispose()
 
 
-def recover_once(url: str, *, job_id: str | None, mode: str, barrier, results) -> None:
+def recover_once(
+    url: str, *, job_id: str | None, mode: str, barrier, results, clock: ClockSpec
+) -> None:
     """P7 body: recovery from an independent process, racing the settlements.
 
     ``mode`` is ``job`` (the job's terminal-state release), ``sweep`` (the worker's
-    sweep, ``now`` past every expiry) or ``expiry`` (``release_expired`` alone).
+    sweep, ``now`` past every expiry) or ``expiry`` (``release_expired`` alone). ``now``
+    is the parent's scenario instant.
     """
+    scenario = ScenarioClock.from_spec(clock)
     engine = make_engine(url)
     try:
         factory = make_factory(engine)
         barrier.wait(timeout=60)
         session: Session = factory()
         try:
-            now = datetime.now(UTC)
+            now = scenario.now()
             if mode == "job":
                 done: Any = ledger.release_for_job(
                     session, job_id=job_id, now=now, outcome="terminal"
@@ -295,6 +317,7 @@ def chaos(
     rounds: int,
     barrier,
     results,
+    clock: ClockSpec,
 ) -> None:
     """P8 body: a random interleaving of every ledger operation against shared keys.
 
@@ -302,9 +325,11 @@ def chaos(
     transaction of its own: a settlement (normal or reporting three times the bound), a
     release by job, an expiry or full sweep with a clock a day ahead, or a fresh
     reservation against the tight budget. Any exception is counted, not swallowed.
+    Every instant is read from the parent's scenario clock.
     """
     import random
 
+    scenario = ScenarioClock.from_spec(clock)
     rng = random.Random(seed)
     engine = make_engine(url)
     ops: dict[str, int] = {}
@@ -326,18 +351,18 @@ def chaos(
                         s,
                         attempt_key=key,
                         settled_usd=cost,
-                        now=datetime.now(UTC),
+                        now=scenario.now(),
                         usage=usage_for(key, cost),
                     )
                 elif op == "release_job":
                     _key, job, _rw = rng.choice(keys)
-                    ledger.release_for_job(s, job_id=job, now=datetime.now(UTC), outcome="t")
+                    ledger.release_for_job(s, job_id=job, now=scenario.now(), outcome="t")
                 elif op == "expire":
-                    ledger.release_expired(s, now=datetime.now(UTC) + timedelta(days=1))
+                    ledger.release_expired(s, now=scenario.now() + timedelta(days=1))
                 elif op == "sweep":
-                    ledger.sweep(s, now=datetime.now(UTC) + timedelta(days=1))
+                    ledger.sweep(s, now=scenario.now() + timedelta(days=1))
                 else:
-                    now = datetime.now(UTC)
+                    now = scenario.now()
                     if ledger.reserve(
                         s,
                         workspace_id="ws-llmpg-0001",
@@ -362,8 +387,12 @@ def chaos(
         engine.dispose()
 
 
-def late_settle(url: str, *, keys: list[str], repeats: int, cost: str, barrier, results) -> None:
-    """P8 body: settle every key ``repeats`` times from this process after a barrier."""
+def late_settle(
+    url: str, *, keys: list[str], repeats: int, cost: str, barrier, results, clock: ClockSpec
+) -> None:
+    """P8 body: settle every key ``repeats`` times from this process after a barrier, at
+    the parent's scenario instants."""
+    scenario = ScenarioClock.from_spec(clock)
     engine = make_engine(url)
     try:
         factory = make_factory(engine)
@@ -378,7 +407,7 @@ def late_settle(url: str, *, keys: list[str], repeats: int, cost: str, barrier, 
                             s,
                             attempt_key=key,
                             settled_usd=Decimal(cost),
-                            now=datetime.now(UTC),
+                            now=scenario.now(),
                             usage=usage_for(key, Decimal(cost)),
                         )
                     )
