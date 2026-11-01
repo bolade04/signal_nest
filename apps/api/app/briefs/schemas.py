@@ -103,6 +103,20 @@ class RecommendationBriefOut(BriefContent):
     created_at: datetime
 
 
+class RecommendationBriefCapabilityOut(BaseModel):
+    """Customer-visible recommendation-briefs availability for one workspace.
+
+    Exactly one field (the ``FeedbackCapabilityOut`` precedent). The operator endpoint's
+    ``decided_by`` / ``global_flag`` / ``has_override`` / ``override_value`` are governance
+    metadata: they would tell a customer the platform-wide rollout posture and that an
+    operator intervened on their tenant. A customer needs only whether briefs (and the
+    approvals that act on them) are available to them. Returned by
+    ``GET /workspaces/{workspace_id}/brief-capability`` (added by the 5A lane).
+    """
+
+    enabled: bool
+
+
 class RecommendationBriefListOut(BaseModel):
     """Bounded, newest-version-first page of an opportunity's briefs."""
 
@@ -115,6 +129,7 @@ class RecommendationBriefListOut(BaseModel):
 __all__ = [
     "BRIEF_BOUNDS",
     "BriefContent",
+    "RecommendationBriefCapabilityOut",
     "RecommendationBriefCreate",
     "RecommendationBriefListOut",
     "RecommendationBriefOut",

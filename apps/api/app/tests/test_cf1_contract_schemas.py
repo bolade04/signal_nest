@@ -32,6 +32,7 @@ from app.briefs.models import RecommendationBrief
 from app.briefs.schemas import (
     BRIEF_BOUNDS,
     BriefContent,
+    RecommendationBriefCapabilityOut,
     RecommendationBriefCreate,
     RecommendationBriefOut,
 )
@@ -184,3 +185,9 @@ def test_the_flag_ships_dark() -> None:
     assert app.openapi()["components"]["schemas"]["FeatureFlagsOut"]["required"].count(
         "recommendation_briefs_enabled"
     ) == 1
+
+
+def test_the_brief_capability_read_has_exactly_one_field() -> None:
+    """The FeedbackCapabilityOut precedent: no governance metadata reaches a customer."""
+    assert set(RecommendationBriefCapabilityOut.model_fields) == {"enabled"}
+    assert RecommendationBriefCapabilityOut(enabled=False).model_dump() == {"enabled": False}

@@ -114,6 +114,10 @@ export const queryKeys = {
   // The workspace's approval queue (5B). Workspace-scoped: approver authority is
   // organization-wide, but each workspace's queue is its own cache entry.
   approvalQueue: (workspaceId: string) => ['workspaces', workspaceId, 'approvals'] as const,
+  // Workspace-effective briefs availability (5A; the feedbackCapability reasoning): a
+  // per-workspace answer, never the raw-global runtimeSummary entry.
+  briefCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'brief-capability'] as const,
 
   // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
   // `runtimeSummary`: that key carries the raw global flags, has no workspace in

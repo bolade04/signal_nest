@@ -37,6 +37,13 @@ describe('queryKeys: recommendation briefs and approvals (CF-1)', () => {
       'approvals',
     ]);
     expect(queryKeys.approvalQueue('ws-1')).toEqual(['workspaces', 'ws-1', 'approvals']);
+    expect(queryKeys.briefCapability('ws-1')).toEqual(['workspaces', 'ws-1', 'brief-capability']);
+  });
+
+  it('keeps the workspace-effective brief capability apart from the raw-global summary', () => {
+    expect(queryKeys.briefCapability('ws-1')).not.toEqual(queryKeys.briefCapability('ws-2'));
+    expect(queryKeys.briefCapability('ws-1')).not.toEqual([...queryKeys.runtimeSummary]);
+    expect(queryKeys.briefCapability('ws-1')).not.toEqual(queryKeys.feedbackCapability('ws-1'));
   });
 
   it('nests every brief key under its opportunity-detail key', () => {
