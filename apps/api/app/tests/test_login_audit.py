@@ -6,7 +6,13 @@ Exit criterion 6 (``docs/project-phase-5b-approval-audit-spine.md`` §4): login 
 failure are audited. What this module pins:
 
 * a success writes one organization-level row per organization of the account, committed in
-  the same transaction as the new session (a failure to open the session leaves neither);
+  the same transaction as the new session (a failure to open the session, or to write a row,
+  leaves neither);
+* the order of a success: the session row, then its audit rows, then the COMMIT, then the
+  token. The rows reference the account (``actor_user_id``), and their foreign-key check
+  locks the user row, so a sign-in that has verified the password holds no lock on the user
+  row until it opens its session (CI #290, U17-C03; the PostgreSQL proof is
+  ``test_login_audit_postgres.py``);
 * a refusal answers the unchanged 401 and writes one row per organization of the account the
   address belongs to, committed although the request fails; an address that belongs to no
   account writes nothing (there is no organization to record against), and its answer is
@@ -25,9 +31,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.audit.models import AuditLog
+from app.auth import routes as auth_routes
 from app.auth import service as auth_service
 from app.auth.models import AuthSession
 from app.core.config import get_settings
@@ -190,6 +197,65 @@ class TestSuccess:
             raise RuntimeError("session store unavailable")
 
         monkeypatch.setattr(auth_service, "create_session", refuse)
+        client = TestClient(app, raise_server_exceptions=False)
+        r = env.login(email(SOLO), PASSWORD, client=client)
+        assert r.status_code == 500
+        assert env.rows() == [] and env.sessions(SOLO) == 0
+
+
+class TestOrder:
+    """The session row, then its audit rows, then the COMMIT, then the token (P6-AUTH-4).
+
+    Writing the rows first made a parked sign-in hold ``FOR KEY SHARE`` on the user row
+    before ``create_session`` (CI #290, U17-C03).
+    """
+
+    def test_the_session_then_its_audit_rows_then_the_commit_then_the_token(
+        self, env: Env, monkeypatch
+    ):
+        calls: list[str] = []
+        real_create = auth_service.create_session
+        real_record = auth_routes.record_audit
+        real_issue = auth_service.issue_token
+
+        def create_session(db, user):
+            calls.append("session")
+            return real_create(db, user)
+
+        def record_audit(db, **kwargs):
+            calls.append(f"audit {kwargs['organization_id']}")
+            return real_record(db, **kwargs)
+
+        def issue_token(user, auth_session):
+            calls.append("token")
+            return real_issue(user, auth_session)
+
+        def before_commit(_session) -> None:
+            calls.append("commit")
+
+        monkeypatch.setattr(auth_service, "create_session", create_session)
+        monkeypatch.setattr(auth_routes, "record_audit", record_audit)
+        monkeypatch.setattr(auth_service, "issue_token", issue_token)
+        event.listen(Session, "before_commit", before_commit)
+        try:
+            r = env.login(email(MULTI), PASSWORD)
+        finally:
+            event.remove(Session, "before_commit", before_commit)
+        assert r.status_code == 200, r.text
+        assert "token" in calls, calls
+        assert calls[: calls.index("token") + 1] == [
+            "session",
+            f"audit {ORG_A}",
+            f"audit {ORG_B}",
+            "commit",
+            "token",
+        ]
+
+    def test_a_failed_audit_write_leaves_no_session(self, env: Env, monkeypatch):
+        def refuse(*_a, **_k):
+            raise RuntimeError("audit store unavailable")
+
+        monkeypatch.setattr(auth_routes, "record_audit", refuse)
         client = TestClient(app, raise_server_exceptions=False)
         r = env.login(email(SOLO), PASSWORD, client=client)
         assert r.status_code == 500
