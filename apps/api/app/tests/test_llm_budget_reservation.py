@@ -18,12 +18,18 @@ crash, retry, duplicate settlement, reservation recovery) live in
 * the run endpoint's gate reads the period's ``reserved_usd``;
 * the worker's recovery slot sweeps expired reservations, the terminal-failure hook
   and the attempt's end release a job's reservations, and the metric counts them.
+
+Every test runs the meter's accounting clock on a scenario anchored at ``T0``
+(:mod:`app.tests._llm_scenario_clock`), so the periods it writes and the periods the
+assertions read are the same UTC month whatever the calendar date of the run; a
+boundary scenario moves that clock across a named month boundary explicitly.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -65,6 +71,7 @@ from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
 from app.organizations.models import Organization, Workspace
 from app.tests._llm_offline import offline_llm, offline_settings, wire_payload
+from app.tests._llm_scenario_clock import ScenarioClock
 
 KEY = "fixture-key"
 MODEL = "claude-sonnet-4-6"
@@ -81,6 +88,14 @@ CALL_COST = Decimal("0.010500")
 def _offline():
     with offline_llm():
         yield
+
+
+@pytest.fixture(autouse=True)
+def scenario_clock() -> Iterator[ScenarioClock]:
+    """The meter's accounting clock for this test: ``T0``'s month, restored afterwards."""
+    clock = ScenarioClock(T0)
+    with clock.installed():
+        yield clock
 
 
 def _settings(**overrides) -> Settings:
@@ -1061,6 +1076,44 @@ def test_same_session_path_is_only_a_per_session_guarantee(factory):
         )
 
 
+def test_a_call_reserved_before_the_month_boundary_is_charged_to_that_month(
+    factory, scenario_clock
+):
+    """Shared-ledger path across a UTC month boundary. The guarantee counts a call in the
+    month it started in (``app.llm.metering``): reserved at 23:59:30 on 31 October and
+    answered after midnight, its reservation, its settlement and the period's totals stay
+    in October's period, the usage row is written once, and November gets no row."""
+    last = datetime(2026, 10, 31, 23, 59, 30, tzinfo=UTC)
+    first = datetime(2026, 11, 1, 0, 0, 30, tzinfo=UTC)
+    s = _settings(llm_workspace_monthly_budget_usd=1.0)
+    scenario_clock.move_to(last)
+    meter = _bound(factory, s, shared=True, job_id="job-edge", attempt=1)
+    worst = _worst(meter)
+
+    def handler(request):
+        scenario_clock.move_to(first)  # the provider answers after midnight UTC
+        return _reply(CLASSIFIED)
+
+    _service(s, handler).run("classify_signal", {"content": "x"}, meter=meter)
+    with factory() as db:
+        row = db.scalar(select(LLMBudgetReservation))
+        assert (row.attempt_key, row.state, row.reserved_usd, row.settled_usd) == (
+            "job-edge:1:0",
+            "settled",
+            worst,
+            CALL_COST,
+        )
+        assert row.period_start == date(2026, 10, 1)
+        # The boundary was crossed: reserved in October, settled in November.
+        assert row.created_at.replace(tzinfo=UTC) < datetime(2026, 11, 1, tzinfo=UTC)
+        assert row.settled_at.replace(tzinfo=UTC) >= first
+        october = _period(db, now=last)
+        assert (october.reserved_usd, october.settled_usd) == (worst, CALL_COST)
+        assert _period(db, now=first) is None
+        assert db.scalar(select(func.count()).select_from(LLMBudgetPeriod)) == 1
+        assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
+
+
 @pytest.mark.parametrize("shared", [True, False], ids=["shared-ledger", "same-session"])
 def test_conservative_cost_basis(factory, shared):
     s = _settings(llm_max_retries=0, llm_workspace_monthly_budget_usd=5.0)
@@ -1180,11 +1233,11 @@ def test_the_mock_provider_reserves_nothing(factory):
 # --------------------------------------------------------------------------- #
 # The run endpoint's gate and the worker's recovery
 # --------------------------------------------------------------------------- #
-def test_ensure_run_allowed_reads_the_periods_reserved_amount(factory):
+def test_ensure_run_allowed_reads_the_periods_reserved_amount(factory, scenario_clock):
     s = _settings(llm_workspace_monthly_budget_usd=0.05)
     with factory() as db:
         ensure_run_allowed(db, s, WS)  # nothing reserved
-        assert _reserve(db, "k:0", Decimal("0.05"), Decimal("0.05"), now=datetime.now(UTC))
+        assert _reserve(db, "k:0", Decimal("0.05"), Decimal("0.05"), now=scenario_clock.now())
         db.commit()
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 0  # no usage row yet
         with pytest.raises(LLMBudgetExhaustedError, match="USD 0.05 of 0.05"):
