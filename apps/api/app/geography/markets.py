@@ -379,6 +379,33 @@ def market_from_parts(
     return _identity(city_folded, region_key, country_code, label)
 
 
+def qualify_for_location(text: str | None, *, country: str | None) -> str | None:
+    """The market text a Scout tied to a location shows its sources (W16, PROPOSED).
+
+    The sources match the request's market as observed text (:func:`text_within`), which never
+    supplies a country the text does not state. For a Scout with a location, the text is the
+    customer's for that location, so it is read in the location's country (the rule
+    :func:`app.geography.engine.coverage_scopes` already applies): when the text names no country
+    and reading it in ``country`` qualifies it in that country, the ISO code is appended
+    ("Lagos, Lagos" + NG -> "Lagos, Lagos, NG"). Any other text is returned unchanged: one that
+    already names a country (an explicit market wins), one that cannot be read, and every text
+    when ``country`` is unknown. Nothing is broadened: the appended code only qualifies what the
+    text already names.
+    """
+    if not text or not text.strip():
+        return text
+    code = normalize_country(country)
+    if code is None:
+        return text
+    observed = parse_observed(text)
+    if observed is not None and observed.country is not None:
+        return text
+    located = parse_market(text, default_country=code)
+    if located is None or located.country != code:
+        return text
+    return f"{text.strip()}, {code}"
+
+
 def market_within(candidate: MarketIdentity | None, scope: MarketIdentity | None) -> bool:
     """True only when ``candidate`` is known to lie inside ``scope`` (fail closed).
 

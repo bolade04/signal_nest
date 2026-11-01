@@ -107,6 +107,12 @@ const scoutRequests = CITIES.map((c, i) => ({
   // The four keys apps/api/app/jobs/pipeline.py actually persists. The previous
   // fixture invented `signals_processed`, which is why the wrong-key defect passed CI.
   stats: { scanned: 24, noise_filtered: 4, signals_analyzed: 20, opportunities: 2 },
+  // W16 §C (PROPOSED): the list and the detail both carry the derived execution state, as
+  // apps/api/app/scouting_requests/schemas.py ScoutExecutionOut shapes it.
+  execution:
+    i === 1
+      ? { state: 'paused', reason: 'paused_by_user', next_action: 'resume', since: null }
+      : { state: 'idle', reason: 'none', next_action: 'run_now', since: '2026-06-01T12:00:00Z' },
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-06-01T12:00:00Z',
 }));
@@ -136,6 +142,9 @@ interface Opp {
   scout_request_id: string;
   is_simulated: boolean;
   created_at: string;
+  /** W16 §A (PROPOSED): how many runs produced the finding, and when last. */
+  seen_count: number;
+  last_seen_at: string | null;
 }
 
 const SORT_KEYS: readonly OpportunitySort[] = ['priority', 'opportunity', 'confidence', 'relevance', 'created'];
@@ -185,6 +194,8 @@ const opportunities: Opp[] = CITIES.flatMap((c, ci) =>
     scout_request_id: `scout-${c.id}`,
     is_simulated: true,
     created_at: `2026-06-0${ci + 1}T09:0${n}:00Z`,
+    seen_count: ci === 0 && n === 0 ? 3 : 1,
+    last_seen_at: ci === 0 && n === 0 ? '2026-06-03T09:00:00Z' : null,
   })),
 );
 
@@ -1781,6 +1792,12 @@ export const handlers = [
   http.post(P('/workspaces/:ws/scout-requests'), async ({ request }) => {
     const body = (await request.json()) as Record<string, unknown>;
     return HttpResponse.json({ ...scoutRequests[0], ...body, id: 'scout-new', status: 'draft' });
+  }),
+  http.put(P('/workspaces/:ws/scout-requests/:id'), async ({ params, request }) => {
+    const r = scoutRequests.find((s) => s.id === params.id);
+    if (!r) return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+    const body = (await request.json()) as Record<string, unknown>;
+    return HttpResponse.json({ ...r, ...body });
   }),
   http.post(P('/workspaces/:ws/scout-requests/:id/pause'), ({ params }) => {
     const r = scoutRequests.find((s) => s.id === params.id)!;

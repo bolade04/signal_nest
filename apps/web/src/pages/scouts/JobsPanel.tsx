@@ -6,6 +6,8 @@ import type { JobListOut } from '@/api/types';
 import { inFlightSignature, pollingOptions, type StatusPollSchedule } from '@/lib/status-polling';
 import { jobFilters } from './jobFilters';
 import { JobStatusBadge } from '@/components/common/badges';
+import { Badge } from '@/components/ui/badge';
+import { rawRunCodes, runOutcomeIntent, runOutcomeLabels, runOutcomeReasons } from '@/lib/run-outcome';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/common/states';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -97,18 +99,28 @@ export function JobsPanel({
                 key={job.id}
                 className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
               >
-                <div className="min-w-0">
+                <div className="min-w-0" data-job-outcome={job.outcome ?? job.status}>
                   <div className="flex items-center gap-2">
-                    <JobStatusBadge value={job.status} />
+                    {/* W16 §D (PROPOSED, a proposed Q1 presentation): a finished run reads its
+                        outcome, never "Succeeded" for a stop or a skip; in flight, the job status. */}
+                    {job.outcome ? (
+                      <Badge intent={runOutcomeIntent[job.outcome]}>{runOutcomeLabels[job.outcome]}</Badge>
+                    ) : (
+                      <JobStatusBadge value={job.status} />
+                    )}
                     {job.attempt_count > 1 ? (
                       <span className="text-xs text-muted-foreground">
                         attempt {job.attempt_count}/{job.max_attempts}
                       </span>
                     ) : null}
                   </div>
-                  <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {job.outcome_reason ? (
+                    <p className="mt-1 text-xs">{runOutcomeReasons[job.outcome_reason]}</p>
+                  ) : null}
+                  {/* Round 1a (CF3): the raw codes wrap instead of being cut off; still secondary. */}
+                  <p className="mt-1 break-words text-xs text-muted-foreground" data-raw-codes="">
                     Updated {formatRelative(job.updated_at)}
-                    {job.last_error_code ? ` · ${job.last_error_code}` : ''}
+                    {job.outcome ? ` · ${rawRunCodes(job)}` : job.last_error_code ? ` · ${job.last_error_code}` : ''}
                   </p>
                 </div>
                 {canEdit && CANCELLABLE.has(job.status) ? (

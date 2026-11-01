@@ -140,6 +140,12 @@ TABLES: dict[str, TableEntry] = {
         TableEntry("opportunity_scores", _COLLECTED),
         TableEntry("validation_evidence", _COLLECTED),
         TableEntry("opportunity_feedback", _COLLECTED),
+        # W16 customer repairs (PROPOSED): one row per sighting of a finding by a run
+        # (``first_seen`` / ``seen_again``, the run's job and cluster). Ids, a kind and instants
+        # only - no content. Exported with the organization (scoped by ``organization_id``);
+        # no retention class of its own: it goes with its card (CASCADE), and a purged job or
+        # cluster leaves it with a NULL reference (SET NULL).
+        TableEntry("opportunity_observations", _COLLECTED),
         TableEntry(
             "jobs",
             Category.OPERATIONAL,

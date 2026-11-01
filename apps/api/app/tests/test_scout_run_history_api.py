@@ -245,6 +245,8 @@ class TestContract:
                 "max_attempts", "last_error_code", "scheduled_for", "started_at",
                 "completed_at", "cancel_requested_at", "cancelled_at", "created_at",
                 "updated_at", "stats",
+                # W16 (PROPOSED): the run's read-only outcome (closed codes; never the summary).
+                "outcome", "outcome_reason",
             }
 
     def test_stats_present_only_when_summary_complete(self, h):
@@ -255,11 +257,20 @@ class TestContract:
         for i in with_stats:
             # P6-DATA-2 added the optional ``coverage`` object; these synthesised summaries
             # predate coverage recording, so it is null rather than invented.
+            # W16 (PROPOSED) adds the optional new/seen-again split, null on these
+            # synthesised summaries that predate it (never invented).
             assert set(i["stats"]) == {
-                "scanned", "noise_filtered", "signals_analyzed", "opportunities", "coverage"
+                "scanned", "noise_filtered", "signals_analyzed", "opportunities", "coverage",
+                "opportunities_new", "opportunities_seen_again",
             }
             assert i["stats"]["coverage"] is None
-            counts = {k: v for k, v in i["stats"].items() if k != "coverage"}
+            assert i["stats"]["opportunities_new"] is None
+            assert i["stats"]["opportunities_seen_again"] is None
+            counts = {
+                k: v
+                for k, v in i["stats"].items()
+                if k not in ("coverage", "opportunities_new", "opportunities_seen_again")
+            }
             assert all(v >= 0 for v in counts.values())
 
     def test_error_code_exposed_summary_never(self, h):

@@ -39,6 +39,7 @@ from app.llm.models import (  # noqa: F401
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: F401
 from app.opportunities.models import (  # noqa: F401
     Opportunity,
+    OpportunityObservation,
     OpportunityScore,
     ValidationEvidence,
 )

@@ -38,6 +38,7 @@ from app.opportunities.models import Opportunity
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal
 from app.tests._llm_offline import offline_llm, offline_settings
+from app.tests._seed_support import forget_findings
 
 CLEAN = {
     "why_it_matters": "Commuters keep reporting long waits at peak hours.",
@@ -403,6 +404,7 @@ def _rerun(factory, monkeypatch, service):
     monkeypatch.setattr(pipeline, "get_settings", offline_settings)
     with factory() as db:
         request_id = db.scalars(select(ScoutRequest.id).order_by(ScoutRequest.id)).first()
+        forget_findings(db, request_id)
         before = set(db.scalars(select(Opportunity.id)))
         before_signals = set(db.scalars(select(NormalizedSignal.id)))
         pipeline._run(db, request_id)

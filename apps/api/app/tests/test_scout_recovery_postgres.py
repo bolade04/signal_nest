@@ -492,10 +492,13 @@ def _alembic(w, *args) -> subprocess.CompletedProcess:
 
 
 def _step_down(w) -> None:
-    token = _alembic(w, "app.db.migrate", "downgrade-confirmation", "-1")
-    assert token.returncode == 0, token.stderr
-    down = _alembic(w, "alembic", "-x", f"confirm={token.stdout.strip()}", "downgrade", "-1")
-    assert down.returncode == 0, down.stdout + down.stderr
+    """Down to c6f1d8e2a4b7 (the ledger without deadlines). W16 (PROPOSED) adds one revision
+    on top (e7b3c5a9d1f4), so that is two guarded steps down from the code head."""
+    for _ in range(2):
+        token = _alembic(w, "app.db.migrate", "downgrade-confirmation", "-1")
+        assert token.returncode == 0, token.stderr
+        down = _alembic(w, "alembic", "-x", f"confirm={token.stdout.strip()}", "downgrade", "-1")
+        assert down.returncode == 0, down.stdout + down.stderr
 
 
 def _scouts(w, n: int) -> list[str]:

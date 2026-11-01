@@ -473,6 +473,15 @@ function DetailInner({ workspaceId, opportunityId }: { workspaceId: string; oppo
                 <span className="text-muted-foreground">Created</span>
                 <span>{formatDateTime(o.created_at)}</span>
               </div>
+              {o.seen_count > 1 ? (
+                <div className="flex justify-between" data-seen-again="">
+                  <span className="text-muted-foreground">Seen in</span>
+                  <span>
+                    {o.seen_count} runs
+                    {o.last_seen_at ? `, last ${formatDateTime(o.last_seen_at)}` : ''}
+                  </span>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

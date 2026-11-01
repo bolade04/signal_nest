@@ -3860,6 +3860,28 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How a finished Scout run ended (PROPOSED, a proposed Q1 presentation): derived read-only from the job's status, its result's outcome and its error code. Null while the run is in flight and for other job types. A succeeded job whose run was stopped or skipped is never 'completed'."
+          },
+          "outcome_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOutcomeReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the run ended so, as a closed code (PROPOSED); null where none applies."
+          },
           "priority": {
             "title": "Priority",
             "type": "integer"
@@ -5019,6 +5041,19 @@
             "title": "Is Simulated",
             "type": "boolean"
           },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a run last produced this finding (PROPOSED); null for a card with no recorded sighting.",
+            "title": "Last Seen At"
+          },
           "location_id": {
             "anyOf": [
               {
@@ -5071,6 +5106,12 @@
           "scout_request_id": {
             "title": "Scout Request Id",
             "type": "string"
+          },
+          "seen_count": {
+            "default": 1,
+            "description": "How many runs produced this finding (PROPOSED). At least 1.",
+            "title": "Seen Count",
+            "type": "integer"
           },
           "source_summary": {
             "items": {
@@ -5247,6 +5288,19 @@
             "title": "Is Simulated",
             "type": "boolean"
           },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a run last produced this finding (PROPOSED); null for a card with no recorded sighting.",
+            "title": "Last Seen At"
+          },
           "location_id": {
             "anyOf": [
               {
@@ -5325,6 +5379,12 @@
           "scout_request_id": {
             "title": "Scout Request Id",
             "type": "string"
+          },
+          "seen_count": {
+            "default": 1,
+            "description": "How many runs produced this finding (PROPOSED). At least 1.",
+            "title": "Seen Count",
+            "type": "integer"
           },
           "source_summary": {
             "items": {
@@ -6195,6 +6255,26 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOutcomeReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scheduled_for": {
             "anyOf": [
               {
@@ -6262,6 +6342,38 @@
         "title": "RunItem",
         "type": "object"
       },
+      "RunOutcome": {
+        "description": "How a finished Scout run ended (null while it is in flight, and for other job types).",
+        "enum": [
+          "completed",
+          "stopped_paused",
+          "skipped_paused",
+          "skipped",
+          "stopped",
+          "cancelled",
+          "failed"
+        ],
+        "title": "RunOutcome",
+        "type": "string"
+      },
+      "RunOutcomeReason": {
+        "description": "Why, in a closed customer-safe code (null where the outcome says it all).",
+        "enum": [
+          "paused_during_run",
+          "another_run_active",
+          "another_run_took_over",
+          "worker_lost",
+          "scout_changed",
+          "scout_removed",
+          "earlier_operation_timed_out",
+          "too_many_signals",
+          "retries_exhausted",
+          "worker_stopped_responding",
+          "internal"
+        ],
+        "title": "RunOutcomeReason",
+        "type": "string"
+      },
       "RunStats": {
         "description": "Aggregate per-run counts, sourced verbatim from the durable job's\n``result_summary``. Present only once a run has produced a summary; a run that\nhas not completed carries ``stats: null`` rather than fabricated zeros.",
         "properties": {
@@ -6282,6 +6394,28 @@
           "opportunities": {
             "title": "Opportunities",
             "type": "integer"
+          },
+          "opportunities_new": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opportunities New"
+          },
+          "opportunities_seen_again": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opportunities Seen Again"
           },
           "scanned": {
             "title": "Scanned",
@@ -6815,7 +6949,7 @@
                 "type": "null"
               }
             ],
-            "description": "Derived execution state (PROPOSED). Computed on single-Scout responses; null means it was not computed on this read (the list)."
+            "description": "Derived execution state (PROPOSED). Computed on every response that returns the Scout itself, the list included (W16, PROPOSED); null only where a response does not compute it."
           },
           "id": {
             "title": "Id",
@@ -6941,6 +7075,8 @@
         "type": "object"
       },
       "ScoutRequestUpdate": {
+        "additionalProperties": false,
+        "description": "An edit of an existing Scout (W16 customer repairs, PROPOSED; create is unchanged).\n\nOnly the fields sent change. ``name`` is required to be non-blank (1-200 characters after\ntrimming); ``source_types`` are the supported source types (repeats dropped); ``keywords`` are\ntrimmed, emptied ones dropped and repeats (ignoring case) dropped. ``name``, ``source_types``\nand ``keywords`` cannot be ``null``; ``resolved_market`` and ``notes`` can (clearing them).\nUnknown fields are refused, so status, location, campaign, product profile, run fence and\nowner can never be set here.",
         "properties": {
           "keywords": {
             "anyOf": [
@@ -6960,6 +7096,7 @@
             "anyOf": [
               {
                 "maxLength": 200,
+                "minLength": 1,
                 "type": "string"
               },
               {
@@ -6982,6 +7119,7 @@
           "resolved_market": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
@@ -6994,7 +7132,7 @@
             "anyOf": [
               {
                 "items": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/SourceType"
                 },
                 "type": "array"
               },
@@ -7211,6 +7349,21 @@
         },
         "title": "SourcePrefPatch",
         "type": "object"
+      },
+      "SourceType": {
+        "enum": [
+          "manual",
+          "website_scan",
+          "competitor_scan",
+          "rss_news",
+          "reddit",
+          "reviews",
+          "google_trends",
+          "meta_ad_library",
+          "tiktok_creative_center"
+        ],
+        "title": "SourceType",
+        "type": "string"
       },
       "StuckJobsOut": {
         "description": "Operator stuck-job summary: a live count plus a bounded page.\n\n``stale_after_seconds`` is the heartbeat-staleness threshold used to classify\n(the configured worker stale bound); ``as_of`` is the injected evaluation\nclock the count/page was computed against, so the read is self-describing.",
@@ -15555,6 +15708,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/scout-requests": {
       "get": {
+        "description": "The workspace's Scouts, each with its derived ``execution`` state (W16 \u00a7C, PROPOSED):\nthe same classification as the single-Scout read, computed for the whole page in a bounded\nnumber of statements (no per-Scout reads).",
         "operationId": "list_scout_requests_api_v1_workspaces__workspace_id__scout_requests_get",
         "parameters": [
           {
@@ -15813,6 +15967,7 @@
         ]
       },
       "put": {
+        "description": "Edit a Scout's name, source types, keywords, market override or notes (W16 \u00a7B, PROPOSED).\n\nOnly the fields sent change; the change applies to future runs. Refused with 422\n``scout_in_progress`` while the Scout is queued or running, or while a run it has not been\npaused out of is live; allowed while paused, stopped, idle or needing attention (an edit\nrestores nothing: Run now's refusals still decide). Decided atomically: the Scout row is\nlocked (``FOR NO KEY UPDATE``) before the check, and the write is a compare-and-set on the\nstatus and run fence read under that lock, so a Run now (or a claim, or a pause) cannot\nslip between the check and the write. Status, run fence, owner and execution state are\nnever written here.",
         "operationId": "update_scout_request_api_v1_workspaces__workspace_id__scout_requests__request_id__put",
         "parameters": [
           {

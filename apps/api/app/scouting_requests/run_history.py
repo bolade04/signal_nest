@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger, log_event
 from app.jobs.models import Job
+from app.jobs.outcomes import outcome_of
 from app.jobs.status import JobType
 from app.scouting_requests.schemas import (
     RunHistoryOut,
@@ -95,19 +96,28 @@ def _map_stats(job: Job) -> RunStats | None:
     if not isinstance(summary, dict) or not all(k in summary for k in _STAT_KEYS):
         return None
     try:
+        split = {
+            key: max(0, int(summary[key]))
+            for key in ("opportunities_new", "opportunities_seen_again")
+            if key in summary
+        }
         return RunStats(
             scanned=max(0, int(summary["scanned"])),
             noise_filtered=max(0, int(summary["noise_filtered"])),
             signals_analyzed=max(0, int(summary["signals_analyzed"])),
             opportunities=max(0, int(summary["opportunities"])),
             coverage=coverage_from_stats(summary),
+            **split,
         )
     except (TypeError, ValueError):
         return None
 
 
 def _map_run(job: Job) -> RunItem:
+    outcome, reason = outcome_of(job)
     return RunItem(
+        outcome=outcome,
+        outcome_reason=reason,
         id=job.id,
         status=job.status,
         trigger=_derive_trigger(job),

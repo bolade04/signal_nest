@@ -28,7 +28,12 @@ from app.llm.metering import ensure_run_allowed
 from app.locations.models import BusinessLocation
 from app.locations.service import ensure_location_active
 from app.scouting_requests import schedules as schedule_service
-from app.scouting_requests.execution import derive_execution, needs_attention
+from app.scouting_requests.execution import (
+    derive_execution,
+    derive_executions,
+    live_run_exists,
+    needs_attention,
+)
 from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.scouting_requests.run_history import (
     DEFAULT_LIMIT,
@@ -56,10 +61,17 @@ EDITORS = require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)
 def _with_execution(db: Session, request: ScoutRequest) -> ScoutRequestOut:
     """A single-Scout response with its derived execution state (D-25 recovery contract §4,
     PROPOSED): read-only, scoped by the Scout's own tenancy, computed after the route has
-    authorized the Scout. The list read does not compute it (``execution`` is null there)."""
+    authorized the Scout. The list computes the same state for its page (W16 §C, PROPOSED)."""
     out = ScoutRequestOut.model_validate(request)
     out.execution = derive_execution(db, request)
     return out
+
+
+#: Edit refused while the Scout is in progress (W16 §B, PROPOSED): a 422 with this code.
+SCOUT_IN_PROGRESS = "scout_in_progress"
+_IN_PROGRESS_MESSAGE = (
+    "This scout is queued or running. Wait for the run to finish, or cancel it, then edit."
+)
 
 
 def _get_scoped(db: Session, workspace_id: str, request_id: str) -> ScoutRequest:
@@ -159,7 +171,10 @@ def list_scout_requests(
     cursor: str | None = Query(default=None, max_length=1024),
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(get_tenant_context),
-) -> list[ScoutRequest]:
+) -> list[ScoutRequestOut]:
+    """The workspace's Scouts, each with its derived ``execution`` state (W16 §C, PROPOSED):
+    the same classification as the single-Scout read, computed for the whole page in a bounded
+    number of statements (no per-Scout reads)."""
     stmt = select(ScoutRequest).where(ScoutRequest.workspace_id == workspace_id)
     if location_id:
         stmt = stmt.where(ScoutRequest.location_id == location_id)
@@ -175,7 +190,14 @@ def list_scout_requests(
         limit=limit,
     )
     page.apply_headers(response)
-    return page.rows
+    rows = list(page.rows)
+    states = derive_executions(db, rows)
+    out = []
+    for row in rows:
+        item = ScoutRequestOut.model_validate(row)
+        item.execution = states[row.id]
+        out.append(item)
+    return out
 
 
 @router.post(
@@ -255,14 +277,56 @@ def update_scout_request(
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutRequestOut:
+    """Edit a Scout's name, source types, keywords, market override or notes (W16 §B, PROPOSED).
+
+    Only the fields sent change; the change applies to future runs. Refused with 422
+    ``scout_in_progress`` while the Scout is queued or running, or while a run it has not been
+    paused out of is live; allowed while paused, stopped, idle or needing attention (an edit
+    restores nothing: Run now's refusals still decide). Decided atomically: the Scout row is
+    locked (``FOR NO KEY UPDATE``) before the check, and the write is a compare-and-set on the
+    status and run fence read under that lock, so a Run now (or a claim, or a pause) cannot
+    slip between the check and the write. Status, run fence, owner and execution state are
+    never written here."""
     request = _get_scoped(db, workspace_id, request_id)
-    if request.status == ScoutRequestStatus.RUNNING.value:
-        raise ValidationDomainError("Cannot edit a request while it is running.")
-    for key, value in body.model_dump(exclude_unset=True).items():
-        setattr(request, key, value)
-    db.add(request)
-    db.flush()
+    changes = body.changes()
+    locked = db.execute(
+        select(ScoutRequest.status, ScoutRequest.run_fence)
+        .where(ScoutRequest.id == request.id, ScoutRequest.workspace_id == workspace_id)
+        .with_for_update(key_share=True)  # PostgreSQL: FOR NO KEY UPDATE
+    ).one()
+    if locked.status in _RUN_REFUSED or live_run_exists(db, request, fence=locked.run_fence):
+        raise ValidationDomainError(_IN_PROGRESS_MESSAGE, code=SCOUT_IN_PROGRESS)
+    if changes:
+        written = db.execute(
+            update(ScoutRequest)
+            .where(
+                ScoutRequest.id == request.id,
+                ScoutRequest.workspace_id == workspace_id,
+                ScoutRequest.status == locked.status,
+                ScoutRequest.run_fence == locked.run_fence,
+            )
+            .values(**changes)
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        if written != 1:
+            raise ValidationDomainError(_IN_PROGRESS_MESSAGE, code=SCOUT_IN_PROGRESS)
+        record_audit(
+            db,
+            organization_id=ctx.organization.id,
+            workspace_id=workspace_id,
+            actor_user_id=ctx.user.id,
+            action="scout_request.updated",
+            entity_type="scout_request",
+            entity_id=request.id,
+            # Field names only: keywords, names and notes are customer text.
+            context={"fields": sorted(changes)},
+        )
+    db.refresh(request)
     return _with_execution(db, request)
+
+
+#: The request statuses in which an edit is refused (a run is queued or running).
+_RUN_REFUSED = (ScoutRequestStatus.QUEUED.value, ScoutRequestStatus.RUNNING.value)
 
 
 @router.post(
