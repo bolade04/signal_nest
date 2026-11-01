@@ -718,6 +718,22 @@ describe('the edit path is accessible (P6-PLAT-9)', () => {
     expect(patches()).toHaveLength(0);
   });
 
+  it('Add from the panel header: Cancel returns focus to that button (the shared dialog)', async () => {
+    const screen = renderApp(<App />, { route: '/context' });
+    const panel = await openTab(screen, 'Products & services');
+    await within(panel).findByText(/no products yet/i);
+    // Header first, then the empty state's own Add button.
+    const [headerAdd] = within(panel).getAllByRole('button', { name: /^add product$/i });
+    headerAdd!.focus();
+    await screen.user.keyboard('{Enter}');
+    const dialog = await screen.findByRole('dialog', { name: /^add product$/i });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    await screen.user.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(headerAdd).toHaveFocus();
+    expect(orgModel.requests().filter((r) => r.method === 'POST' && r.path.endsWith('/products'))).toHaveLength(0);
+  });
+
   it('after a save, focus returns to the row it edited', async () => {
     contextModel.seed('products', 'row-p', { name: 'Signature Cut' });
     const screen = renderApp(<App />, { route: '/context' });
