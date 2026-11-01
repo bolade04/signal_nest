@@ -31,8 +31,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -356,6 +359,15 @@ def test_the_campaign_vocabulary_checks_hold_on_insert(migrated: Path) -> None:
 # --------------------------------------------------------------------------- #
 # The O-8 back-fill and the vocabulary normalisation (from a real CF-2 database)
 # --------------------------------------------------------------------------- #
+#: A 40-character status (it fits ``VARCHAR(40)`` on PostgreSQL) whose repr is 62 characters.
+LONG_STATUS = "\n" * 20 + "x" * 20
+#: Its full rewrite report line (the repr has no real newline, so the report is one line).
+LONG_STATUS_LINE = (
+    f"campaign status: campaign=camp-long stored={LONG_STATUS!r} rewritten_to=paused"
+)
+assert len(repr(LONG_STATUS)) > 60
+
+
 @pytest.fixture()
 def at_cf2_with_campaigns(tmp_path) -> Path:
     db_path = tmp_path / "cf2-campaigns.db"
@@ -380,6 +392,9 @@ def at_cf2_with_campaigns(tmp_path) -> Path:
     _campaign(db_path, "camp-inactive", "ws-b1", "org-b", [], mode="grouped", status="inactive")
     _campaign(db_path, "camp-not-active", "ws-b1", "org-b", [], mode="grouped",
               status="not active")
+    # A value whose repr exceeds 60 characters: its rewrite report must carry all of it, the
+    # only record of the replaced value (review DATA C1).
+    _campaign(db_path, "camp-long", "ws-b1", "org-b", [], mode="grouped", status=LONG_STATUS)
     return db_path
 
 
@@ -434,6 +449,7 @@ def test_the_campaign_vocabularies_are_normalised_and_every_rewrite_reported(
         "camp-b": ("per_location", "active"),  # already valid: untouched
         "camp-inactive": ("grouped", "paused"),  # contains "active": still never active
         "camp-not-active": ("grouped", "paused"),
+        "camp-long": ("grouped", "paused"),
     }
     out = up.stdout + up.stderr
     for line in (
@@ -444,10 +460,32 @@ def test_the_campaign_vocabularies_are_normalised_and_every_rewrite_reported(
         "campaign mode: campaign=camp-empty stored='bogus' rewritten_to=per_location",
         "campaign status: campaign=camp-inactive stored='inactive' rewritten_to=paused",
         "campaign status: campaign=camp-not-active stored='not active' rewritten_to=paused",
-        "CF-3 campaign vocabularies: 7 value(s) rewritten",
+        LONG_STATUS_LINE,
+        "CF-3 campaign vocabularies: 8 value(s) rewritten",
     ):
         assert line in out, out
     assert "campaign=camp-b" not in out.split("back-fill")[0]
+
+
+def test_the_migrate_entrypoint_reports_the_full_replaced_value(
+    at_cf2_with_campaigns: Path,
+) -> None:
+    """The deployed path (``python -m app.db.migrate upgrade``, JSON logs) carries the same
+    untruncated report as the alembic CLI (review DATA C1)."""
+    env = dict(os.environ)
+    env.pop("TEST_POSTGRES_URL", None)
+    env.update(DATABASE_URL=f"sqlite:///{at_cf2_with_campaigns}", LOG_FORMAT="json")
+    up = subprocess.run(
+        [sys.executable, "-m", "app.db.migrate", "upgrade"],
+        cwd=API_DIR, env=env, capture_output=True, text=True,
+    )
+    assert up.returncode == 0, up.stdout + up.stderr
+    messages = []
+    for line in up.stdout.splitlines():
+        if line.startswith("{"):
+            messages.append(json.loads(line).get("message", ""))
+    assert any(m.endswith(LONG_STATUS_LINE) for m in messages), messages
+    assert _version(at_cf2_with_campaigns) == [HEAD]
 
 
 def _migration_module():

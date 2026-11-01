@@ -11,8 +11,9 @@ or columns until the 5D/5E build lanes add their services, and the one new capab
   CHECKs are installed (case, surrounding space, ``-`` and inner spaces as ``_``); a value that
   still names no member is rewritten - ``mode`` to ``per_location`` (the column default),
   ``status`` to ``paused`` (never promoted to ``active``) - and each rewrite is reported in the
-  migration output. The original free-string value is not kept (the downgrade cannot restore
-  it).
+  migration output with the stored value's full ``repr`` (never truncated: that log line is the
+  only record of it). The original free-string value is not kept in the database (the
+  downgrade cannot restore it).
 * ``campaign_locations`` (operator decision O-8, ``REC_campaign_locations_join_table_FKs_backfill``):
   real foreign keys plus two composite keys, ``(campaign_id, workspace_id)`` and
   ``(location_id, workspace_id)``, onto new unique indexes ``(id, workspace_id)`` of
@@ -164,13 +165,14 @@ def normalise_campaign_vocabularies(bind) -> list[tuple[str, str, object, str]]:
                 rewrites.append((campaign_id, column, stored, new))
         if values:
             bind.execute(campaigns.update().where(campaigns.c.id == campaign_id).values(values))
+    # The full repr, never truncated: this line is the only record of the replaced value
+    # (the column bounds it on PostgreSQL: 40 characters, a repr of at most about 400).
     for campaign_id, column, stored, new in rewrites:
-        shown = repr(stored)[:60]
         logger.warning(
             "CF-3 campaign %s: campaign=%s stored=%s rewritten_to=%s",
             column,
             campaign_id,
-            shown,
+            repr(stored),
             new,
         )
     logger.info("CF-3 campaign vocabularies: %d value(s) rewritten", len(rewrites))
