@@ -1073,7 +1073,8 @@
         "enum": [
           "opportunity_feedback",
           "scout_scheduling",
-          "connector_rss"
+          "connector_rss",
+          "recommendation_briefs"
         ],
         "title": "Capability",
         "type": "string"
@@ -2229,6 +2230,10 @@
             "title": "Opportunity Feedback Enabled",
             "type": "boolean"
           },
+          "recommendation_briefs_enabled": {
+            "title": "Recommendation Briefs Enabled",
+            "type": "boolean"
+          },
           "scout_scheduling_enabled": {
             "title": "Scout Scheduling Enabled",
             "type": "boolean"
@@ -2237,7 +2242,8 @@
         "required": [
           "opportunity_feedback_enabled",
           "scout_scheduling_enabled",
-          "connector_rss_enabled"
+          "connector_rss_enabled",
+          "recommendation_briefs_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"

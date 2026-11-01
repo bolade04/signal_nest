@@ -2453,7 +2453,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -2962,6 +2962,8 @@ export interface components {
             connector_rss_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
+            /** Recommendation Briefs Enabled */
+            recommendation_briefs_enabled: boolean;
             /** Scout Scheduling Enabled */
             scout_scheduling_enabled: boolean;
         };

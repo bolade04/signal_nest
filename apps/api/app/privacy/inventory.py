@@ -109,6 +109,15 @@ TABLES: dict[str, TableEntry] = {
             retention_class=RetentionClass.ACCOUNT_TOKENS,
         ),
         TableEntry("audit_logs", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
+        # Project Phase 5B approvals (W21 CF-1; dark until the 5B service writes them):
+        # append-only decisions with FK-less organization/workspace columns, so a decision
+        # survives its scope's deletion like audit_logs (operator decision O-6). Deleting
+        # the organization anonymises them; deleting the deciding account clears the values
+        # naming it (``app.privacy.erasure``). O-6 rider - survival is subject to O-5 and
+        # must not mean indefinite retention by default: they share the ``audit_logs``
+        # retention class (compliance records), whose duration is unset and undecided; no
+        # duration is chosen here, and production refuses to start until it is set.
+        TableEntry("approvals", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
         TableEntry("workspaces", _TENANT),
         TableEntry("workspace_capability_overrides", _TENANT),
         TableEntry("brands", _TENANT),
@@ -140,6 +149,13 @@ TABLES: dict[str, TableEntry] = {
         TableEntry("opportunity_scores", _COLLECTED),
         TableEntry("validation_evidence", _COLLECTED),
         TableEntry("opportunity_feedback", _COLLECTED),
+        # Project Phase 5A recommendation briefs (W21 CF-1; dark until the 5A service writes
+        # them): model-derived recommendations bound to an opportunity's evidence, plus the
+        # author snapshot. Exported with the organization; deleted with its workspace; no
+        # retention class of its own - a dependent of ``opportunities`` and of its
+        # intelligence record (CASCADE), purged with them. Deleting the author's account
+        # anonymises ``created_by_snapshot`` and keeps the brief.
+        TableEntry("recommendation_briefs", _COLLECTED),
         # W16 customer repairs (PROPOSED): one row per sighting of a finding by a run
         # (``first_seen`` / ``seen_again``, the run's job and cluster). Ids, a kind and instants
         # only - no content. Exported with the organization (scoped by ``organization_id``);
