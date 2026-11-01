@@ -1,9 +1,11 @@
 """PostgreSQL sessions are pinned to UTC and verified (``app.db.utc_session``; W21 TZPIN).
 
-psycopg returns a ``timestamptz`` in the session's time zone, and Python compares two aware
-datetimes that share a ``tzinfo`` by wall time, ignoring ``fold`` (PEP 495). In
-America/Chicago on 2026-11-01 the hour 01:00-02:00 happens twice (06:00-08:00Z), so a lease
-50 minutes in the future reads as already expired (review W21-REV-BLOCKEDOBS r1, NOTE-1).
+psycopg returns a ``timestamptz`` in the session's time zone, and Python compares, subtracts
+and adds to two aware datetimes that share a ``tzinfo`` by wall time, ignoring ``fold``
+(PEP 495). In America/Chicago on 2026-11-01 the hour 01:00-02:00 happens twice
+(06:00-08:00Z), so a lease 50 minutes in the future reads as already expired; and, outside
+that hour, any difference or addition across the 07:00Z change is off by 3600 s (review
+W21-REV-BLOCKEDOBS r1, NOTE-1; the BLOCKEDOBS lane's corrected TZ-NOTE).
 
 The always-run tests check the pin and the guard without a database. The PostgreSQL tests
 (``TEST_POSTGRES_URL``; they fail in CI if it is unset) give each test a database whose
@@ -50,6 +52,14 @@ FIRST = datetime(2026, 11, 1, 6, 30, tzinfo=UTC)  # 01:30 CDT
 DEADLINE = datetime(2026, 11, 1, 6, 50, tzinfo=UTC)  # 01:50 CDT
 AFTER = datetime(2026, 11, 1, 7, 10, tzinfo=UTC)  # 01:10 CST: 20 min after DEADLINE
 LATER = datetime(2026, 11, 1, 7, 20, tzinfo=UTC)  # 01:20 CST: 50 min after FIRST
+
+# Outside the fold, on either side of the 07:00Z change. Wall time is monotonic here, so a
+# comparison of two read values holds; a difference or an addition across the change does not.
+NOON_CDT = datetime(2026, 10, 31, 17, 0, tzinfo=UTC)  # 12:00 CDT
+NOON_CST = datetime(2026, 11, 1, 18, 0, tzinfo=UTC)  # 12:00 CST: 25 h later
+ADMITTED = datetime(2026, 11, 1, 5, 30, tzinfo=UTC)  # 00:30 CDT, before the fold
+CHECKED = datetime(2026, 11, 1, 8, 10, tzinfo=UTC)  # 02:10 CST, after the fold: 2 h 40 min later
+BASIS = timedelta(hours=2)  # a deadline basis added to ADMITTED: the deadline is 07:30Z
 
 
 @pytest.fixture(autouse=True)
@@ -292,6 +302,69 @@ def test_instants_inside_the_fall_back_fold_round_trip_and_compare_correctly(chi
         admission.deadline_at = bad["deadline"]
         assert attempt_holds_authority(lease, admission, bad["first"]) is False
         assert is_eligible(admission, holds=False, now=bad["after"]) is False
+    finally:
+        engine.dispose()
+        control.dispose()
+
+
+def test_an_interval_spanning_the_transition_outside_the_fold_measures_correctly(
+    chicago_db,
+) -> None:
+    """Not only the repeated hour: across the 07:00Z change, an America/Chicago session's
+    values subtract and add by wall time, so a difference is 3600 s short and a deadline
+    computed by addition (``admitted + basis``, the shape of ``app.jobs.admission``'s
+    deadline) lands an hour late, although no value is in the fold."""
+    engine = _app_engine(chicago_db)
+    control = create_engine(chicago_db)
+    rows = {"noon_cdt": NOON_CDT, "noon_cst": NOON_CST, "admitted": ADMITTED, "checked": CHECKED}
+    try:
+        with engine.begin() as c:
+            c.execute(text("create table tz_span (k text primary key, at timestamptz not null)"))
+            for k, at in rows.items():
+                c.execute(text("insert into tz_span (k, at) values (:k, :at)"), {"k": k, "at": at})
+            truth = c.execute(
+                text(
+                    "select extract(epoch from (select at from tz_span where k = 'noon_cst')"
+                    " - (select at from tz_span where k = 'noon_cdt'))"
+                )
+            ).scalar_one()
+        assert float(truth) == 25 * 3600  # the database's own interval
+
+        def read(eng) -> dict:
+            with eng.connect() as c:
+                return dict(c.execute(text("select k, at from tz_span")).all())
+
+        got = read(engine)
+        assert {k: got[k] for k in rows} == rows
+        assert (got["noon_cst"] - got["noon_cdt"]).total_seconds() == float(truth)
+        assert got["checked"] - got["admitted"] == timedelta(hours=2, minutes=40)  # an age
+        deadline = got["admitted"] + BASIS
+        assert deadline == datetime(2026, 11, 1, 7, 30, tzinfo=UTC)
+        admission = SimpleNamespace(
+            attempt=1, worker_id="w", end_kind=None, ended_at=None, deadline_at=deadline
+        )
+        lease = SimpleNamespace(
+            status="running", attempt_count=1, worker_id="w", lease_expires_at=deadline
+        )
+        # Checked 40 min after the deadline: eligible, and a lease that expired then is gone.
+        assert is_eligible(admission, holds=False, now=got["checked"]) is True
+        assert attempt_holds_authority(lease, admission, got["checked"]) is False
+
+        # Control: the same rows in an America/Chicago session (no pin). No value is
+        # ambiguous and comparisons hold, but the arithmetic across the change is wall time.
+        bad = read(control)
+        for k in rows:
+            assert str(bad[k].tzinfo) == CHICAGO
+            assert bad[k].replace(fold=1).utcoffset() == bad[k].utcoffset(), k  # not in a fold
+        assert bad["checked"] > bad["admitted"]
+        assert (bad["noon_cst"] - bad["noon_cdt"]).total_seconds() == float(truth) - 3600
+        assert bad["checked"] - bad["admitted"] == timedelta(hours=1, minutes=40)
+        late = bad["admitted"] + BASIS  # wall 02:30, read as CST: 08:30Z, an hour late
+        assert late.astimezone(UTC) == datetime(2026, 11, 1, 8, 30, tzinfo=UTC)
+        admission.deadline_at = late
+        lease.lease_expires_at = late
+        assert is_eligible(admission, holds=False, now=bad["checked"]) is False
+        assert attempt_holds_authority(lease, admission, bad["checked"]) is True
     finally:
         engine.dispose()
         control.dispose()
