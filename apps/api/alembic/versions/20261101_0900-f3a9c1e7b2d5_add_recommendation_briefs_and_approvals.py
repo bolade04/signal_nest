@@ -214,8 +214,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Refuse before any DDL while an override names the capability: the narrowed CHECK could
     # not hold it, and an override is operator intent that is never deleted implicitly.
+    # Both counts are Core expressions (no SQL text is assembled from strings).
+    overrides = sa.table(_OVERRIDES, sa.column("capability"))
     named = op.get_bind().execute(
-        sa.text(f"SELECT count(*) FROM {_OVERRIDES} WHERE capability = 'recommendation_briefs'")
+        sa.select(sa.func.count())
+        .select_from(overrides)
+        .where(overrides.c.capability == "recommendation_briefs")
     ).scalar_one()
     if named:
         raise RuntimeError(
@@ -224,7 +228,9 @@ def downgrade() -> None:
         )
     # Likewise while approvals hold any row: compliance records O-6 keeps are never dropped
     # by a schema rollback (review r1 recommendation).
-    decisions = op.get_bind().execute(sa.text(f"SELECT count(*) FROM {_APPROVALS}")).scalar_one()
+    decisions = op.get_bind().execute(
+        sa.select(sa.func.count()).select_from(sa.table(_APPROVALS))
+    ).scalar_one()
     if decisions:
         raise RuntimeError(
             f"{decisions} approval record(s) exist; approvals are compliance records (O-6) and "
