@@ -119,6 +119,18 @@ export const queryKeys = {
   briefCapability: (workspaceId: string) =>
     ['workspaces', workspaceId, 'brief-capability'] as const,
 
+  // Project Phase 5C (W21 CF-2; the routes land with the 5C build lanes). A brief's drafts
+  // follow the 5C routes (`/workspaces/{ws}/briefs/{brief}/drafts`): workspace and brief are
+  // embedded, so no entry is shared across tenants or briefs. One draft is keyed by
+  // workspace and draft id (`/workspaces/{ws}/drafts/{draft}`). Workspace-effective
+  // generation availability has its own per-workspace key (the feedbackCapability reasoning).
+  briefDrafts: (workspaceId: string, briefId: string) =>
+    ['workspaces', workspaceId, 'briefs', briefId, 'drafts'] as const,
+  creativeDraft: (workspaceId: string, draftId: string) =>
+    ['workspaces', workspaceId, 'drafts', draftId] as const,
+  creativeCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'creative-capability'] as const,
+
   // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
   // `runtimeSummary`: that key carries the raw global flags, has no workspace in
   // it, and is shared at a 60s staleTime — putting a per-workspace answer there
