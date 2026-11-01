@@ -21,7 +21,7 @@ P6-W21-ADV5AB-01):
 * a brief's ``evidence_refs`` name only its own opportunity's validation evidence, never a
   sibling opportunity's or another tenant's;
 * on PostgreSQL, a capture in flight (holding its opportunity's row lock) never blocks a
-  capture of another opportunity, workspace or organization.
+  capture in another workspace or organization.
 
 World (SQLite with FKs on, or PostgreSQL; one database per test):
   org-a: ws-a1 and ws-a2 (SAME organization, so every org-a member reaches both workspaces)
@@ -495,18 +495,23 @@ class TestCaptureLockIsPerOpportunity:
     """PostgreSQL, READ COMMITTED. Kills W4A-M03 (``_next_version`` locks every opportunity
     row, not this one): one tenant's capture in flight would then stall every other
     tenant's. That mutant survives ``test_briefs_postgres.py``, whose captures share one
-    opportunity, so a global lock still yields the same linear chain."""
+    opportunity, so a global lock still yields the same linear chain.
+
+    Tenants only, by design: two captures in the SAME workspace may wait for each other on
+    the unpriced (mock) path, where ``meter.flush`` records the call through
+    ``llm.budget.record_settled`` and so updates the workspace's budget-period row inside the
+    request's transaction (the #269 ledger; a priced call settles in short transactions of
+    its own). Observed at head e2f90d6c, lane evidence raw/022 and raw/024."""
 
     @pytest.mark.parametrize(
         ("opp", "record", "author", "ws"),
         [
             ("opp-a2", "sir-a2", "a-owner", "ws-a2"),
             ("opp-b1", "sir-b1", "b-owner", "ws-b1"),
-            ("opp-a1s", "sir-a1s", "a-marketer", "ws-a1"),
         ],
-        ids=["sibling-workspace", "other-organization", "sibling-opportunity"],
+        ids=["sibling-workspace", "other-organization"],
     )
-    def test_a_capture_in_flight_never_blocks_another_opportunitys(
+    def test_a_capture_in_flight_never_blocks_another_tenants(
         self, pg_make, mock_llm_recorder, opp, record, author, ws
     ):
         llm = LLMService(mock_llm_recorder, sleep=lambda _s: None, settings=offline_settings())
@@ -519,12 +524,10 @@ class TestCaptureLockIsPerOpportunity:
             other.start()
             # It completes while the held capture still holds opp-a1's lock.
             other.join(20.0)
-            assert not other.is_alive(), "another opportunity's capture waited on this one"
+            assert not other.is_alive(), "another tenant's capture waited on this one"
             hold.release.set()
         assert other.outcome() == (ws, 1)
         assert held.outcome() == ("ws-a1", 1)
         # Each capture reached the provider once, under its own tenant's opaque reference.
         refs = [r.tenant_ref for r in mock_llm_recorder.requests]
-        assert len(refs) == 2 and all(refs)
-        if ws != "ws-a1":
-            assert len(set(refs)) == 2
+        assert len(refs) == 2 and all(refs) and len(set(refs)) == 2
