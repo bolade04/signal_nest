@@ -125,6 +125,7 @@ from app.capabilities.service import (
 )
 from app.core.config import get_settings
 from app.core.errors import NotFoundError
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.organizations.models import User, Workspace
 
@@ -415,7 +416,7 @@ def internal_capability_overrides(
 @router.put("/capabilities/overrides", response_model=CapabilityOverrideMutationOut)
 def internal_capability_override_set(
     payload: CapabilityOverrideSetIn,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     operator: User = Depends(require_operator),
 ) -> CapabilityOverrideMutationOut:
     """Record an operator's intent to enable/disable one per-workspace override.
@@ -469,7 +470,7 @@ def internal_capability_override_clear(
     organization_id: str = Query(..., min_length=1),
     workspace_id: str = Query(..., min_length=1),
     capability: Capability = Query(...),
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     operator: User = Depends(require_operator),
 ) -> CapabilityOverrideMutationOut:
     """Clear any recorded override for one ``(capability, workspace)`` pair.
