@@ -8,8 +8,9 @@ fake, never a network client, and the settings are built explicitly from code de
 Every body takes the parent test's scenario clock as ``clock`` (a
 :meth:`~app.tests._llm_scenario_clock.ScenarioClock.spec`). A patch made in the parent
 does not reach a spawned child, so each child rebuilds that clock, installs it for the
-meter's own reads and hands its instants to the ledger explicitly: no child reads the
-calendar date.
+meter's own reads and hands its instants to the ledger explicitly: no child takes a
+reservation, settlement, recovery or period instant from the calendar. (Row timestamps
+the ORM fills in, such as a usage row's ``created_at``, keep the real clock.)
 """
 
 from __future__ import annotations

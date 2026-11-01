@@ -1106,7 +1106,7 @@ def test_a_call_reserved_before_the_month_boundary_is_charged_to_that_month(
         assert row.period_start == date(2026, 10, 1)
         # The boundary was crossed: reserved in October, settled in November.
         assert row.created_at.replace(tzinfo=UTC) < datetime(2026, 11, 1, tzinfo=UTC)
-        assert row.settled_at.replace(tzinfo=UTC) >= first
+        assert first <= row.settled_at.replace(tzinfo=UTC) < first + timedelta(minutes=1)
         october = _period(db, now=last)
         assert (october.reserved_usd, october.settled_usd) == (worst, CALL_COST)
         assert _period(db, now=first) is None

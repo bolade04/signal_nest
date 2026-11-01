@@ -534,7 +534,8 @@ def test_p4_the_same_attempt_key_settled_by_racing_processes_is_charged_once(
         (row,) = _reservations(db)
         assert (row.state, row.settled_usd) == ("settled", child.FIXED_COST)
         assert row.period_start == ledger.period_start_for(reserved_at)
-        assert row.settled_at >= settled_from  # settled at the settlement's instant
+        # Settled at the children's scenario instant (not the calendar's): within the minute.
+        assert settled_from <= row.settled_at < settled_from + timedelta(minutes=1)
         # One period row: the settlement's own month is charged nothing.
         assert db.scalar(select(func.count()).select_from(LLMBudgetPeriod)) == 1
         assert db.scalar(select(func.count()).select_from(LLMUsageEvent)) == 1
