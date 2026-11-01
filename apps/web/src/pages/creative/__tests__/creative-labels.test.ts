@@ -39,6 +39,9 @@ describe('creative labels', () => {
     expect(reviewState({ ...PASSED, blocked_claim_ids: ['c'] })).toBe('blocked');
     expect(reviewState({ ...PASSED, disclaimers_resolved: false, passed: false })).toBe('missing_disclaimers');
     expect(reviewState({ ...PASSED, passed: false })).toBe('missing_disclaimers');
+    // An unresolved disclaimer is never shown as passed, even on an inconsistent answer
+    // (the database CHECK makes passed imply resolved; the UI does not rely on it).
+    expect(reviewState({ ...PASSED, disclaimers_resolved: false })).toBe('missing_disclaimers');
     // High risk that is not blocked is still approvable (a reviewer decides).
     expect(reviewState({ ...PASSED, risk_level: 'high' })).toBe('passed');
   });

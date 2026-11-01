@@ -707,6 +707,10 @@ def test_a_draft_without_a_review_is_not_approvable(world, ws):
 def test_the_generation_inputs_are_stored_context_only(world, ws):
     world.claim("Locally owned", kind="approved", ws=ws)
     world.claim("Old approved", kind="approved", ws=ws, retired=True)
+    # Active entries of every other kind: never offered to the model as approved claims.
+    world.claim("Cures everything", kind="blocked", ws=ws)
+    world.claim("Clinically proven", kind="restricted", ws=ws)
+    world.claim("Terms apply.", kind="required_disclaimer", ws=ws)
     brief_id = world.seed_brief(ws)
     with world.session() as s:
         brief = s.get(creative_service.RecommendationBrief, brief_id)
@@ -719,6 +723,7 @@ def test_the_generation_inputs_are_stored_context_only(world, ws):
 
     assert set(inputs) == set(template_fields(PROMPTS[GENERATE_TASK].template))
     assert inputs["approved_claims"] == ["Locally owned"]
+    assert inputs["required_disclaimers"] == ["Terms apply."]
     assert inputs["channel"] == "sms" and inputs["summary"] == BRIEF_SUMMARY
 
 
