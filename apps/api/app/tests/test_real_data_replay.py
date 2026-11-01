@@ -486,6 +486,45 @@ def test_live_sources_that_all_fail_report_unavailable_not_empty():
     assert batch.coverage.reason is CoverageReason.SOURCES_UNAVAILABLE
     assert batch.coverage.status.value == "unavailable"
     assert (batch.coverage.sources, batch.coverage.sources_failed) == (2, 2)
+    feed_cache.clear()  # both sources now cool down in the process-wide cache
+
+
+def test_a_failing_source_is_asked_once_per_interval_over_loopback_http(tmp_path):
+    """#255 review r2-MINOR-1 end to end: the loopback server no longer holds one capture,
+    so its source answers 404. Three scout-run fetches in a row - each builds its own
+    connector over the process-wide feed cache, as scout runs do - cost the failing
+    source one request (it cools down for its politeness interval); the other source
+    delivers every time from one request."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    manifest = json.loads((replay_mod.CORPUS_DIR / "manifest.json").read_text())
+    gone, kept = manifest["captures"]
+    shutil.copy(replay_mod.CORPUS_DIR / kept["file"], corpus / kept["file"])
+    (corpus / "manifest.json").write_text(json.dumps({**manifest, "captures": [kept]}))
+    feed_cache.clear()
+    try:
+        with ReplayServer(corpus) as server:
+            settings = _settings(
+                connector_rss_live_enabled=True, connector_rss_replay_origin=server.origin
+            )
+            batches = [
+                fetch_signals(
+                    market=REPLAY_MARKET, keywords=[], source_types=[], rss_enabled=True,
+                    settings=settings,
+                )
+                for _ in range(3)
+            ]
+            hits = sorted((path, status) for path, status, _ua in server.hits)
+    finally:
+        feed_cache.clear()
+    assert settings.connector_rss_max_attempts == 3  # a 404 is not retried within a fetch
+    assert hits == sorted(
+        [(f"/captures/{gone['capture_id']}", 404), (f"/captures/{kept['capture_id']}", 200)]
+    )
+    for batch in batches:
+        assert batch.coverage.reason is CoverageReason.LIVE_SOURCES
+        assert (batch.coverage.sources, batch.coverage.sources_failed) == (2, 1)
+        assert {s.attribution["source_key"] for s in batch.signals} == {kept["source_key"]}
 
 
 def test_an_undecodable_capture_fails_its_source_only_end_to_end(tmp_path):

@@ -105,7 +105,8 @@ def fetch_end_known(exc: ConnectorFetchError) -> bool:
     return exc.failure.kind == FailureKind.NETWORK and not isinstance(cause, httpx.HTTPError)
 
 
-#: Transient kinds a live fetch retries (a 429 never is: it starts a cool-down).
+#: Transient kinds a live fetch retries within one fetch (a 429 never is). Every failure,
+#: retried or not, ends in a cool-down once the fetch gives up (r2-MINOR-1).
 _RETRYABLE = frozenset({FailureKind.TIMEOUT, FailureKind.NETWORK, FailureKind.UPSTREAM_ERROR})
 
 
@@ -314,7 +315,16 @@ class LiveRssConnector(SourceConnector):
     def _feed(self, target: SourceTarget, max_entries: int) -> tuple[CachedFeed, ParsedFeed]:
         """The source's feed and its parse (at most ``max_entries`` entries extracted). A
         body is cached only after it parsed, so a feed this connector cannot read is never
-        served again from the cache."""
+        served again from the cache.
+
+        Politeness floor (#255 review r2-MINOR-1): a source is contacted at most once per
+        interval, failing or not, when runs do not overlap (see
+        ``docs/operations/live-data-sources.md`` §6). Every failed fetch - once its bounded
+        retries are spent, whatever the failure - starts a cool-down
+        (:meth:`FeedCache.fetch_failed`: one interval, doubling per consecutive failure up
+        to a bound; a ``Retry-After`` can only lengthen it). Meanwhile the last good body,
+        if any, is served without a request. A D-25 stop (``RunStopped`` /
+        ``AdmissionUnresolved``) is not a source failure and starts no cool-down."""
         key = target.source.source_key
         interval = max(self._interval, target.source.min_fetch_interval_seconds or 0.0)
         fresh = self._cache.fresh(key, interval)
@@ -325,6 +335,33 @@ class LiveRssConnector(SourceConnector):
             if held is not None:
                 return held, parse_feed(held.body, max_entries=max_entries)
             raise ConnectorFetchError(*self._cache.cooling_reason(key))
+        try:
+            return self._fetch(target, max_entries)
+        except (RunStopped, AdmissionUnresolved):
+            # D-25 (PROPOSED): the run stops; the source did not fail.
+            raise
+        except ConnectorFetchError as exc:
+            if exc.retry_after_seconds is not None:
+                # The publisher asked for a pause: while it lasts the source reports
+                # rate limiting (it is never contacted before it ends).
+                self._cache.fetch_failed(
+                    key, interval, retry_after_seconds=exc.retry_after_seconds
+                )
+            else:
+                self._cache.fetch_failed(
+                    key, interval, kind=exc.failure.kind, detail=exc.failure.detail
+                )
+            raise
+        except Exception:
+            self._cache.fetch_failed(
+                key, interval, kind=FailureKind.PARSE_ERROR, detail="unreadable feed"
+            )
+            raise
+
+    def _fetch(self, target: SourceTarget, max_entries: int) -> tuple[CachedFeed, ParsedFeed]:
+        """One fetch of the source (bounded retries with backoff for transient failures)
+        and its parse. Raises on failure; :meth:`_feed` starts the cool-down."""
+        key = target.source.source_key
         validators = self._cache.validators(key)
         last: ConnectorFetchError | None = None
         for attempt in range(1, self._attempts + 1):
@@ -341,8 +378,6 @@ class LiveRssConnector(SourceConnector):
             except ConnectorFetchError as exc:
                 record_external_end(admission_id, known=fetch_end_known(exc))
                 last = exc
-                if exc.retry_after_seconds is not None:
-                    self._cache.cool_down(key, exc.retry_after_seconds)
                 if exc.failure.kind not in _RETRYABLE or exc.retry_after_seconds is not None:
                     raise
                 if attempt < self._attempts:
@@ -357,21 +392,10 @@ class LiveRssConnector(SourceConnector):
                 if held is None:  # validators are only sent while a body is held
                     raise ConnectorFetchError(FailureKind.UPSTREAM_ERROR, "304 without a body")
                 return held, parse_feed(held.body, max_entries=max_entries)
-            try:
-                parsed = parse_feed(response.body, max_entries=max_entries)
-            except ConnectorFetchError as exc:
-                # Not cached, and not asked for again before the politeness interval
-                # passes: an unreadable feed costs its publisher one request per
-                # interval. A previously cached good body stays available meanwhile.
-                self._cache.cool_down(
-                    key, interval, kind=exc.failure.kind, detail=exc.failure.detail
-                )
-                raise
-            except Exception:
-                self._cache.cool_down(
-                    key, interval, kind=FailureKind.PARSE_ERROR, detail="unreadable feed"
-                )
-                raise
+            # An unreadable body raises here: it is not cached, and the cool-down
+            # :meth:`_feed` starts keeps it from being asked for again before the
+            # politeness interval passes. A previously cached good body stays available.
+            parsed = parse_feed(response.body, max_entries=max_entries)
             return self._cache.store(key, response), parsed
         assert last is not None
         raise last
