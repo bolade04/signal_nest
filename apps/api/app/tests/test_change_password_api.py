@@ -37,7 +37,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import event, update
+from sqlalchemy import event, func, select, update
 
 from app.audit.models import AuditLog
 from app.auth import service as auth_service
@@ -695,6 +695,17 @@ def _drive_every_path(env: Env) -> tuple[list[str], list]:
     return [token, sid, other, other_sid, fresh, claims(fresh)["sid"]], responses
 
 
+def _non_login_audit_rows(env: Env) -> int:
+    """Audit rows other than the Phase 5B login audit (``auth.login_succeeded`` / ``_failed``)."""
+    t = AuditLog.__table__
+    with env.witness.engine.connect() as conn:
+        return conn.execute(
+            select(func.count())
+            .select_from(t)
+            .where(t.c.action.notin_(("auth.login_succeeded", "auth.login_failed")))
+        ).scalar_one()
+
+
 class TestLeakage:
     def test_u17_s01_no_password_hash_token_or_sid_reaches_a_log(self, env: Env, capsys):
         with capture_logs() as records:
@@ -730,7 +741,7 @@ class TestLeakage:
                 assert secret not in stream, secret[:12]
 
     def test_u17_s02_the_event_carries_only_allow_listed_fields(self, env: Env):
-        audits = env.witness.count(AuditLog)
+        audits = _non_login_audit_rows(env)
         with capture_logs() as records:
             _drive_every_path(env)
         allowed = {"outcome", "user_id", "error_class", "duration_ms"}
@@ -744,7 +755,9 @@ class TestLeakage:
                 seen += 1
                 assert fields == {"outcome": "success", "user_id": ALICE}  # an id, not an address
         assert seen == 1  # only the success logs it; no refusal does
-        assert env.witness.count(AuditLog) == audits  # account-level: no audit row
+        # Account-level: the password change writes no audit row. The drive's closing sign-in
+        # writes the Phase 5B login audit (auth.login_*), which is not the change's.
+        assert _non_login_audit_rows(env) == audits
 
     def test_u17_s03_responses_carry_no_body_cookie_or_hash(self, env: Env):
         """The response half of U17-S03: an empty 204, no cookie, and no hash anywhere."""

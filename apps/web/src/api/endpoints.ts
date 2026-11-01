@@ -1,5 +1,8 @@
 import { apiRequest, apiRequestPage } from './client';
 import type {
+  ApprovalDecisionCreate,
+  ApprovalHistoryOut,
+  ApprovalOut,
   FeedbackCapability,
   AccountDeletionOut,
   AccountDeletionPreviewOut,
@@ -604,3 +607,44 @@ export const createOpportunityBrief = (
     body,
   });
 // ---- end Phase 5A recommendation briefs ----
+
+// ---- Phase 5B approvals (W21 lane P5B) — begin -------------------------------------
+// Dark behind `recommendation_briefs_enabled` (503 capability_unavailable while the
+// capability resolves disabled for the workspace). Recording a decision and reading the
+// queue are for the REVIEWER role exactly; a brief's history for every role but viewer.
+const briefDecisionsPath = (workspaceId: string, opportunityId: string, briefId: string) =>
+  `/workspaces/${workspaceId}/opportunities/${opportunityId}/briefs/${briefId}/approvals`;
+
+export const listBriefDecisions = (
+  workspaceId: string,
+  opportunityId: string,
+  briefId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<ApprovalHistoryOut>(briefDecisionsPath(workspaceId, opportunityId, briefId), {
+    query: { ...params },
+    signal,
+  });
+
+export const recordBriefDecision = (
+  workspaceId: string,
+  opportunityId: string,
+  briefId: string,
+  body: ApprovalDecisionCreate,
+) =>
+  apiRequest<ApprovalOut>(briefDecisionsPath(workspaceId, opportunityId, briefId), {
+    method: 'POST',
+    body,
+  });
+
+export const getApprovalQueue = (
+  workspaceId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<RecommendationBriefListOut>(`/workspaces/${workspaceId}/approval-queue`, {
+    query: { ...params },
+    signal,
+  });
+// ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------

@@ -224,6 +224,226 @@
         "title": "AccountExportOut",
         "type": "object"
       },
+      "ApprovalDecision": {
+        "description": "The closed decision vocabulary of an append-only approval row (Phase 5B).\n\nA change of mind is a new row, never an edit: ``revoked`` withdraws an earlier\napproval of the same subject version. The controlling decision for a subject version\nis the row with the highest ``decision_seq``; consumers gate on that latest row,\nnever on \"an approved row exists\".",
+        "enum": [
+          "approved",
+          "rejected",
+          "revoked"
+        ],
+        "title": "ApprovalDecision",
+        "type": "string"
+      },
+      "ApprovalDecisionCreate": {
+        "additionalProperties": false,
+        "description": "Strict request body recording one decision on one exact subject version.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ApprovalDecision"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_version": {
+            "minimum": 1.0,
+            "title": "Subject Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "decision",
+          "subject_version"
+        ],
+        "title": "ApprovalDecisionCreate",
+        "type": "object"
+      },
+      "ApprovalHistoryOut": {
+        "description": "Bounded page of the decisions on one subject, newest ``decision_seq`` first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ApprovalHistoryOut",
+        "type": "object"
+      },
+      "ApprovalOut": {
+        "description": "One stored, immutable decision.",
+        "properties": {
+          "brief_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brief Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "decided_by_snapshot": {
+            "title": "Decided By Snapshot",
+            "type": "string"
+          },
+          "decided_role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ApprovalDecision"
+          },
+          "decision_seq": {
+            "title": "Decision Seq",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_type": {
+            "$ref": "#/components/schemas/ApprovalSubjectType"
+          },
+          "subject_version": {
+            "title": "Subject Version",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "subject_type",
+          "subject_id",
+          "subject_version",
+          "brief_id",
+          "decision",
+          "decision_seq",
+          "reason_code",
+          "note",
+          "decided_by",
+          "decided_by_snapshot",
+          "decided_role",
+          "is_simulated",
+          "created_at"
+        ],
+        "title": "ApprovalOut",
+        "type": "object"
+      },
+      "ApprovalReason": {
+        "description": "Why a decider approved, rejected or revoked a subject version.",
+        "enum": [
+          "evidence_sufficient",
+          "aligned_with_strategy",
+          "approved_other",
+          "insufficient_evidence",
+          "off_strategy",
+          "brand_or_compliance_risk",
+          "inaccurate",
+          "rejected_other",
+          "superseded",
+          "circumstances_changed",
+          "approved_in_error",
+          "revoked_other"
+        ],
+        "title": "ApprovalReason",
+        "type": "string"
+      },
+      "ApprovalSubjectType": {
+        "description": "What an approval decides on (Phase 5B).\n\nClosed: only recommendation briefs at CF-1. ``creative_draft`` joins at CF-2\n(Phase 5C), together with the widening migration of the matching CHECK.",
+        "enum": [
+          "recommendation_brief"
+        ],
+        "title": "ApprovalSubjectType",
+        "type": "string"
+      },
       "AudienceIn": {
         "properties": {
           "demographics": {
@@ -321,6 +541,175 @@
           }
         },
         "title": "AudiencePatch",
+        "type": "object"
+      },
+      "AuditAction": {
+        "description": "The closed set of audit actions. The value is the stored ``audit_logs.action``.",
+        "enum": [
+          "auth.register",
+          "auth.login_succeeded",
+          "auth.login_failed",
+          "onboarding.completed",
+          "business_profile.updated",
+          "organization_member.role_changed",
+          "organization_member.removed",
+          "organization_invitation.created",
+          "organization_invitation.accepted",
+          "organization_invitation.revoked",
+          "location.created",
+          "location.deactivated",
+          "location.reactivated",
+          "geo_coverage.updated",
+          "scout_request.created",
+          "scout_request.updated",
+          "scout_request.paused",
+          "scout_request.resumed",
+          "scout_request.run",
+          "scout_schedule.created",
+          "scout_schedule.paused",
+          "scout_schedule.resumed",
+          "scout_schedule.deleted",
+          "scout_admission.reconciled",
+          "opportunity.new",
+          "opportunity.saved",
+          "opportunity.monitoring",
+          "opportunity.ignored",
+          "opportunity.actioned",
+          "opportunity_feedback.created",
+          "workspace_capability_override.created",
+          "workspace_capability_override.updated",
+          "workspace_capability_override.cleared",
+          "workspace_capability_override.rejected",
+          "data_source.taken_down",
+          "recommendation_brief.created",
+          "approval.approved",
+          "approval.rejected",
+          "approval.revoked"
+        ],
+        "title": "AuditAction",
+        "type": "string"
+      },
+      "AuditLogOut": {
+        "description": "One audit record as an owner, admin or compliance reviewer reads it.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "entity_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Id"
+          },
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Type"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "new_state": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New State"
+          },
+          "previous_state": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous State"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "action",
+          "actor_user_id",
+          "entity_type",
+          "entity_id",
+          "reason",
+          "previous_state",
+          "new_state",
+          "context",
+          "created_at"
+        ],
+        "title": "AuditLogOut",
         "type": "object"
       },
       "BrandOut": {
@@ -8696,6 +9085,7 @@
     },
     "/api/v1/auth/login": {
       "post": {
+        "description": "Sign in with a password; audited (Phase 5B login auditing).\n\n* **Success:** one ``auth.login_succeeded`` row per organization of the account,\n  committed in the same transaction as the new session (``_fresh_session``), so a\n  session never exists without its audit rows and vice versa.\n* **Refusal:** the answer is the unchanged 401. When the address belongs to an account,\n  one ``auth.login_failed`` row per organization of that account (no actor: the caller\n  is not authenticated) records the closed failure reason, and is committed before the\n  401 is raised (``get_db`` rolls back on an error, so it would otherwise be lost). An\n  address that belongs to no account has no organization to record against.",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -11094,6 +11484,7 @@
     },
     "/api/v1/organizations/{organization_id}/members/{user_id}/role": {
       "put": {
+        "description": "Change a member's role. The role is organization-wide: it applies in every workspace\nof the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore\nmakes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).\nExactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,\nor grants or changes ``owner`` unless they are an owner; the last owner stays. Audited.",
         "operationId": "change_member_role_api_v1_organizations__organization_id__members__user_id__role_put",
         "parameters": [
           {
@@ -11443,6 +11834,88 @@
         "summary": "Get Workspace",
         "tags": [
           "organizations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/approval-queue": {
+      "get": {
+        "description": "The workspace's briefs awaiting a decision, oldest first: the latest version of each\nopportunity's brief whose controlling decision is absent or ``revoked``. Approver role\nonly (the approver's work list). Read-only.",
+        "operationId": "list_approval_queue_api_v1_workspaces__workspace_id__approval_queue_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationBriefListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Approval Queue",
+        "tags": [
+          "approvals"
         ]
       }
     },
@@ -11810,6 +12283,96 @@
             }
           },
           {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AuditAction"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entity_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Id"
+            }
+          },
+          {
+            "description": "Inclusive lower bound on created_at (UTC if no offset).",
+            "in": "query",
+            "name": "created_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower bound on created_at (UTC if no offset).",
+              "title": "Created From"
+            }
+          },
+          {
+            "description": "Exclusive upper bound on created_at (UTC if no offset).",
+            "in": "query",
+            "name": "created_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclusive upper bound on created_at (UTC if no offset).",
+              "title": "Created Before"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -11832,8 +12395,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/AuditLogOut"
                   },
                   "title": "Response List Audit Logs Api V1 Workspaces  Workspace Id  Audit Logs Get",
                   "type": "array"
@@ -15586,6 +16148,191 @@
         "summary": "Read one recommendation-brief version",
         "tags": [
           "recommendation-briefs"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}/approvals": {
+      "get": {
+        "description": "The brief version's append-only decisions, newest ``decision_seq`` first: the first\nitem, when present, is the controlling decision. Read-only.",
+        "operationId": "list_brief_decisions_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "brief_id",
+            "required": true,
+            "schema": {
+              "title": "Brief Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Brief Decisions",
+        "tags": [
+          "approvals"
+        ]
+      },
+      "post": {
+        "description": "Record one append-only decision (approve / reject / revoke) on the brief's exact\nversion. Approver role only; never the brief's author; ``subject_version`` must be the\nbrief's version (409 otherwise); ``revoked`` only withdraws a controlling approval.",
+        "operationId": "decide_on_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "opportunity_id",
+            "required": true,
+            "schema": {
+              "title": "Opportunity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "brief_id",
+            "required": true,
+            "schema": {
+              "title": "Brief Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide On Brief",
+        "tags": [
+          "approvals"
         ]
       }
     },

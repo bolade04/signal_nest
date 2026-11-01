@@ -94,10 +94,80 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)) -> SessionOut
     return _fresh_session(db, user)
 
 
+def _audit_login(
+    db: Session,
+    *,
+    user_id: str,
+    action: AuditAction,
+    actor_user_id: str | None,
+    context: dict,
+) -> int:
+    """Append one login audit row per organization the account belongs to; flush only.
+
+    ``audit_logs`` is organization-scoped, and a sign-in is an account event, so each
+    organization holding a membership sees it in its own trail (an organization-level row,
+    ``workspace_id`` NULL). An account with no membership has no trail to write to: the
+    structured ``security.login`` log event is then its only record. The context carries
+    no secret: never the address, the password, a token or a session id.
+    """
+    organization_ids = db.scalars(
+        select(OrganizationMember.organization_id)
+        .where(OrganizationMember.user_id == user_id)
+        .order_by(OrganizationMember.organization_id)
+    ).all()
+    for organization_id in organization_ids:
+        record_audit(
+            db,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            entity_type="user",
+            entity_id=user_id,
+            context=context,
+        )
+    return len(organization_ids)
+
+
 @router.post("/login", response_model=SessionOut)
 def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
-    user = service.authenticate(db, email=body.email, password=body.password)
-    return _fresh_session(db, user)
+    """Sign in with a password; audited (Phase 5B login auditing).
+
+    * **Success:** one ``auth.login_succeeded`` row per organization of the account,
+      committed in the same transaction as the new session (``_fresh_session``), so a
+      session never exists without its audit rows and vice versa.
+    * **Refusal:** the answer is the unchanged 401. When the address belongs to an account,
+      one ``auth.login_failed`` row per organization of that account (no actor: the caller
+      is not authenticated) records the closed failure reason, and is committed before the
+      401 is raised (``get_db`` rolls back on an error, so it would otherwise be lost). An
+      address that belongs to no account has no organization to record against.
+    """
+    try:
+        user = service.authenticate(db, email=body.email, password=body.password)
+    except service.LoginFailedError as refused:
+        if refused.user_id is not None:
+            _audit_login(
+                db,
+                user_id=refused.user_id,
+                action=AuditAction.AUTH_LOGIN_FAILED,
+                actor_user_id=None,
+                context={"failure": refused.failure},
+            )
+            db.commit()
+            # ``security.*`` events carry only the allow-listed outcome and account id.
+            log_event(logger, "security.login", outcome="refused", user_id=refused.user_id)
+        else:
+            log_event(logger, "security.login", outcome="refused")
+        raise
+    _audit_login(
+        db,
+        user_id=user.id,
+        action=AuditAction.AUTH_LOGIN_SUCCEEDED,
+        actor_user_id=user.id,
+        context={"method": "password"},
+    )
+    session = _fresh_session(db, user)
+    log_event(logger, "security.login", outcome="success", user_id=user.id)
+    return session
 
 
 @router.get("/me", response_model=SessionOut)
