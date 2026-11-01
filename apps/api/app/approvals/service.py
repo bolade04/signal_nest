@@ -36,8 +36,10 @@ writes nothing and is refused with 409 :data:`CONCURRENT_DECISION` (the request'
 transaction rolls back; the client re-reads and decides again). That backstop is what keeps
 a REPEATABLE READ session (whose snapshot predates the lock, so the lock alone is not
 sufficient there) and SQLite (where ``FOR UPDATE`` compiles to nothing) from ever storing a
-duplicate. Both are proven in ``test_approvals_postgres.py`` and
-``test_approvals_service.py``.
+duplicate. REPEATABLE READ is proven on PostgreSQL in ``test_approvals_postgres.py``
+(``test_repeatable_read_is_not_sufficient_and_the_backstop_refuses_a_duplicate``); the clash
+answer on SQLite in ``test_approvals_api.py``
+(``TestSequence::test_a_sequence_clash_is_a_409_and_writes_nothing``).
 
 *Why a 409 and not an in-transaction retry:* a retry needs a SAVEPOINT, and with the
 ``pysqlite`` driver's legacy transaction handling a SAVEPOINT issued before the request's

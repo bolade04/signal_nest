@@ -280,6 +280,23 @@ class TestDark:
         assert _error(dark)[:2] == (503, "capability_unavailable")
         assert _error(env.queue(REVIEWER, WS_A2))[:2] == (503, "capability_unavailable")
 
+    def test_dark_answers_503_before_any_entity_lookup_even_for_a_foreign_or_missing_brief(
+        self, env: Env
+    ):
+        # Ported from review W21-REV-P5B r1 (TestGateOrder, MINOR-2). Flag off (the default):
+        # the own brief, another organization's brief and a brief that does not exist all
+        # meet the same 503 on POST and GET, so nothing is looked up while dark and a dark
+        # workspace cannot be used to probe brief ids. Nothing is written.
+        a1 = env.ev["a1"]
+        before = (env.count(Approval), env.count(AuditLog))
+        dark = (503, "capability_unavailable", APPROVALS_DARK)
+        for label, brief_id in (("own", BRIEF_A1), ("foreign", BRIEF_B), ("missing", "nope")):
+            url = decisions_url(WS_A1, a1.opportunity_id, brief_id)
+            post = env.send("POST", url, REVIEWER, {"decision": "approved", "subject_version": 1})
+            assert _error(post) == dark, (label, post.text)
+            assert _error(env.send("GET", url, OWNER)) == dark, label
+        assert (env.count(Approval), env.count(AuditLog)) == before
+
     def test_a_resolver_failure_denies_and_writes_nothing(self, env: Env, monkeypatch):
         import app.approvals.routes as routes
 
@@ -303,6 +320,45 @@ class TestDark:
 # --------------------------------------------------------------------------- #
 # Recording a decision (exit criterion 4)
 # --------------------------------------------------------------------------- #
+class TestAuthorEdges:
+    """Ported from review W21-REV-P5B r1 (MINOR-1): the author is matched by the exact
+    account id, never by a prefix of it."""
+
+    @pytest.mark.parametrize("fk_live", [True, False], ids=["created_by-set", "snapshot-only"])
+    def test_a_reviewer_whose_id_is_a_prefix_of_the_authors_is_not_the_author(
+        self, env: Env, briefs_on, fk_live
+    ):
+        # REVIEWER ("ap-a-reviewer") is a strict prefix of REVIEWER2 ("ap-a-reviewer2").
+        assert REVIEWER2.startswith(REVIEWER) and REVIEWER != REVIEWER2
+
+        def seed(s):
+            add_brief(
+                s,
+                env.ev["a1-other"],
+                brief_id="brief-edge",
+                author=s.get(User, REVIEWER2),
+                version=2,
+                parent_id=BRIEF_A1_OTHER,
+                created_by="author" if fk_live else None,
+            )
+
+        env.seed(seed)
+        ev = env.ev["a1-other"]
+        url = decisions_url(ev.ws_id, ev.opportunity_id, "brief-edge")
+        body = {"decision": "approved", "subject_version": 2}
+        own = env.send("POST", url, REVIEWER2, body)
+        assert _error(own) == (
+            403,
+            "approval_author_conflict",
+            approvals_service.AUTHOR_CANNOT_DECIDE,
+        )
+        other = env.send("POST", url, REVIEWER, body)
+        assert other.status_code == 201, other.text
+        assert [(a["decided_by"], a["subject_id"]) for a in env.approvals()] == [
+            (REVIEWER, "brief-edge")
+        ]
+
+
 class TestDecide:
     def test_a_reviewer_approves_the_exact_version(self, env: Env, briefs_on):
         r = env.decide(REVIEWER, reason_code="evidence_sufficient", note="Looks right.")
