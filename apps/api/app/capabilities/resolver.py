@@ -46,7 +46,9 @@ enforcement point and its reflection share:
 * ``recommendation_briefs`` — LIVE gate since Project Phase 5A
   (``app.briefs.routes._resolve_briefs_capability``): every brief endpoint. An honored
   enable override makes that workspace's brief endpoints serve while
-  ``recommendation_briefs_enabled`` stays ``False``.
+  ``recommendation_briefs_enabled`` stays ``False``. Before any per-workspace enable
+  (plan §10): a jurisdiction backfill plan for pre-5D briefs, or a recorded operator
+  decision blocking export and generation of rows with NULL ``jurisdiction_code``.
 
 With every global flag ``False`` and no override row, every capability still resolves
 **disabled** via the global-configuration rule.

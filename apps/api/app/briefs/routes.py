@@ -19,6 +19,9 @@ The boundary mirrors the opportunity-feedback router (:mod:`app.feedback.routes`
   shipped state is the flag ``False`` with no override, so every endpoint is dark). A
   resolver failure is logged and re-raised (a 5xx), never turned into a decision. The gate
   runs before any scope lookup, so a dark deployment discloses nothing about ids.
+  Before any per-workspace enable (plan §10): a jurisdiction backfill plan for pre-5D
+  briefs, or a recorded operator decision blocking export and generation of rows with NULL
+  ``jurisdiction_code``.
 * **Authorization.** Capture (``POST``) is editor-only: owner / admin / marketer, the
   feedback precedent. Reads are open to every workspace member, like the opportunity they
   belong to, so the reviewer who approves a brief (Phase 5B, ``APPROVER_ROLES``) can read
