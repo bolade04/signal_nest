@@ -27,6 +27,7 @@ import type {
   FeedbackCreate,
   FeedbackHistoryOut,
   FeedbackOut,
+  RecommendationBriefCapability,
   RecommendationBriefCreate,
   RecommendationBriefListOut,
   RecommendationBriefOut,
@@ -563,6 +564,14 @@ export const submitOpportunityFeedback = (
 // immutable versions: there is no update or delete call.
 const briefsPath = (workspaceId: string, opportunityId: string) =>
   `/workspaces/${workspaceId}/opportunities/${opportunityId}/briefs`;
+
+// Workspace-effective brief availability, decided by the same resolver call the brief gate
+// enforces with. Member-gated and deliberately NOT capability-gated: it answers 200
+// {enabled:false} while dark rather than 503.
+export const getBriefCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<RecommendationBriefCapability>(`/workspaces/${workspaceId}/brief-capability`, {
+    signal,
+  });
 
 export const listOpportunityBriefs = (
   workspaceId: string,

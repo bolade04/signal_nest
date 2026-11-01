@@ -3,6 +3,7 @@
     GET  /api/v1/workspaces/{ws}/opportunities/{opp}/briefs
     POST /api/v1/workspaces/{ws}/opportunities/{opp}/briefs
     GET  /api/v1/workspaces/{ws}/opportunities/{opp}/briefs/{brief_id}
+    GET  /api/v1/workspaces/{ws}/brief-capability  (the reflection; never 503)
 
 Each test gets its own SQLite database (foreign keys on) with two organizations, Dallas and
 London: owner, admin (Dallas), marketer, reviewer and viewer members, one opportunity with
@@ -335,6 +336,63 @@ class TestCapabilityGate:
             s.commit()
         assert world.get("london").status_code == 503
         assert world.get("dallas").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# The workspace-effective reflection the panel reads (GET .../brief-capability)
+# --------------------------------------------------------------------------- #
+def _capability(world: World, key="dallas", role="owner"):
+    mk = world.m[key]
+    return world.client.get(f"{API}/workspaces/{mk.ws_id}/brief-capability",
+                            headers=mk.auth[role])
+
+
+def _override(world: World, key: str, enabled: bool) -> None:
+    with world.make() as s:
+        s.add(WorkspaceCapabilityOverride(
+            organization_id=f"org-{key}", workspace_id=f"ws-{key}",
+            capability="recommendation_briefs", enabled=enabled, reason="test"))
+        s.commit()
+
+
+class TestCapabilityReflection:
+    def test_dark_is_200_disabled_not_503(self, world):
+        r = _capability(world)
+        assert r.status_code == 200 and r.json() == {"enabled": False}
+
+    @pytest.mark.parametrize(
+        "global_on, override, expected",
+        [
+            (False, None, False),
+            (True, None, True),
+            (False, True, True),  # an honored enable override with the global flag off
+            (True, False, False),  # a disable override with the global flag on
+        ],
+    )
+    def test_the_reflection_agrees_with_the_gate(self, world, monkeypatch, global_on,
+                                                 override, expected):
+        monkeypatch.setattr(get_settings(), "recommendation_briefs_enabled", global_on)
+        if override is not None:
+            _override(world, "dallas", override)
+        assert _capability(world).json() == {"enabled": expected}
+        assert world.get().status_code == (200 if expected else 503)
+
+    def test_it_is_per_workspace(self, world):
+        _override(world, "dallas", True)
+        assert _capability(world, "dallas").json() == {"enabled": True}
+        assert _capability(world, "london").json() == {"enabled": False}
+
+    @pytest.mark.parametrize("role", ["viewer", "reviewer", "compliance_reviewer", "marketer"])
+    def test_any_member_reads_it_and_it_carries_no_governance_metadata(self, world, role):
+        r = _capability(world, role=role)
+        assert r.status_code == 200 and set(r.json()) == {"enabled"}
+
+    def test_a_non_member_is_403_and_unauthenticated_401(self, world):
+        url = f"{API}/workspaces/ws-dallas/brief-capability"
+        assert world.client.get(url, headers=world.outsider).status_code == 403
+        assert world.client.get(url).status_code == 401
+        other_org = world.client.get(url, headers=world.m["london"].auth["owner"])
+        assert other_org.status_code == 403
 
 
 # --------------------------------------------------------------------------- #

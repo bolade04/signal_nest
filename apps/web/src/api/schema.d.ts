@@ -1240,6 +1240,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/brief-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether recommendation briefs are available for this workspace
+         * @description Customer-facing, workspace-effective brief availability (Phase 5A).
+         *
+         *     Workspace-scoped, not opportunity-scoped: the resolver decides per
+         *     ``(capability, workspace)``. Any member may read it, matching the brief reads. Advisory
+         *     only; the brief endpoints remain the enforcement boundary.
+         */
+        get: operations["read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/business-profile": {
         parameters: {
             query?: never;
@@ -4394,6 +4418,21 @@ export interface components {
             unconfigured: string[];
         };
         /**
+         * RecommendationBriefCapabilityOut
+         * @description Customer-visible recommendation-briefs availability for one workspace.
+         *
+         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent). The operator endpoint's
+         *     ``decided_by`` / ``global_flag`` / ``has_override`` / ``override_value`` are governance
+         *     metadata: they would tell a customer the platform-wide rollout posture and that an
+         *     operator intervened on their tenant. A customer needs only whether briefs (and the
+         *     approvals that act on them) are available to them. Returned by
+         *     ``GET /workspaces/{workspace_id}/brief-capability`` (added by the 5A lane).
+         */
+        RecommendationBriefCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
          * RecommendationBriefCreate
          * @description Strict request body to generate and capture one brief version.
          */
@@ -7378,6 +7417,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrandOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefCapabilityOut"];
                 };
             };
             /** @description Validation Error */

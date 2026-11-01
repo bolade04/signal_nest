@@ -112,6 +112,7 @@ export type FeedbackReason = S['FeedbackReason'];
 export type RecommendationBriefCreate = S['RecommendationBriefCreate'];
 export type RecommendationBriefOut = S['RecommendationBriefOut'];
 export type RecommendationBriefListOut = S['RecommendationBriefListOut'];
+export type RecommendationBriefCapability = S['RecommendationBriefCapabilityOut'];
 // ---- end Phase 5A recommendation briefs ----
 
 export type ProductIn = S['ProductIn'];

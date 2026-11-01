@@ -47,10 +47,15 @@ function page(items: RecommendationBriefOut[]): RecommendationBriefListOut {
   return { items, total: items.length, limit: 20, offset: 0 };
 }
 
-// The INTERIM gate reads the raw global flag (see useBriefCapability); all four flags are
-// supplied because FeatureFlagsOut requires all four.
-function globalFlag(on: boolean) {
+// The panel's gate is the WORKSPACE-EFFECTIVE reflection (GET .../brief-capability). The raw
+// global flag in the runtime summary is stubbed alongside it and DELIBERATELY DECOUPLED
+// (`globalFlag` defaults to false): every enabled row runs in the honored-override /
+// flag-off configuration, so a panel that went back to reading
+// `features.recommendation_briefs_enabled` fails here (the P6-UI-005 lesson). All four
+// flags are supplied because FeatureFlagsOut requires all four.
+function capability(enabled: boolean, globalFlag = false) {
   server.use(
+    http.get(P(`/workspaces/${WS}/brief-capability`), () => HttpResponse.json({ enabled })),
     http.get(P('/system/capabilities'), () =>
       HttpResponse.json({
         app_mode: 'local',
@@ -61,7 +66,7 @@ function globalFlag(on: boolean) {
           opportunity_feedback_enabled: false,
           scout_scheduling_enabled: false,
           connector_rss_enabled: false,
-          recommendation_briefs_enabled: on,
+          recommendation_briefs_enabled: globalFlag,
         },
       }),
     ),
@@ -92,10 +97,10 @@ describe('OpportunityBriefPanel', () => {
     let briefRequests = 0;
     let capabilityAnswered = 0;
     server.events.on('request:start', ({ request }) => {
-      if (new URL(request.url).pathname.includes('/briefs')) briefRequests += 1;
+      if (new URL(request.url).pathname.includes('/briefs')) briefRequests += 1; // not the reflection
     });
     server.events.on('response:mocked', ({ request }) => {
-      if (new URL(request.url).pathname.endsWith('/system/capabilities')) capabilityAnswered += 1;
+      if (new URL(request.url).pathname.endsWith('/brief-capability')) capabilityAnswered += 1;
     });
     const screen = render();
     // The gate has been answered (dark) before absence is asserted.
@@ -107,8 +112,27 @@ describe('OpportunityBriefPanel', () => {
     server.events.removeAllListeners();
   });
 
-  it('hides itself when the list answers the 503 gate (workspace disabled by override)', async () => {
-    globalFlag(true);
+  it('stays hidden when only the raw global flag is on (the workspace resolves disabled)', async () => {
+    capability(false, true);
+    asRole('owner');
+    let briefRequests = 0;
+    let capabilityAnswered = 0;
+    server.events.on('request:start', ({ request }) => {
+      if (new URL(request.url).pathname.includes('/briefs')) briefRequests += 1;
+    });
+    server.events.on('response:mocked', ({ request }) => {
+      if (new URL(request.url).pathname.endsWith('/brief-capability')) capabilityAnswered += 1;
+    });
+    const screen = render();
+    await waitFor(() => expect(capabilityAnswered).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/recommendation brief/i)).not.toBeInTheDocument();
+    expect(briefRequests).toBe(0);
+    server.events.removeAllListeners();
+  });
+
+  it('hides itself when the list answers the 503 gate (the decision changed since)', async () => {
+    capability(true);
     asRole('owner');
     let listed = 0;
     server.use(
@@ -131,7 +155,7 @@ describe('OpportunityBriefPanel', () => {
   });
 
   it('shows the newest version with its provenance and lets the reader switch versions', async () => {
-    globalFlag(true);
+    capability(true);
     asRole('viewer');
     server.use(http.get(BRIEFS, () => HttpResponse.json(page([brief(2), brief(1)]))));
     const screen = render();
@@ -153,7 +177,7 @@ describe('OpportunityBriefPanel', () => {
   });
 
   it('offers no generate control to a member who cannot capture', async () => {
-    globalFlag(true);
+    capability(true);
     asRole('reviewer');
     server.use(http.get(BRIEFS, () => HttpResponse.json(page([brief(1)]))));
     const screen = render();
@@ -162,7 +186,7 @@ describe('OpportunityBriefPanel', () => {
   });
 
   it('lets an editor generate the first brief from the bound intelligence record', async () => {
-    globalFlag(true);
+    capability(true);
     asRole('marketer');
     let created = false;
     const posted: unknown[] = [];
@@ -187,7 +211,7 @@ describe('OpportunityBriefPanel', () => {
   });
 
   it('sends exactly one capture for a double click while it is pending', async () => {
-    globalFlag(true);
+    capability(true);
     asRole('owner');
     let posts = 0;
     let release!: () => void;
@@ -215,7 +239,7 @@ describe('OpportunityBriefPanel', () => {
   });
 
   it('reports a refused capture with the server message and stores nothing', async () => {
-    globalFlag(true);
+    capability(true);
     asRole('owner');
     server.use(
       http.get(BRIEFS, () => HttpResponse.json(page([]))),
@@ -241,7 +265,7 @@ describe('OpportunityBriefPanel', () => {
   });
 
   it('disables capture when the opportunity has no intelligence record', async () => {
-    globalFlag(true);
+    capability(true);
     asRole('owner');
     server.use(
       http.get(BRIEFS, () => HttpResponse.json(page([]))),

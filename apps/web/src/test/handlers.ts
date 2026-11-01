@@ -1915,6 +1915,10 @@ export const handlers = [
   // which is the shipped state; tests opt in with server.use(...). The message is the
   // server's (app/briefs/routes.py).
   ...[
+    // The workspace-effective reflection: 200 {enabled:false} while dark, never 503.
+    http.get(P('/workspaces/:workspaceId/brief-capability'), () =>
+      HttpResponse.json({ enabled: false }),
+    ),
     http.get(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
     http.post(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
     http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId'), () => BRIEFS_DARK()),

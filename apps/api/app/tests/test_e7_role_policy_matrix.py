@@ -186,8 +186,9 @@ _O = "/organizations/{organization_id}"
 #: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
 #: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route; P6-PRIV-1 adds
 #: 2 OWNER-only organization routes, counted in ORG_EXACT), and
-#: the 2 GET routes whose membership check is inside the handler. Project Phase 5A adds 3:
-#: the editor-only brief capture (RANK_FLOOR) and the two member-gated brief reads.
+#: the 2 GET routes whose membership check is inside the handler. Project Phase 5A adds 4:
+#: the editor-only brief capture (RANK_FLOOR), the two member-gated brief reads and the
+#: member-gated brief-capability reflection.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -403,6 +404,9 @@ E7_POLICY: tuple[Policy, ...] = (
         )
         for tail in ("", "/events")
     ),
+    # Project Phase 5A: the workspace-effective brief reflection, member-gated like the
+    # brief reads it describes and never 503 (it reports the capability decision).
+    _row("GET", f"{_W}/brief-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
     # Project Phase 5A: brief reads are member-gated like the opportunity they belong to
     # (a 5B reviewer reads the brief it approves); dark by default, so the probe is the 503.
     *(
@@ -582,7 +586,7 @@ class TestPolicyTableCompleteness:
         }
         assert counts == {
             "role_gated": 59,
-            MEMBER_WS: 27,
+            MEMBER_WS: 28,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -595,7 +599,7 @@ class TestPolicyTableCompleteness:
             RANK_FLOOR: 49,
             WS_EXACT: 1,
             ORG_EXACT: 9,
-            MEMBER_WS: 27,
+            MEMBER_WS: 28,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -626,9 +630,10 @@ class TestPolicyTableCompleteness:
         # POST /internal/system/data-sources/{source_key}/takedown, both operator-only.
         # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        # 127 -> 130 (Project Phase 5A): POST .../opportunities/{opportunity_id}/briefs, a
-        # RANK_FLOOR row, and GET .../briefs and GET .../briefs/{brief_id}, MEMBER_WS rows.
-        assert len(served) == 130
+        # 127 -> 131 (Project Phase 5A): POST .../opportunities/{opportunity_id}/briefs, a
+        # RANK_FLOOR row; GET .../briefs, GET .../briefs/{brief_id} and
+        # GET /workspaces/{workspace_id}/brief-capability, MEMBER_WS rows.
+        assert len(served) == 131
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -636,7 +641,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 89
+        assert len(rows) == 90
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

@@ -15,32 +15,35 @@ export function isBriefsDark(error: unknown): boolean {
 }
 
 /**
- * Pre-request capability gate for the brief panel. Tri-state, like the feedback gate: an
- * unresolved query is not a denial.
+ * Authoritative, pre-request capability gate for the brief panel — WORKSPACE-EFFECTIVE.
  *
- * INTERIM (lane P5A, disclosed): this reads the RAW GLOBAL flag
- * `features.recommendation_briefs_enabled` from `GET /system/capabilities`. That is the
- * P6-UI-005 defect class: a workspace enabled only by an operator override (O-3 makes
- * briefs workspace-enableable) sees no panel while the global flag is off. It fails
- * closed — never shows controls the server would refuse — and the list's own 503 still
- * hides the panel when the global flag is on but the workspace is disabled. The
- * coordinator approved a workspace-effective read (`GET
- * /workspaces/{workspace_id}/brief-capability`, `queryKeys.briefCapability`), which
- * replaces this when the CF-1 contract fix lands.
+ * Briefs are workspace-enableable (O-3): an operator override can enable them for one
+ * workspace while the global flag stays off, so the raw-global runtime summary cannot
+ * answer this (the P6-UI-005 lesson). This asks the server the same question the brief
+ * gate asks, for the same workspace (`GET /workspaces/{workspace_id}/brief-capability`).
+ *
+ * Tri-state: an unresolved query is not a denial; the panel renders nothing for both.
+ * `=== true`, so a non-boolean reads as dark. A failed lookup is unknown, and unknown
+ * never presents controls the server would refuse; it is not retried.
  *
  * Advisory only. Every brief endpoint's own 503 remains the enforcement boundary.
  */
 export type BriefCapabilityStatus = 'loading' | 'enabled' | 'disabled';
 
-export function useBriefCapability(): { status: BriefCapabilityStatus; isEnabled: boolean } {
+export function useBriefCapability(workspaceId: string): {
+  status: BriefCapabilityStatus;
+  isEnabled: boolean;
+} {
   const query = useQuery({
-    queryKey: queryKeys.runtimeSummary,
-    queryFn: ({ signal }) => api.getRuntimeSummary(signal),
+    queryKey: queryKeys.briefCapability(workspaceId),
+    queryFn: ({ signal }) => api.getBriefCapability(workspaceId, signal),
+    enabled: Boolean(workspaceId),
     staleTime: 60_000,
+    retry: false,
   });
   const status: BriefCapabilityStatus = query.isPending
     ? 'loading'
-    : query.data?.features.recommendation_briefs_enabled === true
+    : query.data?.enabled === true
       ? 'enabled'
       : 'disabled';
   return { status, isEnabled: status === 'enabled' };

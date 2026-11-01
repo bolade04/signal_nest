@@ -6123,6 +6123,20 @@
         "title": "ReadinessOut",
         "type": "object"
       },
+      "RecommendationBriefCapabilityOut": {
+        "description": "Customer-visible recommendation-briefs availability for one workspace.\n\nExactly one field (the ``FeedbackCapabilityOut`` precedent). The operator endpoint's\n``decided_by`` / ``global_flag`` / ``has_override`` / ``override_value`` are governance\nmetadata: they would tell a customer the platform-wide rollout posture and that an\noperator intervened on their tenant. A customer needs only whether briefs (and the\napprovals that act on them) are available to them. Returned by\n``GET /workspaces/{workspace_id}/brief-capability`` (added by the 5A lane).",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "RecommendationBriefCapabilityOut",
+        "type": "object"
+      },
       "RecommendationBriefCreate": {
         "additionalProperties": false,
         "description": "Strict request body to generate and capture one brief version.",
@@ -12239,6 +12253,65 @@
         "summary": "List Brands",
         "tags": [
           "brands"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/brief-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective brief availability (Phase 5A).\n\nWorkspace-scoped, not opportunity-scoped: the resolver decides per\n``(capability, workspace)``. Any member may read it, matching the brief reads. Advisory\nonly; the brief endpoints remain the enforcement boundary.",
+        "operationId": "read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationBriefCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether recommendation briefs are available for this workspace",
+        "tags": [
+          "recommendation-briefs"
         ]
       }
     },

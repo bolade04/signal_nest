@@ -6,6 +6,11 @@ Three endpoints, nested under an opportunity, all capability-gated:
     POST /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs
     GET  /api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}
 
+and one workspace-scoped reflection, deliberately *not* capability-gated (it reports the
+capability decision; the feedback-capability precedent):
+
+    GET  /api/v1/workspaces/{workspace_id}/brief-capability
+
 The boundary mirrors the opportunity-feedback router (:mod:`app.feedback.routes`):
 
 * **Capability gate.** Every endpoint answers 503 ``capability_unavailable`` unless
@@ -25,6 +30,10 @@ The boundary mirrors the opportunity-feedback router (:mod:`app.feedback.routes`
   and the optional campaign to be the workspace's (404).
 * **Immutable.** There is no update or delete endpoint; a revision is a new version
   (:func:`app.briefs.service.create_brief`).
+* **Reflection.** ``brief-capability`` answers ``{"enabled": bool}`` from the same single
+  resolver call site the gate uses, so the UI shows what the backend enforces, per
+  workspace (an honored override included). Member-gated like the brief reads. Advisory
+  only: every brief endpoint re-decides and answers 503 while disabled.
 
 Transaction ownership follows the house rule: the request-scoped ``get_db`` commits. The one
 exception is deliberate: when no brief is produced after a model call, the route commits the
@@ -42,6 +51,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.briefs.models import RecommendationBrief
 from app.briefs.schemas import (
+    RecommendationBriefCapabilityOut,
     RecommendationBriefCreate,
     RecommendationBriefListOut,
     RecommendationBriefOut,
@@ -113,6 +123,36 @@ def _require_briefs_feature(db: Session, ctx: TenantContext) -> None:
     )
     if not resolution.effective_enabled:
         raise CapabilityUnavailableError("Recommendation briefs are not available yet.")
+
+
+@router.get(
+    "/workspaces/{workspace_id}/brief-capability",
+    response_model=RecommendationBriefCapabilityOut,
+    summary="Whether recommendation briefs are available for this workspace",
+)
+def read_brief_capability(
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> RecommendationBriefCapabilityOut:
+    """Customer-facing, workspace-effective brief availability (Phase 5A).
+
+    Workspace-scoped, not opportunity-scoped: the resolver decides per
+    ``(capability, workspace)``. Any member may read it, matching the brief reads. Advisory
+    only; the brief endpoints remain the enforcement boundary.
+    """
+    resolution = _resolve_briefs_capability(db, ctx)
+    # Distinct from `recommendation_briefs_gate_decided`, which exists to surface an
+    # unexpected enable; reflection traffic must not dilute that signal.
+    log_event(
+        logger,
+        "recommendation_briefs_capability_reflected",
+        outcome="allowed" if resolution.effective_enabled else "denied",
+        capability=Capability.RECOMMENDATION_BRIEFS.value,
+        organization_id=ctx.organization.id,
+        workspace_id=ctx.workspace.id,
+        effective_enabled=resolution.effective_enabled,
+    )
+    return RecommendationBriefCapabilityOut(enabled=resolution.effective_enabled)
 
 
 def _get_scoped_opportunity(db: Session, workspace_id: str, opportunity_id: str) -> Opportunity:

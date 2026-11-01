@@ -214,8 +214,9 @@ function BriefPanelBody({
 
 /**
  * Recommendation briefs for one opportunity (Project Phase 5A). Renders nothing unless the
- * capability gate is enabled, and nothing when the list answers the 503 gate, so a dark
- * deployment shows no trace of the feature and sends no brief request.
+ * workspace-effective capability reflection says enabled, and nothing when the list answers
+ * the 503 gate (a decision changed since the reflection was read), so a dark workspace shows
+ * no trace of the feature and sends no request to the brief endpoints.
  */
 export function OpportunityBriefPanel({
   workspaceId,
@@ -224,7 +225,7 @@ export function OpportunityBriefPanel({
   workspaceId: string;
   opportunityId: string;
 }) {
-  const capability = useBriefCapability();
+  const capability = useBriefCapability(workspaceId);
   if (!capability.isEnabled) return null;
   return <BriefPanelBody workspaceId={workspaceId} opportunityId={opportunityId} />;
 }

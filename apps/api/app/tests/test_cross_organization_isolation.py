@@ -1292,6 +1292,12 @@ class TestOpportunities:
         assert world.count(LLMUsageEvent) == usage_before
         assert world.row(Opportunity, b.opportunity_id) == opp_before
 
+    def test_brief_capability_own_workspace_only(self, world: World, pov: Pov, briefs_on):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/brief-capability"))
+        assert own.status_code == 200 and own.json() == {"enabled": True}
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/brief-capability")))
+
 
 # --------------------------------------------------------------------------- #
 # 9. Jobs
@@ -1746,6 +1752,9 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
+    ("GET", f"{W}/brief-capability"): (
+        "TestOpportunities::test_brief_capability_own_workspace_only",
+    ),
     **{
         (m, f"{W}/opportunities/{{opportunity_id}}/briefs{tail}"): (
             "TestOpportunities::test_brief_routes_with_foreign_opportunity_id_404_and_nothing_written",
@@ -1863,9 +1872,10 @@ class TestCoverageCompleteness:
         assert covered - served == set(), sorted(covered - served)
         # 71 -> 85: P6-PLAT-9 +9, P6-UI-023 +2, P6-UI-006 +1 (83), P6-PRIV-1 +2 (organization
         # export and deletion); 85 -> 86: D-9f +1 (organization export table page); the
-        # equalities above prove no other operation came or went. 86 -> 89: Project Phase 5A
-        # +3 (the recommendation-brief list, capture and read).
-        assert len(served) == 89
+        # equalities above prove no other operation came or went. 86 -> 90: Project Phase 5A
+        # +4 (the recommendation-brief list, capture and read, and the brief-capability
+        # reflection).
+        assert len(served) == 90
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))
