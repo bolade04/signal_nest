@@ -140,6 +140,20 @@ export type ApprovalHistoryOut = S['ApprovalHistoryOut'];
 // in the Phase 5A block above (I-5A/I-5B integration: one alias per type).
 // ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------
 
+// --- Project Phase 5C: text creative generation (W21 lane P5C) — BEGIN ---------
+// Generated contract types only. A draft is one immutable version generated from an
+// approved recommendation brief; its output-side content review is embedded.
+export type CreativeChannel = S['CreativeChannel'];
+export type ClaimRisk = S['ClaimRisk'];
+export type CreativeDraftCreate = S['CreativeDraftCreate'];
+export type CreativeDraftOut = S['CreativeDraftOut'];
+export type CreativeDraftListOut = S['CreativeDraftListOut'];
+export type ContentReviewOut = S['ContentReviewOut'];
+export type ContentFindingOut = S['ContentFindingOut'];
+export type CreativeGenerationQueuedOut = S['CreativeGenerationQueuedOut'];
+export type CreativeCapability = S['CreativeGenerationCapabilityOut'];
+// --- Project Phase 5C: text creative generation (W21 lane P5C) — END -----------
+
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];

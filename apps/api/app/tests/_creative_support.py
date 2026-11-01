@@ -131,6 +131,14 @@ class CreativeWorld:
         return self.owner_b_id if ws == self.ws_b else self.users["owner"]
 
     # -- seeding -------------------------------------------------------------------
+    def workspace(self, name: str, *, enabled: bool = True) -> str:
+        """A fresh, onboarded workspace of organization A (generation enabled by override)."""
+        ws = _workspace(self.client, self.org, self.tokens["owner"],
+                        f"{name[:40]} {uuid.uuid4().hex[:8]}")
+        if enabled:
+            self.enable(ws)
+        return ws
+
     def enable(self, ws: str | None = None, enabled: bool = True) -> None:
         """A workspace override for ``creative_generation`` (the global flag stays off)."""
         ws = ws or self.ws
@@ -317,9 +325,7 @@ def _me(client: TestClient, token: str) -> str:
 
 
 @contextmanager
-def creative_world(db_file: Path, key: str) -> Iterator[CreativeWorld]:
-    request_engine, witness = _engine(db_file), _engine(db_file)
-    Base.metadata.create_all(request_engine)
+def _creative_world(request_engine: Engine, witness: Engine, key: str) -> Iterator[CreativeWorld]:
     factory = sessionmaker(bind=request_engine, autoflush=False, expire_on_commit=False,
                            future=True)
 
@@ -351,8 +357,50 @@ def creative_world(db_file: Path, key: str) -> Iterator[CreativeWorld]:
     finally:
         app.dependency_overrides.clear()
         _rate_limiter()._hits.clear()
+
+
+@contextmanager
+def creative_world(db_file: Path, key: str) -> Iterator[CreativeWorld]:
+    """The world on a temporary SQLite file with foreign keys on."""
+    request_engine, witness = _engine(db_file), _engine(db_file)
+    Base.metadata.create_all(request_engine)
+    try:
+        with _creative_world(request_engine, witness, key) as w:
+            yield w
+    finally:
         request_engine.dispose()
         witness.dispose()
+
+
+@contextmanager
+def postgres_creative_world(key: str) -> Iterator[CreativeWorld]:
+    """The world on a PostgreSQL database of this test's own, migrated to head
+    (``TEST_POSTGRES_URL``; :func:`app.tests._auth2_support.require_postgres` gates it)."""
+    import os
+    import subprocess
+    import sys
+
+    from sqlalchemy import create_engine
+
+    from app.tests._auth2_support import pg_database, require_postgres
+
+    require_postgres()
+    with pg_database(f"sn_{key}") as url:
+        env = {**os.environ, "DATABASE_URL": url}
+        env.pop("SN_MIGRATION_MODE", None)
+        done = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+        request_engine = create_engine(url, future=True, pool_size=10, max_overflow=10)
+        witness = create_engine(url, future=True)
+        try:
+            with _creative_world(request_engine, witness, key) as w:
+                yield w
+        finally:
+            request_engine.dispose()
+            witness.dispose()
 
 
 __all__ = [
@@ -365,4 +413,5 @@ __all__ = [
     "ROLES",
     "CreativeWorld",
     "creative_world",
+    "postgres_creative_world",
 ]
