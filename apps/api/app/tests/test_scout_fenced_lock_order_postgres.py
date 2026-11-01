@@ -74,9 +74,7 @@ def test_a_stale_admission_check_never_deadlocks_the_fenced_failure(world, monke
     monkeypatch.setattr(get_settings(), "vector_inprocess_max_signals_per_run", 2)
     sources = Sources(gate=True, count=5)
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(
             MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
             settings=offline_settings(),
@@ -154,8 +152,7 @@ def test_rev_r8_a_stale_admission_check_against_the_success_commit(
     sources = Sources(gate=True)
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
     monkeypatch.setattr(  # the reviewer's ``rec._mock_llm(monkeypatch)``
-        pipeline,
-        "llm_service",
+        "app.llm.service.llm_service",
         LLMService(
             MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
             settings=offline_settings(),

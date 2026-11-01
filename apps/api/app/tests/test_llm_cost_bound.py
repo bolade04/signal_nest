@@ -399,7 +399,13 @@ def test_the_bytes_that_are_bounded_are_the_bytes_the_transport_sends(which, con
     meter._tenant_ref = "t_" + "9" * 32  # bound by hand: no database needed for the spy
     meter._workspace_id = meter._organization_id = "x"
     meter._bound = True
-    service.run("classify_signal", {"content": content}, meter=meter)
+    service.run(
+        "classify_signal",
+        {"content": content, "audiences": None},
+        meter=meter,
+        organization_id=meter.organization_id,
+        workspace_id=meter.workspace_id,
+    )
     assert len(spy.sent) == 1 and meter.seen == spy.sent  # byte for byte
     sent = spy.sent[0]
     assert sent == encode_body(json.loads(sent))  # canonical: the bytes ARE the encoding
@@ -446,7 +452,11 @@ def test_the_meter_refuses_a_provider_that_cannot_show_its_bytes():
     meter = _meter(settings)
     with pytest.raises(LLMBudgetExceededError) as exc:
         LLMService(provider, settings=settings).run(
-            "classify_signal", {"content": "x"}, meter=meter
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=meter,
+            organization_id=meter.organization_id,
+            workspace_id=meter.workspace_id,
         )
     assert (exc.value.reason, exc.value.detail) == ("cost_unbounded", "no_wire_payload")
     assert provider.calls == 0 and meter.refusals == {"cost_unbounded": 1} and meter.attempts == 0
@@ -462,7 +472,11 @@ def test_the_meter_refuses_a_model_missing_from_the_price_table_before_any_reque
     meter = _meter(settings)
     with pytest.raises(LLMBudgetExceededError) as exc:
         LLMService(provider, settings=settings).run(
-            "classify_signal", {"content": "x"}, meter=meter
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=meter,
+            organization_id=meter.organization_id,
+            workspace_id=meter.workspace_id,
         )
     assert (exc.value.reason, exc.value.detail) == ("cost_unbounded", "model_not_priced")
     assert spy.sent == [] and meter.spent == 0.0
@@ -494,7 +508,11 @@ def test_the_unbounded_refusal_never_reserves_zero_on_the_shared_ledger(tmp_path
     )
     with pytest.raises(LLMBudgetExceededError):
         LLMService(provider, settings=settings).run(
-            "classify_signal", {"content": "x"}, meter=meter
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=meter,
+            organization_id=meter.organization_id,
+            workspace_id=meter.workspace_id,
         )
     with make() as db:
         assert db.scalar(select(func.count()).select_from(LLMBudgetReservation)) == 0
@@ -565,7 +583,11 @@ def test_the_outcome_classifier_is_default_deny(name):
     meter = _meter(settings)
     with pytest.raises(LLMError):
         LLMService(provider, settings=settings).run(
-            "classify_signal", {"content": "x"}, meter=meter
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=meter,
+            organization_id=meter.organization_id,
+            workspace_id=meter.workspace_id,
         )
     worst = float(meter.worst_case("anthropic", MODEL, provider.prepare(_request("x")).content))
     assert meter.spent == (0.0 if expected == FREE else pytest.approx(worst)), name
@@ -578,7 +600,7 @@ def _request(content: str):
 
     return LLMRequest(
         task="classify_signal",
-        inputs={"content": content},
+        inputs={"content": content, "audiences": None},
         max_tokens=offline_settings().llm_max_output_tokens,
         tenant_ref="t",
     )
@@ -694,7 +716,11 @@ def test_an_undecodable_reply_is_malformed_and_charged_the_bound(which, case):
     meter = _meter(settings)
     with pytest.raises(LLMMalformedError):  # never a RecursionError / ValueError escape
         LLMService(provider, settings=settings).run(
-            "classify_signal", {"content": "x"}, meter=meter
+            "classify_signal",
+            {"content": "x", "audiences": None},
+            meter=meter,
+            organization_id=meter.organization_id,
+            workspace_id=meter.workspace_id,
         )
     prepared = provider.prepare(_request("x")).content
     worst = float(meter.worst_case(which, model, prepared))

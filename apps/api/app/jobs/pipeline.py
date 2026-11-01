@@ -61,7 +61,7 @@ from app.jobs.context import ExecutionContext, JobContextError, scope_matches
 from app.llm.base import LLMError
 from app.llm.metering import LLMBudgetExceededError, LLMMeter
 from app.llm.screening import screen_classification, screen_explanation
-from app.llm.service import llm_service
+from app.llm.service import get_llm_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.context import build_business_context
 from app.opportunities.identity import finding_key, legacy_cards_by_key
@@ -462,9 +462,11 @@ def _run(
         if not is_noise and not is_duplicate:
             signal_input.signal_type = None
             try:
-                classified, _ = llm_service.run(
+                classified, _ = get_llm_service().run(
                     "classify_signal",
                     {"content": fx.content, "audiences": ctx.audiences or None},
+                    organization_id=request.organization_id,
+                    workspace_id=request.workspace_id,
                     meter=meter,
                 )
                 # P6-LLM-3: labels constrained to the closed vocabularies before use.
@@ -1156,7 +1158,7 @@ def _explain(
             "suggested_angles": [],
         }, ExplanationSource.RULE_BASED, []
     try:
-        out, _ = llm_service.run(
+        out, _ = get_llm_service().run(
             "explain_opportunity",
             {
                 "resolved_market": geo.resolved_market,
@@ -1164,6 +1166,8 @@ def _explain(
                 "pain_point_dna": primary.pain_point_dna,
                 "safe_positioning": safe_positioning,
             },
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
             meter=meter,
         )
     except LLMBudgetExceededError:

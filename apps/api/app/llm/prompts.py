@@ -9,6 +9,15 @@ Instruction hierarchy (P6-LLM-2): a template holds only trusted task text. Every
 :func:`app.llm.untrusted.data_block` (sanitized, capped, escaped, delimited), and
 :data:`SYSTEM_PROMPT` tells the model that nothing inside such a block is an
 instruction. :func:`render_prompt` is the single place a prompt is assembled.
+
+Fail-closed rendering (Phase 5A): every template field must be a key of the inputs (its
+value may be ``None``, which renders an empty block - an explicit "no value"), and a
+template the formatter cannot fill is an error. Either raises
+:class:`~app.llm.base.LLMPromptRenderError` before anything is sent; there is no fallback
+that sends an unrendered or partly rendered template.
+
+Changing a template is a prompt change: bump its ``version`` in the same commit
+(``test_llm_provider.py`` pins every template's digest against its version).
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ import string
 from dataclasses import dataclass
 
 from app.core.enums import PainPointDNA, SignalType
+from app.llm.base import LLMPromptRenderError
 from app.llm.untrusted import data_block
 
 SYSTEM_PROMPT = (
@@ -42,8 +52,9 @@ class Prompt:
 
 PROMPTS: dict[str, Prompt] = {
     # Template fields must match the input keys the pipeline passes: a field with no
-    # matching input renders an empty block (1.0.0 named ``keywords``/``context``,
-    # which no caller sent). 1.2.0: every field is an untrusted data block.
+    # matching input key raises (fail-closed rendering, Phase 5A; 1.0.0 named
+    # ``keywords``/``context``, which no caller sent). 1.2.0: every field is an untrusted
+    # data block.
     "classify_signal": Prompt(
         name="classify_signal",
         version="1.2.0",
@@ -109,10 +120,28 @@ def template_fields(template: str) -> list[str]:
 
 
 def render_prompt(task: str, inputs: dict, max_untrusted_chars: int) -> str:
-    """The user message for ``task``: trusted task text with every input as data."""
+    """The user message for ``task``: trusted task text with every input as data.
+
+    Raises :class:`LLMPromptRenderError`, having built nothing that could be sent, when a
+    template field has no input key or the template cannot be filled.
+    """
     template = get_prompt(task).template
-    blocks = {
-        name: data_block(name, inputs.get(name), max_untrusted_chars)
-        for name in template_fields(template)
-    }
-    return template.format(**blocks) + "\nRespond with strict minified JSON only."
+    try:
+        fields = template_fields(template)
+    except ValueError as exc:  # an unbalanced brace: not a template the formatter reads
+        raise LLMPromptRenderError(f"prompt '{task}' has a malformed template") from exc
+    missing = sorted(set(fields) - set(inputs))
+    if missing:
+        raise LLMPromptRenderError(
+            f"prompt '{task}' cannot be rendered: no input for {', '.join(missing)}"
+        )
+    blocks = {name: data_block(name, inputs[name], max_untrusted_chars) for name in fields}
+    try:
+        rendered = template.format(**blocks)
+    except (KeyError, IndexError, AttributeError, ValueError) as exc:
+        # A positional, indexed or attribute field ("{0}", "{x[0]}", "{x.y}") or a bad
+        # format spec: the template is not one this renderer can fill.
+        raise LLMPromptRenderError(
+            f"prompt '{task}' cannot be rendered ({type(exc).__name__})"
+        ) from None
+    return rendered + "\nRespond with strict minified JSON only."
