@@ -12,11 +12,11 @@ the legacy bulk API and an ORM upsert — for each of the three append-only mode
   refused;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
   (function, attribute-call or method form, or ``Query``) or an upsert over these models or
-  their tables, writes such SQL as a string, calls the bulk API or calls ``delete_rows``,
-  following import, annotated, tuple, list and walrus aliases — with an in-test control per
-  form and look-alikes that must pass. **Not pinned:** tables reached through
-  ``Base.metadata``, ``getattr`` or ``inspect(...).local_table``, tables passed as parameters,
-  and SQL assembled at run time;
+  their tables, writes a literal unqualified UPDATE / DELETE FROM / INSERT … DO UPDATE string
+  on the three tables, calls the bulk API or calls ``delete_rows``, following model import
+  aliases and annotated, tuple, list and walrus aliases — with an in-test control per form
+  and look-alikes that must pass. It is a backstop to the runtime guard; what it does not
+  pin is listed on the production-scan test and in ``app.db.append_only``;
 * a **mapped subclass** of a guarded model is guarded too (unit of work, statements, bulk
   API).
 
@@ -454,10 +454,18 @@ def test_the_detector_ignores_look_alikes(form: str) -> None:
 
 
 def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert() -> None:
-    """Not pinned: tables reached through ``Base.metadata``, ``getattr`` or
-    ``inspect(...).local_table``, tables passed as parameters, and SQL assembled at run time.
-    (The guarded, development-only demo reset in ``app.db.seed`` writes through
-    ``Base.metadata`` and is the one sanctioned writer outside ``app/privacy/``.)"""
+    """A backstop to the runtime guard, not the enforcement layer. It follows **model** import
+    aliases and annotated, tuple and walrus aliases, and matches only literal, unqualified
+    ``UPDATE`` / ``DELETE FROM`` / ``INSERT … DO UPDATE`` strings on the three tables.
+
+    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts)
+    imported under another name; models referenced through a module (``models.Approval``);
+    tables built or reflected by name (``table("approvals")``, ``Table("approvals", …)``) or
+    reached through ``Base.metadata``, ``getattr``, ``inspect(...).local_table`` or
+    ``Model.__mapper__.local_table``; tables passed as parameters; SQL that schema-qualifies
+    the table or uses TRUNCATE or MERGE; and SQL assembled at run time. (The guarded,
+    development-only demo reset in ``app.db.seed`` writes through ``Base.metadata`` and is the
+    one sanctioned writer outside ``app/privacy/``.)"""
     privacy_hits, offenders = 0, []
     for path in sorted((API_DIR / "app").rglob("*.py")):
         rel = path.relative_to(API_DIR)

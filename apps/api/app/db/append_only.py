@@ -41,12 +41,19 @@ Exactly three places write these tables through Core after insert, all sanctione
 3. :func:`app.db.seed._reset` — the guarded, development-only demo reset that empties every
    table.
 
-``test_cf1_append_only_bulk_paths.py`` pins statically that no other production module
-builds an UPDATE or DELETE (function or attribute-call form, method form, ``Query``) or an
-upsert over these models or their tables, writes such SQL as a string, calls the bulk API or
-calls ``delete_rows`` — following import, annotated, tuple and walrus aliases. **Not pinned:**
-tables reached through ``Base.metadata``, ``getattr`` or ``inspect(...).local_table``, tables
-passed as parameters, and SQL assembled at run time.
+``test_cf1_append_only_bulk_paths.py`` is a static **backstop**, not the enforcement layer
+(the runtime guard above is): it checks that no other production module builds an UPDATE or
+DELETE (function or attribute-call form, method form, ``Query``) or an upsert over these
+models or their tables, writes a literal ``UPDATE <table>`` / ``DELETE FROM <table>`` /
+``INSERT INTO <table> … DO UPDATE`` string naming one of the three tables unqualified, calls
+the bulk API or calls ``delete_rows`` — following **model** import aliases and annotated,
+tuple and walrus aliases. **Not pinned:** the statement functions (``update``, ``delete``,
+``insert``, dialect inserts) imported under another name; models referenced through a module
+(``models.Approval``); tables built or reflected by name (``table("approvals")``,
+``Table("approvals", …, autoload_with=…)``) or reached through ``Base.metadata``, ``getattr``,
+``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as parameters;
+SQL that schema-qualifies the table (``public.approvals``) or uses ``TRUNCATE`` or ``MERGE``;
+and SQL assembled at run time.
 
 **Enforcement level (operator decision O-10,
 ``REC_app_layer_append_only_document_db_level_as_separate_infra``).** This is an

@@ -293,7 +293,7 @@ def test_the_subclass_is_guarded_but_not_enumerated_as_decorated() -> None:
 @pytest.mark.parametrize(
     "path",
     ["flush update", "flush delete", "update(SubClass)", "delete(SubClass)",
-     "bulk_update_mappings(SubClass)"],
+     "bulk_update_mappings(SubClass)", "bulk_save_objects(SubClass)"],
 )
 def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, path) -> None:
     s = child_session
@@ -308,7 +308,12 @@ def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, 
             s.execute(update(_Child).where(_Child.id == "c1").values(value="changed"))
         elif path == "delete(SubClass)":
             s.execute(delete(_Child).where(_Child.id == "c1"))
-        else:
+        elif path == "bulk_update_mappings(SubClass)":
             s.bulk_update_mappings(_Child, [{"id": "c1", "value": "changed"}])
+        else:  # a detached, modified instance: bulk_save_objects would UPDATE it
+            child = s.get(_Child, "c1")
+            s.expunge(child)
+            child.value = "changed"
+            s.bulk_save_objects([child])
     s.rollback()
     assert _child_value(s) == "original"
