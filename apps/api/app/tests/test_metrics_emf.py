@@ -28,6 +28,8 @@ from app.core.metrics import (
     JOBS_FAILED_TOTAL,
     JOBS_QUEUE_DEPTH,
     METRIC_NAMES,
+    SCOUTS_BLOCKED,
+    SCOUTS_BLOCKED_OLDEST_AGE_SECONDS,
     InMemoryMetrics,
     MetricError,
     NoOpMetrics,
@@ -174,8 +176,40 @@ def test_error_class_and_job_status_are_properties_never_dimensions() -> None:
 
 def test_every_catalogued_metric_has_a_unit() -> None:
     for name in METRIC_NAMES:
-        assert metric_unit(name) in {"Count", "Milliseconds"}, name
+        assert metric_unit(name) in {"Count", "Milliseconds", "Seconds"}, name
     assert metric_unit(HTTP_REQUEST_DURATION_MS) == "Milliseconds"
+    # FU-267-A1: the blocked-Scout age is in seconds; the count is a count.
+    assert metric_unit(SCOUTS_BLOCKED_OLDEST_AGE_SECONDS) == "Seconds"
+    assert metric_unit(SCOUTS_BLOCKED) == "Count"
+    assert [n for n in METRIC_NAMES if metric_unit(n) == "Seconds"] == [
+        SCOUTS_BLOCKED_OLDEST_AGE_SECONDS
+    ]
+
+
+def test_the_blocked_scout_gauges_are_one_rollup_series_each() -> None:
+    """FU-267-A1: each gauge is written once per flush with its last value, under the
+    service + environment rollup only (the dimension set the alarm reads), with its unit."""
+    lines: list[str] = []
+    m = _backend(lines)
+    m.set_gauge(SCOUTS_BLOCKED, 1)
+    m.set_gauge(SCOUTS_BLOCKED, 3)  # a later sweep: the last value wins
+    m.set_gauge(SCOUTS_BLOCKED_OLDEST_AGE_SECONDS, 905.5)
+    m.flush()
+    docs = {
+        doc["_aws"]["CloudWatchMetrics"][0]["Metrics"][0]["Name"]: doc for doc in _docs(lines)
+    }
+    assert set(docs) == {SCOUTS_BLOCKED, SCOUTS_BLOCKED_OLDEST_AGE_SECONDS}
+    for name, value, unit in (
+        (SCOUTS_BLOCKED, 3.0, "Count"),
+        (SCOUTS_BLOCKED_OLDEST_AGE_SECONDS, 905.5, "Seconds"),
+    ):
+        doc = docs[name]
+        directive = doc["_aws"]["CloudWatchMetrics"][0]
+        assert directive["Namespace"] == NAMESPACE
+        assert directive["Dimensions"] == [["service", "environment"]]
+        assert directive["Metrics"] == [{"Name": name, "Unit": unit}]
+        assert doc[name] == value
+        assert set(doc) == {"_aws", "service", "environment", name}
 
 
 # --------------------------------------------------------------------------- #

@@ -377,9 +377,18 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     **Caveat:** the deadline guard covers SignalNest's client side only. After the deadline
     the external party (the provider or the feed's server) may still be working;
     reconciling is the operator's declaration that it is not, and the bound then rests on
-    that declaration. A blocked Scout is now visible (the `blocked` listing and the customer
-    indication above), but there is still no alert or metric: operators must look. This
-    operational burden is a stated limitation.
+    that declaration. A blocked Scout is visible (the `blocked` listing and the customer
+    indication above). **Operator signal (FU-267-A1, PROPOSED):** every worker's registry
+    heartbeat sets the gauges `scouts_blocked` and `scouts_blocked_oldest_age_seconds`
+    (exactly the Scouts `blocked` lists; no labels; no traffic needed), and
+    `GET /api/v1/internal/system/overview` reports `scouts.blocked_count` and
+    `scouts.oldest_blocked_age_seconds`. On SQLite (no ledger) the gauges are absent and the
+    overview says `ledger_kept: false`. The alert is defined in
+    [alerts.md](./alerts.md) §21 and the response in
+    [incident_response.md](./incident_response.md) §13; it fires only where metrics are
+    exported (`METRICS_ENABLED=true`, `METRICS_EXPORTER=emf` on the worker) and an alarm
+    is configured — neither is wired in any environment yet, so until then operators must
+    poll the overview.
   - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
     the run at its next admission (including while it waits): the job ends `cancelled`.
     **Cancel recovery (D-25 recovery, PROPOSED):** whenever Cancel makes an execute job

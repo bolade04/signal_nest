@@ -71,6 +71,7 @@ from app.core.tracing import (
     start_span,
 )
 from app.db.session import SessionLocal
+from app.jobs.blocked_signal import record_blocked_scouts
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.registry import (
@@ -879,6 +880,11 @@ class Worker:
         Distinct from the per-job lease heartbeat. It writes no audit rows and
         persists no error detail; a failed beat is logged as a warning and retried
         on the next tick (its retry cadence is independent of job retries).
+
+        Each beat then sets the blocked-Scout gauges (FU-267-A1,
+        :func:`app.jobs.blocked_signal.record_blocked_scouts`) in a read of its own,
+        after the heartbeat has committed: the signal needs no customer traffic, and
+        its failure can never cost the worker its liveness.
         """
         stop = threading.Event()
         interval = self._settings.worker_heartbeat_seconds
@@ -906,6 +912,17 @@ class Worker:
                     )
                 finally:
                     db.close()
+                try:
+                    record_blocked_scouts(self._session_factory)
+                except Exception as exc:  # noqa: BLE001 - observation is never fatal to the beat
+                    log_event(
+                        logger,
+                        "worker.blocked_scouts_signal_failed",
+                        level=WARNING,
+                        component="jobs",
+                        outcome="degraded",
+                        error_class=type(exc).__name__,
+                    )
 
         thread = threading.Thread(target=_beat, name="reg-hb", daemon=True)
         thread.start()

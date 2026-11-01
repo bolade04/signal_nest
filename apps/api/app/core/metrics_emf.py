@@ -70,6 +70,8 @@ def metric_unit(name: str) -> str:
     """The CloudWatch unit declared for a catalogued metric."""
     if name.endswith("_duration_ms"):
         return "Milliseconds"
+    if name.endswith("_seconds"):
+        return "Seconds"
     return "Count"
 
 

@@ -1117,6 +1117,14 @@ export const handlers = [
       },
       workers: { active_count: 3, stale_count: 1, status_counts: { active: 3, stale: 1 } },
       schedules: { total: 4, state_counts: { active: 3, paused: 1 } },
+      // FU-267-A1: the blocked-Scout block of the real OperationalOverviewOut (counts and an
+      // age only; `ledger_kept: false` with nulls on SQLite).
+      scouts: {
+        ledger_kept: true,
+        blocked_count: 1,
+        oldest_blocked_since: '2026-06-01T11:00:00Z',
+        oldest_blocked_age_seconds: 3600,
+      },
     }),
   ),
   http.get(P('/internal/system/telemetry'), () =>
