@@ -528,6 +528,17 @@ class Settings(BaseSettings):
     llm_max_output_tokens_per_call: int | None = None
     # --- Project Phase 5C: creative generation (W21 CF-2) — END ---------------
 
+    # --- Project Phase 5E: audited manual export (W21 CF-3) — BEGIN ------------
+    #: Master switch for audited manual export of approved creative text (dark by
+    #: default). Bound to ``Capability.CONTENT_EXPORT``, which is ``workspace_enableable``
+    #: (operator decision O-3), so availability is the capability resolver's per-workspace
+    #: decision (the deny-biased ``_require_feedback_feature`` pattern), never this raw
+    #: flag. CF-3 adds the flag, the capability and the contracts only: nothing consumes it
+    #: yet. Activation additionally needs O-5 and the verified NULL-jurisdiction refusal
+    #: (Project Phase 5 plan §10). Notifications and analytics have no flag (open O-12).
+    content_export_enabled: bool = False
+    # --- Project Phase 5E: audited manual export (W21 CF-3) — END --------------
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None

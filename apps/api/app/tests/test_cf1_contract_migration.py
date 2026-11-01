@@ -2,9 +2,9 @@
 
 Through the real Alembic CLI on a throwaway SQLite database (as CI validates migrations):
 
-* ``f3a9c1e7b2d5`` follows ``e7b3c5a9d1f4`` and the single head (CF-2's ``a7d2e9f4c1b8``)
-  follows it; ``upgrade head`` then ``alembic check`` reports no drift between the models and
-  the migrations (Phase 5 plan §6.2.0);
+* ``f3a9c1e7b2d5`` follows ``e7b3c5a9d1f4``, CF-2's ``a7d2e9f4c1b8`` follows it and the
+  single head (CF-3's ``c3f8e1a6d2b9``) follows CF-2; ``upgrade head`` then ``alembic
+  check`` reports no drift between the models and the migrations (Phase 5 plan §6.2.0);
 * **the migrated database's CHECKs equal their Python authorities, in both directions** — the
   capability set (``persisted_values()``), the approval decision / subject-type / decided-role
   vocabularies and the reason-code **polarity partition** (decision → codes, not a flat set,
@@ -45,8 +45,10 @@ from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
 API_DIR = Path(__file__).resolve().parents[2]
 #: This revision (W21 CF-1).
 CF1 = "f3a9c1e7b2d5"
-#: The code head (W21 CF-2), which follows CF-1.
-HEAD = "a7d2e9f4c1b8"
+#: The code head (W21 CF-3), which follows CF-2.
+HEAD = "c3f8e1a6d2b9"
+#: W21 CF-2, between this revision and the head.
+CF2 = "a7d2e9f4c1b8"
 PREV = "e7b3c5a9d1f4"
 OVERRIDES = "workspace_capability_overrides"
 
@@ -62,7 +64,10 @@ EXPECTED_CHECKS = {
         "ck_approval_subject_type",
         "ck_approval_subject_version",
     },
-    "recommendation_briefs": {"ck_recommendation_brief_version"},
+    "recommendation_briefs": {
+        "ck_recommendation_brief_version",
+        "ck_recommendation_brief_jurisdiction_code",  # CF-3
+    },
     OVERRIDES: {"ck_workspace_capability_override_capability"},
 }
 
@@ -180,7 +185,8 @@ def test_the_head_is_single_and_follows_the_finding_identity() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CF1
+    assert script.get_revision(HEAD).down_revision == CF2
+    assert script.get_revision(CF2).down_revision == CF1
     assert script.get_revision(CF1).down_revision == PREV
 
 

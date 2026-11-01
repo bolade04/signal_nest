@@ -21,10 +21,12 @@ purge of the ``audit_logs`` retention class removes them. The Project Phase 5 co
 records follow the same rule (W21 CF-1): ``approvals`` (FK-less scope, like ``audit_logs``)
 survive organization deletion anonymised, and the actor snapshots on ``approvals`` and
 ``recommendation_briefs`` are cleared when the account they name is deleted, while the rows
-are kept. A value names a subject only where
-the shared matcher (:mod:`app.privacy.matching`, also the verifier's) finds its id or address
-``WHOLE``; an occurrence that some registrable address could contain is left, because it may be
-another person's.
+are kept. Since W21 CF-3 the 5E ``exports`` (FK-less scope) are treated exactly as
+``approvals``; the 5E ``notifications`` and ``notification_preferences`` are the account's
+own and go with it (and with their workspace) through the foreign-key walk. A value names a
+subject only where the shared matcher (:mod:`app.privacy.matching`, also the verifier's) finds
+its id or address ``WHOLE``; an occurrence that some registrable address could contain is left,
+because it may be another person's.
 
 **Data found only by an email address** (invitations addressed to it, audit values naming
 it) is the account's own only once the account has proven the address
@@ -62,6 +64,7 @@ from app.core.errors import AuthError, ConflictError, PermissionDeniedError, Val
 from app.core.security import verify_password
 from app.creative.models import CreativeDraft
 from app.db.models import Base
+from app.exports.models import Export
 from app.jobs.models import Job
 from app.jobs.status import ACTIVE_STATUSES
 from app.organizations.members import load_membership, lock_organization
@@ -337,12 +340,12 @@ def anonymise_phase5_records_for_subject(
 
     Operator decision ``O-6`` as this module already applies it to ``audit_logs``: the record
     survives, the values naming the subject go. ``recommendation_briefs.created_by_snapshot``,
-    ``creative_drafts.created_by_snapshot`` (CF-2) and ``approvals.decided_by_snapshot``
-    become :data:`ERASED` when the row was made by
+    ``creative_drafts.created_by_snapshot`` (CF-2), ``approvals.decided_by_snapshot`` and
+    ``exports.exported_by_snapshot`` (CF-3) become :data:`ERASED` when the row was made by
     ``user_id`` or the snapshot names the subject; an ``approvals.note`` naming the subject
-    becomes NULL. The ``created_by`` / ``decided_by`` foreign keys are cleared afterwards by
-    the foreign-key walk (``SET NULL``). Run it before the user row goes. Returns the rows
-    changed per table.
+    becomes NULL. The ``created_by`` / ``decided_by`` / ``exported_by`` foreign keys are
+    cleared afterwards by the foreign-key walk (``SET NULL``). Run it before the user row
+    goes. Returns the rows changed per table.
     """
     changed: Counter = Counter()
     subject = Subject(
@@ -352,23 +355,27 @@ def anonymise_phase5_records_for_subject(
     )
     if not subject:
         return changed
-    for authored in (RecommendationBrief.__table__, CreativeDraft.__table__):
-        clauses = [prefilter(authored.c.created_by_snapshot, subject)]
+    for authored, actor, snapshot in (
+        (RecommendationBrief.__table__, "created_by", "created_by_snapshot"),
+        (CreativeDraft.__table__, "created_by", "created_by_snapshot"),
+        (Export.__table__, "exported_by", "exported_by_snapshot"),
+    ):
+        clauses = [prefilter(authored.c[snapshot], subject)]
         if user_id:
-            clauses.append(authored.c.created_by == user_id)
+            clauses.append(authored.c[actor] == user_id)
         for row in db.execute(
-            select(authored.c.id, authored.c.created_by, authored.c.created_by_snapshot).where(
-                or_(*clauses)
-            )
+            select(
+                authored.c.id,
+                authored.c[actor].label("actor"),
+                authored.c[snapshot].label("snapshot"),
+            ).where(or_(*clauses))
         ).all():
-            mine = bool(user_id) and row.created_by == user_id
-            if row.created_by_snapshot != ERASED and (
-                mine or _names(row.created_by_snapshot, subject)
-            ):
+            mine = bool(user_id) and row.actor == user_id
+            if row.snapshot != ERASED and (mine or _names(row.snapshot, subject)):
                 db.execute(
                     update(authored)
                     .where(authored.c.id == row.id)
-                    .values(created_by_snapshot=ERASED)
+                    .values({snapshot: ERASED})
                     .execution_options(synchronize_session=False)
                 )
                 changed[authored.name] += 1
@@ -422,6 +429,25 @@ def anonymise_organization_approvals(db: Session, *, organization_id: str) -> in
     return result.rowcount or 0
 
 
+def anonymise_organization_exports(db: Session, *, organization_id: str) -> int:
+    """Clear every identifying column of the organization's exports; keep the rows (O-6, CF-3).
+
+    Kept: ``organization_id``, ``workspace_id`` (opaque ids of deleted scopes), the draft
+    version, the approval link (the approval is itself retained, anonymised), the format, the
+    jurisdiction, the simulation flag and ``created_at``. Cleared: ``exported_by`` (NULL) and
+    ``exported_by_snapshot`` (:data:`ERASED`). ``draft_id`` is cleared by the foreign-key walk
+    when the organization's drafts are deleted.
+    """
+    table = Export.__table__
+    result = db.execute(
+        update(table)
+        .where(table.c.organization_id == organization_id)
+        .values(exported_by=None, exported_by_snapshot=ERASED)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0
+
+
 # --------------------------------------------------------------------------- #
 # Organization deletion
 # --------------------------------------------------------------------------- #
@@ -468,6 +494,9 @@ def erase_organization(db: Session, *, organization_id: str) -> OrganizationEras
         db, organization_id=organization_id
     )
     counts.anonymised["approvals"] += anonymise_organization_approvals(
+        db, organization_id=organization_id
+    )
+    counts.anonymised["exports"] += anonymise_organization_exports(
         db, organization_id=organization_id
     )
     counts.merge(delete_rows(db, Organization.__table__, [organization_id]))
@@ -733,6 +762,7 @@ __all__ = [
     "anonymise_audit_for_subject",
     "anonymise_organization_approvals",
     "anonymise_organization_audit",
+    "anonymise_organization_exports",
     "anonymise_phase5_records_for_subject",
     "delete_account",
     "delete_organization",

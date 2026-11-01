@@ -85,6 +85,11 @@ class FeatureFlagsOut(BaseModel):
     #: workspace: the 5C gate will decide through the capability resolver.
     creative_generation_enabled: bool
 
+    #: The RAW global content-export flag (Project Phase 5E, CF-3), reflected per operator
+    #: decision O-4 (``ALT_expose_all``). It does not decide availability for a workspace:
+    #: the 5E export gate will decide through the capability resolver.
+    content_export_enabled: bool
+
 
 class RuntimeSummaryOut(BaseModel):
     app_mode: str
@@ -142,6 +147,7 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
             connector_rss_enabled=settings.connector_rss_enabled,
             recommendation_briefs_enabled=settings.recommendation_briefs_enabled,
             creative_generation_enabled=settings.creative_generation_enabled,
+            content_export_enabled=settings.content_export_enabled,
         ),
     )
 

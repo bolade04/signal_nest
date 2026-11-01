@@ -39,6 +39,7 @@ from app.core.actor_snapshot import actor_snapshot
 from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation, append_only, is_append_only, is_guarded
 from app.db.models import Base
+from app.exports.models import Export
 
 SNAPSHOT = actor_snapshot(user_id="u-author", full_name="Ada Author", email="ada@example.test")
 
@@ -232,10 +233,14 @@ def test_exactly_the_append_only_models_are_guarded() -> None:
         # CF-2 (Project Phase 5C).
         "creative_drafts",
         "content_reviews",
+        # CF-3 (Project Phase 5E).
+        "exports",
     }
 
 
-@pytest.mark.parametrize("model", [RecommendationBrief, Approval, CreativeDraft, ContentReview])
+@pytest.mark.parametrize(
+    "model", [RecommendationBrief, Approval, CreativeDraft, ContentReview, Export]
+)
 def test_new_append_only_tables_carry_created_at_only(model) -> None:
     columns = model.__table__.c
     assert "created_at" in columns

@@ -28,6 +28,10 @@ _provider.scrub_environment()
 
 from app.jobs import registry as _registry  # noqa: E402
 
+# Fixture modules (Project Phase 5 plan §6.3: each registered here at its CF-* gate). The
+# Phase 5E analytics seeded fixture is lane 5E-W1's module, registered at W21 CF-3.
+from app.tests.fixtures.analytics import *  # noqa: E402, F401, F403
+
 
 @pytest.fixture(autouse=True)
 def _preserve_job_registry() -> Iterator[None]:

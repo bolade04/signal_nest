@@ -11,8 +11,10 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   decisions it made (ids, versions, channel, decision, reason code, its own snapshot, and the
   account's own free-text note, which may name other people, as
   ``capability_overrides_set.reason`` may; never a brief's or draft's model-generated text and
-  never another account's records). No credential, token or
-  digest.
+  never another account's records) and — Project Phase 5E (W21 CF-3) — the exports it made
+  (ids, version, format, jurisdiction, its own snapshot; never the exported text), its own
+  in-app notifications (event code, subject id, read and soft-delete instants) and its own
+  notification preferences. No credential, token or digest.
   The invitations it accepted are bound to it by id and always listed; the others addressed
   to its email address are found by that address, so they are listed only when it is
   verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says which, in
@@ -50,7 +52,9 @@ from app.core.errors import NotFoundError, ValidationDomainError
 from app.creative.models import CreativeDraft
 from app.db.clock import as_utc
 from app.db.models import Base
+from app.exports.models import Export
 from app.feedback.models import OpportunityFeedback
+from app.notifications.models import Notification, NotificationPreference
 from app.organizations.models import (
     Organization,
     OrganizationInvitation,
@@ -305,6 +309,57 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             )
             .where(CreativeDraft.created_by == uid)
             .order_by(CreativeDraft.created_at, CreativeDraft.id),
+        ),
+        # Project Phase 5E (W21 CF-3): exports the account made — what it exported (ids and
+        # version), how and under which jurisdiction, and its own snapshot; the exported text
+        # is the draft's, in the organization export.
+        "exports_performed": _rows(
+            db,
+            select(
+                Export.id,
+                Export.organization_id,
+                Export.workspace_id,
+                Export.draft_id,
+                Export.draft_version,
+                Export.approval_id,
+                Export.format,
+                Export.jurisdiction_code,
+                Export.exported_by_snapshot,
+                Export.created_at,
+            )
+            .where(Export.exported_by == uid)
+            .order_by(Export.created_at, Export.id),
+        ),
+        # The account's own in-app feed and its per-event preferences (CF-3): codes, ids and
+        # instants only — no text.
+        "notifications_received": _rows(
+            db,
+            select(
+                Notification.id,
+                Notification.organization_id,
+                Notification.workspace_id,
+                Notification.event_code,
+                Notification.subject_id,
+                Notification.read_at,
+                Notification.deleted_at,
+                Notification.created_at,
+            )
+            .where(Notification.user_id == uid)
+            .order_by(Notification.created_at, Notification.id),
+        ),
+        "notification_preferences": _rows(
+            db,
+            select(
+                NotificationPreference.id,
+                NotificationPreference.organization_id,
+                NotificationPreference.workspace_id,
+                NotificationPreference.event_code,
+                NotificationPreference.enabled,
+                NotificationPreference.created_at,
+                NotificationPreference.updated_at,
+            )
+            .where(NotificationPreference.user_id == uid)
+            .order_by(NotificationPreference.created_at, NotificationPreference.id),
         ),
     }
 

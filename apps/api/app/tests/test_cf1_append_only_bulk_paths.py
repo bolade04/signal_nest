@@ -10,8 +10,8 @@ that is not the statement itself: a data-modifying CTE (which PostgreSQL execute
 to a ``select()`` or to an outer INSERT, UPDATE or DELETE of another table, selected from, in
 a scalar subquery or under ``INSERT … FROM SELECT``, an upsert CTE, and ``from_statement()``
 under the model or under another entity (update, delete, upsert, prefixed insert, or carrying
-such a CTE), for each append-only model (the three of CF-1 and, since CF-2,
-``creative_drafts`` and ``content_reviews``), and shows:
+such a CTE), for each append-only model (the three of CF-1, since CF-2 ``creative_drafts`` and
+``content_reviews``, and since CF-3 ``exports``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
   byte-identical afterwards;
@@ -72,11 +72,12 @@ from app.audit.models import AuditLog
 from app.briefs.models import RecommendationBrief
 from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation
+from app.exports.models import Export
 from app.organizations.models import Organization
 from app.tests._privacy_support import ORG_A, WS_A, PrivacyEnv, privacy_world
 
 API_DIR = Path(__file__).resolve().parents[2]
-GUARDED = (RecommendationBrief, Approval, AuditLog, CreativeDraft, ContentReview)
+GUARDED = (RecommendationBrief, Approval, AuditLog, CreativeDraft, ContentReview, Export)
 #: The column each probe tries to change (always allowed by the table's CHECKs).
 FIELD = {
     RecommendationBrief: "summary",
@@ -84,6 +85,7 @@ FIELD = {
     AuditLog: "reason",
     CreativeDraft: "body",
     ContentReview: "warnings",
+    Export: "exported_by_snapshot",
 }
 
 BACKENDS = [
@@ -110,12 +112,12 @@ _serial = itertools.count(1)
 
 
 def _seed(world: PrivacyEnv) -> dict[type, str]:
-    """One fresh committed brief, approval, audit record, creative draft and content review
-    (Core inserts, as a fixture)."""
+    """One fresh committed brief, approval, audit record, creative draft, content review and
+    export (Core inserts, as a fixture)."""
     n = next(_serial)
     ids = {RecommendationBrief: f"cf1b-brief-{n}", Approval: f"cf1b-appr-{n}",
            AuditLog: f"cf1b-log-{n}", CreativeDraft: f"cf2b-draft-{n}",
-           ContentReview: f"cf2b-review-{n}"}
+           ContentReview: f"cf2b-review-{n}", Export: f"cf3b-export-{n}"}
     with world.engine.begin() as conn:
         conn.execute(
             insert(RecommendationBrief.__table__).values(
@@ -160,6 +162,14 @@ def _seed(world: PrivacyEnv) -> dict[type, str]:
                 draft_id=ids[CreativeDraft], draft_version=1, risk_level="low",
                 is_blocked=False, findings=[], warnings=["original"], blocked_claim_ids=[],
                 required_disclaimers=[], disclaimers_resolved=True, passed=True,
+            )
+        )
+        conn.execute(
+            insert(Export.__table__).values(
+                id=ids[Export], organization_id=ORG_A, workspace_id=WS_A,
+                draft_id=ids[CreativeDraft], draft_version=1, approval_id=ids[Approval],
+                format="text/plain", jurisdiction_code="GB",
+                exported_by_snapshot="u Name <u@example.test>", is_simulated=False,
             )
         )
     return ids

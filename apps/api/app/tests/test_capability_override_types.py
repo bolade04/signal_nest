@@ -158,6 +158,8 @@ _RAW_FLAGS = frozenset(
         "recommendation_briefs_enabled",
         # Project Phase 5 CF-2: likewise for the 5C gate when it lands.
         "creative_generation_enabled",
+        # Project Phase 5 CF-3: likewise for the 5E export gate when it lands.
+        "content_export_enabled",
     }
 )
 #: The only production module allowed to read them: the deliberately raw-global

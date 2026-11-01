@@ -2187,6 +2187,10 @@ export interface components {
             email_verification_requests: {
                 [key: string]: unknown;
             }[];
+            /** Exports Performed */
+            exports_performed: {
+                [key: string]: unknown;
+            }[];
             /** Feedback Submitted */
             feedback_submitted: {
                 [key: string]: unknown;
@@ -2203,6 +2207,14 @@ export interface components {
             }[];
             /** Memberships */
             memberships: {
+                [key: string]: unknown;
+            }[];
+            /** Notification Preferences */
+            notification_preferences: {
+                [key: string]: unknown;
+            }[];
+            /** Notifications Received */
+            notifications_received: {
                 [key: string]: unknown;
             }[];
             /** Password Reset Requests */
@@ -2414,32 +2426,40 @@ export interface components {
             goal?: string | null;
             /** Location Ids */
             location_ids?: string[];
-            /**
-             * Mode
-             * @default per_location
-             */
-            mode: string;
+            /** @default per_location */
+            mode: components["schemas"]["CampaignMode"];
             /** Name */
             name: string;
-            /**
-             * Status
-             * @default active
-             */
-            status: string;
+            /** @default active */
+            status: components["schemas"]["CampaignStatus"];
         };
+        /**
+         * CampaignMode
+         * @enum {string}
+         */
+        CampaignMode: "same_for_all" | "per_location" | "grouped" | "recommend";
         /** CampaignPatch */
         CampaignPatch: {
             /** Goal */
             goal?: string | null;
             /** Location Ids */
             location_ids?: string[];
-            /** Mode */
-            mode?: string;
+            mode?: components["schemas"]["CampaignMode"];
             /** Name */
             name?: string;
-            /** Status */
-            status?: string;
+            status?: components["schemas"]["CampaignStatus"];
         };
+        /**
+         * CampaignStatus
+         * @description The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).
+         *
+         *     Validated at the schema layer and by ``ck_campaign_status``. The list is a CF-3 proposal
+         *     recorded for review (the plan names the enum, not its members). ``active`` is the
+         *     default, as it was for the free-string column. Nothing in the product reads a campaign's
+         *     status yet; the members are a vocabulary, not behaviour.
+         * @enum {string}
+         */
+        CampaignStatus: "draft" | "active" | "paused" | "completed" | "archived";
         /** CapabilitiesOut */
         CapabilitiesOut: {
             /** All Configured */
@@ -2465,7 +2485,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -2972,6 +2992,8 @@ export interface components {
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
             connector_rss_enabled: boolean;
+            /** Content Export Enabled */
+            content_export_enabled: boolean;
             /** Creative Generation Enabled */
             creative_generation_enabled: boolean;
             /** Opportunity Feedback Enabled */

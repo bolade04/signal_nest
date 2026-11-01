@@ -17,8 +17,8 @@ Mechanics, identical for every class:
   (:func:`app.privacy.erasure.delete_rows`) — re-running a batch deletes nothing more, so
   every step is idempotent;
 * **platform classes** (no workspace: sessions, account tokens, invitations, audit
-  records and approvals) are purged by the sweep itself, each batch in its own committed
-  transaction, up to ``retention_purge_max_batches`` batches per class per sweep;
+  records, approvals and exports) are purged by the sweep itself, each batch in its own
+  committed transaction, up to ``retention_purge_max_batches`` batches per class per sweep;
 * **workspace classes** (signals, opportunities, job history) are purged by the
   ``retention.purge`` durable job, enqueued once per workspace per class per day (the
   idempotency key carries the cut-off), purging only inside its own tenant scope; a full
@@ -49,6 +49,7 @@ from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetTo
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger, log_event
 from app.db.clock import as_utc, database_now
+from app.exports.models import Export
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.status import TERMINAL_STATUSES, JobErrorCode, JobExecutionError, JobType
@@ -104,10 +105,12 @@ _ROOTS: dict[RetentionClass, tuple[tuple[Any, Callable[[datetime], Any]], ...]] 
             lambda c: (Job.updated_at < c) & Job.status.in_([s.value for s in TERMINAL_STATUSES]),
         ),
     ),
-    # Approvals are compliance records of the same class (W21 CF-1; O-6 rider).
+    # Approvals (W21 CF-1) and exports (CF-3) are compliance records of the same class (O-6
+    # rider: not indefinite by default).
     RetentionClass.AUDIT_LOGS: (
         (AuditLog, lambda c: AuditLog.created_at < c),
         (Approval, lambda c: Approval.created_at < c),
+        (Export, lambda c: Export.created_at < c),
     ),
 }
 
